@@ -1,26 +1,21 @@
-"""Field-name contract enforced across the places_v2 retrieval surface.
+"""Field-name set injected into the places_v2 retrieval consumers.
 
-`SEARCHABLE_FIELDS` is the canonical list of PlaceCore (and
-LocationContext) attributes that participate in retrieval. Adding a
-field means updating four places:
+`SEARCHABLE_FIELDS` is the canonical set of PlaceCore fields that
+participate in retrieval. `EmbeddingService` and `HybridSearchRepo`
+both take it via constructor (defaulting here) and gate each
+field-specific block on membership. Adding or removing a field is one
+edit here; both consumers pick it up. Tests can pass a smaller subset
+to verify isolation.
 
-  1. PlaceCore (or LocationContext) in `models.py` — new attribute.
-  2. The Alembic migration's `search_vector` generated column —
-     include the field so FTS sees it.
-  3. `EmbeddingService._build_text` — include the field so the vector
-     embedding sees it (and add to its `_EMBED_FIELDS` set).
-  4. `HybridSearchRepo` — add to `_FILTER_FIELDS` if discretely
-     filterable, otherwise to `_FTS_ONLY_FIELDS`.
+Heterogeneous filters that aren't per-field — geo box, saved_at
+range, user-side bools (visited / liked / approved) — stay
+unconditional in the repo. They're feature filters, not field
+filters, so they don't belong in this set.
 
-Every consuming module declares its handled set as a private constant
-and asserts it lines up with `SEARCHABLE_FIELDS` at import time. Adding
-a field here without wiring it up everywhere → AssertionError on app
-startup with a message naming exactly which field is missing where.
-
-`HybridSearchFilters` (discrete WHERE filters) is intentionally a
-subset of the searchable set — `place_name` and `place_name_aliases`
-are searched via the user-typed `query` parameter through the FTS
-leg, so they're in `_FTS_ONLY_FIELDS` rather than `_FILTER_FIELDS`.
+The Alembic migration's `search_vector` generated column is the third
+consumer; it's hardcoded SQL and can't import this constant. A test
+substring-checks every name appears in the migration source so drift
+fails CI.
 """
 
 from __future__ import annotations

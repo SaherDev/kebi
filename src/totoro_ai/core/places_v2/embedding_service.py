@@ -12,39 +12,22 @@ hitting the embedder we read the stored `(text_hash, model_name)` for
 each place and skip the rows where both still match — no re-embedding,
 no DB write. Saves Voyage credits and DB churn on no-op upserts.
 
-Wiring: `EmbeddingService(repo, embedder, model_name)`. The repo persists,
-the embedder produces vectors, `model_name` is stamped on every row so
-the consumer can detect model drift.
+Wiring: `EmbeddingService(repo, embedder, model_name, fields=...)`.
+The repo persists, the embedder produces vectors, `model_name` is
+stamped on every row so the consumer can detect model drift. `fields`
+defaults to `SEARCHABLE_FIELDS` and gates which PlaceCore fields the
+text builder includes — pass a subset for tests / A/B variants.
 """
 
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Iterable
 from enum import Enum
 
 from .models import PlaceCore
 from .protocols import EmbedderProtocol, EmbeddingsRepoProtocol
 from .search_fields import SEARCHABLE_FIELDS
-
-# Names of the PlaceCore fields handled by `_build_text`. Pinned to
-# SEARCHABLE_FIELDS at import time — adding a name there without
-# updating this set (and the function body) fails fast on app start.
-_EMBED_FIELDS: frozenset[str] = frozenset(
-    {
-        "place_name",
-        "place_name_aliases",
-        "category",
-        "tags",
-        "neighborhood",
-        "city",
-        "country",
-    }
-)
-assert _EMBED_FIELDS == SEARCHABLE_FIELDS, (
-    "embedding_service._EMBED_FIELDS drifted from SEARCHABLE_FIELDS — "
-    f"missing {SEARCHABLE_FIELDS - _EMBED_FIELDS}, "
-    f"extra {_EMBED_FIELDS - SEARCHABLE_FIELDS}"
-)
 
 
 class EmbeddingService:
@@ -53,10 +36,12 @@ class EmbeddingService:
         repo: EmbeddingsRepoProtocol,
         embedder: EmbedderProtocol,
         model_name: str,
+        fields: Iterable[str] = SEARCHABLE_FIELDS,
     ) -> None:
         self._repo = repo
         self._embedder = embedder
         self._model_name = model_name
+        self._fields: frozenset[str] = frozenset(fields)
 
     async def embed_and_store(self, cores: list[PlaceCore]) -> None:
         """Embed cores whose text or model has changed and upsert the vectors.
@@ -100,35 +85,35 @@ class EmbeddingService:
         ]
         await self._repo.upsert_embeddings(records)
 
-    @staticmethod
-    def _build_text(core: PlaceCore) -> str:
+    def _build_text(self, core: PlaceCore) -> str:
         """Render PlaceCore as deterministic, embedder-friendly prose.
 
-        Includes the fields that actually carry semantic signal for recall
-        (name, aliases, category, tags grouped by type, neighborhood/city/
-        country). Drops identifiers, timestamps, lat/lng/radius (numeric —
-        the recall path applies geo filtering separately), full street
-        addresses (too specific for semantic match), and tag/alias
-        provenance (`source` field is metadata, not content).
+        Each field block is gated on membership in `self._fields`. The
+        bespoke per-field formatting (alias dedupe + sort, tag grouping
+        by type, location bundling) stays — only the inclusion gate
+        comes from the injected set.
 
-        Tag and alias collections are deduped and sorted so re-saving the
-        same logical place produces a byte-identical string — that's what
-        lets the diff-then-embed path skip unchanged rows.
+        Tag and alias collections are deduped and sorted so re-saving
+        the same logical place produces a byte-identical string — that's
+        what lets the diff-then-embed path skip unchanged rows.
 
         Field list is paired with `places_v2.search_vector` in alembic
         migration e9f0a1b2c3d4. Add a field here → add it there too, or
         FTS and vector recall start surfacing different places.
         """
-        parts: list[str] = [f"Name: {core.place_name}"]
+        parts: list[str] = []
 
-        if core.place_name_aliases:
+        if "place_name" in self._fields:
+            parts.append(f"Name: {core.place_name}")
+
+        if core.place_name_aliases and "place_name_aliases" in self._fields:
             aliases = sorted({a.value for a in core.place_name_aliases})
             parts.append(f"Also known as: {', '.join(aliases)}")
 
-        if core.category:
+        if core.category and "category" in self._fields:
             parts.append(f"Category: {_humanize(core.category.value)}")
 
-        if core.tags:
+        if core.tags and "tags" in self._fields:
             by_type: dict[str, set[str]] = {}
             for tag in core.tags:
                 t = _humanize(_enum_or_str(tag.type))
@@ -140,9 +125,13 @@ class EmbeddingService:
 
         loc = core.location
         if loc:
-            place_bits = [
-                b for b in (loc.neighborhood, loc.city, loc.country) if b
-            ]
+            place_bits: list[str] = []
+            if loc.neighborhood and "neighborhood" in self._fields:
+                place_bits.append(loc.neighborhood)
+            if loc.city and "city" in self._fields:
+                place_bits.append(loc.city)
+            if loc.country and "country" in self._fields:
+                place_bits.append(loc.country)
             if place_bits:
                 parts.append(f"Location: {', '.join(place_bits)}")
 

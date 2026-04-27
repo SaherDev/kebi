@@ -36,7 +36,7 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from datetime import datetime
 from typing import Any
 
@@ -73,26 +73,6 @@ from .models import (
     UserPlace,
 )
 from .search_fields import SEARCHABLE_FIELDS
-
-# Names this repo handles. Discretely filterable fields end up as
-# WHERE clauses in `_filter_conditions`; FTS-only fields are reachable
-# through the user-typed `query` parameter via the search_vector leg.
-# Pinned to SEARCHABLE_FIELDS at import time — adding a name there
-# without classifying it here fails fast on app start.
-_FILTER_FIELDS: frozenset[str] = frozenset(
-    {"category", "tags", "neighborhood", "city", "country"}
-)
-_FTS_ONLY_FIELDS: frozenset[str] = frozenset(
-    {"place_name", "place_name_aliases"}
-)
-assert _FILTER_FIELDS.isdisjoint(_FTS_ONLY_FIELDS), (
-    "_FILTER_FIELDS and _FTS_ONLY_FIELDS must not overlap"
-)
-assert _FILTER_FIELDS | _FTS_ONLY_FIELDS == SEARCHABLE_FIELDS, (
-    "hybrid_search_repo field sets drifted from SEARCHABLE_FIELDS — "
-    f"missing {SEARCHABLE_FIELDS - (_FILTER_FIELDS | _FTS_ONLY_FIELDS)}, "
-    f"extra {(_FILTER_FIELDS | _FTS_ONLY_FIELDS) - SEARCHABLE_FIELDS}"
-)
 
 logger = logging.getLogger(__name__)
 
@@ -156,8 +136,13 @@ _TS_CONFIG = "simple_unaccent"  # custom config from the FTS migration
 
 
 class HybridSearchRepo:
-    def __init__(self, session: AsyncSession) -> None:
+    def __init__(
+        self,
+        session: AsyncSession,
+        fields: Iterable[str] = SEARCHABLE_FIELDS,
+    ) -> None:
         self._session = session
+        self._fields: frozenset[str] = frozenset(fields)
 
     async def search(
         self,
@@ -286,14 +271,13 @@ class HybridSearchRepo:
     # CTE builders — one per mode
     # ------------------------------------------------------------------
 
-    @staticmethod
     def _build_scoped_filtered_cte(
-        user_id: str, filters: HybridSearchFilters
+        self, user_id: str, filters: HybridSearchFilters
     ) -> Any:
         """places_v2 ⋈ user_places, scoped + deduped on place_id."""
         conditions: list[ColumnElement[bool]] = [
             _up.user_id == user_id,
-            *_filter_conditions(filters),
+            *_filter_conditions(filters, self._fields),
         ]
         return (
             select(
@@ -320,8 +304,7 @@ class HybridSearchRepo:
             .cte("filtered")
         )
 
-    @staticmethod
-    def _build_unscoped_filtered_cte(filters: HybridSearchFilters) -> Any:
+    def _build_unscoped_filtered_cte(self, filters: HybridSearchFilters) -> Any:
         """places_v2 only — no user scoping, user_places columns NULL.
 
         Padding the user_places columns with typed NULLs keeps the
@@ -343,7 +326,7 @@ class HybridSearchRepo:
                 null().label("saved_at"),
                 null().label("visited_at"),
             )
-            .where(and_(*_filter_conditions(filters)))
+            .where(and_(*_filter_conditions(filters, self._fields)))
             .cte("filtered")
         )
 
@@ -381,20 +364,25 @@ def _reject_user_side_filters(filters: HybridSearchFilters) -> None:
 
 def _filter_conditions(
     filters: HybridSearchFilters,
+    fields: frozenset[str],
 ) -> list[ColumnElement[bool]]:
     """Build WHERE conditions from a HybridSearchFilters.
 
-    Place-side conditions reference _p; user-side reference _up. Caller
-    prepends the `user_id == user_id` condition; this function emits
-    only the optional filter set.
+    Per-field blocks (category, tags, city, neighborhood, country) are
+    gated on membership in `fields` — pass a smaller set to disable a
+    field's discrete filter. Heterogeneous filters (geo box, saved_at
+    range, user-side bools) are feature filters, not per-field, and
+    stay unconditional.
+
+    Place-side conditions reference _p; user-side reference _up.
     """
     conditions: list[ColumnElement[bool]] = []
 
-    # ---- place catalog ----
-    if filters.category is not None:
+    # ---- place catalog (per-field, gated by `fields`) ----
+    if filters.category is not None and "category" in fields:
         conditions.append(_p.category == filters.category.value)
 
-    if filters.tags:
+    if filters.tags and "tags" in fields:
         # AND semantics: every requested tag value must be present.
         # Pre-stringify the JSONB literal because cast() expects a
         # primitive bind value.
@@ -405,17 +393,18 @@ def _filter_conditions(
                 )
             )
 
-    if filters.city:
+    if filters.city and "city" in fields:
         conditions.append(_p.location["city"].astext.ilike(f"%{filters.city}%"))
 
-    if filters.neighborhood:
+    if filters.neighborhood and "neighborhood" in fields:
         conditions.append(
             _p.location["neighborhood"].astext.ilike(f"%{filters.neighborhood}%")
         )
 
-    if filters.country:
+    if filters.country and "country" in fields:
         conditions.append(_p.location["country"].astext == filters.country)
 
+    # ---- geo (feature filter — not gated) ----
     if (
         filters.lat is not None
         and filters.lng is not None
@@ -435,7 +424,7 @@ def _filter_conditions(
             ]
         )
 
-    # ---- user_places ----
+    # ---- user_places (feature filter — not gated) ----
     if filters.visited is not None:
         conditions.append(_up.visited == filters.visited)
 
