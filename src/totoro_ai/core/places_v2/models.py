@@ -321,3 +321,71 @@ class SavedPlaceView(BaseModel):
 
     place: PlaceObject
     user_data: UserPlace
+
+
+class HybridSearchFilters(BaseModel):
+    """Filters applied identically to both legs of hybrid search.
+
+    All fields optional, combined with AND. The same filter set is joined
+    into both the vector and FTS CTEs so RRF fuses ranks computed within
+    the same constrained candidate pool.
+
+    Filters split across two tables:
+      - place catalog (places_v2): category, tags, location, geo
+      - user_places:  visited, liked, approved, saved_at range
+    """
+
+    # ---- place catalog filters --------------------------------------
+    category: PlaceCategory | None = None
+    tags: list[str] | None = None         # JSONB @>, AND across values
+
+    city: str | None = None               # ILIKE
+    neighborhood: str | None = None       # ILIKE
+    country: str | None = None            # exact
+
+    lat: float | None = None
+    lng: float | None = None
+    radius_m: int | None = None           # required if lat/lng set
+
+    # ---- user_places filters (tri-state booleans: omit for "any") ---
+    visited: bool | None = None
+    liked: bool | None = None             # NULL liked rows pass when None
+    approved: bool | None = None
+
+    saved_after: datetime | None = None
+    saved_before: datetime | None = None
+
+    model_config = ConfigDict(extra="forbid")
+
+    @model_validator(mode="after")
+    def _validate_geo(self) -> HybridSearchFilters:
+        has_lat = self.lat is not None
+        has_lng = self.lng is not None
+        if has_lat != has_lng:
+            raise ValueError("lat and lng must both be set or both be None")
+        if (has_lat or has_lng) and self.radius_m is None:
+            raise ValueError("radius_m is required when lat/lng is provided")
+        return self
+
+
+class HybridSearchHit(BaseModel):
+    """One result from hybrid search.
+
+    Carries both the canonical place and the user's relationship to it
+    so downstream consumers (LLM, API, evals) get everything in one
+    round trip — the repo already JOINs user_places when scoped to a
+    user, so emitting the user_data costs nothing extra.
+
+    `user_data` is None when the search ran in unscoped mode (no
+    `user_id` passed) — i.e., a global place catalog search not tied
+    to any user's saves.
+
+    `vector_rank` / `text_rank` are 1-indexed ranks within each leg's
+    candidate pool, or None if this place didn't show up in that leg.
+    """
+
+    place: PlaceCore
+    user_data: UserPlace | None = None
+    rrf_score: float
+    vector_rank: int | None
+    text_rank: int | None

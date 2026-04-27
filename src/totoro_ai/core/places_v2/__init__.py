@@ -4,9 +4,16 @@ Public surface: models, protocols, concrete implementations, services.
 """
 
 from .cache import RedisPlacesCache
+from .cached_embedder import CachedEmbedder
+from .embedding_service import EmbeddingService
+from .embeddings_repo import EMBEDDING_DIMENSIONS, EmbeddingsRepo
 from .google_client import GooglePlacesClient
+from .hybrid_search_repo import HybridSearchRepo
+from .hybrid_search_service import HybridSearchService
 from .models import (
     HoursDict,
+    HybridSearchFilters,
+    HybridSearchHit,
     LocationContext,
     PlaceCategory,
     PlaceCore,
@@ -21,6 +28,11 @@ from .models import (
 from .place_wipe_service import PlaceWipeService
 from .places_repo import PlacesRepo
 from .protocols import (
+    EmbedderProtocol,
+    EmbeddingServiceProtocol,
+    EmbeddingsRepoProtocol,
+    HybridSearchRepoProtocol,
+    HybridSearchServiceProtocol,
     PlacesCacheProtocol,
     PlacesClientProtocol,
     PlacesRepoProtocol,
@@ -63,6 +75,8 @@ __all__ = [
     "TagValue",
     # models
     "HoursDict",
+    "HybridSearchFilters",
+    "HybridSearchHit",
     "LocationContext",
     "PlaceCategory",
     "PlaceCore",
@@ -74,6 +88,11 @@ __all__ = [
     "SavedPlaceView",
     "UserPlace",
     # protocols
+    "EmbedderProtocol",
+    "EmbeddingsRepoProtocol",
+    "EmbeddingServiceProtocol",
+    "HybridSearchRepoProtocol",
+    "HybridSearchServiceProtocol",
     "PlacesCacheProtocol",
     "PlacesClientProtocol",
     "PlacesRepoProtocol",
@@ -83,13 +102,20 @@ __all__ = [
     "UserPlacesRepoProtocol",
     "UserPlacesServiceProtocol",
     # implementations
+    "CachedEmbedder",
+    "EmbeddingsRepo",
+    "HybridSearchRepo",
     "PlacesRepo",
     "UserPlacesRepo",
     "RedisPlacesCache",
     "GooglePlacesClient",
     # services
+    "EmbeddingService",
+    "HybridSearchService",
     "PlacesSearchService",
     "PlaceUpsertService",
     "PlaceWipeService",
     "UserPlacesService",
+    # constants
+    "EMBEDDING_DIMENSIONS",
 ]

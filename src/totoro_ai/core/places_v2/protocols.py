@@ -6,6 +6,8 @@ from datetime import datetime
 from typing import Protocol
 
 from .models import (
+    HybridSearchFilters,
+    HybridSearchHit,
     PlaceCore,
     PlaceObject,
     PlaceQuery,
@@ -99,3 +101,58 @@ class UserPlacesServiceProtocol(Protocol):
         approved: bool | None = None,
         note: str | None = None,
     ) -> UserPlace: ...
+
+
+class EmbeddingsRepoProtocol(Protocol):
+    async def get_by_place_ids(
+        self, place_ids: list[str]
+    ) -> dict[str, list[float]]: ...
+
+    async def get_signatures_by_place_ids(
+        self, place_ids: list[str]
+    ) -> dict[str, tuple[str, str]]: ...
+
+    async def upsert_embeddings(
+        self, records: list[tuple[str, list[float], str, str]]
+    ) -> None: ...
+
+    async def delete_by_place_ids(self, place_ids: list[str]) -> int: ...
+
+
+class EmbedderProtocol(Protocol):
+    """External embedder. Mirrors the project-wide embedder shape so any
+    `providers.embeddings` implementation drops in unchanged.
+    """
+
+    async def embed(
+        self, texts: list[str], input_type: str
+    ) -> list[list[float]]: ...
+
+
+class EmbeddingServiceProtocol(Protocol):
+    async def embed_and_store(self, cores: list[PlaceCore]) -> None: ...
+
+
+class HybridSearchRepoProtocol(Protocol):
+    async def search(
+        self,
+        user_id: str | None,
+        query: str,
+        query_vector: list[float],
+        filters: HybridSearchFilters | None = None,
+        limit: int = 20,
+        rrf_k: int = 60,
+        candidate_multiplier: int = 4,
+    ) -> list[HybridSearchHit]: ...
+
+
+class HybridSearchServiceProtocol(Protocol):
+    async def search(
+        self,
+        user_id: str | None,
+        query: str,
+        filters: HybridSearchFilters | None = None,
+        limit: int = 20,
+        rrf_k: int = 60,
+        candidate_multiplier: int = 4,
+    ) -> list[HybridSearchHit]: ...
