@@ -151,8 +151,22 @@ def upgrade() -> None:
         "ON places_v2 USING gin(search_vector)"
     )
 
+    # ------------------------------------------------------------------
+    # places_v2.tags — GIN index for `tags @> '[{"value": ...}]'`
+    # containment checks used by HybridSearchFilters.tags. Without this,
+    # every tag filter does a sequential JSONB scan. jsonb_path_ops is
+    # the narrow operator class — covers @> only, smaller and faster
+    # than the default jsonb_ops which also indexes key existence (we
+    # don't query for keys).
+    # ------------------------------------------------------------------
+    op.execute(
+        "CREATE INDEX places_v2_tags_idx "
+        "ON places_v2 USING gin(tags jsonb_path_ops)"
+    )
+
 
 def downgrade() -> None:
+    op.execute("DROP INDEX IF EXISTS places_v2_tags_idx")
     op.execute("DROP INDEX IF EXISTS places_v2_fts_idx")
     op.execute("ALTER TABLE places_v2 DROP COLUMN IF EXISTS search_vector")
     op.execute("DROP TEXT SEARCH CONFIGURATION IF EXISTS simple_unaccent")
