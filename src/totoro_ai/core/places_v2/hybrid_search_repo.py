@@ -72,6 +72,27 @@ from .models import (
     PlaceTag,
     UserPlace,
 )
+from .search_fields import SEARCHABLE_FIELDS
+
+# Names this repo handles. Discretely filterable fields end up as
+# WHERE clauses in `_filter_conditions`; FTS-only fields are reachable
+# through the user-typed `query` parameter via the search_vector leg.
+# Pinned to SEARCHABLE_FIELDS at import time — adding a name there
+# without classifying it here fails fast on app start.
+_FILTER_FIELDS: frozenset[str] = frozenset(
+    {"category", "tags", "neighborhood", "city", "country"}
+)
+_FTS_ONLY_FIELDS: frozenset[str] = frozenset(
+    {"place_name", "place_name_aliases"}
+)
+assert _FILTER_FIELDS.isdisjoint(_FTS_ONLY_FIELDS), (
+    "_FILTER_FIELDS and _FTS_ONLY_FIELDS must not overlap"
+)
+assert _FILTER_FIELDS | _FTS_ONLY_FIELDS == SEARCHABLE_FIELDS, (
+    "hybrid_search_repo field sets drifted from SEARCHABLE_FIELDS — "
+    f"missing {SEARCHABLE_FIELDS - (_FILTER_FIELDS | _FTS_ONLY_FIELDS)}, "
+    f"extra {(_FILTER_FIELDS | _FTS_ONLY_FIELDS) - SEARCHABLE_FIELDS}"
+)
 
 logger = logging.getLogger(__name__)
 

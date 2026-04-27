@@ -24,6 +24,27 @@ from enum import Enum
 
 from .models import PlaceCore
 from .protocols import EmbedderProtocol, EmbeddingsRepoProtocol
+from .search_fields import SEARCHABLE_FIELDS
+
+# Names of the PlaceCore fields handled by `_build_text`. Pinned to
+# SEARCHABLE_FIELDS at import time — adding a name there without
+# updating this set (and the function body) fails fast on app start.
+_EMBED_FIELDS: frozenset[str] = frozenset(
+    {
+        "place_name",
+        "place_name_aliases",
+        "category",
+        "tags",
+        "neighborhood",
+        "city",
+        "country",
+    }
+)
+assert _EMBED_FIELDS == SEARCHABLE_FIELDS, (
+    "embedding_service._EMBED_FIELDS drifted from SEARCHABLE_FIELDS — "
+    f"missing {SEARCHABLE_FIELDS - _EMBED_FIELDS}, "
+    f"extra {_EMBED_FIELDS - SEARCHABLE_FIELDS}"
+)
 
 
 class EmbeddingService:

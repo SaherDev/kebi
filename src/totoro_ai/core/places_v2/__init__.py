@@ -42,6 +42,7 @@ from .protocols import (
     UserPlacesRepoProtocol,
     UserPlacesServiceProtocol,
 )
+from .search_fields import SEARCHABLE_FIELDS
 from .search_service import PlacesSearchService
 from .tags import (
     AccessibilityTag,
@@ -118,4 +119,5 @@ __all__ = [
     "UserPlacesService",
     # constants
     "EMBEDDING_DIMENSIONS",
+    "SEARCHABLE_FIELDS",
 ]
