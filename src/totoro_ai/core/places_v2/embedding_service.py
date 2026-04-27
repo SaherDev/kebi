@@ -12,22 +12,18 @@ hitting the embedder we read the stored `(text_hash, model_name)` for
 each place and skip the rows where both still match — no re-embedding,
 no DB write. Saves Voyage credits and DB churn on no-op upserts.
 
-Wiring: `EmbeddingService(repo, embedder, model_name, fields=...)`.
-The repo persists, the embedder produces vectors, `model_name` is
-stamped on every row so the consumer can detect model drift. `fields`
-defaults to `SEARCHABLE_FIELDS` and gates which PlaceCore fields the
-text builder includes — pass a subset for tests / A/B variants.
+Wiring: `EmbeddingService(repo, embedder, model_name)`. The repo
+persists, the embedder produces vectors, `model_name` is stamped on
+every row so the consumer can detect model drift.
 """
 
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Iterable
 from enum import Enum
 
 from .models import PlaceCore
 from .protocols import EmbedderProtocol, EmbeddingsRepoProtocol
-from .search_fields import SEARCHABLE_FIELDS
 
 
 class EmbeddingService:
@@ -36,12 +32,10 @@ class EmbeddingService:
         repo: EmbeddingsRepoProtocol,
         embedder: EmbedderProtocol,
         model_name: str,
-        fields: Iterable[str] = SEARCHABLE_FIELDS,
     ) -> None:
         self._repo = repo
         self._embedder = embedder
         self._model_name = model_name
-        self._fields: frozenset[str] = frozenset(fields)
 
     async def embed_and_store(self, cores: list[PlaceCore]) -> None:
         """Embed cores whose text or model has changed and upsert the vectors.
@@ -85,35 +79,30 @@ class EmbeddingService:
         ]
         await self._repo.upsert_embeddings(records)
 
-    def _build_text(self, core: PlaceCore) -> str:
+    @staticmethod
+    def _build_text(core: PlaceCore) -> str:
         """Render PlaceCore as deterministic, embedder-friendly prose.
-
-        Each field block is gated on membership in `self._fields`. The
-        bespoke per-field formatting (alias dedupe + sort, tag grouping
-        by type, location bundling) stays — only the inclusion gate
-        comes from the injected set.
 
         Tag and alias collections are deduped and sorted so re-saving
         the same logical place produces a byte-identical string — that's
         what lets the diff-then-embed path skip unchanged rows.
 
         Field list is paired with `places_v2.search_vector` in alembic
-        migration e9f0a1b2c3d4. Add a field here → add it there too, or
-        FTS and vector recall start surfacing different places.
+        migration e9f0a1b2c3d4. Adding a field here means adding it
+        there too, or FTS and vector recall start surfacing different
+        places. tests/core/places_v2/test_search_fields.py pins the
+        contract by substring-checking both sources.
         """
-        parts: list[str] = []
+        parts: list[str] = [f"Name: {core.place_name}"]
 
-        if "place_name" in self._fields:
-            parts.append(f"Name: {core.place_name}")
-
-        if core.place_name_aliases and "place_name_aliases" in self._fields:
+        if core.place_name_aliases:
             aliases = sorted({a.value for a in core.place_name_aliases})
             parts.append(f"Also known as: {', '.join(aliases)}")
 
-        if core.category and "category" in self._fields:
+        if core.category:
             parts.append(f"Category: {_humanize(core.category.value)}")
 
-        if core.tags and "tags" in self._fields:
+        if core.tags:
             by_type: dict[str, set[str]] = {}
             for tag in core.tags:
                 t = _humanize(_enum_or_str(tag.type))
@@ -125,13 +114,9 @@ class EmbeddingService:
 
         loc = core.location
         if loc:
-            place_bits: list[str] = []
-            if loc.neighborhood and "neighborhood" in self._fields:
-                place_bits.append(loc.neighborhood)
-            if loc.city and "city" in self._fields:
-                place_bits.append(loc.city)
-            if loc.country and "country" in self._fields:
-                place_bits.append(loc.country)
+            place_bits = [
+                b for b in (loc.neighborhood, loc.city, loc.country) if b
+            ]
             if place_bits:
                 parts.append(f"Location: {', '.join(place_bits)}")
 
