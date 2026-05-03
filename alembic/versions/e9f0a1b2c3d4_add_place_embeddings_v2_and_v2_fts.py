@@ -39,7 +39,7 @@ from pgvector.sqlalchemy import Vector
 from alembic import op
 
 revision: str = "e9f0a1b2c3d4"
-down_revision: str | tuple[str, ...] | None = "d1e2f3a4b5c6"
+down_revision: str | tuple[str, ...] | None = "c7a3f1d8e9b2"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
