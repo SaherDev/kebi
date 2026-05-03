@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Any, cast
 
 from .models import (
+    BusinessStatus,
     HoursDict,
     LocationContext,
     PlaceCategory,
@@ -199,6 +200,12 @@ _GOOGLE_TYPE_TO_CATEGORY: dict[str, str] = {
     "library": "library",
 }
 
+_GOOGLE_BUSINESS_STATUS: dict[str, BusinessStatus] = {
+    "OPERATIONAL": BusinessStatus.operational,
+    "CLOSED_TEMPORARILY": BusinessStatus.closed_temporarily,
+    "CLOSED_PERMANENTLY": BusinessStatus.closed_permanently,
+}
+
 _PRICE_LEVEL_MAP: dict[str, PriceTag] = {
     "PRICE_LEVEL_FREE": PriceTag.free,
     "PRICE_LEVEL_INEXPENSIVE": PriceTag.budget,
@@ -366,6 +373,7 @@ def map_place(raw: dict[str, Any], now: datetime) -> PlaceObject | None:
         phone=raw.get("nationalPhoneNumber"),
         website=raw.get("websiteUri"),
         popularity=raw.get("userRatingCount"),
+        business_status=_GOOGLE_BUSINESS_STATUS.get(raw.get("businessStatus") or ""),
         cached_at=now,
     )
 

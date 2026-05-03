@@ -1,8 +1,9 @@
 """RedisPlacesCache — flat PlaceObject cache keyed by provider_id.
 
 Cache key: `place_v2:{provider_id}`. TTL: 30 days (2_592_000 s) by default.
-Live fields only (rating, hours, phone, website, popularity, cached_at).
-The full PlaceObject is stored so overlays are a simple JSON parse + field copy.
+Live fields only (rating, hours, phone, website, popularity, business_status,
+cached_at). The full PlaceObject is stored so overlays are a simple JSON
+parse + field copy.
 """
 
 from __future__ import annotations

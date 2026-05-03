@@ -28,6 +28,7 @@ _FIELD_MASK = (
     "places.nationalPhoneNumber,"
     "places.websiteUri,"
     "places.types,"
+    "places.businessStatus,"
     "places.userRatingCount,"
     "places.timeZone,"
     "places.priceLevel,"
@@ -143,7 +144,11 @@ class GooglePlacesClient:
             and loc.lng is not None
             and loc.radius_m is not None
         ):
-            body["locationRestriction"] = {
+            # searchText only allows `rectangle` inside `locationRestriction`.
+            # For a circular bound we have to use `locationBias` — Google rejects
+            # `locationRestriction.circle` here with a 400. (searchNearby is the
+            # opposite shape: it requires `locationRestriction.circle`.)
+            body["locationBias"] = {
                 "circle": {
                     "center": {"latitude": loc.lat, "longitude": loc.lng},
                     "radius": float(loc.radius_m),
@@ -207,6 +212,20 @@ class GooglePlacesClient:
             )
             response.raise_for_status()
             data: dict[str, Any] = response.json()
+        except httpx.HTTPStatusError as exc:
+            # Google returns the actual cause (bad field name, quota, etc.) in
+            # the response body — log it so 4xx/5xx are diagnosable from logs
+            # without a repro.
+            logger.error(
+                "google_places_http_error",
+                extra={
+                    "method": method,
+                    "path": path,
+                    "status": exc.response.status_code,
+                    "body": exc.response.text[:1000],
+                },
+            )
+            return []
         except Exception:
             logger.exception(
                 "google_places_request_error",

@@ -27,6 +27,17 @@ class PlaceSource(str, Enum):
     totoro = "totoro"
 
 
+class BusinessStatus(str, Enum):
+    """Operational state of a place. Mirrors Google's `businessStatus` —
+    OPERATIONAL / CLOSED_TEMPORARILY / CLOSED_PERMANENTLY — but in our
+    snake_case style so the rest of the code stays provider-agnostic.
+    """
+
+    operational = "operational"
+    closed_temporarily = "closed_temporarily"
+    closed_permanently = "closed_permanently"
+
+
 class PlaceCategory(str, Enum):
     # food & drink
     restaurant = "restaurant"
@@ -273,6 +284,7 @@ class PlaceObject(PlaceCore):
     phone: str | None = None
     website: str | None = None
     popularity: int | None = None
+    business_status: BusinessStatus | None = None
     cached_at: datetime | None = None
 
     def to_core(self) -> PlaceCore:

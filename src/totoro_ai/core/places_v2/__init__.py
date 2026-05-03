@@ -11,6 +11,7 @@ from .google_client import GooglePlacesClient
 from .hybrid_search_repo import HybridSearchRepo
 from .hybrid_search_service import HybridSearchService
 from .models import (
+    BusinessStatus,
     HoursDict,
     HybridSearchFilters,
     HybridSearchHit,
@@ -62,6 +63,7 @@ from .user_places_service import UserPlacesService
 
 __all__ = [
     # tag vocabulary
+    "BusinessStatus",
     "TagType",
     "CuisineTag",
     "DietaryTag",
