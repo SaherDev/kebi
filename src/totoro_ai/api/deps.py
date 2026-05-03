@@ -26,6 +26,24 @@ from totoro_ai.core.memory.service import UserMemoryService
 from totoro_ai.core.places import GooglePlacesClient, PlacesService
 from totoro_ai.core.places.cache import PlacesCache
 from totoro_ai.core.places.repository import PlacesRepository
+from totoro_ai.core.places_v2 import (
+    CachedEmbedder,
+    EmbeddingsRepo,
+    HybridSearchRepo,
+    HybridSearchService,
+    PlacesRepo,
+    PlacesSearchService,
+    PlaceUpsertService,
+    RedisPlacesCache,
+    UserPlacesRepo,
+    UserPlacesService,
+)
+from totoro_ai.core.places_v2 import (
+    EmbeddingService as EmbeddingServiceV2,
+)
+from totoro_ai.core.places_v2 import (
+    GooglePlacesClient as GooglePlacesClientV2,
+)
 from totoro_ai.core.recall.service import RecallService
 from totoro_ai.core.signal.service import SignalService
 from totoro_ai.core.taste.debounce import regen_debouncer
@@ -456,3 +474,138 @@ async def get_chat_service(
         config=config,
         agent_graph=agent_graph,
     )
+
+
+# ---------------------------------------------------------------------------
+# places_v2 dependencies
+# ---------------------------------------------------------------------------
+
+
+def get_places_v2_repo(
+    db_session: AsyncSession = Depends(get_session),  # noqa: B008
+) -> PlacesRepo:
+    """FastAPI dependency providing PlacesRepo (places_v2 table)."""
+    return PlacesRepo(db_session)
+
+
+def get_user_places_repo(
+    db_session: AsyncSession = Depends(get_session),  # noqa: B008
+) -> UserPlacesRepo:
+    """FastAPI dependency providing UserPlacesRepo (user_places table)."""
+    return UserPlacesRepo(db_session)
+
+
+def get_places_v2_cache() -> RedisPlacesCache:
+    """FastAPI dependency providing RedisPlacesCache (place_v2: key prefix).
+
+    Backed by a process-wide Redis client owned by places_v2 itself.
+    """
+    return RedisPlacesCache.from_url(get_env().REDIS_URL)
+
+
+def get_google_places_client_v2() -> GooglePlacesClientV2:
+    """FastAPI dependency providing GooglePlacesClient (places_v2).
+
+    Backed by a process-wide httpx.AsyncClient owned by places_v2 itself.
+    """
+    return GooglePlacesClientV2(api_key=get_env().GOOGLE_API_KEY or "")
+
+
+def get_place_upsert_service(
+    repo: PlacesRepo = Depends(get_places_v2_repo),  # noqa: B008
+) -> PlaceUpsertService:
+    """FastAPI dependency providing PlaceUpsertService (places_v2)."""
+    return PlaceUpsertService(repo=repo)
+
+
+def get_places_search_service(
+    repo: PlacesRepo = Depends(get_places_v2_repo),  # noqa: B008
+    cache: RedisPlacesCache = Depends(get_places_v2_cache),  # noqa: B008
+    client: GooglePlacesClientV2 = Depends(get_google_places_client_v2),  # noqa: B008
+    upsert_service: PlaceUpsertService = Depends(  # noqa: B008
+        get_place_upsert_service
+    ),
+) -> PlacesSearchService:
+    """FastAPI dependency providing PlacesSearchService (places_v2)."""
+    return PlacesSearchService(
+        repo=repo,
+        cache=cache,
+        client=client,
+        upsert_service=upsert_service,
+    )
+
+
+def get_user_places_service(
+    places_repo: PlacesRepo = Depends(get_places_v2_repo),  # noqa: B008
+    user_places_repo: UserPlacesRepo = Depends(get_user_places_repo),  # noqa: B008
+    search: PlacesSearchService = Depends(get_places_search_service),  # noqa: B008
+) -> UserPlacesService:
+    """FastAPI dependency providing UserPlacesService (places_v2)."""
+    return UserPlacesService(
+        places_repo=places_repo,
+        user_places_repo=user_places_repo,
+        search=search,
+    )
+
+
+# ---------------------------------------------------------------------------
+# places_v2 — embeddings + hybrid search
+# ---------------------------------------------------------------------------
+
+
+def get_embeddings_repo_v2(
+    db_session: AsyncSession = Depends(get_session),  # noqa: B008
+) -> EmbeddingsRepo:
+    """FastAPI dependency providing EmbeddingsRepo (place_embeddings_v2)."""
+    return EmbeddingsRepo(db_session)
+
+
+def get_embedding_service_v2(
+    repo: EmbeddingsRepo = Depends(get_embeddings_repo_v2),  # noqa: B008
+    embedder: EmbedderProtocol = Depends(get_embedder_dep),  # noqa: B008
+    config: AppConfig = Depends(get_config),  # noqa: B008
+) -> EmbeddingServiceV2:
+    """FastAPI dependency providing EmbeddingService (places_v2 documents).
+
+    Doc embeds run at save time and rarely repeat — no cache wrapper here;
+    the diff-then-embed text_hash check on the repo already short-circuits
+    no-op re-saves.
+    """
+    return EmbeddingServiceV2(
+        repo=repo,
+        embedder=embedder,
+        model_name=config.models["embedder"].model,
+    )
+
+
+def get_query_embedder_v2() -> EmbedderProtocol:
+    """Cached query embedder backed by Redis (90-day TTL).
+
+    Wraps the configured embedder so HybridSearchService skips Voyage
+    on repeated queries. ``model_name`` is part of the cache key so
+    swapping embedders later never serves a vector from the wrong space.
+    """
+    return CachedEmbedder.from_url(
+        embedder=get_embedder(),
+        url=get_env().REDIS_URL,
+        model_name=get_config().models["embedder"].model,
+    )
+
+
+def get_hybrid_search_repo(
+    db_session: AsyncSession = Depends(get_session),  # noqa: B008
+) -> HybridSearchRepo:
+    """FastAPI dependency providing HybridSearchRepo (places_v2)."""
+    return HybridSearchRepo(db_session)
+
+
+def get_hybrid_search_service(
+    repo: HybridSearchRepo = Depends(get_hybrid_search_repo),  # noqa: B008
+    embedder: EmbedderProtocol = Depends(get_query_embedder_v2),  # noqa: B008
+) -> HybridSearchService:
+    """FastAPI dependency providing HybridSearchService (places_v2).
+
+    Uses the cached query embedder so repeated agent queries skip
+    Voyage on the hot path.
+    """
+    return HybridSearchService(repo=repo, embedder=embedder)
