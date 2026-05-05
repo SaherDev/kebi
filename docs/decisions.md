@@ -15,6 +15,16 @@ Format:
 
 ---
 
+## ADR-069: Bounding agent state and conversation history for cost
+
+**Date:** 2026-05-05\
+**Status:** accepted\
+**Context:** Two cost problems on the agent path scale with session length. Old tool-result payloads (~2-5KB JSON each) replay through the LLM window every turn even after the agent has acted on them, so token cost grows with conversation length. Separately, LangGraph's checkpointer writes the full agent state — including an unbounded message list — after every node execution, pushing per-user storage into tens of MB on chatty threads. `ShallowPostgresSaver` (only-latest-checkpoint-per-thread) was rejected because `NodeInterrupt`-based resume in the save flow needs the full checkpoint chain.\
+**Decision:** Bound both. Cap state messages so the checkpointer blob can't grow without limit, trimming at turn boundaries when the cap is exceeded. Replace older tool-result payloads in the LLM-bound conversation with short breadcrumbs that keep place names, so cross-turn references like "show me Bun Bo Hue again" still work. The LLM context window stays as it was, and is never allowed to exceed the retained state floor.\
+**Consequences:** Token cost scales with the LLM window rather than session length — on tool-heavy turns this saves on the order of 2-4K input tokens, roughly $0.01 per turn at current pricing. Checkpointer storage flatlines once a thread crosses the cap instead of growing quadratically with session length, an estimated 3-4× reduction for the longest-running users (no change for short sessions). Agent behavior is unchanged because the trimmed history was already past the LLM window. `NodeInterrupt` resume is preserved — checkpoint count and chain depth are untouched. Abandoned-thread cleanup (TTL-based deletion) remains a separate, deferred concern.
+
+---
+
 ## ADR-068: Runtime orchestrator selection via AGENT_MODEL env var
 
 **Date:** 2026-04-24\
