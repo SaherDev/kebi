@@ -449,6 +449,8 @@ class AgentConfig(BaseModel):
     max_errors: int = 3
     max_history_messages: int = 40
     tool_result_window: int = 2
+    state_message_cap: int = 200
+    state_message_floor: int = 150
     checkpointer_ttl_seconds: int = 86400
     tool_timeouts_seconds: ToolTimeoutsConfig = ToolTimeoutsConfig()
     prompt_caching_enabled: bool = True
@@ -472,6 +474,25 @@ class AgentConfig(BaseModel):
             raise ValueError(
                 "agent.tool_result_window must be >= 0 "
                 f"(got {self.tool_result_window})"
+            )
+        if self.state_message_floor < 1 or self.state_message_cap < 1:
+            raise ValueError(
+                "agent.state_message_cap / state_message_floor must be >= 1 "
+                f"(got cap={self.state_message_cap}, "
+                f"floor={self.state_message_floor})"
+            )
+        if self.state_message_floor >= self.state_message_cap:
+            raise ValueError(
+                "agent.state_message_floor must be < state_message_cap "
+                f"(got floor={self.state_message_floor}, "
+                f"cap={self.state_message_cap})"
+            )
+        if self.state_message_floor < self.max_history_messages:
+            raise ValueError(
+                "agent.state_message_floor must be >= max_history_messages "
+                "(otherwise the LLM window would routinely exceed available state) "
+                f"(got floor={self.state_message_floor}, "
+                f"max_history_messages={self.max_history_messages})"
             )
         return self
 

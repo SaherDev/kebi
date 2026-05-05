@@ -253,6 +253,15 @@ agent:
   # `tool_result_window` payloads stay full. State is untouched — this only
   # rewrites the per-call conversation list. 0 disables compaction.
   tool_result_window: 2
+  # Cap unbounded growth of state["messages"] in long-lived threads. When the
+  # list exceeds `state_message_cap`, the reducer trims it down toward
+  # `state_message_floor` at the next HumanMessage boundary (preserves
+  # tool_use/tool_result pairing). Floor must be >= max_history_messages and
+  # < cap. Trimmed messages are gone from the checkpointer blob — irrelevant
+  # to the LLM (already past the 40-message window) but reduces per-checkpoint
+  # blob size for chatty threads.
+  state_message_cap: 200
+  state_message_floor: 150
   checkpointer_ttl_seconds: 86400
   prompt_caching_enabled: false  # ADR-067: Anthropic-only (ephemeral cache_control). Re-enable when orchestrator returns to Anthropic.
   tool_timeouts_seconds:
