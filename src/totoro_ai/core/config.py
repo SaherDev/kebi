@@ -448,6 +448,7 @@ class AgentConfig(BaseModel):
     max_steps: int = 10
     max_errors: int = 3
     max_history_messages: int = 40
+    tool_result_window: int = 2
     checkpointer_ttl_seconds: int = 86400
     tool_timeouts_seconds: ToolTimeoutsConfig = ToolTimeoutsConfig()
     prompt_caching_enabled: bool = True
@@ -466,6 +467,11 @@ class AgentConfig(BaseModel):
                 f"(got max_steps={self.max_steps}, max_errors={self.max_errors}, "
                 f"max_history_messages={self.max_history_messages}, "
                 f"checkpointer_ttl_seconds={self.checkpointer_ttl_seconds})"
+            )
+        if self.tool_result_window < 0:
+            raise ValueError(
+                "agent.tool_result_window must be >= 0 "
+                f"(got {self.tool_result_window})"
             )
         return self
 

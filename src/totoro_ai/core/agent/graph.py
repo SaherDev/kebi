@@ -149,6 +149,114 @@ def _sanitize_orphaned_tool_calls(messages: list[Any]) -> tuple[list[Any], int]:
     return result, injected
 
 
+# Cap on names included in a compacted breadcrumb. Six is enough for the LLM
+# to disambiguate "the third one" or "show me Bun Bo Hue again" while keeping
+# the breadcrumb in the ~100-token range.
+_BREADCRUMB_NAME_CAP = 6
+
+
+def _extract_place_names(results: list[Any]) -> list[str]:
+    """Pull place_name from `results[].place.place_name` (recall/consult/save shape)."""
+    names: list[str] = []
+    for r in results:
+        if not isinstance(r, dict):
+            continue
+        place = r.get("place")
+        nm: str | None = None
+        if isinstance(place, dict):
+            value = place.get("place_name")
+            if isinstance(value, str):
+                nm = value
+        if nm is None:
+            value = r.get("place_name")
+            if isinstance(value, str):
+                nm = value
+        if nm:
+            names.append(nm)
+    return names
+
+
+def _format_names(names: list[str]) -> str:
+    if len(names) <= _BREADCRUMB_NAME_CAP:
+        return ", ".join(names)
+    head = ", ".join(names[:_BREADCRUMB_NAME_CAP])
+    return f"{head}, … (+{len(names) - _BREADCRUMB_NAME_CAP} more)"
+
+
+def _summarize_tool_payload(msg: ToolMessage) -> str:
+    """Squeeze a ToolMessage's JSON body into a one-line breadcrumb.
+
+    Full payloads (recall/consult/save responses) run 2-5KB each. Once the
+    LLM has reacted to a tool result, the JSON is dead weight on the next
+    turn — but bare counts ("returned 3 results") strip away cross-turn
+    referenceability ("show me Bun Bo Hue again", "the third one"). So the
+    breadcrumb keeps the place names (capped at `_BREADCRUMB_NAME_CAP`)
+    while dropping the rest. Costs ~100 tokens vs. ~500-2500 for the full
+    JSON.
+    """
+    raw = extract_text_content(getattr(msg, "content", None))
+    name = getattr(msg, "name", None) or "tool"
+    try:
+        data = json.loads(raw)
+    except (ValueError, TypeError):
+        return f"[{name}] earlier result elided ({len(raw)} chars)"
+    if isinstance(data, dict):
+        results = data.get("results")
+        if isinstance(results, list):
+            names = _extract_place_names(results)
+            count = len(results)
+            if names:
+                return (
+                    f"[{name}] earlier call returned {count} result(s): "
+                    f"{_format_names(names)}"
+                )
+            return f"[{name}] earlier call returned {count} result(s); details elided"
+        status = data.get("status")
+        if status:
+            return f"[{name}] earlier call status={status}; details elided"
+        if "error" in data:
+            return (
+                f"[{name}] earlier call errored ({data.get('type', 'error')})"
+            )
+    return f"[{name}] earlier result elided"
+
+
+def _compact_old_tool_results(
+    messages: list[Any], keep_recent: int
+) -> tuple[list[Any], int]:
+    """Replace ToolMessage bodies older than the last `keep_recent` with breadcrumbs.
+
+    Produces fresh ToolMessage objects with the same `tool_call_id` so the
+    Anthropic tool_use ↔ tool_result pairing stays valid. Does not mutate
+    state — the original messages in the checkpointer stay intact; this only
+    rewrites the per-call conversation list.
+
+    `keep_recent=0` compacts every ToolMessage. Negative values are a no-op.
+    """
+    if keep_recent < 0:
+        return messages, 0
+    tool_indices = [i for i, m in enumerate(messages) if isinstance(m, ToolMessage)]
+    if len(tool_indices) <= keep_recent:
+        return messages, 0
+    cutoff_slice = tool_indices[: -keep_recent or None]
+    cutoff = set(cutoff_slice)
+    result: list[Any] = []
+    compacted = 0
+    for i, msg in enumerate(messages):
+        if i in cutoff:
+            result.append(
+                ToolMessage(
+                    content=_summarize_tool_payload(msg),
+                    tool_call_id=getattr(msg, "tool_call_id", "") or "",
+                    name=getattr(msg, "name", None),
+                )
+            )
+            compacted += 1
+        else:
+            result.append(msg)
+    return result, compacted
+
+
 def _render_location_context(state: AgentState) -> str:
     loc = state.get("location")
     label = state.get("location_label")
@@ -222,7 +330,12 @@ def make_agent_node(llm: Any, tools: list[Any]) -> Any:
                 "Injected %d placeholder ToolMessage(s) for orphaned tool_use blocks",
                 dropped,
             )
-        conversation = [system, *sanitized]
+        compacted_msgs, compacted = _compact_old_tool_results(
+            sanitized, keep_recent=get_config().agent.tool_result_window
+        )
+        if compacted:
+            logger.info("Compacted %d older ToolMessage payload(s)", compacted)
+        conversation = [system, *compacted_msgs]
         try:
             ai_msg = await _invoke_llm_with_retry(bound, conversation)
         except Exception as exc:
