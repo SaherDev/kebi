@@ -4,17 +4,15 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from totoro_ai.core.config import MemoryConfidenceConfig
 from totoro_ai.core.events.events import (
     ChipConfirmed,
     OnboardingSignal,
-    PersonalFactsExtracted,
     PlaceSaved,
     RecommendationAccepted,
     RecommendationRejected,
+    TurnCompleted,
 )
 from totoro_ai.core.events.handlers import EventHandlers
-from totoro_ai.core.memory.schemas import PersonalFact
 from totoro_ai.db.models import InteractionType
 
 
@@ -100,8 +98,8 @@ class TestOnTasteSignal:
         await handlers.on_taste_signal(event)  # should not raise
 
 
-class TestOnPersonalFactsExtracted:
-    """Tests for EventHandlers.on_personal_facts_extracted()."""
+class TestOnTurnCompleted:
+    """Tests for EventHandlers.on_turn_completed() — thin delegation layer."""
 
     @pytest.fixture
     def mock_taste_service(self) -> MagicMock:
@@ -109,7 +107,9 @@ class TestOnPersonalFactsExtracted:
 
     @pytest.fixture
     def mock_memory_service(self) -> MagicMock:
-        return MagicMock()
+        svc = MagicMock()
+        svc.extract_and_save_facts = AsyncMock()
+        return svc
 
     @pytest.fixture
     def handlers(
@@ -125,58 +125,25 @@ class TestOnPersonalFactsExtracted:
             ),
         )
 
-    async def test_empty_facts_skips_save(
+    async def test_delegates_to_service(
         self, handlers: EventHandlers, mock_memory_service: MagicMock
     ) -> None:
-        event = PersonalFactsExtracted(user_id="user-1", personal_facts=[])
-        await handlers.on_personal_facts_extracted(event)
-        mock_memory_service.save_facts.assert_not_called()
-
-    async def test_calls_memory_service_save_facts(
-        self, handlers: EventHandlers, mock_memory_service: MagicMock
-    ) -> None:
-        mock_memory_service.save_facts = AsyncMock()
-        event = PersonalFactsExtracted(
+        event = TurnCompleted(user_id="user-1", user_message="I'm vegan")
+        await handlers.on_turn_completed(event)
+        mock_memory_service.extract_and_save_facts.assert_awaited_once_with(
             user_id="user-1",
-            personal_facts=[PersonalFact(text="I'm vegetarian", source="stated")],
+            user_message="I'm vegan",
         )
-        await handlers.on_personal_facts_extracted(event)
-        mock_memory_service.save_facts.assert_called_once()
 
-    async def test_passes_user_id(
+    async def test_swallows_service_exceptions(
         self, handlers: EventHandlers, mock_memory_service: MagicMock
     ) -> None:
-        mock_memory_service.save_facts = AsyncMock()
-        event = PersonalFactsExtracted(
-            user_id="user-123",
-            personal_facts=[PersonalFact(text="I'm vegan", source="stated")],
+        """Per ADR-043, handler failures must never propagate."""
+        mock_memory_service.extract_and_save_facts = AsyncMock(
+            side_effect=RuntimeError("redis down")
         )
-        await handlers.on_personal_facts_extracted(event)
-        call_args = mock_memory_service.save_facts.call_args
-        assert call_args[1]["user_id"] == "user-123"
-
-    async def test_passes_confidence_config(
-        self, handlers: EventHandlers, mock_memory_service: MagicMock
-    ) -> None:
-        mock_memory_service.save_facts = AsyncMock()
-        event = PersonalFactsExtracted(
-            user_id="user-1",
-            personal_facts=[PersonalFact(text="I'm vegetarian", source="stated")],
-        )
-        await handlers.on_personal_facts_extracted(event)
-        call_args = mock_memory_service.save_facts.call_args
-        confidence_config = call_args[1]["confidence_config"]
-        assert isinstance(confidence_config, MemoryConfidenceConfig)
-
-    async def test_catches_exception_does_not_raise(
-        self, handlers: EventHandlers, mock_memory_service: MagicMock
-    ) -> None:
-        mock_memory_service.save_facts = AsyncMock(side_effect=Exception("DB error"))
-        event = PersonalFactsExtracted(
-            user_id="user-1",
-            personal_facts=[PersonalFact(text="I'm vegetarian", source="stated")],
-        )
-        await handlers.on_personal_facts_extracted(event)
+        event = TurnCompleted(user_id="user-1", user_message="anything")
+        await handlers.on_turn_completed(event)  # must not raise
 
 
 class TestOnChipConfirmed:
@@ -211,7 +178,7 @@ class TestOnChipConfirmed:
     async def test_ignores_non_chip_confirmed_events(
         self, handlers: EventHandlers, mock_taste_service: MagicMock
     ) -> None:
-        event = PersonalFactsExtracted(user_id="user-1", personal_facts=[])
+        event = TurnCompleted(user_id="user-1", user_message="hi")
         await handlers.on_chip_confirmed(event)
         mock_taste_service.run_regen_now.assert_not_awaited()
 

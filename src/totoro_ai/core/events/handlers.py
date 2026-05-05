@@ -11,10 +11,10 @@ from totoro_ai.core.events.events import (
     ChipConfirmed,
     DomainEvent,
     OnboardingSignal,
-    PersonalFactsExtracted,
     PlaceSaved,
     RecommendationAccepted,
     RecommendationRejected,
+    TurnCompleted,
 )
 from totoro_ai.db.models import InteractionType
 from totoro_ai.providers.tracing import TracingClient, get_tracing_client
@@ -129,46 +129,32 @@ class EventHandlers:
             )
             self._tracer.flush()
 
-    async def on_personal_facts_extracted(self, event: PersonalFactsExtracted) -> None:
-        """Handle personal facts extracted event - persist to user_memories.
+    async def on_turn_completed(self, event: TurnCompleted) -> None:
+        """Hand the user message off to the memory service for buffered extraction.
 
-        Skips if personal_facts is empty. Catches and logs all exceptions
-        via tracing; never raises (per ADR-043: failures don't block responses).
+        The service buffers per turn and only runs the LLM on every Nth
+        message (memory.extraction.debounce_messages). All exceptions are
+        caught here; ADR-043 forbids handler failures from surfacing.
         """
-        if not event.personal_facts:
-            return
-
         try:
-            from totoro_ai.core.config import get_config
-
-            config = get_config()
-            await self.memory_service.save_facts(
+            await self.memory_service.extract_and_save_facts(
                 user_id=event.user_id,
-                facts=event.personal_facts,
-                confidence_config=config.memory.confidence,
+                user_message=event.user_message,
             )
-
             self._tracer.capture_message(
-                message="PersonalFactsExtracted event handled",
+                message="TurnCompleted event handled",
                 level="info",
-                metadata={
-                    "event_id": event.event_id,
-                    "user_id": event.user_id,
-                    "facts_count": len(event.personal_facts),
-                },
+                metadata={"event_id": event.event_id, "user_id": event.user_id},
             )
         except Exception as exc:
             logger.error(
-                "Failed to save personal facts: %s",
+                "Failed to handle TurnCompleted: %s",
                 exc,
                 exc_info=True,
-                extra={
-                    "user_id": event.user_id,
-                    "facts_count": len(event.personal_facts),
-                },
+                extra={"user_id": event.user_id},
             )
             self._tracer.capture_message(
-                message=f"PersonalFactsExtracted handler error: {exc}",
+                message=f"TurnCompleted handler error: {exc}",
                 level="error",
                 metadata={"event_id": event.event_id, "user_id": event.user_id},
             )

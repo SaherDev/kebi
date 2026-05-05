@@ -21,6 +21,8 @@ from totoro_ai.core.extraction.extraction_pipeline import (
 from totoro_ai.core.extraction.persistence import ExtractionPersistenceService
 from totoro_ai.core.extraction.service import ExtractionService
 from totoro_ai.core.extraction.status_repository import ExtractionStatusRepository
+from totoro_ai.core.memory.buffer import MessageBuffer
+from totoro_ai.core.memory.extractor import MemoryExtractor
 from totoro_ai.core.memory.repository import SQLAlchemyUserMemoryRepository
 from totoro_ai.core.memory.service import UserMemoryService
 from totoro_ai.core.places import GooglePlacesClient, PlacesService
@@ -122,14 +124,36 @@ def get_embedding_repo(
     return SQLAlchemyEmbeddingRepository(db_session)
 
 
+def _build_message_buffer() -> MessageBuffer:
+    """Construct a per-user message buffer backed by a fresh Redis client.
+
+    Per `_build_places_cache`'s pattern: build a fresh `redis.asyncio.Redis`
+    per call. The async client reuses its connection pool internally, so
+    per-request construction is cheap and avoids the wrong-event-loop pitfall.
+    """
+    from redis.asyncio import Redis
+
+    cfg = get_config()
+    redis_client = Redis.from_url(get_env().REDIS_URL, decode_responses=True)
+    return MessageBuffer(
+        redis=redis_client,
+        ttl_seconds=cfg.memory.extraction.buffer_ttl_seconds,
+    )
+
+
 def get_user_memory_service() -> UserMemoryService:
     """FastAPI dependency providing UserMemoryService.
 
     CRITICAL (ADR-038): SQLAlchemyUserMemoryRepository is constructed ONLY here.
     Repo uses session_factory — each method opens its own session.
     """
+    cfg = get_config()
     return UserMemoryService(
-        repo=SQLAlchemyUserMemoryRepository(_get_session_factory())
+        repo=SQLAlchemyUserMemoryRepository(_get_session_factory()),
+        extractor=MemoryExtractor(get_instructor_client("memory_extractor")),
+        confidence_config=cfg.memory.confidence,
+        buffer=_build_message_buffer(),
+        debounce_messages=cfg.memory.extraction.debounce_messages,
     )
 
 
@@ -158,9 +182,16 @@ async def get_event_dispatcher(
     Taste and memory services use session_factory — each repo method opens
     its own session, so background tasks don't depend on request session.
     """
+    cfg = get_config()
     sf = _get_session_factory()
     taste_service = TasteModelService(session_factory=sf)
-    memory_service = UserMemoryService(repo=SQLAlchemyUserMemoryRepository(sf))
+    memory_service = UserMemoryService(
+        repo=SQLAlchemyUserMemoryRepository(sf),
+        extractor=MemoryExtractor(get_instructor_client("memory_extractor")),
+        confidence_config=cfg.memory.confidence,
+        buffer=_build_message_buffer(),
+        debounce_messages=cfg.memory.extraction.debounce_messages,
+    )
     handlers = EventHandlers(
         taste_service=taste_service,
         memory_service=memory_service,
@@ -175,8 +206,8 @@ async def get_event_dispatcher(
     ):
         dispatcher.register_handler(event_type, handlers.on_taste_signal)
     dispatcher.register_handler(
-        "personal_facts_extracted",
-        handlers.on_personal_facts_extracted,  # type: ignore[arg-type]
+        "turn_completed",
+        handlers.on_turn_completed,  # type: ignore[arg-type]
     )
     dispatcher.register_handler(
         "chip_confirmed",

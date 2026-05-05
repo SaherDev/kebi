@@ -356,10 +356,18 @@ class MemoryConfidenceConfig(BaseModel):
     inferred: float = 0.6
 
 
+class MemoryExtractionConfig(BaseModel):
+    """Personal-fact extraction batching."""
+
+    debounce_messages: int = 5
+    buffer_ttl_seconds: int = 604800
+
+
 class MemoryConfig(BaseModel):
     """User memory layer configuration."""
 
     confidence: MemoryConfidenceConfig = MemoryConfidenceConfig()
+    extraction: MemoryExtractionConfig = MemoryExtractionConfig()
 
 
 class ProviderEndpointConfig(BaseModel):

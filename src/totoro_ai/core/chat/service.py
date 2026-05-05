@@ -19,6 +19,7 @@ from totoro_ai.api.schemas.chat import ChatRequest, ChatResponse
 from totoro_ai.core.agent.invocation import build_turn_payload
 from totoro_ai.core.agent.messages import extract_text_content
 from totoro_ai.core.consult.service import ConsultService
+from totoro_ai.core.events.events import TurnCompleted
 from totoro_ai.core.extraction.service import ExtractionService
 from totoro_ai.core.recall.service import RecallService
 from totoro_ai.core.taste.regen import format_summary_for_agent
@@ -72,80 +73,94 @@ class ChatService:
             )
 
     async def _run_agent(self, request: ChatRequest) -> ChatResponse:
-        """Invoke the compiled agent graph and map its final state to ChatResponse."""
-        # Pre-agent prep runs in parallel so the cold-path geocode hides
-        # behind the taste/memory reads we'd do anyway.
-        taste_summary, memory_summary, location_label = await asyncio.gather(
-            self._compose_taste_summary(request.user_id),
-            self._compose_memory_summary(request.user_id),
-            self._resolve_location_label(request),
-        )
+        """Invoke the compiled agent graph and map its final state to ChatResponse.
 
-        payload = build_turn_payload(
-            message=request.message,
-            user_id=request.user_id,
-            taste_profile_summary=taste_summary,
-            memory_summary=memory_summary,
-            location=(request.location.model_dump() if request.location else None),
-            location_label=location_label,
-        )
-
-        graph_config = {
-            "configurable": {"thread_id": request.user_id},
-            "metadata": {"user_id": request.user_id},
-        }
+        Dispatches a TurnCompleted event in `finally` so the memory layer
+        captures every turn — success, clarification, or error.
+        """
         try:
-            final_state = await self._agent_graph.ainvoke(payload, config=graph_config)
-        except GraphInterrupt as interrupt:
-            # LangGraph wraps NodeInterrupt payload as:
-            #   interrupt.args[0] == [Interrupt(value=<payload>, ...)]
-            # Direct GraphInterrupt construction passes args[0] as a plain dict.
-            raw = interrupt.args[0] if interrupt.args else {}
-            if isinstance(raw, list) and raw and hasattr(raw[0], "value"):
-                interrupt_val: dict[str, Any] = raw[0].value
-            elif isinstance(raw, dict):
-                interrupt_val = raw
-            else:
-                interrupt_val = {}
-            candidates = (
-                interrupt_val.get("candidates", [])
-                if isinstance(interrupt_val, dict)
-                else []
+            # Pre-agent prep runs in parallel so the cold-path geocode hides
+            # behind the taste/memory reads we'd do anyway.
+            taste_summary, memory_summary, location_label = await asyncio.gather(
+                self._compose_taste_summary(request.user_id),
+                self._compose_memory_summary(request.user_id),
+                self._resolve_location_label(request),
             )
-            name = (
-                candidates[0].get("place", {}).get("place_name", "this place")
-                if candidates
-                else "this place"
+
+            payload = build_turn_payload(
+                message=request.message,
+                user_id=request.user_id,
+                taste_profile_summary=taste_summary,
+                memory_summary=memory_summary,
+                location=(request.location.model_dump() if request.location else None),
+                location_label=location_label,
             )
+
+            graph_config = {
+                "configurable": {"thread_id": request.user_id},
+                "metadata": {"user_id": request.user_id},
+            }
+            try:
+                final_state = await self._agent_graph.ainvoke(
+                    payload, config=graph_config
+                )
+            except GraphInterrupt as interrupt:
+                # LangGraph wraps NodeInterrupt payload as:
+                #   interrupt.args[0] == [Interrupt(value=<payload>, ...)]
+                # Direct GraphInterrupt construction passes args[0] as a plain dict.
+                raw = interrupt.args[0] if interrupt.args else {}
+                if isinstance(raw, list) and raw and hasattr(raw[0], "value"):
+                    interrupt_val: dict[str, Any] = raw[0].value
+                elif isinstance(raw, dict):
+                    interrupt_val = raw
+                else:
+                    interrupt_val = {}
+                candidates = (
+                    interrupt_val.get("candidates", [])
+                    if isinstance(interrupt_val, dict)
+                    else []
+                )
+                name = (
+                    candidates[0].get("place", {}).get("place_name", "this place")
+                    if candidates
+                    else "this place"
+                )
+                return ChatResponse(
+                    type="clarification",
+                    message=f"Low confidence on {name} — is this the place you meant?",
+                    data={"interrupt": interrupt_val},
+                )
+
+            messages = final_state.get("messages", [])
+            ai_message = _last_ai_message(messages)
+            all_steps = final_state.get("reasoning_steps", [])
+            user_steps = [s for s in all_steps if s.visibility == "user"]
+            tool_results = _collect_current_turn_tool_results(messages)
+
+            message_text = (
+                extract_text_content(ai_message.content) if ai_message else ""
+            ).strip()
+            if not message_text:
+                # Tool-use-only AIMessage or no response at all — give the client
+                # something renderable rather than an empty bubble.
+                message_text = "I'm working on it."
+
             return ChatResponse(
-                type="clarification",
-                message=f"Low confidence on {name} — is this the place you meant?",
-                data={"interrupt": interrupt_val},
+                type="agent",
+                message=message_text,
+                data={
+                    "reasoning_steps": [s.model_dump(mode="json") for s in user_steps],
+                    "tool_results": tool_results,
+                },
+                tool_calls_used=final_state.get("tool_calls_used", 0),
             )
-
-        messages = final_state.get("messages", [])
-        ai_message = _last_ai_message(messages)
-        all_steps = final_state.get("reasoning_steps", [])
-        user_steps = [s for s in all_steps if s.visibility == "user"]
-        tool_results = _collect_current_turn_tool_results(messages)
-
-        message_text = (
-            extract_text_content(ai_message.content) if ai_message else ""
-        ).strip()
-        if not message_text:
-            # Tool-use-only AIMessage or no response at all — give the client
-            # something renderable rather than an empty bubble.
-            message_text = "I'm working on it."
-
-        return ChatResponse(
-            type="agent",
-            message=message_text,
-            data={
-                "reasoning_steps": [s.model_dump(mode="json") for s in user_steps],
-                "tool_results": tool_results,
-            },
-            tool_calls_used=final_state.get("tool_calls_used", 0),
-        )
+        finally:
+            await self._dispatcher.dispatch(
+                TurnCompleted(
+                    user_id=request.user_id,
+                    user_message=request.message,
+                )
+            )
 
     async def _compose_taste_summary(self, user_id: str) -> str:
         profile = await self._taste_service.get_taste_profile(user_id)

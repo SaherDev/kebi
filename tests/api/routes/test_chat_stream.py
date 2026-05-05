@@ -22,6 +22,7 @@ def _make_mock_service() -> MagicMock:
     svc._config = MagicMock(spec=AppConfig)
     svc._compose_taste_summary = AsyncMock(return_value="")
     svc._compose_memory_summary = AsyncMock(return_value="")
+    svc._dispatcher = MagicMock(dispatch=AsyncMock())
     return svc
 
 

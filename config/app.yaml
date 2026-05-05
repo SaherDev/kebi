@@ -89,6 +89,15 @@ models:
     max_tokens: 512
     temperature: 0.3
 
+  # Personal-fact extraction from a batch of recent user messages.
+  # Triggered every Nth user turn (memory.extraction.debounce_messages).
+  # Output feeds UserMemoryService.save_facts → user_memories.
+  memory_extractor:
+    provider: openai
+    model: gpt-4o-mini
+    max_tokens: 256
+    temperature: 0
+
 # ---------------------------------------------------------------------------
 # Extraction pipeline — confidence weights and decision thresholds
 # ADR-018, ADR-034: confidence scoring and two-phase confirmation
@@ -279,6 +288,15 @@ memory:
   confidence:
     stated: 0.9
     inferred: 0.6
+  extraction:
+    # Run extraction once every Nth user turn. Each turn appends to a
+    # per-user Redis buffer; on the Nth append the buffer is drained and
+    # passed to the memory_extractor LLM as one batch.
+    debounce_messages: 5
+    # TTL on the per-user message buffer (seconds). Refreshed on every
+    # append, so active users never expire. Caps Redis memory leak from
+    # users who go quiet mid-batch. 7 days.
+    buffer_ttl_seconds: 604800
 
 # ---------------------------------------------------------------------------
 # PlacesService Configuration (ADR-054, feature 019)

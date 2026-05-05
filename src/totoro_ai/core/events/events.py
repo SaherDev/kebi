@@ -5,8 +5,6 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
-from totoro_ai.core.memory.schemas import PersonalFact
-
 
 class DomainEvent(BaseModel):
     """Base class for all domain events"""
@@ -59,12 +57,14 @@ class ChipConfirmed(DomainEvent):
     event_type: str = "chip_confirmed"
 
 
-class PersonalFactsExtracted(DomainEvent):
-    """Event: Personal facts extracted from user message.
+class TurnCompleted(DomainEvent):
+    """Event: A user turn finished (success, clarification, or error).
 
-    Fired after every intent classification. Handler persists facts to
-    user_memories table. Payload may contain empty list if no facts were extracted.
+    Fired by ChatService for every user turn. The memory handler appends
+    `user_message` to a per-user buffer and runs LLM fact extraction on
+    every Nth turn (memory.extraction.debounce_messages). The agent layer
+    is unaware of fact extraction; it just emits this event.
     """
 
-    event_type: str = "personal_facts_extracted"
-    personal_facts: list[PersonalFact]
+    event_type: str = "turn_completed"
+    user_message: str

@@ -42,11 +42,14 @@ def _make_service(
         )
         agent_graph = graph
 
+    dispatcher = MagicMock()
+    dispatcher.dispatch = AsyncMock()
+
     return ChatService(
         extraction_service=MagicMock(),
         consult_service=MagicMock(),
         recall_service=MagicMock(),
-        event_dispatcher=MagicMock(),
+        event_dispatcher=dispatcher,
         memory_service=memory_service,
         taste_service=taste_service,
         places_service=places_service,
