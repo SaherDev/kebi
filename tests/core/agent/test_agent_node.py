@@ -127,6 +127,7 @@ async def test_agent_node_trims_history_to_max_history_messages(
     messages = [HumanMessage(content=f"msg {i}") for i in range(60)]
     with patch("totoro_ai.core.agent.graph.get_config") as mock_cfg:
         mock_cfg.return_value.agent.max_history_messages = 40
+        mock_cfg.return_value.agent.tool_result_window = 2
         mock_cfg.return_value.prompts = {
             "agent": MagicMock(
                 content="prompt {taste_profile_summary} {memory_summary}"
@@ -168,6 +169,7 @@ async def test_agent_node_trim_before_sanitize_no_orphaned_tool_message(
     node = make_agent_node(captured_llm, [])
     with patch("totoro_ai.core.agent.graph.get_config") as mock_cfg:
         mock_cfg.return_value.agent.max_history_messages = 40
+        mock_cfg.return_value.agent.tool_result_window = 2
         mock_cfg.return_value.prompts = {
             "agent": MagicMock(
                 content="prompt {taste_profile_summary} {memory_summary}"

@@ -248,6 +248,11 @@ agent:
   max_steps: 10
   max_errors: 3
   max_history_messages: 40
+  # Older ToolMessage payloads (recall/consult/save JSON, ~2-5KB each) get
+  # replaced by a one-line breadcrumb on the way to the LLM. The most recent
+  # `tool_result_window` payloads stay full. State is untouched — this only
+  # rewrites the per-call conversation list. 0 disables compaction.
+  tool_result_window: 2
   checkpointer_ttl_seconds: 86400
   prompt_caching_enabled: false  # ADR-067: Anthropic-only (ephemeral cache_control). Re-enable when orchestrator returns to Anthropic.
   tool_timeouts_seconds:
