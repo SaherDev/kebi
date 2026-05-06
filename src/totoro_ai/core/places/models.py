@@ -54,6 +54,7 @@ _SUBCATEGORIES: dict[PlaceType, frozenset[str]] = {
     PlaceType.food_and_drink: frozenset(
         {
             "restaurant",
+            "fast_food",
             "cafe",
             "bar",
             "bakery",

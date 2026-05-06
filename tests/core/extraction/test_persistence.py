@@ -43,6 +43,7 @@ def _make_validated(
     external_id: str = "place_123",
     provider: PlaceProvider = PlaceProvider.google,
     cuisine: str | None = "ramen",
+    subcategory: str | None = "restaurant",
     match_lat: float | None = None,
     match_lng: float | None = None,
     match_address: str | None = None,
@@ -55,7 +56,7 @@ def _make_validated(
         external_id=external_id,
         confidence=confidence,
         evidence=evidence or [Evidence(Producer.LLM_NER, Medium.CAPTION)],
-        subcategory="restaurant",
+        subcategory=subcategory,
         attributes=PlaceAttributes(cuisine=cuisine),
         match_lat=match_lat,
         match_lng=match_lng,
@@ -649,3 +650,63 @@ async def test_mixed_saved_and_below_threshold_only_saved_in_event(
     event: PlaceSaved = event_dispatcher.dispatch.call_args[0][0]
     assert len(event.place_ids) == 1
     assert event.place_ids[0] == saved[0].place_id
+
+
+# ---------------------------------------------------------------------------
+# Per-item PlaceCreate validation isolation — bad subcategory falls back
+# ---------------------------------------------------------------------------
+
+
+async def test_invalid_subcategory_strips_and_saves(
+    service: ExtractionPersistenceService,
+    places_service: AsyncMock,
+) -> None:
+    """An LLM-emitted subcategory outside the allowed vocabulary used to
+    crash the whole batch. Now the persistence layer retries with
+    subcategory stripped so the place still saves."""
+    places_service.create_batch.return_value = [_make_saved_object("place-1")]
+    # subcategory='bogus_subcat' is not in PlaceType.food_and_drink's allowed set.
+    vc = _make_validated(subcategory="bogus_subcat")
+
+    outcomes = await service.save_and_emit([vc], user_id="user-1")
+
+    assert len(outcomes) == 1
+    assert outcomes[0].status == "saved"
+    # The PlaceCreate handed to create_batch had subcategory=None after
+    # the safe fallback.
+    places_service.create_batch.assert_awaited_once()
+    items = places_service.create_batch.call_args[0][0]
+    assert items[0].subcategory is None
+
+
+async def test_one_bad_subcategory_does_not_kill_other_candidates(
+    service: ExtractionPersistenceService,
+    places_service: AsyncMock,
+    embedder: AsyncMock,
+) -> None:
+    """A bad row gets saved-with-stripped-subcategory; valid rows save
+    with their subcategory intact. No row in the batch is dropped just
+    because another row had a vocabulary mismatch."""
+    places_service.create_batch.return_value = [
+        _make_saved_object("p-good", "Good Place"),
+        _make_saved_object(
+            "p-bad", "Bad Subcat", provider_id="google:ext_b"
+        ),
+    ]
+    embedder.embed = AsyncMock(return_value=[[0.1] * 1024, [0.2] * 1024])
+
+    outcomes = await service.save_and_emit(
+        [
+            _make_validated("Good Place", external_id="ext_a"),
+            _make_validated(
+                "Bad Subcat", external_id="ext_b", subcategory="bogus_subcat"
+            ),
+        ],
+        user_id="user-1",
+    )
+
+    assert len(outcomes) == 2
+    assert all(o.status == "saved" for o in outcomes)
+    items = places_service.create_batch.call_args[0][0]
+    assert items[0].subcategory == "restaurant"
+    assert items[1].subcategory is None

@@ -116,8 +116,8 @@ For each venue, emit a strict JSON object matching this schema:
 }}
 
 Allowed subcategory values by place_type:
-  - food_and_drink: restaurant, cafe, bar, bakery, food_truck, brewery,
-                    dessert_shop, market
+  - food_and_drink: restaurant, fast_food, cafe, bar, bakery, food_truck,
+                    brewery, dessert_shop, market
   - things_to_do:   nature, cultural_site, museum, nightlife, experience,
                     wellness, event_venue
   - shopping:       market, boutique, mall, bookstore, specialty_store

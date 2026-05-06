@@ -40,6 +40,10 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Sentinel for `_to_place_create(subcategory=...)` — distinguishes
+# "not passed, use vc.subcategory" from "passed as None to strip".
+_UNSET: object = object()
+
 
 @dataclass
 class PlaceSaveOutcome:
@@ -202,9 +206,24 @@ class ExtractionPersistenceService:
         if not eligible:
             return []
 
-        items = [
-            self._to_place_create(vc, user_id, source_url, source) for vc in eligible
-        ]
+        # Build PlaceCreate per candidate, isolating per-item validation
+        # failures (e.g. an LLM-emitted subcategory outside the allowed
+        # vocabulary). One bad row used to crash the whole batch via the
+        # raised ValidationError; now it falls back to a stripped-
+        # subcategory retry, and only candidates that fail BOTH attempts
+        # are dropped.
+        eligible_pairs: list[tuple[ValidatedCandidate, PlaceCreate]] = []
+        for vc in eligible:
+            place = self._safe_to_place_create(vc, user_id, source_url, source)
+            if place is None:
+                continue
+            eligible_pairs.append((vc, place))
+
+        if not eligible_pairs:
+            return []
+
+        eligible = [vc for vc, _ in eligible_pairs]
+        items = [place for _, place in eligible_pairs]
 
         try:
             saved = await self._places_service.create_batch(items)
@@ -251,7 +270,9 @@ class ExtractionPersistenceService:
                 )
                 continue
 
-            item = self._to_place_create(vc, user_id, source_url, source)
+            item = self._safe_to_place_create(vc, user_id, source_url, source)
+            if item is None:
+                continue
             try:
                 place = await self._places_service.create(item)
             except DuplicatePlaceError as inner:
@@ -289,16 +310,23 @@ class ExtractionPersistenceService:
         user_id: str,
         source_url: str | None,
         source: PlaceSource | None,
+        subcategory: str | None | object = _UNSET,
     ) -> PlaceCreate:
         """Assemble a `PlaceCreate` from a `ValidatedCandidate` plus the
         pipeline context the candidate doesn't carry (`user_id`,
         `source_url`, `source`). This is the single boundary where
-        extraction's lighter shape becomes the persistence shape."""
+        extraction's lighter shape becomes the persistence shape.
+
+        `subcategory` defaults to the candidate's value; pass `None`
+        explicitly to strip it (used by `_safe_to_place_create` after a
+        first attempt fails Pydantic validation on a bad subcategory).
+        """
+        sub = vc.subcategory if subcategory is _UNSET else subcategory
         return PlaceCreate(
             user_id=user_id,
             place_name=vc.place_name,
             place_type=vc.place_type,
-            subcategory=vc.subcategory,
+            subcategory=sub,
             tags=vc.tags,
             attributes=vc.attributes,
             source_url=source_url,
@@ -306,6 +334,46 @@ class ExtractionPersistenceService:
             provider=vc.provider,
             external_id=vc.external_id,
         )
+
+    def _safe_to_place_create(
+        self,
+        vc: ValidatedCandidate,
+        user_id: str,
+        source_url: str | None,
+        source: PlaceSource | None,
+    ) -> PlaceCreate | None:
+        """Build a `PlaceCreate` with per-item error isolation.
+
+        First tries the candidate as-is. If Pydantic validation fails
+        (most common cause: LLM-emitted `subcategory` outside the
+        allowed vocabulary for the picked `place_type`), retries with
+        `subcategory=None` so the place still saves with degraded data
+        rather than killing the whole batch. Returns `None` only if
+        even the stripped retry fails — those candidates are logged
+        and dropped.
+        """
+        try:
+            return self._to_place_create(vc, user_id, source_url, source)
+        except Exception as first_exc:
+            logger.warning(
+                "PlaceCreate validation failed for %r — retrying without "
+                "subcategory %r: %s",
+                vc.place_name,
+                vc.subcategory,
+                first_exc,
+            )
+            try:
+                return self._to_place_create(
+                    vc, user_id, source_url, source, subcategory=None
+                )
+            except Exception as second_exc:
+                logger.warning(
+                    "PlaceCreate validation still failed for %r after "
+                    "subcategory strip — dropping: %s",
+                    vc.place_name,
+                    second_exc,
+                )
+                return None
 
     @staticmethod
     def _format_provider_id(vc: ValidatedCandidate) -> str | None:
