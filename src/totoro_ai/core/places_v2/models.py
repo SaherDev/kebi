@@ -332,9 +332,14 @@ class UserPlace(BaseModel):
 
 
 class SavedPlaceView(BaseModel):
-    """List view combining a UserPlace with its underlying place data."""
+    """List view combining a UserPlace with its underlying place data.
 
-    place: PlaceObject
+    Carries `PlaceCore` (DB-side, persistable) — no live Google fields.
+    The saved-places list does not need rating/hours/etc., and skipping the
+    cache overlay keeps this read cheap.
+    """
+
+    place: PlaceCore
     user_data: UserPlace
 
 

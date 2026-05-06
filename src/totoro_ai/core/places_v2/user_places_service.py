@@ -1,14 +1,12 @@
-"""UserPlacesService — combines user_places + places repos and live-field enrichment."""
+"""UserPlacesService — combines user_places + places repos."""
 
 from __future__ import annotations
 
 import logging
 
-from ._place_utils import overlay_with_cache
 from .models import SavedPlaceView, UserPlace
 from .protocols import (
     PlacesRepoProtocol,
-    PlacesSearchServiceProtocol,
     UserPlacesRepoProtocol,
 )
 
@@ -20,14 +18,12 @@ class UserPlacesService:
         self,
         places_repo: PlacesRepoProtocol,
         user_places_repo: UserPlacesRepoProtocol,
-        search: PlacesSearchServiceProtocol,
     ) -> None:
         self._places_repo = places_repo
         self._user_places_repo = user_places_repo
-        self._search = search
 
     async def get_user_places(self, user_id: str) -> list[SavedPlaceView]:
-        """Three reads: user_places → places → cache overlay. Zero writes."""
+        """Two reads: user_places → places. Zero writes."""
         user_places = await self._user_places_repo.get_by_user(user_id)
         if not user_places:
             return []
@@ -36,25 +32,16 @@ class UserPlacesService:
         cores = await self._places_repo.get_by_ids(place_ids)
         cores_by_id = {c.id: c for c in cores if c.id}
 
-        provider_ids = [c.provider_id for c in cores if c.provider_id]
-        fresh = await self._search.get_by_ids(provider_ids) if provider_ids else {}
-
-        place_objects = {
-            obj.id: obj
-            for obj in overlay_with_cache(list(cores_by_id.values()), fresh)
-            if obj.id
-        }
-
         result: list[SavedPlaceView] = []
         for up in user_places:
-            place = place_objects.get(up.place_id)
-            if place is None:
+            core = cores_by_id.get(up.place_id)
+            if core is None:
                 logger.warning(
                     "user_place_missing_core",
                     extra={"place_id": up.place_id, "user_id": user_id},
                 )
                 continue
-            result.append(SavedPlaceView(place=place, user_data=up))
+            result.append(SavedPlaceView(place=core, user_data=up))
 
         return result
 

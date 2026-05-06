@@ -40,10 +40,17 @@ service.list_user_places(user_id: str, query: UserPlacesListQuery) -> SavedPlace
 
 **Service call:**
 ```python
-service.get_user_place(user_id: str, user_place_id: str) -> SavedPlaceView
+service.get_user_place(user_id: str, user_place_id: str) -> SavedPlaceDetail
 ```
 
-**Response:** `SavedPlaceView` with **always-fresh** live fields. On cache miss the service refreshes from Google (one `places.get` call), writes back to cache, and returns the enriched object. Same refresh-on-miss path is used by Route 1 (list).
+**`SavedPlaceDetail` (Pydantic, in `models.py`)** — single-place detail view:
+
+| Field | Type | Notes |
+|---|---|---|
+| `place` | `PlaceObject` | Full place: core + live Google fields (rating, hours, phone, website, popularity, business_status). |
+| `user_data` | `UserPlace` | The user's relationship with this place. |
+
+**Response:** `SavedPlaceDetail` with **always-fresh** live fields. On cache miss the service refreshes from Google (one `places.get` call), writes back to cache, and returns the enriched object. Route 1 stays on `SavedPlaceView` (`PlaceCore` only) — the detail route is the one that pays the live-field cost per request.
 
 **Errors:** `404` if the row doesn't exist OR `row.user_id != user_id` (mask existence — don't leak ownership).
 

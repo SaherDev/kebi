@@ -164,7 +164,7 @@ class TestPlaceQuery:
 
 class TestSavedPlaceView:
     def test_construction(self) -> None:
-        place = PlaceObject(place_name="Cafe X")
+        place = PlaceCore(place_name="Cafe X")
         up = UserPlace(
             user_place_id="u1",
             user_id="user",

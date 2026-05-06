@@ -569,13 +569,11 @@ def get_places_search_service(
 def get_user_places_service(
     places_repo: PlacesRepo = Depends(get_places_v2_repo),  # noqa: B008
     user_places_repo: UserPlacesRepo = Depends(get_user_places_repo),  # noqa: B008
-    search: PlacesSearchService = Depends(get_places_search_service),  # noqa: B008
 ) -> UserPlacesService:
     """FastAPI dependency providing UserPlacesService (places_v2)."""
     return UserPlacesService(
         places_repo=places_repo,
         user_places_repo=user_places_repo,
-        search=search,
     )
 
 
