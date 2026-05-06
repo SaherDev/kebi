@@ -108,7 +108,7 @@ class TestEmbedAndDelegate:
     async def test_filters_pass_through_unchanged(self) -> None:
         service, repo, _ = _make_service()
         f = HybridSearchFilters(
-            category=PlaceCategory.restaurant,
+            categories=[PlaceCategory.restaurant],
             tags=["italian"],
             city="Tokyo",
             visited=True,

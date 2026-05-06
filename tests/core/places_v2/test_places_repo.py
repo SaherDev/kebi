@@ -41,7 +41,7 @@ def _minimal_row(
         "id": pid,
         "provider_id": provider_id,
         "place_name": f"Place {pid}",
-        "category": None,
+        "categories": [],
         "tags": None,
         "location": None,
         "created_at": datetime.now(UTC),
@@ -77,11 +77,11 @@ class TestRowToCore:
         assert core.location is not None
         assert core.location.lat == 13.7
 
-    def test_with_category(self) -> None:
+    def test_with_categories(self) -> None:
         row = _minimal_row()
-        row["category"] = "restaurant"
+        row["categories"] = ["restaurant", "bar"]
         core = _row_to_core(row)
-        assert core.category == PlaceCategory.restaurant
+        assert core.categories == [PlaceCategory.restaurant, PlaceCategory.bar]
 
     def test_with_aliases(self) -> None:
         row = _minimal_row()
@@ -212,7 +212,7 @@ class TestFind:
 
     async def test_category_filter_applied(self) -> None:
         repo, session = _make_repo([])
-        await repo.find(PlaceQuery(category=PlaceCategory.cafe))
+        await repo.find(PlaceQuery(categories=[PlaceCategory.cafe]))
         stmt = session.execute.call_args.args[0]
         compiled = str(stmt.compile(compile_kwargs={"literal_binds": True}))
         assert "cafe" in compiled.lower()
@@ -276,7 +276,7 @@ class TestUpsertPlaces:
         for col in (
             "place_name",
             "place_name_aliases",
-            "category",
+            "categories",
             "tags",
             "location",
             "refreshed_at",

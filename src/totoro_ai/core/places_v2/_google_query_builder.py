@@ -149,10 +149,10 @@ _CATEGORY_TO_GOOGLE_TYPE: dict[str, str] = {
 # ---------------------------------------------------------------------------
 
 def query_to_google_types(query: PlaceQuery) -> list[str]:
-    """Map PlaceQuery category + cuisine/dietary tags to Google place type IDs.
+    """Map PlaceQuery categories + cuisine/dietary tags to Google place type IDs.
 
-    Returns a deduplicated list (category first, then tags). Tags without a
-    known Google mapping are handled by the text query instead.
+    Returns a deduplicated list (categories first in input order, then tags).
+    Tags without a known Google mapping are handled by the text query instead.
     """
     seen: set[str] = set()
     types: list[str] = []
@@ -162,10 +162,11 @@ def query_to_google_types(query: PlaceQuery) -> list[str]:
             seen.add(t)
             types.append(t)
 
-    if query.category:
-        gtype = _CATEGORY_TO_GOOGLE_TYPE.get(query.category.value)
-        if gtype:
-            _add(gtype)
+    if query.categories:
+        for cat in query.categories:
+            gtype = _CATEGORY_TO_GOOGLE_TYPE.get(cat.value)
+            if gtype:
+                _add(gtype)
 
     if query.tags:
         for tag_val in query.tags:
@@ -179,9 +180,11 @@ def query_to_google_types(query: PlaceQuery) -> list[str]:
 def build_text_search_params(query: PlaceQuery) -> tuple[str, str | None]:
     """Build (textQuery, includedType) for Google searchText.
 
-    The first term mappable to a Google type ID (category checked before
-    tags) becomes includedType, and that same term is omitted from
-    textQuery to avoid sending the same concept twice.
+    The first term mappable to a Google type ID (categories checked in order
+    before tags) becomes includedType, and that same term is omitted from
+    textQuery to avoid sending the same concept twice. Additional categories
+    beyond the first fall through into textQuery — searchText has no plural
+    form, so the OR is expressed in text and the first as the typed filter.
 
     Edge case: searchText requires a non-empty textQuery. If stripping
     the type-mapped term would leave textQuery empty, the term is kept
@@ -194,14 +197,15 @@ def build_text_search_params(query: PlaceQuery) -> tuple[str, str | None]:
     if query.place_name:
         text_parts.append(query.place_name)
 
-    if query.category:
-        cat_text = query.category.value.replace("_", " ")
-        gtype = _CATEGORY_TO_GOOGLE_TYPE.get(query.category.value)
-        if gtype and primary_type is None:
-            primary_type = gtype
-            primary_term = cat_text
-        else:
-            text_parts.append(cat_text)
+    if query.categories:
+        for cat in query.categories:
+            cat_text = cat.value.replace("_", " ")
+            gtype = _CATEGORY_TO_GOOGLE_TYPE.get(cat.value)
+            if gtype and primary_type is None:
+                primary_type = gtype
+                primary_term = cat_text
+            else:
+                text_parts.append(cat_text)
 
     if query.tags:
         for tag_val in query.tags:

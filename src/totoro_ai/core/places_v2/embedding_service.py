@@ -99,8 +99,9 @@ class EmbeddingService:
             aliases = sorted({a.value for a in core.place_name_aliases})
             parts.append(f"Also known as: {', '.join(aliases)}")
 
-        if core.category:
-            parts.append(f"Category: {_humanize(core.category.value)}")
+        if core.categories:
+            cats = ", ".join(_humanize(c.value) for c in core.categories)
+            parts.append(f"Categories: {cats}")
 
         if core.tags:
             by_type: dict[str, set[str]] = {}

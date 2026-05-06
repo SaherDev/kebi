@@ -531,19 +531,19 @@ class TestPostTTLRecovery:
 
 class TestFieldOwnership:
     async def test_db_wins_for_curated_fields(self) -> None:
-        """name, aliases, tags, category come from DB even when cache differs."""
+        """name, aliases, tags, categories come from DB even when cache differs."""
         db_core = PlaceCore(
             id="x",
             provider_id="google:x",
             place_name="DB Name",
-            category=PlaceCategory.cafe,
+            categories=[PlaceCategory.cafe],
             tags=[PlaceTag(type="cuisine", value="thai", source="manual")],
             location=LocationContext(lat=1.0, address="DB"),
         )
         cached = _object("x").model_copy(
             update={
                 "place_name": "Cache Name",
-                "category": PlaceCategory.restaurant,
+                "categories": [PlaceCategory.restaurant],
                 "tags": [PlaceTag(type="cuisine", value="italian", source="google")],
             }
         )
@@ -556,7 +556,7 @@ class TestFieldOwnership:
         result = (await svc.find(PlaceQuery(), limit=5))[0]
 
         assert result.place_name == "DB Name"
-        assert result.category == PlaceCategory.cafe
+        assert result.categories == [PlaceCategory.cafe]
         assert [t.value for t in result.tags] == ["thai"]
 
     async def test_cache_wins_for_live_fields(self) -> None:

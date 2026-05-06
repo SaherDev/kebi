@@ -57,7 +57,7 @@ from sqlalchemy import (
     null,
     select,
 )
-from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB, TSVECTOR
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .embeddings_repo import EMBEDDING_DIMENSIONS
@@ -92,7 +92,7 @@ _PlacesV2Table = Table(
     Column("provider_id", String),
     Column("place_name", String),
     Column("place_name_aliases", JSONB),
-    Column("category", String),
+    Column("categories", ARRAY(String)),
     Column("tags", JSONB),
     Column("location", JSONB),
     Column("created_at", DateTime(timezone=True)),
@@ -218,7 +218,7 @@ class HybridSearchRepo:
                 _p.provider_id,
                 _p.place_name,
                 _p.place_name_aliases,
-                _p.category,
+                _p.categories,
                 _p.tags,
                 _p.location,
                 _p.created_at,
@@ -370,8 +370,14 @@ def _filter_conditions(
     conditions: list[ColumnElement[bool]] = []
 
     # ---- place catalog ----
-    if filters.category is not None:
-        conditions.append(_p.category == filters.category.value)
+    if filters.categories:
+        # Array overlap: a place matches if its categories list shares any
+        # element with the filter's category set (OR semantics).
+        conditions.append(
+            _p.categories.op("&&")(
+                cast([c.value for c in filters.categories], ARRAY(String))
+            )
+        )
 
     if filters.tags:
         # AND semantics: every requested tag value must be present.
@@ -452,7 +458,7 @@ def _row_to_hit(row: Mapping[str, Any]) -> HybridSearchHit:
         provider_id=row.get("provider_id"),
         place_name=row["place_name"],
         place_name_aliases=aliases,
-        category=PlaceCategory(row["category"]) if row.get("category") else None,
+        categories=[PlaceCategory(c) for c in (row.get("categories") or [])],
         tags=tags,
         location=location,
         created_at=_to_datetime(row.get("created_at")),

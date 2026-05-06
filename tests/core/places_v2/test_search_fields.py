@@ -19,7 +19,7 @@ _SEARCHABLE_FIELDS: frozenset[str] = frozenset(
     {
         "place_name",
         "place_name_aliases",
-        "category",
+        "categories",
         "tags",
         "neighborhood",
         "city",
@@ -33,7 +33,7 @@ _MIGRATION_PATH = (
     _REPO_ROOT
     / "alembic"
     / "versions"
-    / "e9f0a1b2c3d4_add_place_embeddings_v2_and_v2_fts.py"
+    / "a4d2c1b9e8f3_places_v2_category_to_categories_array.py"
 )
 _EMBEDDING_SERVICE_PATH = (
     _REPO_ROOT

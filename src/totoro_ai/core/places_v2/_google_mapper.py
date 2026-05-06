@@ -35,8 +35,10 @@ GOOGLE_PROVIDER_PREFIX = "google:"
 # ---------------------------------------------------------------------------
 
 # Google Places API v1 types → our canonical category list.
-# Order within each group matters: more specific types first so the first
-# match in _map_types() lands on the most precise category.
+# A place often matches several entries (e.g. a wine bar is `wine_bar`,
+# `bar`, and `store`); _map_categories preserves the order Google returned
+# them in `types[]`, which is documented to put the most specific type
+# first.
 _GOOGLE_TYPE_TO_CATEGORY: dict[str, str] = {
     # restaurants
     "burger_restaurant": "restaurant",
@@ -314,8 +316,7 @@ def map_place(raw: dict[str, Any], now: datetime) -> PlaceObject | None:
         return None
 
     types: list[str] = raw.get("types") or []
-    category_str = _map_category(types)
-    category = PlaceCategory(category_str) if category_str else None
+    categories = [PlaceCategory(c) for c in _map_categories(types)]
 
     tags: list[PlaceTag] = []
     seen: set[tuple[str, str]] = set()
@@ -358,7 +359,7 @@ def map_place(raw: dict[str, Any], now: datetime) -> PlaceObject | None:
     return PlaceObject(
         provider_id=f"{GOOGLE_PROVIDER_PREFIX}{raw_id}",
         place_name=place_name,
-        category=category,
+        categories=categories,
         tags=tags,
         location=LocationContext(
             lat=raw_loc.get("latitude"),
@@ -382,12 +383,22 @@ def map_place(raw: dict[str, Any], now: datetime) -> PlaceObject | None:
 # Internal helpers
 # ---------------------------------------------------------------------------
 
-def _map_category(types: list[str]) -> str | None:
+def _map_categories(types: list[str]) -> list[str]:
+    """Walk Google's types[] and return every recognized category, in order, deduped.
+
+    Google returns multi-membership facts in `types[]` — a wine bar may come
+    back as ``["wine_bar", "bar", "store", "food", ...]``. Preserving the
+    order keeps the most specific type first (Google's contract), which is
+    what consumers should treat as the "primary" for display purposes.
+    """
+    seen: set[str] = set()
+    result: list[str] = []
     for t in types:
         cat = _GOOGLE_TYPE_TO_CATEGORY.get(t)
-        if cat:
-            return cat
-    return None
+        if cat and cat not in seen:
+            seen.add(cat)
+            result.append(cat)
+    return result
 
 
 def _map_address_components(

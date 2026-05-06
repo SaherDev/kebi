@@ -197,19 +197,22 @@ class PlaceNameAlias(BaseModel):
     source: str          # "tiktok" | "instagram" | "user" | "llm" | ...
 
 
-SortField = Literal["created_at", "refreshed_at", "place_name", "category"]
+SortField = Literal["created_at", "refreshed_at", "place_name"]
 
 
 class PlaceQuery(BaseModel):
     """Structured search query. All fields optional, combined with AND.
 
-    DB filters:  place_name, category, tags, location, created_after/before, sort_*
+    DB filters:  place_name, categories, tags, location, created_after/before, sort_*
     Client hints: open_now (passed through to the search client)
+
+    `categories` is OR across values (a place matches if its category is in the list).
+    `tags` is AND (all listed tag values must be present on the place).
     """
 
     # DB filters
     place_name: str | None = None    # ILIKE on DB; also drives client text search
-    category: PlaceCategory | None = None
+    categories: list[PlaceCategory] | None = None  # OR across values
     tags: list[str] | None = None   # tag values; all must be present (AND)
     location: LocationContext | None = None
 
@@ -260,7 +263,7 @@ class PlaceCore(BaseModel):
     # core (mergeable)
     place_name: str
     place_name_aliases: list[PlaceNameAlias] = Field(default_factory=list)
-    category: PlaceCategory | None = None
+    categories: list[PlaceCategory] = Field(default_factory=list)
     tags: list[PlaceTag] = Field(default_factory=list)
 
     # location (Google-derived; wiped by nightly cron after 30 days per ToS)
@@ -343,12 +346,12 @@ class HybridSearchFilters(BaseModel):
     the same constrained candidate pool.
 
     Filters split across two tables:
-      - place catalog (places_v2): category, tags, location, geo
+      - place catalog (places_v2): categories, tags, location, geo
       - user_places:  visited, liked, approved, saved_at range
     """
 
     # ---- place catalog filters --------------------------------------
-    category: PlaceCategory | None = None
+    categories: list[PlaceCategory] | None = None  # OR across values
     tags: list[str] | None = None         # JSONB @>, AND across values
 
     city: str | None = None               # ILIKE

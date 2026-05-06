@@ -119,7 +119,7 @@ class TestPlaceCore:
             id="abc",
             provider_id="google:ChIJ123",
             place_name="Sukhumvit Joe's",
-            category="restaurant",
+            categories=["restaurant", "bar"],
             tags=[
                 PlaceTag(type="cuisine", value="Thai", source="google"),
                 PlaceTag(type="price", value="$$", source="google"),
@@ -129,7 +129,7 @@ class TestPlaceCore:
             ),
         )
         assert core.provider_id == "google:ChIJ123"
-        assert core.category == PlaceCategory.restaurant
+        assert core.categories == [PlaceCategory.restaurant, PlaceCategory.bar]
         assert len(core.tags) == 2
         assert core.tags[0].value == "Thai"
         assert core.tags[1].type == "price"
@@ -153,7 +153,7 @@ class TestPlaceObject:
 class TestPlaceQuery:
     def test_all_optional(self) -> None:
         q = PlaceQuery()
-        assert q.category is None
+        assert q.categories is None
         assert q.tags is None
         assert q.location is None
 

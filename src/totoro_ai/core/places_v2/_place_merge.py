@@ -8,7 +8,8 @@ Policies (per-column):
     place_name              sticky — first non-empty wins.
     place_name_aliases      dedup by value — existing wins on conflict;
                             new values are appended. Never removed.
-    category                sticky — first non-NULL wins.
+    categories              order-preserving union — existing order kept,
+                            new categories appended. Never removed.
     tags                    dedup by value — existing wins on conflict;
                             new values are appended. Never removed.
     location                sticky whole-blob — first non-NULL wins.
@@ -22,7 +23,7 @@ from __future__ import annotations
 
 from typing import TypeVar
 
-from .models import PlaceCore, PlaceNameAlias, PlaceTag
+from .models import PlaceCategory, PlaceCore, PlaceNameAlias, PlaceTag
 
 T = TypeVar("T", PlaceTag, PlaceNameAlias)
 
@@ -42,7 +43,9 @@ def merge_place(existing: PlaceCore | None, candidate: PlaceCore) -> PlaceCore:
             "place_name_aliases": _dedup_by_value(
                 existing.place_name_aliases, candidate.place_name_aliases
             ),
-            "category": existing.category or candidate.category,
+            "categories": _merge_categories(
+                existing.categories, candidate.categories
+            ),
             "tags": _dedup_by_value(existing.tags, candidate.tags),
             "location": existing.location or candidate.location,
             "refreshed_at": (
@@ -52,6 +55,25 @@ def merge_place(existing: PlaceCore | None, candidate: PlaceCore) -> PlaceCore:
             ),
         }
     )
+
+
+def _merge_categories(
+    existing: list[PlaceCategory], incoming: list[PlaceCategory]
+) -> list[PlaceCategory]:
+    """Order-preserving union — keep `existing` order, append unseen `incoming`.
+
+    Categories are an enum, not a value-bearing object, so equality-based
+    dedup is enough; no need for the `value`-keyed shape `_dedup_by_value`
+    uses.
+    """
+    seen: set[PlaceCategory] = set(existing)
+    merged = list(existing)
+    for cat in incoming:
+        if cat in seen:
+            continue
+        seen.add(cat)
+        merged.append(cat)
+    return merged
 
 
 def _dedup_by_value(existing: list[T], incoming: list[T]) -> list[T]:

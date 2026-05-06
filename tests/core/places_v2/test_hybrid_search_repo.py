@@ -60,7 +60,7 @@ def _hit_row(
     v_rank: int | None = 1,
     t_rank: int | None = 2,
     place_name: str = "Test Place",
-    category: str | None = "restaurant",
+    categories: list[str] | None = None,
     tags: list[dict[str, Any]] | None = None,
     location: dict[str, Any] | None = None,
     aliases: list[dict[str, Any]] | None = None,
@@ -78,7 +78,7 @@ def _hit_row(
         "provider_id": f"google:{pid}",
         "place_name": place_name,
         "place_name_aliases": aliases,
-        "category": category,
+        "categories": categories if categories is not None else ["restaurant"],
         "tags": tags,
         "location": location,
         "created_at": saved_at,
@@ -120,7 +120,7 @@ def _compiled(stmt: Any) -> Any:
 class TestHybridSearchFiltersValidator:
     def test_empty_filters_construct(self) -> None:
         f = HybridSearchFilters()
-        assert f.category is None
+        assert f.categories is None
         assert f.tags is None
 
     def test_geo_lat_without_lng_rejected(self) -> None:
@@ -154,14 +154,16 @@ class TestFilterConditions:
     def test_empty_filters_produce_no_conditions(self) -> None:
         assert _filter_conditions(HybridSearchFilters()) == []
 
-    def test_category_condition(self) -> None:
+    def test_categories_condition_uses_array_overlap(self) -> None:
         cond = _filter_conditions(
-            HybridSearchFilters(category=PlaceCategory.cafe)
+            HybridSearchFilters(categories=[PlaceCategory.cafe, PlaceCategory.bar])
         )
         assert len(cond) == 1
         sql = str(cond[0].compile(compile_kwargs={"literal_binds": True}))
-        assert "category" in sql.lower()
+        assert "categories" in sql.lower()
+        assert "&&" in sql
         assert "cafe" in sql.lower()
+        assert "bar" in sql.lower()
 
     def test_single_tag_uses_jsonb_containment(self) -> None:
         cond = _filter_conditions(
@@ -259,7 +261,7 @@ class TestFilterConditions:
     def test_combined_filters_each_present(self) -> None:
         cond = _filter_conditions(
             HybridSearchFilters(
-                category=PlaceCategory.restaurant,
+                categories=[PlaceCategory.restaurant],
                 tags=["italian"],
                 city="Tokyo",
                 visited=True,
@@ -339,13 +341,13 @@ class TestRowToHit:
         hit = _row_to_hit(_hit_row(location=None))
         assert hit.place.location is None
 
-    def test_category_string_coerced_to_enum(self) -> None:
-        hit = _row_to_hit(_hit_row(category="cafe"))
-        assert hit.place.category == PlaceCategory.cafe
+    def test_categories_strings_coerced_to_enums(self) -> None:
+        hit = _row_to_hit(_hit_row(categories=["cafe", "bar"]))
+        assert hit.place.categories == [PlaceCategory.cafe, PlaceCategory.bar]
 
-    def test_category_none_preserved(self) -> None:
-        hit = _row_to_hit(_hit_row(category=None))
-        assert hit.place.category is None
+    def test_categories_empty_when_absent(self) -> None:
+        hit = _row_to_hit(_hit_row(categories=[]))
+        assert hit.place.categories == []
 
     def test_missing_jsonb_keys_yield_empty_lists(self) -> None:
         # If the row mapping is missing tags/aliases entirely, fall back to [].
@@ -513,7 +515,7 @@ class TestSearchSQLShape:
             "italian",
             _query_vector(),
             filters=HybridSearchFilters(
-                category=PlaceCategory.restaurant,
+                categories=[PlaceCategory.restaurant],
                 city="Tokyo",
             ),
         )
@@ -689,7 +691,7 @@ class TestUnscopedMode:
             "italian",
             _query_vector(),
             filters=HybridSearchFilters(
-                category=PlaceCategory.restaurant,
+                categories=[PlaceCategory.restaurant],
                 city="Tokyo",
             ),
         )

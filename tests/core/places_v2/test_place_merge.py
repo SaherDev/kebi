@@ -35,17 +35,27 @@ class TestMergePlace:
         merged = merge_place(existing, candidate)
         assert merged.place_name == "Cafe Centro"
 
-    def test_category_is_sticky(self) -> None:
-        existing = _core(category=PlaceCategory.cafe)
-        candidate = _core(category=PlaceCategory.restaurant)
+    def test_categories_union_preserves_existing_order(self) -> None:
+        existing = _core(categories=[PlaceCategory.cafe])
+        candidate = _core(categories=[PlaceCategory.restaurant])
         merged = merge_place(existing, candidate)
-        assert merged.category == PlaceCategory.cafe
+        assert merged.categories == [PlaceCategory.cafe, PlaceCategory.restaurant]
 
-    def test_category_set_when_existing_missing(self) -> None:
-        existing = _core(category=None)
-        candidate = _core(category=PlaceCategory.restaurant)
+    def test_categories_union_dedups(self) -> None:
+        existing = _core(categories=[PlaceCategory.cafe, PlaceCategory.bar])
+        candidate = _core(categories=[PlaceCategory.bar, PlaceCategory.restaurant])
         merged = merge_place(existing, candidate)
-        assert merged.category == PlaceCategory.restaurant
+        assert merged.categories == [
+            PlaceCategory.cafe,
+            PlaceCategory.bar,
+            PlaceCategory.restaurant,
+        ]
+
+    def test_categories_set_when_existing_empty(self) -> None:
+        existing = _core(categories=[])
+        candidate = _core(categories=[PlaceCategory.restaurant])
+        merged = merge_place(existing, candidate)
+        assert merged.categories == [PlaceCategory.restaurant]
 
     def test_location_is_sticky_whole_blob(self) -> None:
         existing_loc = LocationContext(lat=1.0, lng=2.0, neighborhood="Mission")

@@ -21,7 +21,7 @@ from sqlalchemy import (
     select,
     update,
 )
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -46,7 +46,7 @@ _PlacesV2Table = Table(
     Column("provider_id", String),
     Column("place_name", String),
     Column("place_name_aliases", JSONB),
-    Column("category", String),
+    Column("categories", ARRAY(String)),
     Column("tags", JSONB),
     Column("location", JSONB),
     Column("created_at", DateTime(timezone=True)),
@@ -61,7 +61,6 @@ _SORT_COLUMNS: dict[SortField, ColumnElement[Any]] = {
     "created_at": _t.created_at,
     "refreshed_at": _t.refreshed_at,
     "place_name": _t.place_name,
-    "category": _t.category,
 }
 
 # JSONB tag containment in find() encodes the PlaceTag.value field name as
@@ -104,8 +103,14 @@ class PlacesRepo:
         if query.place_name:
             conditions.append(_t.place_name.ilike(f"%{query.place_name}%"))
 
-        if query.category:
-            conditions.append(_t.category == query.category.value)
+        if query.categories:
+            # Array overlap: a place matches if its categories list shares
+            # any element with the query's category set (OR semantics).
+            conditions.append(
+                _t.categories.op("&&")(
+                    cast([c.value for c in query.categories], ARRAY(String))
+                )
+            )
 
         if query.tags:
             # AND semantics: every requested tag value must be present
@@ -199,7 +204,7 @@ class PlacesRepo:
             set_={
                 "place_name": excl.place_name,
                 "place_name_aliases": excl.place_name_aliases,
-                "category": excl.category,
+                "categories": excl.categories,
                 "tags": excl.tags,
                 "location": excl.location,
                 "refreshed_at": excl.refreshed_at,
@@ -250,7 +255,7 @@ def _core_to_dict(core: PlaceCore, now: datetime) -> dict[str, object]:
         "place_name": core.place_name,
         "place_name_aliases": [a.model_dump() for a in core.place_name_aliases]
         or None,
-        "category": core.category.value if core.category else None,
+        "categories": [c.value for c in core.categories],
         "tags": [t.model_dump() for t in core.tags] or None,
         "location": loc.model_dump(exclude_none=True) if loc else None,
         "created_at": core.created_at or now,
@@ -275,7 +280,7 @@ def _row_to_core(row: object) -> PlaceCore:
         provider_id=m.get("provider_id"),
         place_name=m["place_name"],
         place_name_aliases=aliases,
-        category=PlaceCategory(m["category"]) if m.get("category") else None,
+        categories=[PlaceCategory(c) for c in (m.get("categories") or [])],
         tags=tags,
         location=location,
         created_at=m.get("created_at"),

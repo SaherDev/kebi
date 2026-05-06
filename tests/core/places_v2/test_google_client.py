@@ -46,7 +46,7 @@ def _make_client() -> GooglePlacesClient:
 class TestSearchRouting:
     async def test_category_routes_to_text_search(self) -> None:
         c = _make_client()
-        await c.search(PlaceQuery(category=PlaceCategory.restaurant), limit=5)
+        await c.search(PlaceQuery(categories=[PlaceCategory.restaurant]), limit=5)
         c._text_search.assert_awaited_once()
         c._nearby_search.assert_not_awaited()
 
@@ -124,14 +124,14 @@ class TestBuildTextSearchParams:
     def test_strips_type_mapped_category_from_text_when_other_text_remains(
         self,
     ) -> None:
-        q = PlaceQuery(category=PlaceCategory.restaurant, tags=[DietaryTag.vegan])
+        q = PlaceQuery(categories=[PlaceCategory.restaurant], tags=[DietaryTag.vegan])
         text, included_type = build_text_search_params(q)
         assert text == "vegan"
         assert included_type == "restaurant"
 
     def test_keeps_type_mapped_term_in_text_when_it_would_be_only_text(self) -> None:
         # Stripping would leave textQuery empty — Google rejects that.
-        q = PlaceQuery(category=PlaceCategory.cafe)
+        q = PlaceQuery(categories=[PlaceCategory.cafe])
         text, included_type = build_text_search_params(q)
         assert text == "cafe"
         assert included_type == "cafe"
@@ -146,7 +146,7 @@ class TestBuildTextSearchParams:
         # Category checked before tags — its type wins the includedType slot.
         q = PlaceQuery(
             place_name="ramen",
-            category=PlaceCategory.restaurant,
+            categories=[PlaceCategory.restaurant],
             tags=[CuisineTag.thai],
         )
         text, included_type = build_text_search_params(q)
