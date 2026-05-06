@@ -110,24 +110,38 @@ def _is_image_entry(entry: dict[str, Any]) -> bool:
     return bool(not formats and entry.get("thumbnails"))
 
 
-def _extract_image_url(entry: dict[str, Any]) -> str | None:
-    """Pick the best image URL from a yt-dlp entry, preferring the entry
-    URL over thumbnails (which may be lower-resolution previews)."""
-    url = entry.get("url")
-    if isinstance(url, str) and url:
-        return url
+def _extract_image_url(
+    entry: dict[str, Any], prefer_thumbnails: bool = False
+) -> str | None:
+    """Pick the best image URL from a yt-dlp entry.
+
+    `prefer_thumbnails`: when True, use the `thumbnails` array even if
+    `entry.url` is set. This is needed for non-playlist photo posts
+    where yt-dlp's top-level `url` field points at the audio track
+    (the only "format" available for photo-mode), not the image —
+    only the `thumbnails` array carries the actual photo URL.
+    """
+    if not prefer_thumbnails:
+        url = entry.get("url")
+        if isinstance(url, str) and url:
+            return url
     thumbs = entry.get("thumbnails") or []
-    if not thumbs:
-        return None
-    best = max(
-        thumbs,
-        key=lambda t: (t.get("height") or 0) * (t.get("width") or 0),
-        default=None,
-    )
-    if best is None:
-        return None
-    candidate = best.get("url")
-    return candidate if isinstance(candidate, str) and candidate else None
+    if thumbs:
+        best = max(
+            thumbs,
+            key=lambda t: (t.get("height") or 0) * (t.get("width") or 0),
+            default=None,
+        )
+        if best is not None:
+            candidate = best.get("url")
+            if isinstance(candidate, str) and candidate:
+                return candidate
+    if prefer_thumbnails:
+        # Fallback: thumbnails missing — try entry.url anyway.
+        url = entry.get("url")
+        if isinstance(url, str) and url:
+            return url
+    return None
 
 
 def _extract_image_urls(data: dict[str, Any]) -> list[str]:
@@ -145,7 +159,10 @@ def _extract_image_urls(data: dict[str, Any]) -> list[str]:
         return urls
 
     if _is_image_entry(data):
-        url = _extract_image_url(data)
+        # Single-record photo post (e.g. TikTok photo-mode with no
+        # carousel). yt-dlp's top-level `url` is the AUDIO track that
+        # plays over the photo — not the photo. Force thumbnails.
+        url = _extract_image_url(data, prefer_thumbnails=True)
         if url:
             return [url]
     return []

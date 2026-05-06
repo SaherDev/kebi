@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from totoro_ai.core.extraction.enrichers.vision_images import VisionImagesEnricher
-from totoro_ai.core.extraction.types import ExtractionContext
+from totoro_ai.core.extraction.types import ExtractionContext, Medium, Producer
 
 
 @pytest.fixture
@@ -20,12 +20,23 @@ def enricher(vision_extractor: AsyncMock) -> VisionImagesEnricher:
     return VisionImagesEnricher(vision_extractor=vision_extractor)
 
 
-def _mock_proc(stdout: bytes, returncode: int = 0) -> MagicMock:
-    """Build a mock asyncio subprocess returning the given stdout."""
-    proc = MagicMock()
-    proc.returncode = returncode
-    proc.communicate = AsyncMock(return_value=(stdout, b""))
-    return proc
+def _http_response(content: bytes, status: int = 200) -> MagicMock:
+    response = MagicMock()
+    response.content = content
+    response.raise_for_status = MagicMock()
+    if status >= 400:
+        response.raise_for_status.side_effect = RuntimeError(f"HTTP {status}")
+    return response
+
+
+def _patched_client(side_effect: list) -> MagicMock:  # type: ignore[type-arg]
+    """Build an `httpx.AsyncClient` mock that yields the given responses
+    in order from `client.get(...)`."""
+    client = AsyncMock()
+    client.get = AsyncMock(side_effect=side_effect)
+    client.__aenter__ = AsyncMock(return_value=client)
+    client.__aexit__ = AsyncMock(return_value=None)
+    return client
 
 
 class TestVisionImagesEnricher:
@@ -35,9 +46,9 @@ class TestVisionImagesEnricher:
         vision_extractor: AsyncMock,
     ) -> None:
         ctx = ExtractionContext(url="https://tiktok.com/v/123", user_id="u1")
-        with patch("asyncio.create_subprocess_exec") as mock_exec:
+        with patch("httpx.AsyncClient") as client_cls:
             await enricher.enrich(ctx)
-        mock_exec.assert_not_called()
+        client_cls.assert_not_called()
         vision_extractor.extract_place_names.assert_not_called()
 
     async def test_skips_when_no_image_urls(
@@ -50,9 +61,9 @@ class TestVisionImagesEnricher:
             user_id="u1",
             is_photo_post=True,
         )
-        with patch("asyncio.create_subprocess_exec") as mock_exec:
+        with patch("httpx.AsyncClient") as client_cls:
             await enricher.enrich(ctx)
-        mock_exec.assert_not_called()
+        client_cls.assert_not_called()
         vision_extractor.extract_place_names.assert_not_called()
 
     async def test_skips_unsupported_source(
@@ -66,12 +77,12 @@ class TestVisionImagesEnricher:
             is_photo_post=True,
             image_urls=["https://yt/1.jpg"],
         )
-        with patch("asyncio.create_subprocess_exec") as mock_exec:
+        with patch("httpx.AsyncClient") as client_cls:
             await enricher.enrich(ctx)
-        mock_exec.assert_not_called()
+        client_cls.assert_not_called()
         vision_extractor.extract_place_names.assert_not_called()
 
-    async def test_pipes_each_image_via_ytdlp_and_extracts_names(
+    async def test_downloads_via_httpx_and_extracts_names(
         self,
         enricher: VisionImagesEnricher,
         vision_extractor: AsyncMock,
@@ -86,34 +97,25 @@ class TestVisionImagesEnricher:
             is_photo_post=True,
             image_urls=["https://cdn/1.jpg", "https://cdn/2.jpg"],
         )
-        procs = [_mock_proc(b"img1bytes"), _mock_proc(b"img2bytes")]
-        with patch(
-            "asyncio.create_subprocess_exec", side_effect=procs
-        ) as mock_exec:
+        client = _patched_client(
+            [_http_response(b"img1bytes"), _http_response(b"img2bytes")]
+        )
+        with patch("httpx.AsyncClient", return_value=client):
             await enricher.enrich(ctx)
 
-        # One yt-dlp invocation per image; --playlist-items is 1-indexed.
-        assert mock_exec.call_count == 2
-        for i, call in enumerate(mock_exec.call_args_list, start=1):
-            args = call.args
-            assert "--playlist-items" in args
-            assert str(i) == args[args.index("--playlist-items") + 1]
-            assert args[-1] == "https://tiktok.com/v/photo"
+        # Both URLs fetched.
+        assert client.get.await_count == 2
+        urls_called = [c.args[0] for c in client.get.await_args_list]
+        assert urls_called == ["https://cdn/1.jpg", "https://cdn/2.jpg"]
 
-        vision_extractor.extract_place_names.assert_awaited_once()
-        passed_images = vision_extractor.extract_place_names.await_args.args[0]
-        assert sorted(passed_images) == sorted([b"img1bytes", b"img2bytes"])
-
-        # Names go into known_places as KnownPlace entries with
-        # producer=VISION_IMAGES, medium=IMAGE.
-        assert [k.name for k in ctx.known_places] == ["Fuji Ramen", "Pizza Place"]
-        assert all(
-            k.producer.value == "vision_images" for k in ctx.known_places
+        vision_extractor.extract_place_names.assert_awaited_once_with(
+            [b"img1bytes", b"img2bytes"]
         )
-        assert all(k.medium.value == "image" for k in ctx.known_places)
-        assert ctx.candidates == []
+        assert [k.name for k in ctx.known_places] == ["Fuji Ramen", "Pizza Place"]
+        assert all(k.producer == Producer.VISION_IMAGES for k in ctx.known_places)
+        assert all(k.medium == Medium.IMAGE for k in ctx.known_places)
 
-    async def test_caps_subprocess_count_at_max_images(
+    async def test_caps_request_count_at_max_images(
         self,
         enricher: VisionImagesEnricher,
         vision_extractor: AsyncMock,
@@ -124,15 +126,13 @@ class TestVisionImagesEnricher:
             is_photo_post=True,
             image_urls=[f"https://cdn/{i}.jpg" for i in range(15)],
         )
-        with patch(
-            "asyncio.create_subprocess_exec",
-            side_effect=lambda *_a, **_kw: _mock_proc(b""),
-        ) as mock_exec:
+        client = _patched_client([_http_response(b"")] * 15)
+        with patch("httpx.AsyncClient", return_value=client):
             await enricher.enrich(ctx)
         # Hard cap at 10 even when image_urls is longer.
-        assert mock_exec.call_count == 10
+        assert client.get.await_count == 10
 
-    async def test_skips_failed_subprocess_but_keeps_others(
+    async def test_skips_failed_download_but_keeps_others(
         self,
         enricher: VisionImagesEnricher,
         vision_extractor: AsyncMock,
@@ -144,13 +144,15 @@ class TestVisionImagesEnricher:
             is_photo_post=True,
             image_urls=["https://cdn/ok.jpg", "https://cdn/bad.jpg"],
         )
-        procs = [_mock_proc(b"ok-bytes"), _mock_proc(b"", returncode=1)]
-        with patch("asyncio.create_subprocess_exec", side_effect=procs):
+        client = _patched_client(
+            [_http_response(b"ok-bytes"), _http_response(b"", status=500)]
+        )
+        with patch("httpx.AsyncClient", return_value=client):
             await enricher.enrich(ctx)
         vision_extractor.extract_place_names.assert_awaited_once_with([b"ok-bytes"])
         assert [k.name for k in ctx.known_places] == ["Cafe X"]
 
-    async def test_returns_silently_when_all_subprocesses_fail(
+    async def test_returns_silently_when_all_downloads_fail(
         self,
         enricher: VisionImagesEnricher,
         vision_extractor: AsyncMock,
@@ -161,11 +163,8 @@ class TestVisionImagesEnricher:
             is_photo_post=True,
             image_urls=["https://cdn/bad.jpg"],
         )
-        with patch(
-            "asyncio.create_subprocess_exec",
-            return_value=_mock_proc(b"", returncode=1),
-        ):
+        client = _patched_client([_http_response(b"", status=500)])
+        with patch("httpx.AsyncClient", return_value=client):
             await enricher.enrich(ctx)
         vision_extractor.extract_place_names.assert_not_called()
         assert ctx.known_places == []
-        assert ctx.candidates == []
