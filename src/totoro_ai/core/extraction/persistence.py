@@ -17,7 +17,7 @@ import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from totoro_ai.core.config import get_config
 from totoro_ai.core.events.events import PlaceSaved
@@ -321,7 +321,7 @@ class ExtractionPersistenceService:
         explicitly to strip it (used by `_safe_to_place_create` after a
         first attempt fails Pydantic validation on a bad subcategory).
         """
-        sub = vc.subcategory if subcategory is _UNSET else subcategory
+        sub = vc.subcategory if subcategory is _UNSET else cast("str | None", subcategory)
         return PlaceCreate(
             user_id=user_id,
             place_name=vc.place_name,
