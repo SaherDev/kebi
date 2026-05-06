@@ -7,7 +7,12 @@ import logging
 import subprocess
 
 from totoro_ai.core.config import ExtractionWhisperConfig
-from totoro_ai.core.extraction.types import ExtractionContext
+from totoro_ai.core.extraction.types import (
+    Evidence,
+    ExtractionContext,
+    Medium,
+    Producer,
+)
 from totoro_ai.providers.transcription import TranscriptionProtocol
 
 logger = logging.getLogger(__name__)
@@ -55,6 +60,13 @@ class WhisperAudioEnricher:
         transcript = await self._transcribe(context.url)  # type: ignore[arg-type]
         if transcript:
             context.transcript = transcript
+            context.text_evidence.append(
+                Evidence(
+                    producer=Producer.WHISPER_AUDIO,
+                    medium=Medium.TRANSCRIPT,
+                    snippet=transcript[:200],
+                )
+            )
 
     async def _transcribe(self, url: str) -> str | None:
         try:

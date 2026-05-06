@@ -85,6 +85,15 @@ def _outcome_to_item_dict(outcome: PlaceSaveOutcome) -> dict[str, Any]:
         "place": outcome.place.model_dump(mode="json"),
         "confidence": outcome.metadata.confidence,
         "status": outcome.status,
+        "evidence": [
+            {
+                "producer": e.producer.value,
+                "medium": e.medium.value,
+                "snippet": e.snippet,
+                "metadata": dict(e.metadata),
+            }
+            for e in outcome.metadata.evidence
+        ],
     }
 
 

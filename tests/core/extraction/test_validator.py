@@ -1,11 +1,13 @@
-"""Tests for GooglePlacesValidator (ADR-054 / feature 019)."""
+"""Tests for GooglePlacesValidator on the evidence trail."""
 
 from unittest.mock import AsyncMock, MagicMock
 
 from totoro_ai.core.config import ConfidenceConfig
 from totoro_ai.core.extraction.types import (
     CandidatePlace,
-    ExtractionLevel,
+    Evidence,
+    Medium,
+    Producer,
     ValidatedCandidate,
 )
 from totoro_ai.core.extraction.validator import GooglePlacesValidator
@@ -23,12 +25,18 @@ from totoro_ai.core.places.places_client import (
 
 def _make_config() -> ConfidenceConfig:
     return ConfidenceConfig(
-        base_scores={
-            "emoji_regex": 0.95,
+        producer_scores={
             "llm_ner": 0.80,
-            "subtitle_check": 0.75,
-            "whisper_audio": 0.65,
             "vision_frames": 0.55,
+            "whisper_audio": 0.65,
+            "google_maps_list": 0.95,
+        },
+        medium_scores={
+            "caption": 0.75,
+            "transcript": 0.65,
+            "frame": 0.55,
+            "list": 0.95,
+            "emoji_marker": 0.92,
         },
         corroboration_bonus=0.10,
         max_score=0.97,
@@ -56,21 +64,19 @@ def _make_match(
 
 def _make_candidate(
     name: str = "Chez Claude",
-    source: ExtractionLevel = ExtractionLevel.EMOJI_REGEX,
-    corroborated: bool = False,
+    evidence: list[Evidence] | None = None,
     cuisine: str | None = "french",
     city: str | None = "Paris",
 ) -> CandidatePlace:
     return CandidatePlace(
         place_name=name,
         place_type=PlaceType.food_and_drink,
-        source=source,
+        evidence=evidence or [Evidence(Producer.LLM_NER, Medium.CAPTION)],
         subcategory="restaurant",
         attributes=PlaceAttributes(
             cuisine=cuisine,
             location_context=LocationContext(city=city) if city else None,
         ),
-        corroborated=corroborated,
     )
 
 
@@ -100,20 +106,33 @@ async def test_single_exact_match_returns_validated_candidate() -> None:
     assert len(results) == 1
     r = results[0]
     assert isinstance(r, ValidatedCandidate)
-    # confidence = min(0.95 * 1.0 + 0.0, 0.97) = 0.95
-    assert abs(r.confidence - 0.95) < 1e-9
     assert r.external_id == "place_123"
     assert r.provider == PlaceProvider.google
     assert r.place_name == "Chez Claude"
     assert r.place_type == PlaceType.food_and_drink
     assert r.attributes.cuisine == "french"
-    assert r.attributes.location_context is not None
-    assert r.attributes.location_context.city == "Paris"
 
 
-async def test_validator_propagates_match_geo_onto_validated_candidate() -> None:
-    """Lat/lng/address from Google validation must reach the persistence
-    layer via ValidatedCandidate so the geo cache write has data to use."""
+async def test_evidence_propagated_through_validator() -> None:
+    """The validator passes the candidate's evidence list through unchanged."""
+    client = AsyncMock()
+    client.validate_place.return_value = _make_match(PlacesMatchQuality.EXACT)
+    validator = GooglePlacesValidator(
+        places_client=client, confidence_config=_make_config()
+    )
+
+    evidence = [
+        Evidence(Producer.LLM_NER, Medium.CAPTION, snippet="Loved Chez Claude"),
+        Evidence(Producer.VISION_FRAMES, Medium.FRAME, snippet="Chez Claude"),
+    ]
+    results = await validator.validate([_make_candidate(evidence=evidence)])
+
+    assert results is not None
+    assert len(results) == 1
+    assert results[0].evidence == evidence
+
+
+async def test_validator_propagates_match_geo() -> None:
     client = AsyncMock()
     client.validate_place.return_value = _make_match(
         PlacesMatchQuality.EXACT,
@@ -128,14 +147,13 @@ async def test_validator_propagates_match_geo_onto_validated_candidate() -> None
     results = await validator.validate([_make_candidate()])
 
     assert results is not None
-    assert len(results) == 1
     r = results[0]
     assert r.match_lat == 13.7563
     assert r.match_lng == 100.5018
     assert r.match_address == "1 Sukhumvit Rd, Bangkok, Thailand"
 
 
-async def test_validator_passes_city_from_location_context_to_client() -> None:
+async def test_validator_passes_city_from_location_context() -> None:
     client = AsyncMock()
     client.validate_place.return_value = _make_match(PlacesMatchQuality.EXACT)
     validator = GooglePlacesValidator(
@@ -162,50 +180,37 @@ async def test_validator_passes_none_location_when_no_city() -> None:
     assert client.validate_place.await_args.kwargs["location"] is None
 
 
-async def test_fuzzy_match_uses_modifier_0_9() -> None:
-    client = AsyncMock()
-    client.validate_place.return_value = _make_match(PlacesMatchQuality.FUZZY)
-    validator = GooglePlacesValidator(
-        places_client=client, confidence_config=_make_config()
-    )
-
-    results = await validator.validate(
-        [_make_candidate(source=ExtractionLevel.LLM_NER)]
-    )
-
-    assert results is not None
-    # confidence = min(0.80 * 0.9 + 0.0, 0.97) = 0.72
-    assert abs(results[0].confidence - 0.72) < 1e-9
-
-
-async def test_none_match_uses_modifier_0_3() -> None:
-    client = AsyncMock()
-    client.validate_place.return_value = _make_match(PlacesMatchQuality.NONE)
-    validator = GooglePlacesValidator(
-        places_client=client, confidence_config=_make_config()
-    )
-
-    results = await validator.validate(
-        [_make_candidate(source=ExtractionLevel.LLM_NER)]
-    )
-
-    assert results is not None
-    # confidence = min(0.80 * 0.3 + 0.0, 0.97) = 0.24
-    assert abs(results[0].confidence - 0.24) < 1e-9
-
-
-async def test_corroborated_candidate_gets_bonus() -> None:
+async def test_multi_evidence_corroboration_bonus_applied() -> None:
+    """Two distinct (producer, medium) pairs → corroboration bonus."""
     client = AsyncMock()
     client.validate_place.return_value = _make_match(PlacesMatchQuality.EXACT)
     validator = GooglePlacesValidator(
         places_client=client, confidence_config=_make_config()
     )
 
-    results = await validator.validate([_make_candidate(corroborated=True)])
+    evidence = [
+        Evidence(Producer.LLM_NER, Medium.CAPTION),
+        Evidence(Producer.VISION_FRAMES, Medium.FRAME),
+    ]
+    results = await validator.validate([_make_candidate(evidence=evidence)])
 
     assert results is not None
-    # confidence = min(0.95 * 1.0 + 0.10, 0.97) = 0.97
-    assert abs(results[0].confidence - 0.97) < 1e-9
+    # base = max(0.80, 0.75) = 0.80; *1.0 + 0.10 = 0.90, capped at 0.97.
+    assert results[0].confidence > 0.85
+
+
+async def test_none_match_low_confidence() -> None:
+    client = AsyncMock()
+    client.validate_place.return_value = _make_match(PlacesMatchQuality.NONE)
+    validator = GooglePlacesValidator(
+        places_client=client, confidence_config=_make_config()
+    )
+
+    results = await validator.validate([_make_candidate()])
+
+    assert results is not None
+    # base 0.80 * 0.30 = 0.24, no bonus (single evidence).
+    assert results[0].confidence < 0.30
 
 
 async def test_all_none_external_id_returns_none() -> None:

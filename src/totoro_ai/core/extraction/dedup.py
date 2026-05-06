@@ -1,34 +1,32 @@
 """Candidate deduplication — collapses duplicates at two points in the cascade.
 
-1. `dedup_candidates` — pre-validation dedup on `CandidatePlace` by normalised
-   `place.place_name`. Runs before the Google Places call so duplicate
-   candidates from different enrichers get a single validation call.
+1. `dedup_candidates` — pre-validation dedup on `CandidatePlace` by
+   normalised `place_name`. Runs before the Google Places call so duplicate
+   candidates from different producers result in a single validation call.
+   Evidence lists are unioned across the group (preserving first-seen order)
+   and attribute fields the carrier left blank are inherited.
 
 2. `dedup_validated_by_provider_id` — post-validation dedup on
    `ValidatedCandidate`. Two candidates that share a `provider_id`
-   (namespaced `{provider}:{external_id}`) get collapsed into one; the
-   winner inherits any attribute fields a loser filled in but the winner
-   left blank (cuisine, price_hint, ambiance, location_context, dietary,
-   good_for). The inheritance is a general attribute merge — not just
-   "city" — because the relevant data all lives on `PlaceAttributes` now.
+   (namespaced `{provider}:{external_id}`) get collapsed into one.
+   Evidence is unioned, confidence becomes max(group), and the
+   corroboration bonus is applied when the merged evidence has more
+   than one distinct (producer, medium) pair (capped at `max_score`).
 """
 
 from __future__ import annotations
 
 import re
-from dataclasses import replace
 
 from totoro_ai.core.config import ConfidenceConfig
 from totoro_ai.core.extraction.types import (
     CandidatePlace,
+    Evidence,
     ExtractionContext,
-    ExtractionLevel,
     ValidatedCandidate,
 )
 from totoro_ai.core.places import PlaceAttributes
 from totoro_ai.core.places.repository import build_provider_id
-
-_LEVEL_ORDER = list(ExtractionLevel)
 
 
 def _normalize(name: str) -> str:
@@ -37,13 +35,28 @@ def _normalize(name: str) -> str:
     return " ".join(without_punct.lower().split())
 
 
+def _merge_evidence(*lists: list[Evidence]) -> list[Evidence]:
+    """Concatenate evidence lists preserving first-seen order, dropping
+    duplicates so each `(producer, medium, snippet)` triple appears at
+    most once. Equality is structural (Evidence is frozen)."""
+    seen: set[Evidence] = set()
+    merged: list[Evidence] = []
+    for source in lists:
+        for item in source:
+            if item not in seen:
+                seen.add(item)
+                merged.append(item)
+    return merged
+
+
 def dedup_candidates(context: ExtractionContext) -> None:
     """Deduplicate context.candidates in-place.
 
     Groups by normalised `place_name`. When multiple candidates share a
-    name the one with the lowest ExtractionLevel index (highest priority)
-    wins; it is marked `corroborated=True` and inherits any attribute
-    fields a loser had but the winner left blank.
+    name they merge into one: evidence lists are unioned (preserving
+    order), attributes are filled in from the first candidate that
+    supplied each field, and the rest of the fields are taken from the
+    first candidate in the group (LLM_NER's structured output).
     """
     if len(context.candidates) <= 1:
         return
@@ -59,13 +72,14 @@ def dedup_candidates(context: ExtractionContext) -> None:
             winners.append(group[0])
             continue
 
-        winner = min(group, key=lambda c: _LEVEL_ORDER.index(c.source))
-        losers = [c for c in group if c is not winner]
-        merged = _merge_attributes(
-            winner.attributes, *(c.attributes for c in losers)
+        winner = group[0]
+        rest = group[1:]
+        winner.evidence = _merge_evidence(
+            winner.evidence, *(c.evidence for c in rest)
         )
-        winner.attributes = merged
-        winner = replace(winner, corroborated=True)
+        winner.attributes = _merge_attributes(
+            winner.attributes, *(c.attributes for c in rest)
+        )
         winners.append(winner)
 
     context.candidates = winners
@@ -81,10 +95,13 @@ def dedup_validated_by_provider_id(
 ) -> list[ValidatedCandidate]:
     """Collapse validated candidates sharing a `provider_id`.
 
-    Winner is the entry with the highest-priority `resolved_by`. It gets the
-    corroboration bonus (capped at `max_score`) and inherits any attribute
-    fields a loser filled in but the winner left blank.
-    `provider_id=None` results pass through unchanged.
+    Evidence is unioned across the group. Confidence becomes max(group);
+    the corroboration bonus is added when the merged evidence has more
+    than one distinct `(producer, medium)` pair (capped at `max_score`).
+    The first candidate in the group keeps the role of "carrier" — its
+    place_name, place_type, etc. survive. Attribute fields the carrier
+    left blank are inherited from the rest. `provider_id=None` results
+    pass through unchanged.
     """
     if len(results) <= 1:
         return results
@@ -105,17 +122,21 @@ def dedup_validated_by_provider_id(
             winners.append(group[0])
             continue
 
-        winner = min(group, key=lambda r: _LEVEL_ORDER.index(r.resolved_by))
-        losers = [r for r in group if r is not winner]
-        merged = _merge_attributes(
-            winner.attributes, *(r.attributes for r in losers)
+        winner = group[0]
+        rest = group[1:]
+        winner.evidence = _merge_evidence(
+            winner.evidence, *(r.evidence for r in rest)
         )
-        winner.attributes = merged
-        winner.confidence = min(
-            winner.confidence + confidence_config.corroboration_bonus,
-            confidence_config.max_score,
+        winner.attributes = _merge_attributes(
+            winner.attributes, *(r.attributes for r in rest)
         )
-        winner.corroborated = True
+        winner.confidence = max(r.confidence for r in group)
+        distinct_pairs = len({(e.producer, e.medium) for e in winner.evidence})
+        if distinct_pairs >= 2:
+            winner.confidence = min(
+                winner.confidence + confidence_config.corroboration_bonus,
+                confidence_config.max_score,
+            )
         winners.append(winner)
 
     return no_id + winners

@@ -9,8 +9,10 @@ from totoro_ai.core.extraction.dedup import (
 )
 from totoro_ai.core.extraction.types import (
     CandidatePlace,
+    Evidence,
     ExtractionContext,
-    ExtractionLevel,
+    Medium,
+    Producer,
     ValidatedCandidate,
 )
 from totoro_ai.core.places import (
@@ -41,17 +43,15 @@ def _ctx(*candidates: CandidatePlace) -> ExtractionContext:
 
 def _candidate(
     name: str = "Ramen House",
-    source: ExtractionLevel = ExtractionLevel.EMOJI_REGEX,
-    corroborated: bool = False,
+    evidence: list[Evidence] | None = None,
     cuisine: str | None = None,
     city: str | None = None,
 ) -> CandidatePlace:
     return CandidatePlace(
         place_name=name,
         place_type=PlaceType.food_and_drink,
-        source=source,
+        evidence=evidence or [Evidence(Producer.LLM_NER, Medium.CAPTION)],
         attributes=_attrs(cuisine=cuisine, city=city),
-        corroborated=corroborated,
     )
 
 
@@ -66,7 +66,6 @@ def test_single_candidate_unchanged() -> None:
     dedup_candidates(ctx)
     assert len(ctx.candidates) == 1
     assert ctx.candidates[0].place_name == "Ramen House"
-    assert ctx.candidates[0].corroborated is False
 
 
 def test_two_different_names_both_kept() -> None:
@@ -75,31 +74,54 @@ def test_two_different_names_both_kept() -> None:
     assert len(ctx.candidates) == 2
 
 
-def test_same_name_different_levels_lower_index_wins() -> None:
-    emoji = _candidate("Ramen House", source=ExtractionLevel.EMOJI_REGEX)
-    ner = _candidate("Ramen House", source=ExtractionLevel.LLM_NER)
-    ctx = _ctx(emoji, ner)
+def test_same_name_merges_evidence_lists() -> None:
+    a = _candidate(
+        "Ramen House", evidence=[Evidence(Producer.LLM_NER, Medium.CAPTION)]
+    )
+    b = _candidate(
+        "Ramen House", evidence=[Evidence(Producer.VISION_FRAMES, Medium.FRAME)]
+    )
+    ctx = _ctx(a, b)
     dedup_candidates(ctx)
-
     assert len(ctx.candidates) == 1
-    winner = ctx.candidates[0]
-    assert winner.source == ExtractionLevel.EMOJI_REGEX
-    assert winner.corroborated is True
+    producers = {e.producer for e in ctx.candidates[0].evidence}
+    assert producers == {Producer.LLM_NER, Producer.VISION_FRAMES}
 
 
-def test_three_candidates_two_same_one_different() -> None:
-    regex = _candidate("Ramen House", source=ExtractionLevel.EMOJI_REGEX)
-    ner = _candidate("Ramen House", source=ExtractionLevel.LLM_NER)
-    other = _candidate("Sushi Bar", source=ExtractionLevel.LLM_NER)
-    ctx = _ctx(regex, ner, other)
+def test_same_evidence_item_unioned_not_duplicated() -> None:
+    """Two candidates with overlapping evidence don't double-count."""
+    shared = Evidence(Producer.LLM_NER, Medium.CAPTION, snippet="x")
+    a = _candidate("Ramen House", evidence=[shared])
+    b = _candidate(
+        "Ramen House",
+        evidence=[shared, Evidence(Producer.VISION_FRAMES, Medium.FRAME)],
+    )
+    ctx = _ctx(a, b)
     dedup_candidates(ctx)
+    assert len(ctx.candidates) == 1
+    assert len(ctx.candidates[0].evidence) == 2  # not 3
 
-    assert len(ctx.candidates) == 2
-    names = [c.place_name for c in ctx.candidates]
-    assert "Ramen House" in names
-    assert "Sushi Bar" in names
-    ramen = next(c for c in ctx.candidates if c.place_name == "Ramen House")
-    assert ramen.corroborated is True
+
+def test_same_name_different_case_merged() -> None:
+    a = _candidate(
+        "RAMEN KAISUGI", evidence=[Evidence(Producer.LLM_NER, Medium.CAPTION)]
+    )
+    b = _candidate(
+        "ramen kaisugi", evidence=[Evidence(Producer.VISION_FRAMES, Medium.FRAME)]
+    )
+    ctx = _ctx(a, b)
+    dedup_candidates(ctx)
+    assert len(ctx.candidates) == 1
+
+
+def test_dedup_candidates_inherits_attributes_from_loser() -> None:
+    """Carrier with no cuisine inherits from a loser that had one."""
+    winner = _candidate("Ramen House", cuisine=None)
+    loser = _candidate("Ramen House", cuisine="ramen")
+    ctx = _ctx(winner, loser)
+    dedup_candidates(ctx)
+    assert len(ctx.candidates) == 1
+    assert ctx.candidates[0].attributes.cuisine == "ramen"
 
 
 def test_empty_candidates_noop() -> None:
@@ -109,40 +131,6 @@ def test_empty_candidates_noop() -> None:
     assert ctx.candidates == []
 
 
-def test_same_name_different_case_merged() -> None:
-    emoji = _candidate("RAMEN KAISUGI", source=ExtractionLevel.EMOJI_REGEX)
-    ner = _candidate("ramen kaisugi", source=ExtractionLevel.LLM_NER)
-    ctx = _ctx(emoji, ner)
-    dedup_candidates(ctx)
-
-    assert len(ctx.candidates) == 1
-    assert ctx.candidates[0].source == ExtractionLevel.EMOJI_REGEX
-    assert ctx.candidates[0].corroborated is True
-
-
-def test_same_name_with_punctuation_merged() -> None:
-    emoji = _candidate("RAMEN KAISUGI!", source=ExtractionLevel.EMOJI_REGEX)
-    ner = _candidate("RAMEN KAISUGI", source=ExtractionLevel.LLM_NER)
-    ctx = _ctx(emoji, ner)
-    dedup_candidates(ctx)
-
-    assert len(ctx.candidates) == 1
-    assert ctx.candidates[0].corroborated is True
-
-
-def test_dedup_candidates_inherits_attributes_from_loser() -> None:
-    """Winner with no cuisine inherits from a loser that had one."""
-    winner = _candidate("Ramen House", source=ExtractionLevel.EMOJI_REGEX, cuisine=None)
-    loser = _candidate("Ramen House", source=ExtractionLevel.LLM_NER, cuisine="ramen")
-    ctx = _ctx(winner, loser)
-    dedup_candidates(ctx)
-
-    assert len(ctx.candidates) == 1
-    winner_out = ctx.candidates[0]
-    assert winner_out.source == ExtractionLevel.EMOJI_REGEX
-    assert winner_out.attributes.cuisine == "ramen"
-
-
 # ---------------------------------------------------------------------------
 # dedup_validated_by_provider_id
 # ---------------------------------------------------------------------------
@@ -150,10 +138,9 @@ def test_dedup_candidates_inherits_attributes_from_loser() -> None:
 
 def _make_validated(
     place_name: str = "Ramen Kaisugi",
-    resolved_by: ExtractionLevel = ExtractionLevel.EMOJI_REGEX,
     external_id: str = "ChIJrUYs1Xuf4jARDnd40CFUUAE",
     confidence: float = 0.85,
-    corroborated: bool = False,
+    evidence: list[Evidence] | None = None,
     cuisine: str | None = None,
     city: str | None = "Bangkok",
 ) -> ValidatedCandidate:
@@ -163,9 +150,8 @@ def _make_validated(
         provider=PlaceProvider.google,
         external_id=external_id,
         confidence=confidence,
-        resolved_by=resolved_by,
+        evidence=evidence or [Evidence(Producer.LLM_NER, Medium.CAPTION)],
         attributes=_attrs(cuisine=cuisine, city=city),
-        corroborated=corroborated,
     )
 
 
@@ -181,7 +167,6 @@ def test_single_result_unchanged() -> None:
     result = _make_validated()
     out = dedup_validated_by_provider_id([result], _config())
     assert out == [result]
-    assert out[0].corroborated is False
 
 
 def test_two_different_external_ids_both_kept() -> None:
@@ -191,34 +176,57 @@ def test_two_different_external_ids_both_kept() -> None:
     assert len(out) == 2
 
 
-def test_same_provider_id_emoji_wins_over_ner() -> None:
-    emoji = _make_validated(resolved_by=ExtractionLevel.EMOJI_REGEX, confidence=0.76)
-    ner = _make_validated(resolved_by=ExtractionLevel.LLM_NER, confidence=0.64)
-    out = dedup_validated_by_provider_id([emoji, ner], _config())
-
-    assert len(out) == 1
-    assert out[0].resolved_by == ExtractionLevel.EMOJI_REGEX
-
-
-def test_corroboration_bonus_applied_to_winner() -> None:
-    emoji = _make_validated(resolved_by=ExtractionLevel.EMOJI_REGEX, confidence=0.76)
-    ner = _make_validated(resolved_by=ExtractionLevel.LLM_NER, confidence=0.64)
-    out = dedup_validated_by_provider_id(
-        [emoji, ner], _config(corroboration_bonus=0.10, max_score=0.97)
+def test_same_provider_id_merges_evidence() -> None:
+    a = _make_validated(
+        evidence=[Evidence(Producer.LLM_NER, Medium.CAPTION)]
     )
+    b = _make_validated(
+        evidence=[Evidence(Producer.VISION_FRAMES, Medium.FRAME)]
+    )
+    out = dedup_validated_by_provider_id([a, b], _config())
+    assert len(out) == 1
+    producers = {e.producer for e in out[0].evidence}
+    assert producers == {Producer.LLM_NER, Producer.VISION_FRAMES}
 
+
+def test_corroboration_bonus_applied_when_two_distinct_pairs() -> None:
+    a = _make_validated(
+        confidence=0.76, evidence=[Evidence(Producer.LLM_NER, Medium.CAPTION)]
+    )
+    b = _make_validated(
+        confidence=0.64,
+        evidence=[Evidence(Producer.VISION_FRAMES, Medium.FRAME)],
+    )
+    out = dedup_validated_by_provider_id(
+        [a, b], _config(corroboration_bonus=0.10, max_score=0.97)
+    )
+    # Confidence becomes max(0.76, 0.64) + 0.10 = 0.86.
     assert out[0].confidence == pytest.approx(0.86)
-    assert out[0].corroborated is True
 
 
 def test_corroboration_bonus_capped_at_max_score() -> None:
-    emoji = _make_validated(resolved_by=ExtractionLevel.EMOJI_REGEX, confidence=0.95)
-    ner = _make_validated(resolved_by=ExtractionLevel.LLM_NER, confidence=0.80)
-    out = dedup_validated_by_provider_id(
-        [emoji, ner], _config(corroboration_bonus=0.10, max_score=0.97)
+    a = _make_validated(
+        confidence=0.95, evidence=[Evidence(Producer.LLM_NER, Medium.CAPTION)]
     )
-
+    b = _make_validated(
+        confidence=0.80,
+        evidence=[Evidence(Producer.VISION_FRAMES, Medium.FRAME)],
+    )
+    out = dedup_validated_by_provider_id(
+        [a, b], _config(corroboration_bonus=0.10, max_score=0.97)
+    )
     assert out[0].confidence == pytest.approx(0.97)
+
+
+def test_no_bonus_when_only_one_distinct_pair() -> None:
+    """Same (producer, medium) on both items — no corroboration bonus."""
+    same_pair = Evidence(Producer.LLM_NER, Medium.CAPTION)
+    a = _make_validated(confidence=0.76, evidence=[same_pair])
+    b = _make_validated(confidence=0.64, evidence=[same_pair])
+    out = dedup_validated_by_provider_id(
+        [a, b], _config(corroboration_bonus=0.10, max_score=0.97)
+    )
+    assert out[0].confidence == pytest.approx(0.76)
 
 
 def test_empty_results_returns_empty() -> None:
@@ -226,26 +234,21 @@ def test_empty_results_returns_empty() -> None:
 
 
 def test_dedup_validated_inherits_attributes_from_loser() -> None:
-    """Winner with no cuisine/city inherits from a loser — deep attribute merge."""
-    emoji_winner = _make_validated(
-        resolved_by=ExtractionLevel.EMOJI_REGEX,
-        external_id="same_id",
+    a = _make_validated(
         confidence=0.80,
+        evidence=[Evidence(Producer.LLM_NER, Medium.CAPTION)],
         cuisine=None,
         city=None,
     )
-    ner_loser = _make_validated(
-        resolved_by=ExtractionLevel.LLM_NER,
-        external_id="same_id",
+    b = _make_validated(
         confidence=0.65,
+        evidence=[Evidence(Producer.VISION_FRAMES, Medium.FRAME)],
         cuisine="ramen",
         city="Bangkok",
     )
-    out = dedup_validated_by_provider_id([emoji_winner, ner_loser], _config())
-
+    out = dedup_validated_by_provider_id([a, b], _config())
     assert len(out) == 1
     winner = out[0]
-    assert winner.resolved_by == ExtractionLevel.EMOJI_REGEX
     assert winner.attributes.cuisine == "ramen"
     assert winner.attributes.location_context is not None
     assert winner.attributes.location_context.city == "Bangkok"

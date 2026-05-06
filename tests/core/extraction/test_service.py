@@ -8,7 +8,9 @@ from totoro_ai.api.schemas.extract_place import ExtractPlaceResponse
 from totoro_ai.core.extraction.persistence import PlaceSaveOutcome
 from totoro_ai.core.extraction.service import ExtractionService
 from totoro_ai.core.extraction.types import (
-    ExtractionLevel,
+    Evidence,
+    Medium,
+    Producer,
     ValidatedCandidate,
 )
 from totoro_ai.core.places import (
@@ -27,7 +29,6 @@ def _make_validated(
     place_name: str = "Fuji Ramen",
     external_id: str = "place_123",
     confidence: float = 0.87,
-    resolved_by: ExtractionLevel = ExtractionLevel.LLM_NER,
 ) -> ValidatedCandidate:
     return ValidatedCandidate(
         place_name=place_name,
@@ -35,10 +36,9 @@ def _make_validated(
         provider=PlaceProvider.google,
         external_id=external_id,
         confidence=confidence,
-        resolved_by=resolved_by,
+        evidence=[Evidence(Producer.LLM_NER, Medium.CAPTION)],
         subcategory="restaurant",
         attributes=PlaceAttributes(cuisine="ramen"),
-        corroborated=False,
     )
 
 

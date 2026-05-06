@@ -17,7 +17,12 @@ from totoro_ai.core.extraction.persistence import (
     ExtractionPersistenceService,
     PlaceSaveOutcome,
 )
-from totoro_ai.core.extraction.types import ExtractionLevel, ValidatedCandidate
+from totoro_ai.core.extraction.types import (
+    Evidence,
+    Medium,
+    Producer,
+    ValidatedCandidate,
+)
 from totoro_ai.core.places import (
     DuplicatePlaceError,
     DuplicateProviderId,
@@ -35,13 +40,13 @@ from totoro_ai.core.places import (
 def _make_validated(
     place_name: str = "Fuji Ramen",
     confidence: float = 0.87,
-    resolved_by: ExtractionLevel = ExtractionLevel.LLM_NER,
     external_id: str = "place_123",
     provider: PlaceProvider = PlaceProvider.google,
     cuisine: str | None = "ramen",
     match_lat: float | None = None,
     match_lng: float | None = None,
     match_address: str | None = None,
+    evidence: list[Evidence] | None = None,
 ) -> ValidatedCandidate:
     return ValidatedCandidate(
         place_name=place_name,
@@ -49,10 +54,9 @@ def _make_validated(
         provider=provider,
         external_id=external_id,
         confidence=confidence,
-        resolved_by=resolved_by,
+        evidence=evidence or [Evidence(Producer.LLM_NER, Medium.CAPTION)],
         subcategory="restaurant",
         attributes=PlaceAttributes(cuisine=cuisine),
-        corroborated=False,
         match_lat=match_lat,
         match_lng=match_lng,
         match_address=match_address,

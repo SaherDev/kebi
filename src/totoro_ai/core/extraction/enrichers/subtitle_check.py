@@ -9,7 +9,12 @@ import subprocess
 from pathlib import Path
 
 from totoro_ai.core.config import ExtractionSubtitleConfig
-from totoro_ai.core.extraction.types import ExtractionContext
+from totoro_ai.core.extraction.types import (
+    Evidence,
+    ExtractionContext,
+    Medium,
+    Producer,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -100,3 +105,10 @@ class SubtitleCheckEnricher:
             return
 
         context.transcript = clean_text
+        context.text_evidence.append(
+            Evidence(
+                producer=Producer.SUBTITLE_CHECK,
+                medium=Medium.TRANSCRIPT,
+                snippet=clean_text[:200],
+            )
+        )

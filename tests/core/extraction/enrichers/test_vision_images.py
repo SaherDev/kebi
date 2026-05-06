@@ -104,9 +104,13 @@ class TestVisionImagesEnricher:
         passed_images = vision_extractor.extract_place_names.await_args.args[0]
         assert sorted(passed_images) == sorted([b"img1bytes", b"img2bytes"])
 
-        # Names go into known_places — LLMNEREnricher (deep-level finalizer)
-        # builds the structured candidates downstream.
-        assert ctx.known_places == ["Fuji Ramen", "Pizza Place"]
+        # Names go into known_places as KnownPlace entries with
+        # producer=VISION_IMAGES, medium=IMAGE.
+        assert [k.name for k in ctx.known_places] == ["Fuji Ramen", "Pizza Place"]
+        assert all(
+            k.producer.value == "vision_images" for k in ctx.known_places
+        )
+        assert all(k.medium.value == "image" for k in ctx.known_places)
         assert ctx.candidates == []
 
     async def test_caps_subprocess_count_at_max_images(
@@ -144,7 +148,7 @@ class TestVisionImagesEnricher:
         with patch("asyncio.create_subprocess_exec", side_effect=procs):
             await enricher.enrich(ctx)
         vision_extractor.extract_place_names.assert_awaited_once_with([b"ok-bytes"])
-        assert ctx.known_places == ["Cafe X"]
+        assert [k.name for k in ctx.known_places] == ["Cafe X"]
 
     async def test_returns_silently_when_all_subprocesses_fail(
         self,

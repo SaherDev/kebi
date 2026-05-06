@@ -7,7 +7,12 @@ import logging
 import sys
 
 from totoro_ai.core.extraction.source_filtered_enricher import SourceFilteredEnricher
-from totoro_ai.core.extraction.types import ExtractionContext
+from totoro_ai.core.extraction.types import (
+    ExtractionContext,
+    KnownPlace,
+    Medium,
+    Producer,
+)
 from totoro_ai.core.places import PlaceSource
 from totoro_ai.providers.llm import VisionExtractorProtocol
 
@@ -75,7 +80,14 @@ class VisionImagesEnricher(SourceFilteredEnricher):
         names = await self._vision_extractor.extract_place_names(images)
         for name in names:
             if name:
-                context.known_places.append(name)
+                context.known_places.append(
+                    KnownPlace(
+                        name=name,
+                        producer=Producer.VISION_IMAGES,
+                        medium=Medium.IMAGE,
+                        snippet=name,
+                    )
+                )
 
     async def _capture_image(self, url: str, item: int) -> bytes | None:
         """Fetch the Nth image of the post via yt-dlp -o - (stdout, no file).

@@ -8,7 +8,12 @@ import sys
 from typing import Any
 
 from totoro_ai.core.extraction.source_filtered_enricher import SourceFilteredEnricher
-from totoro_ai.core.extraction.types import ExtractionContext
+from totoro_ai.core.extraction.types import (
+    Evidence,
+    ExtractionContext,
+    Medium,
+    Producer,
+)
 from totoro_ai.core.places import PlaceSource
 
 # Cap mirrors the design decision: Instagram carousels max at 10, TikTok
@@ -50,6 +55,14 @@ class PhotoDetectorEnricher(SourceFilteredEnricher):
 
         context.is_photo_post = True
         context.image_urls = urls[:_MAX_IMAGE_URLS]
+        context.text_evidence.append(
+            Evidence(
+                producer=Producer.PHOTO_DETECTOR,
+                medium=Medium.IMAGE,
+                snippet=None,
+                metadata=(("image_count", len(context.image_urls)),),
+            )
+        )
 
     async def _fetch_metadata(self, url: str) -> dict[str, Any] | None:
         proc = await asyncio.create_subprocess_exec(

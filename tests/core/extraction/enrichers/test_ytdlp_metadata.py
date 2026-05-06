@@ -6,7 +6,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from totoro_ai.core.extraction.enrichers.ytdlp_metadata import YtDlpMetadataEnricher
-from totoro_ai.core.extraction.types import ExtractionContext
+from totoro_ai.core.extraction.types import (
+    ExtractionContext,
+    Medium,
+    Producer,
+)
 
 
 def _mock_proc(data: dict) -> MagicMock:  # type: ignore[type-arg]
@@ -143,3 +147,31 @@ class TestYtDlpMetadataEnricher:
         with patch("asyncio.create_subprocess_exec") as mock_exec:
             await enricher.enrich(ctx)
         mock_exec.assert_not_called()
+        assert ctx.text_evidence == []
+
+    async def test_appends_text_evidence_per_field_written(
+        self, enricher: YtDlpMetadataEnricher
+    ) -> None:
+        """One Evidence entry per field yt-dlp populated: caption, title,
+        each hashtag, location_tag."""
+        ctx = ExtractionContext(url="https://tiktok.com/v/123", user_id="u1")
+        proc = _mock_proc(
+            {
+                "description": "Loved Fuji Ramen",
+                "title": "Best Bangkok bites",
+                "tags": ["bangkokfood", "ramen"],
+                "location": "Bangkok, Thailand",
+                "extractor": "TikTok",
+            }
+        )
+        with patch("asyncio.create_subprocess_exec", return_value=proc):
+            await enricher.enrich(ctx)
+
+        producers = {e.producer for e in ctx.text_evidence}
+        assert producers == {Producer.YTDLP_METADATA}
+        media = [e.medium for e in ctx.text_evidence]
+        # one each for caption + title + location_tag, plus one per hashtag.
+        assert media.count(Medium.CAPTION) == 1
+        assert media.count(Medium.TITLE) == 1
+        assert media.count(Medium.LOCATION_TAG) == 1
+        assert media.count(Medium.HASHTAG) == 2

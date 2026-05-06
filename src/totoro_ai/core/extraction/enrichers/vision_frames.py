@@ -9,7 +9,12 @@ import subprocess
 import sys
 
 from totoro_ai.core.config import ExtractionVisionConfig
-from totoro_ai.core.extraction.types import ExtractionContext
+from totoro_ai.core.extraction.types import (
+    ExtractionContext,
+    KnownPlace,
+    Medium,
+    Producer,
+)
 from totoro_ai.providers.llm import VisionExtractorProtocol
 
 logger = logging.getLogger(__name__)
@@ -104,7 +109,14 @@ class VisionFramesEnricher:
         names = await self._vision_extractor.extract_place_names(frames)
         for name in names:
             if name:
-                context.known_places.append(name)
+                context.known_places.append(
+                    KnownPlace(
+                        name=name,
+                        producer=Producer.VISION_FRAMES,
+                        medium=Medium.FRAME,
+                        snippet=name,
+                    )
+                )
 
     def _capture_frames(self, url: str) -> bytes:
         """Pipe yt-dlp video stream into ffmpeg and collect PNG bytes."""

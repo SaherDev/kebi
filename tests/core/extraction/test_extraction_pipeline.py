@@ -6,7 +6,9 @@ import pytest
 
 from totoro_ai.core.extraction.types import (
     CandidatePlace,
-    ExtractionLevel,
+    Evidence,
+    Medium,
+    Producer,
     ValidatedCandidate,
 )
 from totoro_ai.core.places import (
@@ -19,8 +21,8 @@ from totoro_ai.core.places import (
 def _make_validated(
     name: str = "Chez Claude",
     external_id: str = "place_abc",
-    resolved_by: ExtractionLevel = ExtractionLevel.EMOJI_REGEX,
     confidence: float = 0.85,
+    evidence: list[Evidence] | None = None,
 ) -> ValidatedCandidate:
     return ValidatedCandidate(
         place_name=name,
@@ -28,9 +30,8 @@ def _make_validated(
         provider=PlaceProvider.google,
         external_id=external_id,
         confidence=confidence,
-        resolved_by=resolved_by,
+        evidence=evidence or [Evidence(Producer.LLM_NER, Medium.CAPTION)],
         attributes=PlaceAttributes(),
-        corroborated=False,
     )
 
 
@@ -74,7 +75,7 @@ def _make_pipeline(
                 CandidatePlace(
                     place_name=f"Place {i}",
                     place_type=PlaceType.food_and_drink,
-                    source=ExtractionLevel.LLM_NER,
+                    evidence=[Evidence(Producer.LLM_NER, Medium.CAPTION)],
                     attributes=PlaceAttributes(),
                 )
             )
@@ -202,20 +203,20 @@ async def test_plain_text_no_url_skips_bg_enrichers() -> None:
 
 async def test_same_provider_id_deduped_after_validation() -> None:
     """Two validated candidates resolving to the same provider_id are
-    collapsed into one with the corroboration bonus applied."""
-    emoji = _make_validated(
+    collapsed into one with merged evidence and the corroboration bonus."""
+    a = _make_validated(
         name="RAMEN KAISUGI Bangkok",
         external_id="ChIJrUYs1Xuf4jARDnd40CFUUAE",
-        resolved_by=ExtractionLevel.EMOJI_REGEX,
         confidence=0.76,
+        evidence=[Evidence(Producer.LLM_NER, Medium.CAPTION)],
     )
-    ner = _make_validated(
+    b = _make_validated(
         name="RAMEN KAISUGI",
         external_id="ChIJrUYs1Xuf4jARDnd40CFUUAE",
-        resolved_by=ExtractionLevel.LLM_NER,
         confidence=0.64,
+        evidence=[Evidence(Producer.VISION_FRAMES, Medium.FRAME)],
     )
-    pipeline, _, _, _ = _make_pipeline(inline_validator_returns=[emoji, ner])
+    pipeline, _, _, _ = _make_pipeline(inline_validator_returns=[a, b])
 
     output = await pipeline.run(
         url=None,
@@ -226,8 +227,8 @@ async def test_same_provider_id_deduped_after_validation() -> None:
 
     assert isinstance(output, list)
     assert len(output) == 1
-    assert output[0].resolved_by == ExtractionLevel.EMOJI_REGEX
-    assert output[0].corroborated is True
+    producers = {e.producer for e in output[0].evidence}
+    assert producers == {Producer.LLM_NER, Producer.VISION_FRAMES}
 
 
 async def test_plain_text_input_url_none_passes_through() -> None:
@@ -355,7 +356,7 @@ async def test_phase3_too_many_candidates_drops_request() -> None:
                 CandidatePlace(
                     place_name=f"BG Place {i}",
                     place_type=PlaceType.food_and_drink,
-                    source=ExtractionLevel.WHISPER_AUDIO,
+                    evidence=[Evidence(Producer.LLM_NER, Medium.TRANSCRIPT)],
                     attributes=PlaceAttributes(),
                 )
             )

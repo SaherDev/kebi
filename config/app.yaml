@@ -120,14 +120,33 @@ extraction:
     store_silently: 0.70
     require_confirmation: 0.30
   confidence:
-    base_scores:
-      emoji_regex: 0.95
+    # Per-producer base scores. Keys are Producer.value strings.
+    producer_scores:
+      # Name producers
       llm_ner: 0.80
-      subtitle_check: 0.75
-      whisper_audio: 0.65
-      vision_frames: 0.55
       # User-curated lists are explicit saves — treat them as ground truth.
       google_maps_list: 0.95
+      vision_frames: 0.55
+      vision_images: 0.55
+      # Text producers — modest baseline; corroboration bonus when paired
+      # with a name producer is what actually lifts confidence.
+      tiktok_oembed: 0.65
+      ytdlp_metadata: 0.60
+      whisper_audio: 0.65
+      subtitle_check: 0.75
+      photo_detector: 0.50
+    # Per-medium base scores. Keys are Medium.value strings.
+    medium_scores:
+      emoji_marker: 0.92
+      location_tag: 0.85
+      caption: 0.75
+      title: 0.70
+      transcript: 0.65
+      supplementary_text: 0.70
+      hashtag: 0.55
+      frame: 0.55
+      image: 0.55
+      list: 0.95
     corroboration_bonus: 0.10
     max_score: 0.97
     # ADR-057: two-band save gate.

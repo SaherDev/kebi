@@ -3,8 +3,20 @@
 The LLM's structured output schema (`_NERPlace`) mirrors the extraction-
 only `CandidatePlace` shape — no `user_id` / `provider` / `external_id`
 on the extraction path. Pipeline-context fields are stamped onto a
-`PlaceCreate` only at the persistence boundary (see
-`ValidatedCandidate.to_place_create`).
+`PlaceCreate` only at the persistence boundary.
+
+Evidence: every candidate this enricher emits gets a non-empty
+`evidence` list. NER stamps:
+- One `Evidence(LLM_NER, medium)` for each text field on
+  `ExtractionContext` whose content contains the candidate name —
+  caption, transcript, supplementary_text, title, location_tag, plus
+  `EMOJI_MARKER` if the caption has a 📍/📌 marker and `HASHTAG` if
+  any hashtag matches.
+- All `text_evidence` items the upstream text producers contributed
+  whose source field contains the candidate name (so `YTDLP_METADATA +
+  CAPTION` rides alongside `LLM_NER + CAPTION`).
+- All `known_places` entries whose name matches the candidate name
+  (so `VISION_FRAMES + FRAME`, `GOOGLE_MAPS_LIST + LIST`, etc.).
 """
 
 import logging
@@ -12,10 +24,13 @@ from typing import cast
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from totoro_ai.core.extraction.evidence import collect_evidence_for
 from totoro_ai.core.extraction.types import (
     CandidatePlace,
+    Evidence,
     ExtractionContext,
-    ExtractionLevel,
+    Medium,
+    Producer,
 )
 from totoro_ai.core.places import PlaceAttributes, PlaceType
 from totoro_ai.providers.llm import InstructorClient
@@ -97,8 +112,7 @@ For each venue, emit a strict JSON object matching this schema:
       "city": "string or null",
       "country": "string or null"
     }}
-  }},
-  "signals": ["zero or more of: emoji_marker, location_tag, caption, hashtag"]
+  }}
 }}
 
 Allowed subcategory values by place_type:
@@ -115,6 +129,7 @@ classification rule in the system prompt to pick the right one.
 
 If a field is unknown, set it to null (or [] for the list fields). Do not invent values.
 """
+
 
 
 class _NERPlace(BaseModel):
@@ -135,7 +150,6 @@ class _NERPlace(BaseModel):
     subcategory: str | None = None
     tags: list[str] = Field(default_factory=list)
     attributes: PlaceAttributes = Field(default_factory=PlaceAttributes)
-    signals: list[str] = Field(default_factory=list)
 
     model_config = ConfigDict(extra="forbid")
 
@@ -180,9 +194,10 @@ class LLMNEREnricher:
         transcript_line = (
             f"  transcript: {context.transcript}\n" if context.transcript else ""
         )
+        known_place_names = [k.name for k in context.known_places]
         known_places_line = (
-            f"  known_places: {context.known_places}\n"
-            if context.known_places
+            f"  known_places: {known_place_names}\n"
+            if known_place_names
             else ""
         )
         known_places_instruction = (
@@ -190,7 +205,7 @@ class LLMNEREnricher:
             " external source — emit one structured object per entry, inferring"
             " place_type, subcategory, cuisine, and other attributes from the"
             " name itself. Do not drop or rename them.\n"
-            if context.known_places
+            if known_place_names
             else ""
         )
 
@@ -243,22 +258,36 @@ class LLMNEREnricher:
             for ner in response.places:
                 if not ner.place_name:
                     continue
-                # The LLM occasionally emits an invalid subcategory (e.g.
-                # the literal string "null", or a value not in the
-                # allowed set for the chosen place_type). Sanitize here
-                # rather than at validate time.
+                # Sanitize subcategory — the LLM occasionally emits
+                # "null"/empty for fields outside the allowed set.
                 subcategory = ner.subcategory
                 if subcategory in ("null", "none", ""):
                     subcategory = None
+
+                evidence = collect_evidence_for(ner.place_name, context)
+                # Safety net: if the LLM emits a name that doesn't
+                # match any text source (rare — e.g. an LLM
+                # hallucination or a paraphrase), still record the NER
+                # contribution so the candidate has non-empty evidence.
+                if not evidence:
+                    evidence = [
+                        Evidence(
+                            producer=Producer.LLM_NER,
+                            medium=Medium.CAPTION
+                            if context.caption
+                            else Medium.SUPPLEMENTARY_TEXT,
+                            snippet=ner.place_name,
+                        )
+                    ]
+
                 context.candidates.append(
                     CandidatePlace(
                         place_name=ner.place_name,
                         place_type=ner.place_type,
-                        source=ExtractionLevel.LLM_NER,
+                        evidence=evidence,
                         subcategory=subcategory,
                         tags=ner.tags,
                         attributes=ner.attributes,
-                        signals=ner.signals,
                     )
                 )
 

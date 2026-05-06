@@ -3,7 +3,12 @@
 import httpx
 
 from totoro_ai.core.extraction.source_filtered_enricher import SourceFilteredEnricher
-from totoro_ai.core.extraction.types import ExtractionContext
+from totoro_ai.core.extraction.types import (
+    Evidence,
+    ExtractionContext,
+    Medium,
+    Producer,
+)
 from totoro_ai.core.places import PlaceSource
 
 _TIKTOK_OEMBED_URL = "https://www.tiktok.com/oembed"
@@ -30,6 +35,13 @@ class TikTokOEmbedEnricher(SourceFilteredEnricher):
         caption = await self._fetch_caption(context.url)  # type: ignore[arg-type]
         if caption and context.caption is None:
             context.caption = caption
+            context.text_evidence.append(
+                Evidence(
+                    producer=Producer.TIKTOK_OEMBED,
+                    medium=Medium.CAPTION,
+                    snippet=caption[:200],
+                )
+            )
         if context.platform is None:
             context.platform = "tiktok"
 
