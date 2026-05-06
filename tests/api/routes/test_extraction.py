@@ -1,4 +1,4 @@
-"""Route tests for GET /v1/extraction/{request_id} polling (ADR-048, ADR-063)."""
+"""Route tests for /v1/extract (POST) and /v1/extraction/{request_id} (GET)."""
 
 from __future__ import annotations
 
@@ -7,8 +7,10 @@ from unittest.mock import AsyncMock
 import pytest
 from fastapi.testclient import TestClient
 
-from totoro_ai.api.deps import get_status_repo
+from totoro_ai.api.deps import get_extraction_service, get_status_repo
 from totoro_ai.api.main import app
+from totoro_ai.api.schemas.extract_place import ExtractPlaceResponse
+from totoro_ai.core.extraction.service import ExtractionService
 from totoro_ai.core.extraction.status_repository import ExtractionStatusRepository
 
 
@@ -111,6 +113,77 @@ class TestPollingRouteMissing:
         mock_status_repo.read.return_value = None
         resp = client.get("/v1/extraction/req_missing")
         assert resp.status_code == 404
+
+
+class TestExtractRoute:
+    """`POST /v1/extract` invokes the extraction service directly,
+    bypassing the agent."""
+
+    def test_post_extract_returns_envelope(self) -> None:
+        mock_service = AsyncMock(spec=ExtractionService)
+        mock_service.run.return_value = ExtractPlaceResponse(
+            status="completed",
+            results=[
+                {
+                    "place": _sample_place(),
+                    "confidence": 0.87,
+                    "status": "saved",
+                    "evidence": [
+                        {
+                            "producer": "llm_ner",
+                            "medium": "caption",
+                            "snippet": "Loved Nara Eatery",
+                            "metadata": {},
+                        }
+                    ],
+                }
+            ],
+            raw_input="https://tiktok.com/@x/video/123",
+            request_id="req_abc",
+        )
+        app.dependency_overrides[get_extraction_service] = lambda: mock_service
+        try:
+            client = TestClient(app)
+            resp = client.post(
+                "/v1/extract",
+                json={
+                    "user_id": "u1",
+                    "raw_input": "https://tiktok.com/@x/video/123",
+                },
+            )
+        finally:
+            app.dependency_overrides.pop(get_extraction_service, None)
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == "completed"
+        assert body["results"][0]["evidence"][0]["producer"] == "llm_ner"
+        mock_service.run.assert_awaited_once_with(
+            raw_input="https://tiktok.com/@x/video/123", user_id="u1"
+        )
+
+    def test_post_extract_returns_failed_envelope(self) -> None:
+        mock_service = AsyncMock(spec=ExtractionService)
+        mock_service.run.return_value = ExtractPlaceResponse(
+            status="failed",
+            results=[],
+            raw_input="gibberish",
+            request_id="req_fail",
+        )
+        app.dependency_overrides[get_extraction_service] = lambda: mock_service
+        try:
+            client = TestClient(app)
+            resp = client.post(
+                "/v1/extract",
+                json={"user_id": "u1", "raw_input": "gibberish"},
+            )
+        finally:
+            app.dependency_overrides.pop(get_extraction_service, None)
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == "failed"
+        assert body["results"] == []
 
 
 class TestPollingStatusRepoWritesV2Prefix:
