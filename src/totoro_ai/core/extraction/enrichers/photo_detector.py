@@ -90,7 +90,10 @@ class PhotoDetectorEnricher(SourceFilteredEnricher):
         if not text:
             return None
         first_line = text.splitlines()[0]
-        parsed: dict[str, Any] = json.loads(first_line)
+        try:
+            parsed: dict[str, Any] = json.loads(first_line)
+        except json.JSONDecodeError:
+            return None
         return parsed
 
 

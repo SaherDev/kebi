@@ -81,6 +81,17 @@ class WhisperAudioEnricher:
             audio_bytes = await asyncio.get_event_loop().run_in_executor(
                 None, self._download_audio_bytes, url
             )
+            # yt-dlp can exit clean with 0 bytes on URLs whose audio
+            # stream isn't actually available (some TikTok photo-mode
+            # variants slip past the is_photo_post guard). Sending 0
+            # bytes to Groq Whisper returns 400 "file is empty".
+            if not audio_bytes:
+                logger.debug(
+                    "Whisper Tier 2 skipped — yt-dlp returned 0 audio bytes "
+                    "for url=%s",
+                    url,
+                )
+                return None
             filename = f"audio.{self._config.audio_format}"
             return await self._transcription_client.transcribe_bytes(
                 audio_bytes, filename

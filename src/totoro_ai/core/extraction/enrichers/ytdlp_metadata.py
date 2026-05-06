@@ -106,4 +106,14 @@ class YtDlpMetadataEnricher(SourceFilteredEnricher):
         if proc.returncode != 0:
             raise RuntimeError(f"yt-dlp exited with code {proc.returncode} for {url}")
 
-        return json.loads(stdout)  # type: ignore[no-any-return]
+        # Empty stdout despite returncode 0 is rare (some TikTok URLs
+        # exit clean but produce nothing on the metadata flow). Return
+        # None instead of crashing the JSON parser — caller treats None
+        # as "no metadata available" and the cascade keeps going.
+        text = stdout.decode("utf-8", errors="replace").strip()
+        if not text:
+            return None
+        try:
+            return json.loads(text)  # type: ignore[no-any-return]
+        except json.JSONDecodeError:
+            return None

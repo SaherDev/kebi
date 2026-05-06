@@ -84,3 +84,22 @@ class TestWhisperAudioEnricher:
             await enricher.enrich(ctx)
         assert ctx.transcript is None
         assert ctx.text_evidence == []
+
+    async def test_tier2_skips_empty_audio_bytes(
+        self,
+        enricher: WhisperAudioEnricher,
+        transcription_client: AsyncMock,
+    ) -> None:
+        """yt-dlp can exit clean with 0 bytes; we must not POST that to
+        Groq Whisper — it 400s with 'file is empty'."""
+        transcription_client.transcribe_url = AsyncMock(
+            side_effect=RuntimeError("tier 1 failed")
+        )
+        transcription_client.transcribe_bytes = AsyncMock()
+        with (
+            patch.object(enricher, "_get_cdn_url", return_value="cdn"),
+            patch.object(enricher, "_download_audio_bytes", return_value=b""),
+        ):
+            result = await enricher._transcribe("https://tiktok.com/v/abc")
+        assert result is None
+        transcription_client.transcribe_bytes.assert_not_called()
