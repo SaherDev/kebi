@@ -33,7 +33,12 @@ import httpx
 
 from totoro_ai.core.config import get_env
 from totoro_ai.core.extraction.source_filtered_enricher import SourceFilteredEnricher
-from totoro_ai.core.extraction.types import ExtractionContext
+from totoro_ai.core.extraction.types import (
+    ExtractionContext,
+    KnownPlace,
+    Medium,
+    Producer,
+)
 from totoro_ai.core.places import PlaceSource
 
 logger = logging.getLogger(__name__)
@@ -85,7 +90,15 @@ class GoogleMapsListEnricher(SourceFilteredEnricher):
         for item in items:
             name = item.get("name") or item.get("title")
             if name:
-                context.known_places.append(str(name))
+                name_str = str(name)
+                context.known_places.append(
+                    KnownPlace(
+                        name=name_str,
+                        producer=Producer.GOOGLE_MAPS_LIST,
+                        medium=Medium.LIST,
+                        snippet=name_str,
+                    )
+                )
 
     async def _fetch_list(self, url: str, token: str) -> list[dict[str, Any]]:
         body = {

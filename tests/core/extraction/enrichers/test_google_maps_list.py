@@ -73,7 +73,14 @@ class TestApifyResponse:
             client_cls.return_value.__aenter__.return_value.post = _post
             await enricher.enrich(ctx)
 
-        assert ctx.known_places == ["Joe's Pizza", "Eleven Madison Park"]
+        assert [k.name for k in ctx.known_places] == [
+            "Joe's Pizza",
+            "Eleven Madison Park",
+        ]
+        assert all(
+            k.producer.value == "google_maps_list" for k in ctx.known_places
+        )
+        assert all(k.medium.value == "list" for k in ctx.known_places)
         assert ctx.candidates == []
 
     async def test_skips_items_without_a_name(self) -> None:
@@ -91,7 +98,7 @@ class TestApifyResponse:
             client_cls.return_value.__aenter__.return_value.post = _post
             await enricher.enrich(ctx)
 
-        assert ctx.known_places == ["Joe's Pizza"]
+        assert [k.name for k in ctx.known_places] == ["Joe's Pizza"]
 
     async def test_request_body_disables_apify_residential_proxy(self) -> None:
         """Apify residential proxy is a paid-tier feature; the enricher

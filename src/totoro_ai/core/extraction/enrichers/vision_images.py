@@ -4,37 +4,45 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import sys
+
+import httpx
 
 from totoro_ai.core.extraction.source_filtered_enricher import SourceFilteredEnricher
-from totoro_ai.core.extraction.types import ExtractionContext
+from totoro_ai.core.extraction.types import (
+    ExtractionContext,
+    KnownPlace,
+    Medium,
+    Producer,
+)
 from totoro_ai.core.places import PlaceSource
 from totoro_ai.providers.llm import VisionExtractorProtocol
 
 logger = logging.getLogger(__name__)
 
+_PER_REQUEST_TIMEOUT_SECONDS = 5.0
 _TOTAL_TIMEOUT_SECONDS = 15.0
 _MAX_IMAGES = 10
 
 
 class VisionImagesEnricher(SourceFilteredEnricher):
-    """Downloads photo-post images via yt-dlp and extracts place names via vision LLM.
+    """Downloads photo-post images and extracts place names via vision LLM.
 
-    Sibling to `VisionFramesEnricher`. Where frames-mode pipes a video
-    stream from yt-dlp through ffmpeg, this enricher invokes
-    `yt-dlp --playlist-items N -o - <url>` once per image (1..N in
-    parallel) and captures each image's bytes from stdout. We don't
-    httpx-GET the URLs that `PhotoDetectorEnricher` captured — those are
-    often signed CDN links that 403 without yt-dlp's cookie/header
-    handling, the same reason `VisionFramesEnricher` pipes through
-    yt-dlp instead of fetching the resolved URL directly. Nothing is
-    written to disk.
+    Sibling to `VisionFramesEnricher`. Photo posts are simpler than
+    videos: `PhotoDetectorEnricher` already extracted signed CDN URLs
+    via yt-dlp metadata; we just `httpx.get` each one in parallel and
+    feed the bytes to `VisionExtractorProtocol`. We don't pipe through
+    `yt-dlp -o -` here because for photo-mode posts yt-dlp would
+    download the audio track (the only "format") rather than the
+    image — a different code path from frames-mode video extraction.
+    The signed query-string auth on TikTok/Instagram photo URLs makes
+    direct httpx GETs work without cookies.
 
     Names-only producer: appends each extracted name to
-    `context.known_places` and lets the deep-level finalizer
-    (`LLMNEREnricher`) emit one structured `CandidatePlace` per name
-    with `place_type` / `subcategory` / `cuisine` inferred from the
-    name itself. Same path used by `GoogleMapsListEnricher`.
+    `context.known_places` as a `KnownPlace(VISION_IMAGES, IMAGE)`
+    entry. The deep-level finalizer (`LLMNEREnricher`) reads
+    known_places and emits one structured candidate per name with
+    inferred `place_type` / `subcategory` / `cuisine` and stamps the
+    full evidence trail.
     """
 
     def __init__(self, vision_extractor: VisionExtractorProtocol) -> None:
@@ -62,12 +70,14 @@ class VisionImagesEnricher(SourceFilteredEnricher):
             )
 
     async def _fetch_and_extract(self, context: ExtractionContext) -> None:
-        assert context.url is not None  # SourceFilteredEnricher guarantees
-        count = min(len(context.image_urls), _MAX_IMAGES)
-        results = await asyncio.gather(
-            *(self._capture_image(context.url, i) for i in range(1, count + 1)),
-            return_exceptions=True,
-        )
+        urls = context.image_urls[:_MAX_IMAGES]
+        async with httpx.AsyncClient(
+            timeout=_PER_REQUEST_TIMEOUT_SECONDS, follow_redirects=True
+        ) as client:
+            results = await asyncio.gather(
+                *(self._download(client, u) for u in urls),
+                return_exceptions=True,
+            )
         images: list[bytes] = [r for r in results if isinstance(r, bytes) and r]
         if not images:
             return
@@ -75,28 +85,24 @@ class VisionImagesEnricher(SourceFilteredEnricher):
         names = await self._vision_extractor.extract_place_names(images)
         for name in names:
             if name:
-                context.known_places.append(name)
+                context.known_places.append(
+                    KnownPlace(
+                        name=name,
+                        producer=Producer.VISION_IMAGES,
+                        medium=Medium.IMAGE,
+                        snippet=name,
+                    )
+                )
 
-    async def _capture_image(self, url: str, item: int) -> bytes | None:
-        """Fetch the Nth image of the post via yt-dlp -o - (stdout, no file).
-
-        `--playlist-items` is 1-indexed in yt-dlp. For single-image posts,
-        `1` selects the only entry; for carousels, `1..N` selects each
-        slide in order.
-        """
-        proc = await asyncio.create_subprocess_exec(
-            sys.executable,
-            "-m",
-            "yt_dlp",
-            "--playlist-items",
-            str(item),
-            "-o",
-            "-",
-            url,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.DEVNULL,
-        )
-        stdout, _ = await proc.communicate()
-        if proc.returncode != 0:
+    async def _download(
+        self, client: httpx.AsyncClient, url: str
+    ) -> bytes | None:
+        try:
+            response = await client.get(url)
+            response.raise_for_status()
+            return response.content
+        except Exception as exc:
+            logger.debug(
+                "VisionImagesEnricher download failed for %s: %s", url, exc
+            )
             return None
-        return stdout or None

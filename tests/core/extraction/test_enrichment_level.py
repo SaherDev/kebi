@@ -5,8 +5,10 @@ from unittest.mock import AsyncMock, MagicMock
 from totoro_ai.core.extraction.enrichment_level import EnrichmentLevel
 from totoro_ai.core.extraction.types import (
     CandidatePlace,
+    Evidence,
     ExtractionContext,
-    ExtractionLevel,
+    Medium,
+    Producer,
 )
 from totoro_ai.core.places import (
     PlaceAttributes,
@@ -18,7 +20,7 @@ def _candidate(name: str = "Place") -> CandidatePlace:
     return CandidatePlace(
         place_name=name,
         place_type=PlaceType.food_and_drink,
-        source=ExtractionLevel.LLM_NER,
+        evidence=[Evidence(Producer.LLM_NER, Medium.CAPTION)],
         attributes=PlaceAttributes(),
     )
 

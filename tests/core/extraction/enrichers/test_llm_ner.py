@@ -17,8 +17,11 @@ from totoro_ai.core.extraction.enrichers.llm_ner import (
 )
 from totoro_ai.core.extraction.types import (
     CandidatePlace,
+    Evidence,
     ExtractionContext,
-    ExtractionLevel,
+    KnownPlace,
+    Medium,
+    Producer,
 )
 from totoro_ai.core.places import (
     LocationContext,
@@ -35,7 +38,6 @@ def _ner_place(
     cuisine: str | None = None,
     price_hint: str | None = None,
     city: str | None = None,
-    signals: list[str] | None = None,
 ) -> _NERPlace:
     attributes = PlaceAttributes(
         cuisine=cuisine,
@@ -47,7 +49,6 @@ def _ner_place(
         place_type=place_type,
         subcategory=subcategory,
         attributes=attributes,
-        signals=signals or [],
     )
 
 
@@ -100,7 +101,7 @@ class TestLLMNEREnricher:
             CandidatePlace(
                 place_name="Existing",
                 place_type=PlaceType.food_and_drink,
-                source=ExtractionLevel.EMOJI_REGEX,
+                evidence=[Evidence(Producer.LLM_NER, Medium.CAPTION)],
             )
         )
         await enricher_two_places.enrich(ctx)
@@ -190,7 +191,10 @@ class TestLLMNEREnricher:
         ctx = ExtractionContext(
             url="https://maps.app.goo.gl/x",
             user_id="u1",
-            known_places=["Baret", "KitKatClub"],
+            known_places=[
+                KnownPlace("Baret", Producer.GOOGLE_MAPS_LIST, Medium.LIST),
+                KnownPlace("KitKatClub", Producer.GOOGLE_MAPS_LIST, Medium.LIST),
+            ],
         )
         await enricher.enrich(ctx)
         client.extract.assert_awaited_once()
@@ -205,7 +209,10 @@ class TestLLMNEREnricher:
         ctx = ExtractionContext(
             url=None,
             user_id="u1",
-            known_places=["Baret", "KitKatClub"],
+            known_places=[
+                KnownPlace("Baret", Producer.GOOGLE_MAPS_LIST, Medium.LIST),
+                KnownPlace("KitKatClub", Producer.GOOGLE_MAPS_LIST, Medium.LIST),
+            ],
         )
         await enricher.enrich(ctx)
         content = client.extract.call_args.kwargs["messages"][-1]["content"]
@@ -287,21 +294,56 @@ class TestLLMNEREnricher:
         assert "<metadata>" in user_msg["content"]
         assert "</metadata>" in user_msg["content"]
 
-    async def test_source_set_to_llm_ner(
-        self, enricher_two_places: LLMNEREnricher
+    async def test_evidence_includes_llm_ner_caption_when_in_caption(
+        self,
     ) -> None:
-        ctx = ExtractionContext(url=None, user_id="u1", caption="text")
-        await enricher_two_places.enrich(ctx)
-        assert all(c.source == ExtractionLevel.LLM_NER for c in ctx.candidates)
-
-    async def test_signals_propagate_to_candidate(self) -> None:
-        client = _mock_instructor(
-            [_ner_place("Sushi Bar", signals=["emoji_marker", "caption"])]
-        )
+        client = _mock_instructor([_ner_place("Sushi Bar")])
         enricher = LLMNEREnricher(instructor_client=client)
-        ctx = ExtractionContext(url=None, user_id="u1", caption="text")
+        ctx = ExtractionContext(
+            url=None, user_id="u1", caption="Loved Sushi Bar tonight"
+        )
         await enricher.enrich(ctx)
-        assert ctx.candidates[0].signals == ["emoji_marker", "caption"]
+        assert len(ctx.candidates) == 1
+        pairs = {(e.producer, e.medium) for e in ctx.candidates[0].evidence}
+        assert (Producer.LLM_NER, Medium.CAPTION) in pairs
+
+    async def test_evidence_includes_text_producer_when_caption_came_from_ytdlp(
+        self,
+    ) -> None:
+        """If yt-dlp wrote the caption, NER should stamp YTDLP_METADATA
+        evidence onto candidates whose name appears in that caption."""
+        client = _mock_instructor([_ner_place("Sushi Bar")])
+        enricher = LLMNEREnricher(instructor_client=client)
+        ctx = ExtractionContext(
+            url=None, user_id="u1", caption="Loved Sushi Bar tonight"
+        )
+        ctx.text_evidence.append(
+            Evidence(
+                Producer.YTDLP_METADATA,
+                Medium.CAPTION,
+                snippet="Loved Sushi Bar tonight",
+            )
+        )
+        await enricher.enrich(ctx)
+        producers = {e.producer for e in ctx.candidates[0].evidence}
+        assert Producer.YTDLP_METADATA in producers
+        assert Producer.LLM_NER in producers
+
+    async def test_evidence_includes_known_place_producer(self) -> None:
+        """A name surfaced via known_places gets that producer on
+        the candidate's evidence."""
+        client = _mock_instructor([_ner_place("Baret")])
+        enricher = LLMNEREnricher(instructor_client=client)
+        ctx = ExtractionContext(
+            url="https://maps.app.goo.gl/x",
+            user_id="u1",
+            known_places=[
+                KnownPlace("Baret", Producer.GOOGLE_MAPS_LIST, Medium.LIST)
+            ],
+        )
+        await enricher.enrich(ctx)
+        producers = {e.producer for e in ctx.candidates[0].evidence}
+        assert Producer.GOOGLE_MAPS_LIST in producers
 
     async def test_empty_places_list_no_candidates(self) -> None:
         client = _mock_instructor([])

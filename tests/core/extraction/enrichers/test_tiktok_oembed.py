@@ -5,7 +5,12 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from totoro_ai.core.extraction.enrichers.tiktok_oembed import TikTokOEmbedEnricher
-from totoro_ai.core.extraction.types import ExtractionContext
+from totoro_ai.core.extraction.types import (
+    Evidence,
+    ExtractionContext,
+    Medium,
+    Producer,
+)
 
 
 @pytest.fixture
@@ -24,6 +29,22 @@ class TestTikTokOEmbedEnricher:
             await enricher.enrich(ctx)
         assert ctx.caption == "Fuji Ramen caption"
 
+    async def test_appends_text_evidence_when_caption_written(
+        self, enricher: TikTokOEmbedEnricher
+    ) -> None:
+        ctx = ExtractionContext(url="https://tiktok.com/v/123", user_id="u1")
+        with patch.object(
+            enricher, "_fetch_caption", new=AsyncMock(return_value="Fuji Ramen")
+        ):
+            await enricher.enrich(ctx)
+        assert ctx.text_evidence == [
+            Evidence(
+                producer=Producer.TIKTOK_OEMBED,
+                medium=Medium.CAPTION,
+                snippet="Fuji Ramen",
+            )
+        ]
+
     async def test_first_write_wins_does_not_overwrite(
         self, enricher: TikTokOEmbedEnricher
     ) -> None:
@@ -35,6 +56,7 @@ class TestTikTokOEmbedEnricher:
         ):
             await enricher.enrich(ctx)
         assert ctx.caption == "existing"
+        assert ctx.text_evidence == []
 
     async def test_skips_when_no_url(self, enricher: TikTokOEmbedEnricher) -> None:
         ctx = ExtractionContext(url=None, user_id="u1")

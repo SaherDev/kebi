@@ -114,11 +114,9 @@ class GooglePlacesValidator:
 
         modifier = _QUALITY_MODIFIERS[places_match.match_quality]
         confidence = calculate_confidence(
-            source=candidate.source,
+            evidence=candidate.evidence,
             match_modifier=modifier,
-            corroborated=candidate.corroborated,
             config=self._confidence_config,
-            signals=candidate.signals or None,
         )
 
         if confidence == 0.0 or places_match.external_id is None:
@@ -137,11 +135,10 @@ class GooglePlacesValidator:
             provider=provider,
             external_id=places_match.external_id,
             confidence=confidence,
-            resolved_by=candidate.source,
+            evidence=list(candidate.evidence),
             subcategory=candidate.subcategory,
             tags=candidate.tags,
             attributes=candidate.attributes,
-            corroborated=candidate.corroborated,
             match_lat=places_match.lat,
             match_lng=places_match.lng,
             match_address=places_match.address,

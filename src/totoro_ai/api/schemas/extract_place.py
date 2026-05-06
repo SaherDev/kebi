@@ -19,6 +19,23 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from totoro_ai.core.places import PlaceObject
 
 
+class EvidenceDTO(BaseModel):
+    """One piece of evidence in a candidate's audit trail.
+
+    `producer` identifies which enricher contributed (`llm_ner`,
+    `vision_frames`, `ytdlp_metadata`, `whisper_audio`, ...).
+    `medium` identifies where in pipeline state the evidence lived
+    (`caption`, `transcript`, `frame`, `image`, `list`, ...).
+    `snippet` is the actual content (truncated to 200 chars) when
+    available; `metadata` carries producer-specific extras.
+    """
+
+    producer: str
+    medium: str
+    snippet: str | None = None
+    metadata: dict[str, str | int | float | bool] = Field(default_factory=dict)
+
+
 class ExtractPlaceItem(BaseModel):
     """One row in the extract response.
 
@@ -33,11 +50,17 @@ class ExtractPlaceItem(BaseModel):
 
     Pipeline-level states (`pending`, `failed`) live on the response
     envelope, never on items (ADR-063).
+
+    `evidence` is the audit trail — every producer/medium pair that
+    contributed to this candidate, in extraction order. Empty list for
+    legacy callers; non-empty for any candidate produced by the
+    Evidence-aware pipeline.
     """
 
     place: PlaceObject
     confidence: float
     status: Literal["saved", "needs_review", "duplicate"]
+    evidence: list[EvidenceDTO] = Field(default_factory=list)
 
     @field_validator("confidence")
     @classmethod

@@ -158,8 +158,9 @@ class ConfidenceWeights(BaseModel):
 class ConfidenceConfig(BaseModel):
     """Per-level confidence scoring config (ADR-029, ADR-057).
 
-    base_scores keys are ExtractionLevel.value strings (e.g. "emoji_regex").
-    max_score caps the output — no extraction path earns 1.0.
+    `producer_scores` keys are `Producer.value` strings (e.g. "llm_ner").
+    `medium_scores` keys are `Medium.value` strings (e.g. "caption").
+    `max_score` caps the output — no extraction path earns 1.0.
 
     Two-band save gate (ADR-057):
       confidence <  save_threshold      → not written, surfaces as "failed".
@@ -167,20 +168,32 @@ class ConfidenceConfig(BaseModel):
       confidence ≥  confident_threshold → written silently as "saved".
     """
 
-    base_scores: dict[str, float] = {
-        "emoji_regex": 0.95,
+    producer_scores: dict[str, float] = {
+        # Name producers
         "llm_ner": 0.60,
-        "subtitle_check": 0.75,
-        "whisper_audio": 0.65,
-        "vision_frames": 0.55,
         # User-curated lists are explicit saves — treat them as ground truth.
         "google_maps_list": 0.95,
+        "vision_frames": 0.55,
+        "vision_images": 0.55,
+        # Text producers — modest baseline; corroboration bonus when paired
+        # with a name producer is what actually lifts confidence.
+        "tiktok_oembed": 0.65,
+        "ytdlp_metadata": 0.60,
+        "whisper_audio": 0.65,
+        "subtitle_check": 0.75,
+        "photo_detector": 0.50,
     }
-    signal_scores: dict[str, float] = {
+    medium_scores: dict[str, float] = {
         "emoji_marker": 0.92,
         "location_tag": 0.85,
         "caption": 0.75,
+        "title": 0.70,
+        "transcript": 0.65,
+        "supplementary_text": 0.70,
         "hashtag": 0.55,
+        "frame": 0.55,
+        "image": 0.55,
+        "list": 0.95,
     }
     corroboration_bonus: float = 0.10
     max_score: float = 0.97

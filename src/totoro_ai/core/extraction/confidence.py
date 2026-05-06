@@ -1,49 +1,57 @@
-"""Extraction confidence scoring logic (ADR-029)."""
+"""Extraction confidence scoring on the evidence trail (ADR-029).
+
+Confidence is computed from the candidate's `evidence` list — every
+producer/medium pair that contributed. Each evidence item has two
+scores: one from `producer_scores` (which enricher contributed) and
+one from `medium_scores` (where in pipeline state the evidence lived).
+The candidate's base score is the strongest single piece — the max
+across both axes for all evidence items. The corroboration bonus is
+applied when the candidate has more than one distinct (producer,
+medium) pair, which captures both "two enrichers agreed" and "one
+enricher saw the name in two different media".
+"""
 
 from totoro_ai.core.config import ConfidenceConfig
-from totoro_ai.core.extraction.types import ExtractionLevel
+from totoro_ai.core.extraction.types import Evidence
 
 
 def calculate_confidence(
-    source: ExtractionLevel,
+    evidence: list[Evidence],
     match_modifier: float,
-    corroborated: bool,
     config: ConfidenceConfig,
-    signals: list[str] | None = None,
 ) -> float:
-    """Compute confidence using multiplicative formula (ADR-029).
+    """Compute confidence using the evidence trail (ADR-029).
 
-    Formula: min((base * match_modifier) + corroboration_bonus, config.max_score)
+    Formula: min((base * match_modifier) + bonus, config.max_score)
 
-    Base score is determined by signals when present (LLM reports which evidence
-    it used), otherwise falls back to base_scores[source.value].
+    `base` is the strongest single piece of evidence:
+        max(producer_scores[e.producer.value],
+            medium_scores[e.medium.value]) for each e in evidence.
 
-    Signal priority (highest wins when multiple present):
-        emoji_marker → 0.92  (explicit 📍 marker in caption)
-        location_tag → 0.85  (platform-provided location confirmed it)
-        caption      → 0.75  (venue named in caption text)
-        hashtag      → 0.55  (hashtag was the primary clue)
-
-    Multiple signals also trigger the corroboration bonus, since the LLM had
-    independent evidence from more than one source.
+    `bonus` is `config.corroboration_bonus` when the candidate has
+    more than one distinct (producer, medium) pair, otherwise 0.
 
     Args:
-        source: ExtractionLevel that produced the candidate
-        match_modifier: Google Places match quality as float (1.0=exact, 0.3=none)
-        corroborated: True if two enrichers independently found the same name
-        config: ConfidenceConfig loaded from app.yaml
-        signals: Signal list from LLM (e.g. ["emoji_marker", "caption"])
+        evidence: List of `Evidence` items backing this candidate. By
+            invariant non-empty (always at least one `LLM_NER` entry).
+        match_modifier: Google Places match quality as float
+            (1.0=exact, 0.3=none).
+        config: ConfidenceConfig loaded from app.yaml.
 
     Returns:
-        Confidence score in range [0.0, config.max_score]
+        Confidence score in range [0.0, config.max_score].
     """
-    if signals:
-        base = max(config.signal_scores.get(s, 0.0) for s in signals)
-        # Multiple independent signals = corroborated evidence
-        if len(signals) >= 2:
-            corroborated = True
-    else:
-        base = config.base_scores.get(source.value, 0.50)
+    if not evidence:
+        return 0.0
 
-    bonus = config.corroboration_bonus if corroborated else 0.0
+    bases: list[float] = []
+    for e in evidence:
+        producer_score = config.producer_scores.get(e.producer.value, 0.50)
+        medium_score = config.medium_scores.get(e.medium.value, 0.50)
+        bases.append(max(producer_score, medium_score))
+    base = max(bases)
+
+    distinct_pairs = len({(e.producer, e.medium) for e in evidence})
+    bonus = config.corroboration_bonus if distinct_pairs >= 2 else 0.0
+
     return min((base * match_modifier) + bonus, config.max_score)

@@ -19,7 +19,7 @@ from totoro_ai.core.extraction.persistence import (
     PlaceSaveOutcome,
 )
 from totoro_ai.core.extraction.status_repository import ExtractionStatusRepository
-from totoro_ai.core.extraction.url_source import source_from_url
+from totoro_ai.core.extraction.url_source import normalize_url, source_from_url
 from totoro_ai.core.places import PlaceSource
 
 logger = logging.getLogger(__name__)
@@ -85,6 +85,15 @@ def _outcome_to_item_dict(outcome: PlaceSaveOutcome) -> dict[str, Any]:
         "place": outcome.place.model_dump(mode="json"),
         "confidence": outcome.metadata.confidence,
         "status": outcome.status,
+        "evidence": [
+            {
+                "producer": e.producer.value,
+                "medium": e.medium.value,
+                "snippet": e.snippet,
+                "metadata": dict(e.metadata),
+            }
+            for e in outcome.metadata.evidence
+        ],
     }
 
 
@@ -143,6 +152,9 @@ class ExtractionService:
             raise ValueError("raw_input cannot be empty")
 
         parsed = parse_input(raw_input)
+        # Canonicalize platform-specific URL forms (e.g. TikTok /photo/ →
+        # /video/) so downstream yt-dlp calls don't hit "Unsupported URL".
+        parsed.url = normalize_url(parsed.url)
         source = source_from_url(parsed.url)
         rid = request_id or uuid4().hex
 

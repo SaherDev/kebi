@@ -8,7 +8,11 @@ import pytest
 from totoro_ai.core.extraction.enrichers.photo_detector import (
     PhotoDetectorEnricher,
 )
-from totoro_ai.core.extraction.types import ExtractionContext
+from totoro_ai.core.extraction.types import (
+    ExtractionContext,
+    Medium,
+    Producer,
+)
 
 
 def _mock_proc(data: dict) -> MagicMock:  # type: ignore[type-arg]
@@ -152,3 +156,24 @@ class TestPhotoDetectorEnricher:
             await enricher.enrich(ctx)
         assert ctx.is_photo_post is False
         assert ctx.image_urls == []
+        assert ctx.text_evidence == []
+
+    async def test_appends_text_evidence_when_photo_post_detected(
+        self, enricher: PhotoDetectorEnricher
+    ) -> None:
+        ctx = ExtractionContext(url="https://tiktok.com/v/photo123", user_id="u1")
+        data = {
+            "_type": "playlist",
+            "entries": [
+                {"vcodec": "none", "url": "https://cdn.tiktok.com/img1.jpg"},
+                {"vcodec": "none", "url": "https://cdn.tiktok.com/img2.jpg"},
+            ],
+        }
+        with patch("asyncio.create_subprocess_exec", return_value=_mock_proc(data)):
+            await enricher.enrich(ctx)
+        assert len(ctx.text_evidence) == 1
+        ev = ctx.text_evidence[0]
+        assert ev.producer == Producer.PHOTO_DETECTOR
+        assert ev.medium == Medium.IMAGE
+        assert ev.snippet is None
+        assert dict(ev.metadata)["image_count"] == 2
