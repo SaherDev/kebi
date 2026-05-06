@@ -1,11 +1,22 @@
-"""Level 1 — PhotoDetectorEnricher: detect Instagram/TikTok photo posts."""
+"""TikTokPhotoEnricher — detect TikTok photo posts and capture all carousel slides.
+
+Instagram has its own dedicated path (`InstagramApifyEnricher`) — yt-dlp
+can't read Instagram without auth, so calling it for IG URLs would just
+trip the circuit breaker. This enricher handles TikTok only; the TikTok
+path uses yt-dlp for detection, then falls back to scraping the page's
+rehydration JSON when yt-dlp returns ≤1 image (carousel posts).
+"""
 
 from __future__ import annotations
 
 import asyncio
 import json
+import logging
+import re
 import sys
 from typing import Any
+
+import httpx
 
 from totoro_ai.core.extraction.source_filtered_enricher import SourceFilteredEnricher
 from totoro_ai.core.extraction.types import (
@@ -16,30 +27,53 @@ from totoro_ai.core.extraction.types import (
 )
 from totoro_ai.core.places import PlaceSource
 
+logger = logging.getLogger(__name__)
+
 # Cap mirrors the design decision: Instagram carousels max at 10, TikTok
 # photo posts can be much longer — 10 covers IG fully and trims long
 # TikTok carousels to a sane vision-spend budget.
 _MAX_IMAGE_URLS = 10
 
+# yt-dlp doesn't enumerate TikTok carousel slides — it returns the cover
+# thumbnail and the music track only. The full slide list lives in the
+# page's `__UNIVERSAL_DATA_FOR_REHYDRATION__` JSON blob, which we parse
+# directly. Used as a TikTok-only fallback when yt-dlp gave us ≤1 image.
+_TIKTOK_REHYDRATION_RE = re.compile(
+    r'<script id="__UNIVERSAL_DATA_FOR_REHYDRATION__"'
+    r' type="application/json">(.*?)</script>',
+    re.DOTALL,
+)
+_TIKTOK_PAGE_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
+    ),
+    "Accept-Language": "en-US,en;q=0.9",
+}
+_TIKTOK_PAGE_TIMEOUT_SECONDS = 15.0
 
-class PhotoDetectorEnricher(SourceFilteredEnricher):
-    """Detects Instagram/TikTok photo posts and captures their image URLs.
+
+class TikTokPhotoEnricher(SourceFilteredEnricher):
+    """Detects TikTok photo posts and captures their image URLs.
 
     Runs its own `yt-dlp --dump-json` (separate from `YtDlpMetadataEnricher`)
     so detection can read fields the metadata enricher intentionally does
     not touch — `_type`, `entries`, `vcodec`, `thumbnails`. When a photo
     post is detected, sets `context.is_photo_post = True` and populates
     `context.image_urls` with up to `_MAX_IMAGE_URLS` image URLs in their
-    natural order. Video posts and unrecognized payloads leave the context
-    untouched.
+    natural order. For TikTok carousel posts (where yt-dlp only exposes
+    the cover thumbnail) falls back to scraping the page's
+    `__UNIVERSAL_DATA_FOR_REHYDRATION__` JSON for the full slide list.
+
+    Gated to TikTok only — Instagram goes through `InstagramApifyEnricher`,
+    which calls Apify and gets caption + hashtags + carousel slides in one
+    request (yt-dlp can't auth against Instagram).
 
     Does NOT catch exceptions — they propagate to `CircuitBreakerEnricher`.
     """
 
     def __init__(self) -> None:
-        super().__init__(
-            allowed_sources={PlaceSource.tiktok, PlaceSource.instagram}
-        )
+        super().__init__(allowed_sources={PlaceSource.tiktok})
 
     async def _run(self, context: ExtractionContext) -> None:
         if context.is_photo_post or context.image_urls:
@@ -50,6 +84,22 @@ class PhotoDetectorEnricher(SourceFilteredEnricher):
             return
 
         urls = _extract_image_urls(data)
+
+        # yt-dlp only exposes the cover thumb (single image) for TikTok
+        # photo posts, never the full carousel. When we got ≤1 URL on
+        # a TikTok photo post, fetch the page HTML and pull every slide
+        # from the rehydration blob. Best-effort — failures fall back
+        # to whatever yt-dlp gave us.
+        if (
+            len(urls) <= 1
+            and data.get("_type") != "playlist"
+            and _is_image_entry(data)
+            and context.url is not None
+        ):
+            carousel = await _fetch_tiktok_carousel_urls(context.url)
+            if len(carousel) > len(urls):
+                urls = carousel
+
         if not urls:
             return
 
@@ -169,3 +219,62 @@ def _extract_image_urls(data: dict[str, Any]) -> list[str]:
         if url:
             return [url]
     return []
+
+
+async def _fetch_tiktok_carousel_urls(url: str) -> list[str]:
+    """Pull all carousel slide URLs from a TikTok photo-post page.
+
+    yt-dlp doesn't expose carousel slides for TikTok — only the cover
+    thumbnail. The full slide list lives in
+    `__UNIVERSAL_DATA_FOR_REHYDRATION__` on the rendered HTML page,
+    under `webapp.video-detail.itemInfo.itemStruct.imagePost.images`.
+    Each entry's `imageURL.urlList` is an ordered list of CDN mirrors;
+    the first is the canonical signed URL.
+
+    Best-effort: any HTTP failure / missing JSON / shape change returns
+    `[]` so the caller can fall back to yt-dlp's cover thumbnail.
+    """
+    try:
+        async with httpx.AsyncClient(
+            follow_redirects=True, timeout=_TIKTOK_PAGE_TIMEOUT_SECONDS
+        ) as client:
+            response = await client.get(url, headers=_TIKTOK_PAGE_HEADERS)
+            response.raise_for_status()
+    except (httpx.HTTPError, httpx.TimeoutException) as exc:
+        logger.warning(
+            "tiktok_carousel_fetch_failed",
+            extra={"url": url, "error": str(exc)},
+        )
+        return []
+
+    match = _TIKTOK_REHYDRATION_RE.search(response.text)
+    if match is None:
+        return []
+    try:
+        data: dict[str, Any] = json.loads(match.group(1))
+    except json.JSONDecodeError:
+        return []
+
+    item_struct = (
+        data.get("__DEFAULT_SCOPE__", {})
+        .get("webapp.video-detail", {})
+        .get("itemInfo", {})
+        .get("itemStruct", {})
+    )
+    if not isinstance(item_struct, dict):
+        return []
+    image_post = item_struct.get("imagePost") or {}
+    images = image_post.get("images") or []
+    if not isinstance(images, list):
+        return []
+
+    urls: list[str] = []
+    for img in images:
+        if not isinstance(img, dict):
+            continue
+        url_list = (img.get("imageURL") or {}).get("urlList") or []
+        if isinstance(url_list, list) and url_list:
+            first = url_list[0]
+            if isinstance(first, str) and first:
+                urls.append(first)
+    return urls

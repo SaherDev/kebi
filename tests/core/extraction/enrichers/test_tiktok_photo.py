@@ -1,12 +1,12 @@
-"""Tests for PhotoDetectorEnricher — photo-post detection + image URL capture."""
+"""Tests for TikTokPhotoEnricher — photo-post detection + image URL capture."""
 
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from totoro_ai.core.extraction.enrichers.photo_detector import (
-    PhotoDetectorEnricher,
+from totoro_ai.core.extraction.enrichers.tiktok_photo import (
+    TikTokPhotoEnricher,
 )
 from totoro_ai.core.extraction.types import (
     ExtractionContext,
@@ -24,13 +24,13 @@ def _mock_proc(data: dict) -> MagicMock:  # type: ignore[type-arg]
 
 
 @pytest.fixture
-def enricher() -> PhotoDetectorEnricher:
-    return PhotoDetectorEnricher()
+def enricher() -> TikTokPhotoEnricher:
+    return TikTokPhotoEnricher()
 
 
-class TestPhotoDetectorEnricher:
+class TestTikTokPhotoEnricher:
     async def test_detects_tiktok_photo_mode_playlist(
-        self, enricher: PhotoDetectorEnricher
+        self, enricher: TikTokPhotoEnricher
     ) -> None:
         ctx = ExtractionContext(url="https://tiktok.com/v/photo123", user_id="u1")
         data = {
@@ -50,18 +50,18 @@ class TestPhotoDetectorEnricher:
             "https://cdn.tiktok.com/img3.jpg",
         ]
 
-    async def test_detects_instagram_carousel_via_thumbnails(
-        self, enricher: PhotoDetectorEnricher
+    async def test_detects_carousel_via_thumbnails(
+        self, enricher: TikTokPhotoEnricher
     ) -> None:
-        ctx = ExtractionContext(url="https://instagram.com/p/abc", user_id="u1")
+        ctx = ExtractionContext(url="https://www.tiktok.com/@x/photo/123", user_id="u1")
         data = {
             "_type": "playlist",
             "entries": [
                 {
                     "thumbnails": [
-                        {"url": "https://ig.com/sm1.jpg", "width": 320, "height": 320},
+                        {"url": "https://cdn.tiktok.com/sm1.jpg", "width": 320, "height": 320},
                         {
-                            "url": "https://ig.com/lg1.jpg",
+                            "url": "https://cdn.tiktok.com/lg1.jpg",
                             "width": 1080,
                             "height": 1080,
                         },
@@ -70,7 +70,7 @@ class TestPhotoDetectorEnricher:
                 {
                     "thumbnails": [
                         {
-                            "url": "https://ig.com/lg2.jpg",
+                            "url": "https://cdn.tiktok.com/lg2.jpg",
                             "width": 1080,
                             "height": 1080,
                         },
@@ -83,12 +83,12 @@ class TestPhotoDetectorEnricher:
         assert ctx.is_photo_post is True
         # Highest-resolution thumbnail wins per entry
         assert ctx.image_urls == [
-            "https://ig.com/lg1.jpg",
-            "https://ig.com/lg2.jpg",
+            "https://cdn.tiktok.com/lg1.jpg",
+            "https://cdn.tiktok.com/lg2.jpg",
         ]
 
     async def test_leaves_video_post_untouched(
-        self, enricher: PhotoDetectorEnricher
+        self, enricher: TikTokPhotoEnricher
     ) -> None:
         ctx = ExtractionContext(url="https://tiktok.com/v/video123", user_id="u1")
         data = {
@@ -102,7 +102,7 @@ class TestPhotoDetectorEnricher:
         assert ctx.image_urls == []
 
     async def test_caps_image_urls_at_ten(
-        self, enricher: PhotoDetectorEnricher
+        self, enricher: TikTokPhotoEnricher
     ) -> None:
         ctx = ExtractionContext(url="https://tiktok.com/v/long", user_id="u1")
         data = {
@@ -119,7 +119,7 @@ class TestPhotoDetectorEnricher:
         assert ctx.image_urls[-1] == "https://cdn/9.jpg"
 
     async def test_skips_when_already_detected(
-        self, enricher: PhotoDetectorEnricher
+        self, enricher: TikTokPhotoEnricher
     ) -> None:
         ctx = ExtractionContext(
             url="https://tiktok.com/v/photo",
@@ -133,7 +133,7 @@ class TestPhotoDetectorEnricher:
         assert ctx.image_urls == ["https://existing/1.jpg"]
 
     async def test_skips_unsupported_source(
-        self, enricher: PhotoDetectorEnricher
+        self, enricher: TikTokPhotoEnricher
     ) -> None:
         ctx = ExtractionContext(url="https://youtube.com/watch?v=123", user_id="u1")
         with patch("asyncio.create_subprocess_exec") as mock_exec:
@@ -143,7 +143,7 @@ class TestPhotoDetectorEnricher:
         assert ctx.image_urls == []
 
     async def test_handles_playlist_with_zero_image_entries(
-        self, enricher: PhotoDetectorEnricher
+        self, enricher: TikTokPhotoEnricher
     ) -> None:
         ctx = ExtractionContext(url="https://tiktok.com/v/x", user_id="u1")
         data = {
@@ -159,7 +159,7 @@ class TestPhotoDetectorEnricher:
         assert ctx.text_evidence == []
 
     async def test_appends_text_evidence_when_photo_post_detected(
-        self, enricher: PhotoDetectorEnricher
+        self, enricher: TikTokPhotoEnricher
     ) -> None:
         ctx = ExtractionContext(url="https://tiktok.com/v/photo123", user_id="u1")
         data = {

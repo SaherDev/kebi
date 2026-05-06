@@ -1,4 +1,4 @@
-"""Level 2 — yt-dlp metadata caption enricher."""
+"""VideoMetadataEnricher — yt-dlp metadata: title, description, hashtags, location."""
 
 import asyncio
 import json
@@ -14,7 +14,7 @@ from totoro_ai.core.extraction.types import (
 from totoro_ai.core.places import PlaceSource
 
 
-class YtDlpMetadataEnricher(SourceFilteredEnricher):
+class VideoMetadataEnricher(SourceFilteredEnricher):
     """Fetches video metadata via yt-dlp --dump-json.
 
     Caption enricher: populates context.caption (first-write-wins).
@@ -48,7 +48,7 @@ class YtDlpMetadataEnricher(SourceFilteredEnricher):
             context.caption = description
             context.text_evidence.append(
                 Evidence(
-                    producer=Producer.YTDLP_METADATA,
+                    producer=Producer.VIDEO_METADATA,
                     medium=Medium.CAPTION,
                     snippet=description[:200],
                 )
@@ -59,7 +59,7 @@ class YtDlpMetadataEnricher(SourceFilteredEnricher):
             context.title = title_value
             context.text_evidence.append(
                 Evidence(
-                    producer=Producer.YTDLP_METADATA,
+                    producer=Producer.VIDEO_METADATA,
                     medium=Medium.TITLE,
                     snippet=title_value[:200],
                 )
@@ -71,7 +71,7 @@ class YtDlpMetadataEnricher(SourceFilteredEnricher):
             for tag in tags_value:
                 context.text_evidence.append(
                     Evidence(
-                        producer=Producer.YTDLP_METADATA,
+                        producer=Producer.VIDEO_METADATA,
                         medium=Medium.HASHTAG,
                         snippet=str(tag),
                     )
@@ -85,7 +85,7 @@ class YtDlpMetadataEnricher(SourceFilteredEnricher):
             context.location_tag = location_value
             context.text_evidence.append(
                 Evidence(
-                    producer=Producer.YTDLP_METADATA,
+                    producer=Producer.VIDEO_METADATA,
                     medium=Medium.LOCATION_TAG,
                     snippet=str(location_value)[:200],
                 )

@@ -1,4 +1,4 @@
-"""Level 1 — TikTok oEmbed caption enricher."""
+"""TikTokCaptionEnricher — fetches the post caption via TikTok's oEmbed API."""
 
 import httpx
 
@@ -11,11 +11,11 @@ from totoro_ai.core.extraction.types import (
 )
 from totoro_ai.core.places import PlaceSource
 
-_TIKTOK_OEMBED_URL = "https://www.tiktok.com/oembed"
+_OEMBED_URL = "https://www.tiktok.com/oembed"
 _TIMEOUT_SECONDS = 10.0  # TODO: move to config if oEmbed URL needs per-env override
 
 
-class TikTokOEmbedEnricher(SourceFilteredEnricher):
+class TikTokCaptionEnricher(SourceFilteredEnricher):
     """Fetches TikTok video caption via oEmbed API.
 
     Caption enricher: populates context.caption (first-write-wins).
@@ -37,7 +37,7 @@ class TikTokOEmbedEnricher(SourceFilteredEnricher):
             context.caption = caption
             context.text_evidence.append(
                 Evidence(
-                    producer=Producer.TIKTOK_OEMBED,
+                    producer=Producer.TIKTOK_CAPTION,
                     medium=Medium.CAPTION,
                     snippet=caption[:200],
                 )
@@ -48,7 +48,7 @@ class TikTokOEmbedEnricher(SourceFilteredEnricher):
     async def _fetch_caption(self, url: str) -> str | None:
         async with httpx.AsyncClient() as client:
             response = await client.get(
-                _TIKTOK_OEMBED_URL,
+                _OEMBED_URL,
                 params={"url": url},
                 timeout=_TIMEOUT_SECONDS,
             )

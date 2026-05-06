@@ -16,7 +16,7 @@ def normalize_url(url: str | None) -> str | None:
     extractor (as of 2026.03.17) rejects with "Unsupported URL" — but
     the same post resolves cleanly under `/video/<id>`. Rewrite once at
     the pipeline entry point so every downstream enricher
-    (photo_detector, vision_images, ytdlp_metadata, …) hits a URL
+    (tiktok_photo, vision_images, video_metadata, …) hits a URL
     yt-dlp accepts.
 
     Returns the input unchanged for non-TikTok URLs, non-photo TikTok

@@ -258,21 +258,29 @@ def _make_inline_level() -> EnrichmentLevel:
     from totoro_ai.core.extraction.enrichers.google_maps_list import (
         GoogleMapsListEnricher,
     )
-    from totoro_ai.core.extraction.enrichers.photo_detector import (
-        PhotoDetectorEnricher,
+    from totoro_ai.core.extraction.enrichers.instagram_post import (
+        InstagramPostEnricher,
     )
-    from totoro_ai.core.extraction.enrichers.tiktok_oembed import TikTokOEmbedEnricher
-    from totoro_ai.core.extraction.enrichers.ytdlp_metadata import YtDlpMetadataEnricher
+    from totoro_ai.core.extraction.enrichers.tiktok_caption import (
+        TikTokCaptionEnricher,
+    )
+    from totoro_ai.core.extraction.enrichers.tiktok_photo import (
+        TikTokPhotoEnricher,
+    )
+    from totoro_ai.core.extraction.enrichers.video_metadata import (
+        VideoMetadataEnricher,
+    )
 
     return EnrichmentLevel(
         name="enrich",
         enrichers=[
             ParallelEnricherGroup(
                 [
-                    CircuitBreakerEnricher(TikTokOEmbedEnricher()),
-                    CircuitBreakerEnricher(YtDlpMetadataEnricher()),
+                    CircuitBreakerEnricher(TikTokCaptionEnricher()),
+                    CircuitBreakerEnricher(VideoMetadataEnricher()),
                     CircuitBreakerEnricher(GoogleMapsListEnricher()),
-                    CircuitBreakerEnricher(PhotoDetectorEnricher()),
+                    CircuitBreakerEnricher(InstagramPostEnricher()),
+                    CircuitBreakerEnricher(TikTokPhotoEnricher()),
                 ]
             ),
         ],
@@ -337,22 +345,24 @@ def _get_deep_level() -> EnrichmentLevel:
 def get_extraction_pipeline(
     extraction_config: ExtractionConfig = Depends(get_extraction_config),  # noqa: B008
 ) -> ExtractionPipeline:
-    """FastAPI dependency providing ExtractionPipeline with all levels wired."""
-    from totoro_ai.core.extraction.enrichers.llm_ner import LLMNEREnricher
-    from totoro_ai.core.extraction.validator import GooglePlacesValidator
+    """FastAPI dependency providing ExtractionPipeline with all levels wired.
+
+    Wires the search-first sequence: producers (per level) → Google
+    Places search (`PlacesSearcher`) → LLM pick + classify
+    (`LLMPlacePicker`) → schema validation in persistence → upsert.
+    """
+    from totoro_ai.core.extraction.enrichers.llm_picker import LLMPlacePicker
+    from totoro_ai.core.extraction.searcher import PlacesSearcher
     from totoro_ai.core.places import GooglePlacesClient
 
-    validator = GooglePlacesValidator(
-        places_client=GooglePlacesClient(),
-        confidence_config=extraction_config.confidence,
-    )
     return ExtractionPipeline(
         levels=[_get_inline_level(), _get_deep_level()],
-        validator=validator,
-        extraction_config=extraction_config,
-        finalizer=LLMNEREnricher(
-            instructor_client=get_instructor_client("extractor")
+        searcher=PlacesSearcher(places_client=GooglePlacesClient()),
+        picker=LLMPlacePicker(
+            instructor_client=get_instructor_client("extractor"),
+            confidence_config=extraction_config.confidence,
         ),
+        extraction_config=extraction_config,
     )
 
 

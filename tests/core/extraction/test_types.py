@@ -1,18 +1,20 @@
 """Tests for extraction-cascade types."""
 
 from totoro_ai.core.extraction.types import (
-    CandidatePlace,
     Evidence,
+    EvidenceField,
     ExtractionContext,
     KnownPlace,
     Medium,
     Producer,
+    SearchMatch,
     ValidatedCandidate,
 )
 from totoro_ai.core.places import (
     LocationContext,
     PlaceAttributes,
     PlaceProvider,
+    PlacesMatchQuality,
     PlaceType,
 )
 
@@ -23,22 +25,6 @@ def _evidence(
     snippet: str | None = "Loved Fuji Ramen",
 ) -> Evidence:
     return Evidence(producer=producer, medium=medium, snippet=snippet)
-
-
-def _candidate(
-    name: str = "Fuji Ramen",
-    evidence: list[Evidence] | None = None,
-) -> CandidatePlace:
-    return CandidatePlace(
-        place_name=name,
-        place_type=PlaceType.food_and_drink,
-        evidence=evidence or [_evidence()],
-        subcategory="restaurant",
-        attributes=PlaceAttributes(
-            cuisine="ramen",
-            location_context=LocationContext(city="Bangkok"),
-        ),
-    )
 
 
 class TestProducer:
@@ -54,8 +40,8 @@ class TestProducer:
     def test_text_producers_present(self) -> None:
         names = {p.value for p in Producer}
         assert {
-            "tiktok_oembed",
-            "ytdlp_metadata",
+            "tiktok_caption",
+            "video_metadata",
             "whisper_audio",
             "subtitle_check",
             "photo_detector",
@@ -78,6 +64,20 @@ class TestMedium:
     def test_visual_media_present(self) -> None:
         names = {m.value for m in Medium}
         assert {"frame", "image", "list"} <= names
+
+
+class TestEvidenceField:
+    def test_text_fields_present(self) -> None:
+        names = {f.value for f in EvidenceField}
+        assert {
+            "caption",
+            "transcript",
+            "title",
+            "hashtag",
+            "location_tag",
+            "supplementary_text",
+            "known_places",
+        } <= names
 
 
 class TestEvidence:
@@ -105,29 +105,46 @@ class TestEvidence:
         assert dict(e.metadata)["image_count"] == 5
 
 
-class TestCandidatePlace:
-    def test_holds_extraction_fields(self) -> None:
-        c = _candidate()
-        assert c.place_name == "Fuji Ramen"
-        assert c.place_type == PlaceType.food_and_drink
-        assert c.subcategory == "restaurant"
-        assert c.attributes.cuisine == "ramen"
-        assert len(c.evidence) == 1
-        assert c.evidence[0].producer == Producer.LLM_NER
-
-    def test_evidence_can_carry_multiple_items(self) -> None:
-        c = CandidatePlace(
-            place_name="Fuji Ramen",
-            place_type=PlaceType.food_and_drink,
-            evidence=[
-                Evidence(Producer.LLM_NER, Medium.CAPTION),
-                Evidence(Producer.VISION_FRAMES, Medium.FRAME, snippet="Fuji Ramen"),
-            ],
+class TestSearchMatch:
+    def test_holds_google_metadata(self) -> None:
+        m = SearchMatch(
+            query="Fuji Ramen",
+            query_producer=Producer.GOOGLE_MAPS_LIST,
+            query_medium=Medium.LIST,
+            validated_name="Fuji Ramen Bangkok",
+            provider=PlaceProvider.google,
+            external_id="ChIJ123",
+            match_quality=PlacesMatchQuality.EXACT,
+            lat=13.7,
+            lng=100.5,
+            address="Sukhumvit, Bangkok",
+            place_types=("restaurant", "food"),
         )
-        assert {e.producer for e in c.evidence} == {
-            Producer.LLM_NER,
-            Producer.VISION_FRAMES,
-        }
+        assert m.external_id == "ChIJ123"
+        assert m.match_quality == PlacesMatchQuality.EXACT
+        assert m.place_types == ("restaurant", "food")
+
+    def test_frozen_and_hashable(self) -> None:
+        a = SearchMatch(
+            query="Joe",
+            query_producer=Producer.GOOGLE_MAPS_LIST,
+            query_medium=Medium.LIST,
+            validated_name="Joe's Pizza",
+            provider=PlaceProvider.google,
+            external_id="ChIJ_joe",
+            match_quality=PlacesMatchQuality.EXACT,
+        )
+        b = SearchMatch(
+            query="Joe",
+            query_producer=Producer.GOOGLE_MAPS_LIST,
+            query_medium=Medium.LIST,
+            validated_name="Joe's Pizza",
+            provider=PlaceProvider.google,
+            external_id="ChIJ_joe",
+            match_quality=PlacesMatchQuality.EXACT,
+        )
+        assert a == b
+        assert hash(a) == hash(b)
 
 
 class TestExtractionContext:
@@ -135,21 +152,20 @@ class TestExtractionContext:
         ctx = ExtractionContext(url="https://tiktok.com/v/123", user_id="u1")
         assert ctx.url == "https://tiktok.com/v/123"
         assert ctx.user_id == "u1"
-        assert ctx.candidates == []
+        assert ctx.search_matches == []
         assert ctx.known_places == []
         assert ctx.text_evidence == []
 
     def test_independent_per_instance(self) -> None:
         ctx1 = ExtractionContext(url=None, user_id="u1")
         ctx2 = ExtractionContext(url=None, user_id="u2")
-        ctx1.candidates.append(_candidate(name="A"))
         ctx1.text_evidence.append(_evidence())
         ctx1.known_places.append(
             KnownPlace(
                 name="X", producer=Producer.GOOGLE_MAPS_LIST, medium=Medium.LIST
             )
         )
-        assert ctx2.candidates == []
+        assert ctx2.search_matches == []
         assert ctx2.text_evidence == []
         assert ctx2.known_places == []
 
@@ -177,10 +193,15 @@ class TestValidatedCandidate:
             confidence=0.95,
             evidence=[_evidence()],
             subcategory="restaurant",
-            attributes=PlaceAttributes(cuisine="ramen"),
+            attributes=PlaceAttributes(
+                cuisine="ramen",
+                location_context=LocationContext(city="Bangkok"),
+            ),
         )
         assert vc.confidence == 0.95
         assert vc.provider == PlaceProvider.google
         assert vc.external_id == "ChIJ123"
         assert vc.attributes.cuisine == "ramen"
+        assert vc.attributes.location_context is not None
+        assert vc.attributes.location_context.city == "Bangkok"
         assert len(vc.evidence) == 1

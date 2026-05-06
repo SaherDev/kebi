@@ -1,16 +1,11 @@
-"""Tests for dedup_candidates and dedup_validated_by_provider_id."""
+"""Tests for dedup_validated_by_provider_id (post-pick dedup)."""
 
 import pytest
 
 from totoro_ai.core.config import ConfidenceConfig
-from totoro_ai.core.extraction.dedup import (
-    dedup_candidates,
-    dedup_validated_by_provider_id,
-)
+from totoro_ai.core.extraction.dedup import dedup_validated_by_provider_id
 from totoro_ai.core.extraction.types import (
-    CandidatePlace,
     Evidence,
-    ExtractionContext,
     Medium,
     Producer,
     ValidatedCandidate,
@@ -33,107 +28,6 @@ def _attrs(
         price_hint=price_hint,
         location_context=LocationContext(city=city) if city else None,
     )
-
-
-def _ctx(*candidates: CandidatePlace) -> ExtractionContext:
-    ctx = ExtractionContext(url=None, user_id="u1")
-    ctx.candidates = list(candidates)
-    return ctx
-
-
-def _candidate(
-    name: str = "Ramen House",
-    evidence: list[Evidence] | None = None,
-    cuisine: str | None = None,
-    city: str | None = None,
-) -> CandidatePlace:
-    return CandidatePlace(
-        place_name=name,
-        place_type=PlaceType.food_and_drink,
-        evidence=evidence or [Evidence(Producer.LLM_NER, Medium.CAPTION)],
-        attributes=_attrs(cuisine=cuisine, city=city),
-    )
-
-
-# ---------------------------------------------------------------------------
-# dedup_candidates
-# ---------------------------------------------------------------------------
-
-
-def test_single_candidate_unchanged() -> None:
-    c = _candidate("Ramen House")
-    ctx = _ctx(c)
-    dedup_candidates(ctx)
-    assert len(ctx.candidates) == 1
-    assert ctx.candidates[0].place_name == "Ramen House"
-
-
-def test_two_different_names_both_kept() -> None:
-    ctx = _ctx(_candidate("Ramen House"), _candidate("Sushi Bar"))
-    dedup_candidates(ctx)
-    assert len(ctx.candidates) == 2
-
-
-def test_same_name_merges_evidence_lists() -> None:
-    a = _candidate(
-        "Ramen House", evidence=[Evidence(Producer.LLM_NER, Medium.CAPTION)]
-    )
-    b = _candidate(
-        "Ramen House", evidence=[Evidence(Producer.VISION_FRAMES, Medium.FRAME)]
-    )
-    ctx = _ctx(a, b)
-    dedup_candidates(ctx)
-    assert len(ctx.candidates) == 1
-    producers = {e.producer for e in ctx.candidates[0].evidence}
-    assert producers == {Producer.LLM_NER, Producer.VISION_FRAMES}
-
-
-def test_same_evidence_item_unioned_not_duplicated() -> None:
-    """Two candidates with overlapping evidence don't double-count."""
-    shared = Evidence(Producer.LLM_NER, Medium.CAPTION, snippet="x")
-    a = _candidate("Ramen House", evidence=[shared])
-    b = _candidate(
-        "Ramen House",
-        evidence=[shared, Evidence(Producer.VISION_FRAMES, Medium.FRAME)],
-    )
-    ctx = _ctx(a, b)
-    dedup_candidates(ctx)
-    assert len(ctx.candidates) == 1
-    assert len(ctx.candidates[0].evidence) == 2  # not 3
-
-
-def test_same_name_different_case_merged() -> None:
-    a = _candidate(
-        "RAMEN KAISUGI", evidence=[Evidence(Producer.LLM_NER, Medium.CAPTION)]
-    )
-    b = _candidate(
-        "ramen kaisugi", evidence=[Evidence(Producer.VISION_FRAMES, Medium.FRAME)]
-    )
-    ctx = _ctx(a, b)
-    dedup_candidates(ctx)
-    assert len(ctx.candidates) == 1
-
-
-def test_dedup_candidates_inherits_attributes_from_loser() -> None:
-    """Carrier with no cuisine inherits from a loser that had one."""
-    winner = _candidate("Ramen House", cuisine=None)
-    loser = _candidate("Ramen House", cuisine="ramen")
-    ctx = _ctx(winner, loser)
-    dedup_candidates(ctx)
-    assert len(ctx.candidates) == 1
-    assert ctx.candidates[0].attributes.cuisine == "ramen"
-
-
-def test_empty_candidates_noop() -> None:
-    ctx = ExtractionContext(url=None, user_id="u1")
-    ctx.candidates = []
-    dedup_candidates(ctx)
-    assert ctx.candidates == []
-
-
-# ---------------------------------------------------------------------------
-# dedup_validated_by_provider_id
-# ---------------------------------------------------------------------------
 
 
 def _make_validated(

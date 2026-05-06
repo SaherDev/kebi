@@ -1,38 +1,21 @@
-"""Candidate deduplication — collapses duplicates at two points in the cascade.
+"""Validated-candidate deduplication.
 
-1. `dedup_candidates` — pre-validation dedup on `CandidatePlace` by
-   normalised `place_name`. Runs before the Google Places call so duplicate
-   candidates from different producers result in a single validation call.
-   Evidence lists are unioned across the group (preserving first-seen order)
-   and attribute fields the carrier left blank are inherited.
-
-2. `dedup_validated_by_provider_id` — post-validation dedup on
-   `ValidatedCandidate`. Two candidates that share a `provider_id`
-   (namespaced `{provider}:{external_id}`) get collapsed into one.
-   Evidence is unioned, confidence becomes max(group), and the
-   corroboration bonus is applied when the merged evidence has more
-   than one distinct (producer, medium) pair (capped at `max_score`).
+`dedup_validated_by_provider_id` collapses two `ValidatedCandidate`s
+that share a `provider_id` (namespaced `{provider}:{external_id}`).
+Evidence is unioned, confidence becomes max(group), and the
+corroboration bonus is applied when the merged evidence has more than
+one distinct (producer, medium) pair (capped at `max_score`).
 """
 
 from __future__ import annotations
 
-import re
-
 from totoro_ai.core.config import ConfidenceConfig
 from totoro_ai.core.extraction.types import (
-    CandidatePlace,
     Evidence,
-    ExtractionContext,
     ValidatedCandidate,
 )
 from totoro_ai.core.places import PlaceAttributes
 from totoro_ai.core.places.repository import build_provider_id
-
-
-def _normalize(name: str) -> str:
-    """Normalize a place name for dedup comparison."""
-    without_punct = re.sub(r"[^\w\s]", "", name, flags=re.UNICODE)
-    return " ".join(without_punct.lower().split())
 
 
 def _merge_evidence(*lists: list[Evidence]) -> list[Evidence]:
@@ -47,42 +30,6 @@ def _merge_evidence(*lists: list[Evidence]) -> list[Evidence]:
                 seen.add(item)
                 merged.append(item)
     return merged
-
-
-def dedup_candidates(context: ExtractionContext) -> None:
-    """Deduplicate context.candidates in-place.
-
-    Groups by normalised `place_name`. When multiple candidates share a
-    name they merge into one: evidence lists are unioned (preserving
-    order), attributes are filled in from the first candidate that
-    supplied each field, and the rest of the fields are taken from the
-    first candidate in the group (LLM_NER's structured output).
-    """
-    if len(context.candidates) <= 1:
-        return
-
-    groups: dict[str, list[CandidatePlace]] = {}
-    for candidate in context.candidates:
-        key = _normalize(candidate.place_name)
-        groups.setdefault(key, []).append(candidate)
-
-    winners: list[CandidatePlace] = []
-    for group in groups.values():
-        if len(group) == 1:
-            winners.append(group[0])
-            continue
-
-        winner = group[0]
-        rest = group[1:]
-        winner.evidence = _merge_evidence(
-            winner.evidence, *(c.evidence for c in rest)
-        )
-        winner.attributes = _merge_attributes(
-            winner.attributes, *(c.attributes for c in rest)
-        )
-        winners.append(winner)
-
-    context.candidates = winners
 
 
 def _provider_id(vc: ValidatedCandidate) -> str | None:

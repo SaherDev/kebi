@@ -33,7 +33,7 @@ class CircuitBreakerEnricher:
     def __init__(
         self,
         enricher: "Enricher",
-        failure_threshold: int = 5,
+        failure_threshold: int = 3,
         cooldown_seconds: float = 900.0,
     ) -> None:
         self._enricher = enricher

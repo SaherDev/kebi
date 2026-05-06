@@ -26,6 +26,7 @@ from totoro_ai.core.places import (
     PlaceCreate,
     PlaceObject,
     PlaceProvider,
+    PlacesMatchQuality,
     PlaceSource,
     PlaceType,
 )
@@ -33,9 +34,10 @@ from totoro_ai.core.places import (
 __all__ = [
     "Producer",
     "Medium",
+    "EvidenceField",
     "Evidence",
     "KnownPlace",
-    "CandidatePlace",
+    "SearchMatch",
     "ExtractionContext",
     "ValidatedCandidate",
     # Re-exported from core.places for legacy import paths.
@@ -56,11 +58,12 @@ class Producer(Enum):
     # Name producers — emit candidate names
     LLM_NER = "llm_ner"
     GOOGLE_MAPS_LIST = "google_maps_list"
+    INSTAGRAM_POST = "instagram_post"
     VISION_FRAMES = "vision_frames"
     VISION_IMAGES = "vision_images"
     # Text producers — populate caption / transcript / etc.
-    TIKTOK_OEMBED = "tiktok_oembed"
-    YTDLP_METADATA = "ytdlp_metadata"
+    TIKTOK_CAPTION = "tiktok_caption"
+    VIDEO_METADATA = "video_metadata"
     WHISPER_AUDIO = "whisper_audio"
     SUBTITLE_CHECK = "subtitle_check"
     PHOTO_DETECTOR = "photo_detector"
@@ -79,6 +82,24 @@ class Medium(Enum):
     FRAME = "frame"
     IMAGE = "image"
     LIST = "list"
+
+
+class EvidenceField(str, Enum):
+    """LLM-side label for which text source supported a pick.
+
+    The picker self-reports which fields it leaned on for each chosen
+    place. The pipeline maps these to `Evidence(producer=LLM_NER,
+    medium=...)` records. Maps onto `Medium` 1:1 for the text fields
+    the picker can actually see in its prompt.
+    """
+
+    CAPTION = "caption"
+    TRANSCRIPT = "transcript"
+    TITLE = "title"
+    HASHTAG = "hashtag"
+    LOCATION_TAG = "location_tag"
+    SUPPLEMENTARY_TEXT = "supplementary_text"
+    KNOWN_PLACES = "known_places"
 
 
 @dataclass(frozen=True)
@@ -113,33 +134,37 @@ class KnownPlace:
     snippet: str | None = None
 
 
-@dataclass
-class CandidatePlace:
-    """Pre-validation extraction candidate.
+@dataclass(frozen=True)
+class SearchMatch:
+    """A vetted Google Places hit that the picker LLM may choose from.
 
-    Holds only the fields the producing enricher could derive from the
-    source content, plus an `evidence` audit trail. No `user_id` (that's
-    pipeline context), no `provider` / `external_id` (the validator
-    fills those in on `ValidatedCandidate`), no `source_url` / `source`
-    (stamped at persistence time). Mutable so dedup can merge in place.
+    Produced by `PlacesSearcher` from the names that producers
+    contributed (`KnownPlace`s + `location_tag`). Drops NONE /
+    CATEGORY_ONLY quality and geographic-feature place_types at the
+    searcher boundary — the picker only ever sees real venues.
 
-    By construction `evidence` is non-empty: the only emitter
-    (`LLMNEREnricher`) always stamps at least one `Evidence(LLM_NER, ...)`
-    item — otherwise the candidate's name wouldn't be present in any
-    text source and the LLM wouldn't have produced it.
+    Frozen so the searcher's per-query dedup can use set semantics on
+    `external_id`. The picker references entries by `external_id` only;
+    the rest of the fields are echoed back to the caller as authoritative
+    Google data.
     """
 
-    place_name: str
-    place_type: PlaceType
-    evidence: list[Evidence]
-    subcategory: str | None = None
-    tags: list[str] = field(default_factory=list)
-    attributes: PlaceAttributes = field(default_factory=PlaceAttributes)
+    query: str
+    query_producer: Producer
+    query_medium: Medium
+    validated_name: str
+    provider: PlaceProvider
+    external_id: str
+    match_quality: PlacesMatchQuality
+    lat: float | None = None
+    lng: float | None = None
+    address: str | None = None
+    place_types: tuple[str, ...] = ()
 
 
 @dataclass
 class ExtractionContext:
-    """Shared mutable state threaded through all enrichers.
+    """Shared mutable state threaded through all enrichers and the picker.
 
     `source` is auto-derived from `url` in `__post_init__` so every
     consumer (enrichers, persistence, the service) reads the same
@@ -149,16 +174,17 @@ class ExtractionContext:
     `known_places` is a list of `KnownPlace` entries — confirmed venue
     names from name producers (Google Maps shared list, vision frames,
     vision images). Each entry carries the `producer + medium + snippet`
-    so the NER finalizer can stamp matching candidates with full
-    provenance.
+    so the picker can stamp matching picks with full provenance.
 
     `text_evidence` is a list of `Evidence` entries appended by text
     producers when they actually wrote pipeline state (caption,
-    transcript, title, etc.). NER reads it when emitting candidates and
-    stamps any item whose source field contains the candidate name onto
-    the candidate's evidence — preserving the "this caption came from
-    yt-dlp metadata, not TikTok oEmbed" distinction that would
-    otherwise be lost.
+    transcript, title, etc.). Used by `assemble_evidence` to attach
+    upstream producer attribution (e.g. "this caption came from yt-dlp
+    metadata") to whichever places the picker chose.
+
+    `search_matches` is the picker's closed candidate set — Google
+    Places hits returned by `PlacesSearcher`. The picker may only emit
+    places whose `external_id` matches an entry here.
     """
 
     url: str | None
@@ -166,7 +192,6 @@ class ExtractionContext:
     supplementary_text: str = ""
     caption: str | None = None
     transcript: str | None = None
-    candidates: list[CandidatePlace] = field(default_factory=list)
     platform: str | None = None
     title: str | None = None
     hashtags: list[str] = field(default_factory=list)
@@ -176,6 +201,7 @@ class ExtractionContext:
     text_evidence: list[Evidence] = field(default_factory=list)
     is_photo_post: bool = False
     image_urls: list[str] = field(default_factory=list)
+    search_matches: list[SearchMatch] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if self.source is None:

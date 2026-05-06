@@ -125,6 +125,18 @@ class PlaceAttributes(BaseModel):
     dietary: list[str] = Field(default_factory=list)
     good_for: list[str] = Field(default_factory=list)
     location_context: LocationContext | None = None
+    # Rich attributes — inferable from text + Google Places metadata.
+    # All optional; existing rows in the JSONB column fall back to defaults.
+    atmosphere: list[str] = Field(default_factory=list)
+    time_of_day: list[str] = Field(default_factory=list)
+    season: list[str] = Field(default_factory=list)
+    crowd: list[str] = Field(default_factory=list)
+    dress_code: str | None = None
+    noise_level: str | None = None
+    music: str | None = None
+    aesthetic: list[str] = Field(default_factory=list)
+    signature_items: list[str] = Field(default_factory=list)
+    known_for: list[str] = Field(default_factory=list)
 
     model_config = ConfigDict(extra="forbid")
 

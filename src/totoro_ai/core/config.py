@@ -173,12 +173,14 @@ class ConfidenceConfig(BaseModel):
         "llm_ner": 0.60,
         # User-curated lists are explicit saves — treat them as ground truth.
         "google_maps_list": 0.95,
+        # Instagram-tagged caption / location-tag — moderate signal.
+        "instagram_post": 0.65,
         "vision_frames": 0.55,
         "vision_images": 0.55,
         # Text producers — modest baseline; corroboration bonus when paired
         # with a name producer is what actually lifts confidence.
-        "tiktok_oembed": 0.65,
-        "ytdlp_metadata": 0.60,
+        "tiktok_caption": 0.65,
+        "video_metadata": 0.60,
         "whisper_audio": 0.65,
         "subtitle_check": 0.75,
         "photo_detector": 0.50,
@@ -239,7 +241,7 @@ class ExtractionConfig(BaseModel):
         "source",
     ]
     confidence: ConfidenceConfig = ConfidenceConfig()
-    circuit_breaker_threshold: int = 5
+    circuit_breaker_threshold: int = 3
     circuit_breaker_cooldown: float = 900.0
     vision: ExtractionVisionConfig = ExtractionVisionConfig()
     whisper: ExtractionWhisperConfig = ExtractionWhisperConfig()

@@ -126,12 +126,14 @@ extraction:
       llm_ner: 0.80
       # User-curated lists are explicit saves — treat them as ground truth.
       google_maps_list: 0.95
+      # Instagram-tagged caption / location_tag — moderate signal.
+      instagram_post: 0.65
       vision_frames: 0.55
       vision_images: 0.55
       # Text producers — modest baseline; corroboration bonus when paired
       # with a name producer is what actually lifts confidence.
-      tiktok_oembed: 0.65
-      ytdlp_metadata: 0.60
+      tiktok_caption: 0.65
+      video_metadata: 0.60
       whisper_audio: 0.65
       subtitle_check: 0.75
       photo_detector: 0.50
@@ -155,7 +157,7 @@ extraction:
     #   confidence ≥ confident_threshold → written silently as "saved".
     save_threshold: 0.30
     confident_threshold: 0.70
-  circuit_breaker_threshold: 5
+  circuit_breaker_threshold: 3
   circuit_breaker_cooldown: 900
   vision:
     max_frames: 5

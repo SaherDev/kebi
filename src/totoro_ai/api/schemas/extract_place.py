@@ -23,7 +23,7 @@ class EvidenceDTO(BaseModel):
     """One piece of evidence in a candidate's audit trail.
 
     `producer` identifies which enricher contributed (`llm_ner`,
-    `vision_frames`, `ytdlp_metadata`, `whisper_audio`, ...).
+    `vision_frames`, `video_metadata`, `whisper_audio`, ...).
     `medium` identifies where in pipeline state the evidence lived
     (`caption`, `transcript`, `frame`, `image`, `list`, ...).
     `snippet` is the actual content (truncated to 200 chars) when

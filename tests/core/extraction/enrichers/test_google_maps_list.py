@@ -55,10 +55,8 @@ class TestTokenResolution:
 
 class TestApifyResponse:
     async def test_appends_each_name_to_known_places(self) -> None:
-        """Pure text producer — names land in known_places; no
-        CandidatePlace is created here. The NER finalizer downstream
-        is responsible for turning each name into a structured
-        candidate with inferred attributes."""
+        """Name producer — names land in known_places. The pipeline's
+        searcher consumes them as queries, the picker chooses + classifies."""
         enricher = GoogleMapsListEnricher(token="apify-token")
         items = [
             {"name": "Joe's Pizza", "placeId": "0xabc:0x123"},
@@ -81,7 +79,7 @@ class TestApifyResponse:
             k.producer.value == "google_maps_list" for k in ctx.known_places
         )
         assert all(k.medium.value == "list" for k in ctx.known_places)
-        assert ctx.candidates == []
+        assert ctx.search_matches == []
 
     async def test_skips_items_without_a_name(self) -> None:
         enricher = GoogleMapsListEnricher(token="apify-token")
