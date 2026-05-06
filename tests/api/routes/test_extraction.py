@@ -94,6 +94,8 @@ class TestPollingRouteFailed:
             "results": [],
             "raw_input": "gibberish with no place",
             "request_id": "req_fail",
+            "failure_reason": "no_candidates",
+            "failure_message": "Nothing extractable",
         }
         resp = client.get("/v1/extraction/req_fail")
         assert resp.status_code == 200
@@ -169,6 +171,8 @@ class TestExtractRoute:
             results=[],
             raw_input="gibberish",
             request_id="req_fail",
+            failure_reason="no_candidates",
+            failure_message="No venue found in 'gibberish'",
         )
         app.dependency_overrides[get_extraction_service] = lambda: mock_service
         try:

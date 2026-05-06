@@ -33,7 +33,13 @@ def test_llm_visible_schema_is_single_raw_input_field() -> None:
 
 
 def test_save_summary_failed() -> None:
-    resp = ExtractPlaceResponse(status="failed", results=[], raw_input="x")
+    resp = ExtractPlaceResponse(
+        status="failed",
+        results=[],
+        raw_input="x",
+        failure_reason="no_candidates",
+        failure_message="nothing extractable",
+    )
     assert _save_summary(resp) == "Couldn't extract a place from that"
 
 

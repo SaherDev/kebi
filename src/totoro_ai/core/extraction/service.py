@@ -162,12 +162,15 @@ class ExtractionService:
         # source we can extract from. Reject up-front with a clear message
         # rather than running the cascade and timing out on it.
         if parsed.url is not None and source is None:
-            _emit("save.unsupported_url", _unsupported_url_message(parsed.url))
+            unsupported_msg = _unsupported_url_message(parsed.url)
+            _emit("save.unsupported_url", unsupported_msg)
             response = ExtractPlaceResponse(
                 status="failed",
                 results=[],
                 raw_input=raw_input,
                 request_id=rid,
+                failure_reason="unsupported_url",
+                failure_message=unsupported_msg,
             )
             _emit(
                 "save.persist",
@@ -197,6 +200,12 @@ class ExtractionService:
                     results=[],
                     raw_input=raw_input,
                     request_id=rid,
+                    failure_reason="no_candidates",
+                    failure_message=(
+                        "No venue could be extracted from the post — "
+                        "the caption, transcript, and visible text "
+                        "didn't contain a recognizable place name."
+                    ),
                 )
             else:
                 outcomes = await self._persistence.save_and_emit(
@@ -207,12 +216,34 @@ class ExtractionService:
                     for o in outcomes
                     if _is_real(o)
                 ]
-                response = ExtractPlaceResponse(
-                    status="completed" if items else "failed",
-                    results=items,
-                    raw_input=raw_input,
-                    request_id=rid,
-                )
+                if items:
+                    response = ExtractPlaceResponse(
+                        status="completed",
+                        results=items,
+                        raw_input=raw_input,
+                        request_id=rid,
+                    )
+                else:
+                    # Outcomes existed but every one was filtered: all
+                    # below confidence threshold (Google rejected as
+                    # locality / weak match / no match).
+                    attempted_names = [
+                        o.metadata.place_name for o in outcomes
+                    ]
+                    response = ExtractPlaceResponse(
+                        status="failed",
+                        results=[],
+                        raw_input=raw_input,
+                        request_id=rid,
+                        failure_reason="all_below_threshold",
+                        failure_message=(
+                            f"Found {len(attempted_names)} candidate(s) "
+                            f"({', '.join(attempted_names[:5])}) but "
+                            f"confidence was below the save threshold — "
+                            f"likely cities/regions or weak Google Places "
+                            f"matches, not specific venues."
+                        ),
+                    )
         except TooManyCandidatesError as exc:
             # Expected outcome — not an error. Pipeline already emitted
             # the user-facing reason via `save.cap_exceeded`; flag the
@@ -230,14 +261,22 @@ class ExtractionService:
                 results=[],
                 raw_input=raw_input,
                 request_id=rid,
+                failure_reason="candidate_limit_exceeded",
+                failure_message=(
+                    f"Found {exc.found} candidates, more than the limit "
+                    f"of {exc.limit} — request dropped to protect "
+                    f"validation quota."
+                ),
             )
-        except Exception:
+        except Exception as exc:
             logger.exception("Extraction pipeline failed for request %s", rid)
             response = ExtractPlaceResponse(
                 status="failed",
                 results=[],
                 raw_input=raw_input,
                 request_id=rid,
+                failure_reason="pipeline_error",
+                failure_message=f"Pipeline error: {type(exc).__name__}: {exc}",
             )
 
         if response.results:

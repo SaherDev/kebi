@@ -77,16 +77,32 @@ class ExtractPlaceRequest(BaseModel):
     raw_input: str = Field(description="TikTok URL or plain text")
 
 
+FailureReason = Literal[
+    "unsupported_url",
+    "empty_input",
+    "no_candidates",
+    "all_below_threshold",
+    "candidate_limit_exceeded",
+    "pipeline_error",
+]
+
+
 class ExtractPlaceResponse(BaseModel):
     """Response body for extract-place endpoint (ADR-063).
 
     Invariant: `results` is empty iff `status != "completed"`.
+
+    `failure_reason` and `failure_message` are populated only when
+    `status == "failed"` so callers can surface a meaningful diagnostic
+    instead of an opaque "Couldn't extract a place from that".
     """
 
     status: Literal["pending", "completed", "failed"]
     results: list[ExtractPlaceItem] = Field(default_factory=list)
     raw_input: str | None = None
     request_id: str | None = None
+    failure_reason: FailureReason | None = None
+    failure_message: str | None = None
 
     @model_validator(mode="after")
     def _status_results_consistency(self) -> "ExtractPlaceResponse":
@@ -96,5 +112,15 @@ class ExtractPlaceResponse(BaseModel):
             raise ValueError(
                 f"status={self.status!r} forbids non-empty results; "
                 f"pipeline-level states carry no items"
+            )
+        if self.status == "failed" and self.failure_reason is None:
+            raise ValueError(
+                "status='failed' requires failure_reason; populate it at "
+                "the failure site so callers can render a diagnostic."
+            )
+        if self.status != "failed" and self.failure_reason is not None:
+            raise ValueError(
+                f"status={self.status!r} forbids failure_reason; only "
+                f"'failed' carries a reason."
             )
         return self
