@@ -11,7 +11,6 @@ from totoro_ai.core.extraction.types import (
 )
 from totoro_ai.core.places import (
     PlaceAttributes,
-    PlaceCreate,
     PlaceProvider,
     PlaceType,
 )
@@ -24,16 +23,13 @@ def _make_validated(
     confidence: float = 0.85,
 ) -> ValidatedCandidate:
     return ValidatedCandidate(
-        place=PlaceCreate(
-            user_id="u1",
-            place_name=name,
-            place_type=PlaceType.food_and_drink,
-            attributes=PlaceAttributes(),
-            provider=PlaceProvider.google,
-            external_id=external_id,
-        ),
+        place_name=name,
+        place_type=PlaceType.food_and_drink,
+        provider=PlaceProvider.google,
+        external_id=external_id,
         confidence=confidence,
         resolved_by=resolved_by,
+        attributes=PlaceAttributes(),
         corroborated=False,
     )
 
@@ -76,13 +72,10 @@ def _make_pipeline(
         for i in range(enrichment_seeds_candidates):
             ctx.candidates.append(
                 CandidatePlace(
-                    place=PlaceCreate(
-                        user_id="u1",
-                        place_name=f"Place {i}",
-                        place_type=PlaceType.food_and_drink,
-                        attributes=PlaceAttributes(),
-                    ),
+                    place_name=f"Place {i}",
+                    place_type=PlaceType.food_and_drink,
                     source=ExtractionLevel.LLM_NER,
+                    attributes=PlaceAttributes(),
                 )
             )
 
@@ -360,13 +353,10 @@ async def test_phase3_too_many_candidates_drops_request() -> None:
         for i in range(30):
             ctx.candidates.append(
                 CandidatePlace(
-                    place=PlaceCreate(
-                        user_id="u1",
-                        place_name=f"BG Place {i}",
-                        place_type=PlaceType.food_and_drink,
-                        attributes=PlaceAttributes(),
-                    ),
+                    place_name=f"BG Place {i}",
+                    place_type=PlaceType.food_and_drink,
                     source=ExtractionLevel.WHISPER_AUDIO,
+                    attributes=PlaceAttributes(),
                 )
             )
 

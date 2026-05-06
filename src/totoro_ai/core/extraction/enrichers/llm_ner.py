@@ -1,10 +1,10 @@
 """Level 4 — LLM NER candidate enricher (GPT-4o-mini).
 
-The LLM's structured output schema (`_NERPlace`) mirrors `PlaceCreate`
-field-for-field (minus user_id/provider/external_id, which are attached
-later). No post-extraction mapping happens — the enricher just adds
-`user_id` from `ExtractionContext` and wraps the result in a
-`CandidatePlace` alongside the extraction-cascade metadata.
+The LLM's structured output schema (`_NERPlace`) mirrors the extraction-
+only `CandidatePlace` shape — no `user_id` / `provider` / `external_id`
+on the extraction path. Pipeline-context fields are stamped onto a
+`PlaceCreate` only at the persistence boundary (see
+`ValidatedCandidate.to_place_create`).
 """
 
 import logging
@@ -17,7 +17,7 @@ from totoro_ai.core.extraction.types import (
     ExtractionContext,
     ExtractionLevel,
 )
-from totoro_ai.core.places import PlaceAttributes, PlaceCreate, PlaceType
+from totoro_ai.core.places import PlaceAttributes, PlaceType
 from totoro_ai.providers.llm import InstructorClient
 from totoro_ai.providers.tracing import get_tracing_client
 
@@ -118,11 +118,11 @@ If a field is unknown, set it to null (or [] for the list fields). Do not invent
 
 
 class _NERPlace(BaseModel):
-    """LLM output schema — a partial `PlaceCreate`.
+    """LLM output schema — mirrors the extraction-only `CandidatePlace`.
 
-    Missing only the fields that can't be produced from text alone:
-    `user_id` (threaded from ExtractionContext) and `provider`/`external_id`
-    (filled in by the validator from Google Places).
+    Pipeline context (`user_id`, `source_url`, `source`) and validator
+    output (`provider`, `external_id`) are not on the extraction path
+    and never appear here.
 
     `attributes.cuisine` and `attributes.dietary` are food-only and should
     be left at their defaults for non-food venues (hotels, museums, shops,
@@ -245,32 +245,19 @@ class LLMNEREnricher:
                     continue
                 # The LLM occasionally emits an invalid subcategory (e.g.
                 # the literal string "null", or a value not in the
-                # allowed set for the chosen place_type). Sanitize and
-                # isolate the per-item failure so one bad entry doesn't
-                # drop the whole batch.
+                # allowed set for the chosen place_type). Sanitize here
+                # rather than at validate time.
                 subcategory = ner.subcategory
                 if subcategory in ("null", "none", ""):
                     subcategory = None
-                try:
-                    place = PlaceCreate(
-                        user_id=context.user_id,
+                context.candidates.append(
+                    CandidatePlace(
                         place_name=ner.place_name,
                         place_type=ner.place_type,
+                        source=ExtractionLevel.LLM_NER,
                         subcategory=subcategory,
                         tags=ner.tags,
                         attributes=ner.attributes,
-                    )
-                except Exception as item_exc:
-                    logger.warning(
-                        "LLMNEREnricher: dropping invalid item %r — %s",
-                        ner.place_name,
-                        item_exc,
-                    )
-                    continue
-                context.candidates.append(
-                    CandidatePlace(
-                        place=place,
-                        source=ExtractionLevel.LLM_NER,
                         signals=ner.signals,
                     )
                 )

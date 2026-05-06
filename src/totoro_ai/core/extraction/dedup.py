@@ -40,7 +40,7 @@ def _normalize(name: str) -> str:
 def dedup_candidates(context: ExtractionContext) -> None:
     """Deduplicate context.candidates in-place.
 
-    Groups by normalised `place.place_name`. When multiple candidates share a
+    Groups by normalised `place_name`. When multiple candidates share a
     name the one with the lowest ExtractionLevel index (highest priority)
     wins; it is marked `corroborated=True` and inherits any attribute
     fields a loser had but the winner left blank.
@@ -50,7 +50,7 @@ def dedup_candidates(context: ExtractionContext) -> None:
 
     groups: dict[str, list[CandidatePlace]] = {}
     for candidate in context.candidates:
-        key = _normalize(candidate.place.place_name)
+        key = _normalize(candidate.place_name)
         groups.setdefault(key, []).append(candidate)
 
     winners: list[CandidatePlace] = []
@@ -62,9 +62,9 @@ def dedup_candidates(context: ExtractionContext) -> None:
         winner = min(group, key=lambda c: _LEVEL_ORDER.index(c.source))
         losers = [c for c in group if c is not winner]
         merged = _merge_attributes(
-            winner.place.attributes, *(c.place.attributes for c in losers)
+            winner.attributes, *(c.attributes for c in losers)
         )
-        winner.place = winner.place.model_copy(update={"attributes": merged})
+        winner.attributes = merged
         winner = replace(winner, corroborated=True)
         winners.append(winner)
 
@@ -72,7 +72,7 @@ def dedup_candidates(context: ExtractionContext) -> None:
 
 
 def _provider_id(vc: ValidatedCandidate) -> str | None:
-    return build_provider_id(vc.place.provider, vc.place.external_id)
+    return build_provider_id(vc.provider, vc.external_id)
 
 
 def dedup_validated_by_provider_id(
@@ -108,9 +108,9 @@ def dedup_validated_by_provider_id(
         winner = min(group, key=lambda r: _LEVEL_ORDER.index(r.resolved_by))
         losers = [r for r in group if r is not winner]
         merged = _merge_attributes(
-            winner.place.attributes, *(r.place.attributes for r in losers)
+            winner.attributes, *(r.attributes for r in losers)
         )
-        winner.place = winner.place.model_copy(update={"attributes": merged})
+        winner.attributes = merged
         winner.confidence = min(
             winner.confidence + confidence_config.corroboration_bonus,
             confidence_config.max_score,

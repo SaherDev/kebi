@@ -37,6 +37,8 @@ class WhisperAudioEnricher:
             return
         if not context.url:
             return
+        if context.is_photo_post:
+            return
 
         try:
             await asyncio.wait_for(

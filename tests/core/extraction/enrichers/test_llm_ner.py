@@ -23,7 +23,6 @@ from totoro_ai.core.extraction.types import (
 from totoro_ai.core.places import (
     LocationContext,
     PlaceAttributes,
-    PlaceCreate,
     PlaceType,
 )
 from totoro_ai.providers.llm import InstructorClient
@@ -89,16 +88,9 @@ class TestLLMNEREnricher:
         )
         await enricher_two_places.enrich(ctx)
         assert len(ctx.candidates) == 2
-        names = {c.place.place_name for c in ctx.candidates}
+        names = {c.place_name for c in ctx.candidates}
         assert "Fuji Ramen" in names
         assert "Som Tam Nua" in names
-
-    async def test_candidates_carry_user_id_from_context(
-        self, enricher_two_places: LLMNEREnricher
-    ) -> None:
-        ctx = ExtractionContext(url=None, user_id="user-42", caption="text")
-        await enricher_two_places.enrich(ctx)
-        assert all(c.place.user_id == "user-42" for c in ctx.candidates)
 
     async def test_no_skip_guard_appends_to_existing_candidates(
         self, enricher_two_places: LLMNEREnricher
@@ -106,11 +98,8 @@ class TestLLMNEREnricher:
         ctx = ExtractionContext(url=None, user_id="u1", caption="some text")
         ctx.candidates.append(
             CandidatePlace(
-                place=PlaceCreate(
-                    user_id="u1",
-                    place_name="Existing",
-                    place_type=PlaceType.food_and_drink,
-                ),
+                place_name="Existing",
+                place_type=PlaceType.food_and_drink,
                 source=ExtractionLevel.EMOJI_REGEX,
             )
         )
@@ -165,7 +154,7 @@ class TestLLMNEREnricher:
         await enricher.enrich(ctx)
         client.extract.assert_awaited_once()
         assert len(ctx.candidates) == 1
-        assert ctx.candidates[0].place.place_name == "Joe's Pizza"
+        assert ctx.candidates[0].place_name == "Joe's Pizza"
 
     async def test_transcript_included_in_prompt_when_present(self) -> None:
         """When transcript is populated, it appears as its own metadata line."""
@@ -205,7 +194,7 @@ class TestLLMNEREnricher:
         )
         await enricher.enrich(ctx)
         client.extract.assert_awaited_once()
-        names = [c.place.place_name for c in ctx.candidates]
+        names = [c.place_name for c in ctx.candidates]
         assert names == ["Baret", "KitKatClub"]
 
     async def test_known_places_appears_in_prompt_with_instruction(self) -> None:
@@ -267,13 +256,13 @@ class TestLLMNEREnricher:
         await enricher.enrich(ctx)
         assert len(ctx.candidates) == 1
         candidate = ctx.candidates[0]
-        assert candidate.place.place_name == "Le Bernardin"
-        assert candidate.place.place_type == PlaceType.food_and_drink
-        assert candidate.place.subcategory == "restaurant"
-        assert candidate.place.attributes.cuisine == "french"
-        assert candidate.place.attributes.price_hint == "expensive"
-        assert candidate.place.attributes.location_context is not None
-        assert candidate.place.attributes.location_context.city == "New York"
+        assert candidate.place_name == "Le Bernardin"
+        assert candidate.place_type == PlaceType.food_and_drink
+        assert candidate.subcategory == "restaurant"
+        assert candidate.attributes.cuisine == "french"
+        assert candidate.attributes.price_hint == "expensive"
+        assert candidate.attributes.location_context is not None
+        assert candidate.attributes.location_context.city == "New York"
 
     async def test_adr_044_system_prompt_defensive_instruction(self) -> None:
         client = _mock_instructor([])
@@ -350,10 +339,10 @@ class TestLLMNEREnricher:
         )
         await enricher.enrich(ctx)
         assert len(ctx.candidates) == 1
-        place = ctx.candidates[0].place
-        assert place.place_name == "Tsukiji Outer Market"
-        assert place.place_type == PlaceType.food_and_drink
-        assert place.subcategory == "market"
+        candidate = ctx.candidates[0]
+        assert candidate.place_name == "Tsukiji Outer Market"
+        assert candidate.place_type == PlaceType.food_and_drink
+        assert candidate.subcategory == "market"
 
     async def test_market_subcategory_prompt_guidance_present(self) -> None:
         """System prompt must contain the market classification rule with examples."""

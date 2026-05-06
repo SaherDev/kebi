@@ -22,7 +22,6 @@ from totoro_ai.core.places import (
     DuplicatePlaceError,
     DuplicateProviderId,
     PlaceAttributes,
-    PlaceCreate,
     PlaceObject,
     PlaceProvider,
     PlaceType,
@@ -33,46 +32,26 @@ from totoro_ai.core.places import (
 # ---------------------------------------------------------------------------
 
 
-def _make_place_create(
-    place_name: str = "Fuji Ramen",
-    external_id: str | None = "place_123",
-    provider: PlaceProvider | None = PlaceProvider.google,
-    cuisine: str | None = "ramen",
-    user_id: str = "user-1",
-) -> PlaceCreate:
-    return PlaceCreate(
-        user_id=user_id,
-        place_name=place_name,
-        place_type=PlaceType.food_and_drink,
-        subcategory="restaurant",
-        attributes=PlaceAttributes(cuisine=cuisine),
-        provider=provider,
-        external_id=external_id,
-    )
-
-
 def _make_validated(
     place_name: str = "Fuji Ramen",
     confidence: float = 0.87,
     resolved_by: ExtractionLevel = ExtractionLevel.LLM_NER,
-    external_id: str | None = "place_123",
-    provider: PlaceProvider | None = PlaceProvider.google,
+    external_id: str = "place_123",
+    provider: PlaceProvider = PlaceProvider.google,
     cuisine: str | None = "ramen",
-    user_id: str = "user-1",
     match_lat: float | None = None,
     match_lng: float | None = None,
     match_address: str | None = None,
 ) -> ValidatedCandidate:
     return ValidatedCandidate(
-        place=_make_place_create(
-            place_name=place_name,
-            external_id=external_id,
-            provider=provider,
-            cuisine=cuisine,
-            user_id=user_id,
-        ),
+        place_name=place_name,
+        place_type=PlaceType.food_and_drink,
+        provider=provider,
+        external_id=external_id,
         confidence=confidence,
         resolved_by=resolved_by,
+        subcategory="restaurant",
+        attributes=PlaceAttributes(cuisine=cuisine),
         corroborated=False,
         match_lat=match_lat,
         match_lng=match_lng,
@@ -259,23 +238,6 @@ async def test_partial_duplicate_retries_one_by_one(
     assert statuses == ["saved", "duplicate"]
     assert outcomes[0].place_id == "new-a"
     assert outcomes[1].place_id == "existing-b"
-
-
-async def test_external_id_none_passes_through_create_batch(
-    service: ExtractionPersistenceService,
-    places_service: AsyncMock,
-) -> None:
-    """When external_id is None, no namespace collision is possible; the
-    row is just saved with provider_id=NULL."""
-    places_service.create_batch.return_value = [
-        _make_saved_object("place-1", provider_id=None)
-    ]
-
-    vc = _make_validated(external_id=None, provider=None)
-    outcomes = await service.save_and_emit([vc], user_id="user-1")
-
-    places_service.create_batch.assert_awaited_once()
-    assert outcomes[0].status == "saved"
 
 
 # ---------------------------------------------------------------------------

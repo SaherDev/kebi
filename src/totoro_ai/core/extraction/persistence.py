@@ -115,7 +115,7 @@ class ExtractionPersistenceService:
                 continue
             eligible.append(vc)
             if rounded < confident_threshold:
-                pid = self._format_provider_id(vc.place)
+                pid = self._format_provider_id(vc)
                 if pid is not None:
                     tentative_pids.add(pid)
 
@@ -202,7 +202,9 @@ class ExtractionPersistenceService:
         if not eligible:
             return []
 
-        items = [self._stamp(vc.place, user_id, source_url, source) for vc in eligible]
+        items = [
+            self._to_place_create(vc, user_id, source_url, source) for vc in eligible
+        ]
 
         try:
             saved = await self._places_service.create_batch(items)
@@ -235,7 +237,7 @@ class ExtractionPersistenceService:
     ) -> list[PlaceSaveOutcome]:
         outcomes: list[PlaceSaveOutcome] = []
         for vc in eligible:
-            provider_id = self._format_provider_id(vc.place)
+            provider_id = self._format_provider_id(vc)
             if provider_id and provider_id in conflict_ids:
                 existing_id = conflict_ids[provider_id]
                 existing = await self._places_service.get(existing_id)
@@ -249,7 +251,7 @@ class ExtractionPersistenceService:
                 )
                 continue
 
-            item = self._stamp(vc.place, user_id, source_url, source)
+            item = self._to_place_create(vc, user_id, source_url, source)
             try:
                 place = await self._places_service.create(item)
             except DuplicatePlaceError as inner:
@@ -276,43 +278,38 @@ class ExtractionPersistenceService:
 
     def _status_for(self, vc: ValidatedCandidate, tentative_pids: set[str]) -> str:
         """Return "needs_review" if the candidate is in the tentative band."""
-        pid = self._format_provider_id(vc.place)
+        pid = self._format_provider_id(vc)
         if pid is not None and pid in tentative_pids:
             return "needs_review"
         return "saved"
 
     @staticmethod
-    def _stamp(
-        place: PlaceCreate,
+    def _to_place_create(
+        vc: ValidatedCandidate,
         user_id: str,
         source_url: str | None,
         source: PlaceSource | None,
     ) -> PlaceCreate:
-        """Re-stamp a PlaceCreate with user_id, source_url, and source.
-
-        The validator builds `PlaceCreate` with the user_id threaded through
-        from the pipeline; source/source_url come from `ExtractionService`
-        which knows the original URL and derived platform. A single helper
-        means the stamp is applied at exactly one site on both the batch
-        and retry paths.
-
-        Only fields that differ from the input are copied — no allocation
-        when the defaults already match.
-        """
-        update: dict[str, object] = {}
-        if place.user_id != user_id:
-            update["user_id"] = user_id
-        if source_url is not None and place.source_url != source_url:
-            update["source_url"] = source_url
-        if source is not None and place.source != source:
-            update["source"] = source
-        if not update:
-            return place
-        return place.model_copy(update=update)
+        """Assemble a `PlaceCreate` from a `ValidatedCandidate` plus the
+        pipeline context the candidate doesn't carry (`user_id`,
+        `source_url`, `source`). This is the single boundary where
+        extraction's lighter shape becomes the persistence shape."""
+        return PlaceCreate(
+            user_id=user_id,
+            place_name=vc.place_name,
+            place_type=vc.place_type,
+            subcategory=vc.subcategory,
+            tags=vc.tags,
+            attributes=vc.attributes,
+            source_url=source_url,
+            source=source,
+            provider=vc.provider,
+            external_id=vc.external_id,
+        )
 
     @staticmethod
-    def _format_provider_id(place: PlaceCreate) -> str | None:
-        return build_provider_id(place.provider, place.external_id)
+    def _format_provider_id(vc: ValidatedCandidate) -> str | None:
+        return build_provider_id(vc.provider, vc.external_id)
 
     async def _write_geo_cache(self, saved_outcomes: list[PlaceSaveOutcome]) -> None:
         """Write Tier 2 geo cache for newly saved rows whose validator

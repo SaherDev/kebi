@@ -1,12 +1,10 @@
 """Places validator — parallel multi-candidate validation with confidence scoring.
 
-The validator takes `CandidatePlace` wrappers (each carrying a `PlaceCreate`
-built by the enricher) and returns `ValidatedCandidate` wrappers with the
-same `PlaceCreate`, now stamped with `provider` + `external_id` from the
-match. No field-level mapping happens here — the enricher already put
-every inferrable field onto the `PlaceCreate`, and the validator only adds
-what Google knows (the namespaced provider identity and the canonical
-name).
+Takes extraction-only `CandidatePlace`s and returns `ValidatedCandidate`s
+with `provider` + `external_id` resolved from Google Places, plus a
+confidence score and the Tier 2 geo data the persistence layer needs.
+The persistence layer is the only place that builds a `PlaceCreate` —
+this module never touches the write-side shape.
 """
 
 from __future__ import annotations
@@ -21,7 +19,6 @@ from totoro_ai.core.extraction.types import (
     ValidatedCandidate,
 )
 from totoro_ai.core.places import (
-    PlaceCreate,
     PlaceProvider,
     PlacesClient,
     PlacesMatchQuality,
@@ -109,7 +106,7 @@ class GooglePlacesValidator:
     ) -> ValidatedCandidate | None:
         try:
             places_match: PlacesMatchResult = await self._places_client.validate_place(
-                name=candidate.place.place_name,
+                name=candidate.place_name,
                 location=self._lookup_city(candidate),
             )
         except Exception:
@@ -133,18 +130,17 @@ class GooglePlacesValidator:
         provider = _PROVIDER_MAP.get(
             (places_match.external_provider or "").lower(), PlaceProvider.google
         )
-        validated_place: PlaceCreate = candidate.place.model_copy(
-            update={
-                "place_name": places_match.validated_name or candidate.place.place_name,
-                "provider": provider,
-                "external_id": places_match.external_id,
-            }
-        )
 
         return ValidatedCandidate(
-            place=validated_place,
+            place_name=places_match.validated_name or candidate.place_name,
+            place_type=candidate.place_type,
+            provider=provider,
+            external_id=places_match.external_id,
             confidence=confidence,
             resolved_by=candidate.source,
+            subcategory=candidate.subcategory,
+            tags=candidate.tags,
+            attributes=candidate.attributes,
             corroborated=candidate.corroborated,
             match_lat=places_match.lat,
             match_lng=places_match.lng,
@@ -154,5 +150,5 @@ class GooglePlacesValidator:
     @staticmethod
     def _lookup_city(candidate: CandidatePlace) -> str | None:
         """Read the city off the candidate's location_context for the provider call."""
-        ctx = candidate.place.attributes.location_context
+        ctx = candidate.attributes.location_context
         return ctx.city if ctx is not None else None

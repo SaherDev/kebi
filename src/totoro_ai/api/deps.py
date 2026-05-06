@@ -258,6 +258,9 @@ def _make_inline_level() -> EnrichmentLevel:
     from totoro_ai.core.extraction.enrichers.google_maps_list import (
         GoogleMapsListEnricher,
     )
+    from totoro_ai.core.extraction.enrichers.photo_detector import (
+        PhotoDetectorEnricher,
+    )
     from totoro_ai.core.extraction.enrichers.tiktok_oembed import TikTokOEmbedEnricher
     from totoro_ai.core.extraction.enrichers.ytdlp_metadata import YtDlpMetadataEnricher
 
@@ -269,6 +272,7 @@ def _make_inline_level() -> EnrichmentLevel:
                     CircuitBreakerEnricher(TikTokOEmbedEnricher()),
                     CircuitBreakerEnricher(YtDlpMetadataEnricher()),
                     CircuitBreakerEnricher(GoogleMapsListEnricher()),
+                    CircuitBreakerEnricher(PhotoDetectorEnricher()),
                 ]
             ),
         ],
@@ -299,8 +303,10 @@ def _make_deep_level() -> EnrichmentLevel:
     """
     from totoro_ai.core.extraction.enrichers.subtitle_check import SubtitleCheckEnricher
     from totoro_ai.core.extraction.enrichers.vision_frames import VisionFramesEnricher
+    from totoro_ai.core.extraction.enrichers.vision_images import VisionImagesEnricher
     from totoro_ai.core.extraction.enrichers.whisper_audio import WhisperAudioEnricher
 
+    vision_extractor = get_vision_extractor()
     return EnrichmentLevel(
         name="deep_enrichment",
         enrichers=[
@@ -308,7 +314,8 @@ def _make_deep_level() -> EnrichmentLevel:
             WhisperAudioEnricher(
                 transcription_client=get_transcription_client(),
             ),
-            VisionFramesEnricher(vision_extractor=get_vision_extractor()),
+            VisionFramesEnricher(vision_extractor=vision_extractor),
+            VisionImagesEnricher(vision_extractor=vision_extractor),
         ],
         summary_fn=deep_summary,
         requires_url=True,

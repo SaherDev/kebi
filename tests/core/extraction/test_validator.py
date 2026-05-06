@@ -12,7 +12,6 @@ from totoro_ai.core.extraction.validator import GooglePlacesValidator
 from totoro_ai.core.places import (
     LocationContext,
     PlaceAttributes,
-    PlaceCreate,
     PlaceProvider,
     PlaceType,
 )
@@ -62,17 +61,17 @@ def _make_candidate(
     cuisine: str | None = "french",
     city: str | None = "Paris",
 ) -> CandidatePlace:
-    place = PlaceCreate(
-        user_id="u1",
+    return CandidatePlace(
         place_name=name,
         place_type=PlaceType.food_and_drink,
+        source=source,
         subcategory="restaurant",
         attributes=PlaceAttributes(
             cuisine=cuisine,
             location_context=LocationContext(city=city) if city else None,
         ),
+        corroborated=corroborated,
     )
-    return CandidatePlace(place=place, source=source, corroborated=corroborated)
 
 
 def _make_validator() -> GooglePlacesValidator:
@@ -103,14 +102,13 @@ async def test_single_exact_match_returns_validated_candidate() -> None:
     assert isinstance(r, ValidatedCandidate)
     # confidence = min(0.95 * 1.0 + 0.0, 0.97) = 0.95
     assert abs(r.confidence - 0.95) < 1e-9
-    assert r.place.external_id == "place_123"
-    assert r.place.provider == PlaceProvider.google
-    assert r.place.place_name == "Chez Claude"
-    assert r.place.user_id == "u1"
-    assert r.place.place_type == PlaceType.food_and_drink
-    assert r.place.attributes.cuisine == "french"
-    assert r.place.attributes.location_context is not None
-    assert r.place.attributes.location_context.city == "Paris"
+    assert r.external_id == "place_123"
+    assert r.provider == PlaceProvider.google
+    assert r.place_name == "Chez Claude"
+    assert r.place_type == PlaceType.food_and_drink
+    assert r.attributes.cuisine == "french"
+    assert r.attributes.location_context is not None
+    assert r.attributes.location_context.city == "Paris"
 
 
 async def test_validator_propagates_match_geo_onto_validated_candidate() -> None:

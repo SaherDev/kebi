@@ -9,12 +9,7 @@ import subprocess
 import sys
 
 from totoro_ai.core.config import ExtractionVisionConfig
-from totoro_ai.core.extraction.types import (
-    CandidatePlace,
-    ExtractionContext,
-    ExtractionLevel,
-)
-from totoro_ai.core.places import PlaceCreate, PlaceType
+from totoro_ai.core.extraction.types import ExtractionContext
 from totoro_ai.providers.llm import VisionExtractorProtocol
 
 logger = logging.getLogger(__name__)
@@ -52,6 +47,13 @@ class VisionFramesEnricher:
     ADR-020: model injected via VisionExtractorProtocol — never hardcoded here.
     ADR-044: defensive prompt and image handling delegated to the extractor.
     Hard timeout: 10 seconds via asyncio.wait_for.
+
+    Names-only producer: appends each extracted name to
+    `context.known_places` and lets the deep-level finalizer
+    (`LLMNEREnricher`) emit one structured `CandidatePlace` per name
+    with `place_type` / `subcategory` / `cuisine` inferred from the
+    name itself. Same path used by `GoogleMapsListEnricher` and
+    `VisionImagesEnricher`.
     """
 
     def __init__(
@@ -70,6 +72,8 @@ class VisionFramesEnricher:
 
     async def enrich(self, context: ExtractionContext) -> None:
         if not context.url:
+            return
+        if context.is_photo_post:
             return
 
         try:
@@ -99,19 +103,8 @@ class VisionFramesEnricher:
 
         names = await self._vision_extractor.extract_place_names(frames)
         for name in names:
-            if not name:
-                continue
-            place = PlaceCreate(
-                user_id=context.user_id,
-                place_name=name,
-                place_type=PlaceType.services,
-            )
-            context.candidates.append(
-                CandidatePlace(
-                    place=place,
-                    source=ExtractionLevel.VISION_FRAMES,
-                )
-            )
+            if name:
+                context.known_places.append(name)
 
     def _capture_frames(self, url: str) -> bytes:
         """Pipe yt-dlp video stream into ffmpeg and collect PNG bytes."""

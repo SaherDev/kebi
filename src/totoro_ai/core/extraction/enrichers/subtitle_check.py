@@ -84,6 +84,8 @@ class SubtitleCheckEnricher:
     async def enrich(self, context: ExtractionContext) -> None:
         if not context.url or context.transcript is not None:
             return
+        if context.is_photo_post:
+            return
 
         subtitle_dir = Path(self._config.output_dir)
         loop = asyncio.get_running_loop()

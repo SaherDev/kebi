@@ -9,28 +9,24 @@ from totoro_ai.core.extraction.types import (
 from totoro_ai.core.places import (
     LocationContext,
     PlaceAttributes,
-    PlaceCreate,
     PlaceProvider,
     PlaceType,
 )
 
 
-def _place(
+def _candidate(
     name: str = "Fuji Ramen",
-    provider: PlaceProvider | None = None,
-    external_id: str | None = None,
-) -> PlaceCreate:
-    return PlaceCreate(
-        user_id="u1",
+    source: ExtractionLevel = ExtractionLevel.LLM_NER,
+) -> CandidatePlace:
+    return CandidatePlace(
         place_name=name,
         place_type=PlaceType.food_and_drink,
+        source=source,
         subcategory="restaurant",
         attributes=PlaceAttributes(
             cuisine="ramen",
             location_context=LocationContext(city="Bangkok"),
         ),
-        provider=provider,
-        external_id=external_id,
     )
 
 
@@ -48,17 +44,20 @@ class TestExtractionLevel:
 
 
 class TestCandidatePlace:
-    def test_wraps_place_create(self) -> None:
-        c = CandidatePlace(place=_place(), source=ExtractionLevel.EMOJI_REGEX)
-        assert c.place.place_name == "Fuji Ramen"
-        assert c.place.attributes.cuisine == "ramen"
+    def test_holds_extraction_fields(self) -> None:
+        c = _candidate(source=ExtractionLevel.EMOJI_REGEX)
+        assert c.place_name == "Fuji Ramen"
+        assert c.place_type == PlaceType.food_and_drink
+        assert c.subcategory == "restaurant"
+        assert c.attributes.cuisine == "ramen"
         assert c.source == ExtractionLevel.EMOJI_REGEX
         assert c.corroborated is False
         assert c.signals == []
 
-    def test_corroborated_can_be_set(self) -> None:
+    def test_corroborated_and_signals_can_be_set(self) -> None:
         c = CandidatePlace(
-            place=_place(),
+            place_name="Fuji Ramen",
+            place_type=PlaceType.food_and_drink,
             source=ExtractionLevel.LLM_NER,
             corroborated=True,
             signals=["caption"],
@@ -80,29 +79,30 @@ class TestExtractionContext:
     def test_candidates_are_independent_instances(self) -> None:
         ctx1 = ExtractionContext(url=None, user_id="u1")
         ctx2 = ExtractionContext(url=None, user_id="u2")
-        ctx1.candidates.append(
-            CandidatePlace(place=_place(name="A"), source=ExtractionLevel.LLM_NER)
-        )
+        ctx1.candidates.append(_candidate(name="A"))
         assert ctx2.candidates == []
 
 
 class TestValidatedCandidate:
-    def test_instantiation_with_place_create(self) -> None:
+    def test_instantiation(self) -> None:
         vc = ValidatedCandidate(
-            place=_place(
-                name="Fuji Ramen",
-                provider=PlaceProvider.google,
-                external_id="ChIJ123",
-            ),
+            place_name="Fuji Ramen",
+            place_type=PlaceType.food_and_drink,
+            provider=PlaceProvider.google,
+            external_id="ChIJ123",
             confidence=0.95,
             resolved_by=ExtractionLevel.EMOJI_REGEX,
-            corroborated=False,
+            subcategory="restaurant",
+            attributes=PlaceAttributes(
+                cuisine="ramen",
+                location_context=LocationContext(city="Bangkok"),
+            ),
         )
         assert vc.confidence == 0.95
         assert vc.resolved_by == ExtractionLevel.EMOJI_REGEX
-        assert vc.place.provider == PlaceProvider.google
-        assert vc.place.external_id == "ChIJ123"
-        assert vc.place.attributes.cuisine == "ramen"
+        assert vc.provider == PlaceProvider.google
+        assert vc.external_id == "ChIJ123"
+        assert vc.attributes.cuisine == "ramen"
         # City lives on attributes.location_context, not on the wrapper.
-        assert vc.place.attributes.location_context is not None
-        assert vc.place.attributes.location_context.city == "Bangkok"
+        assert vc.attributes.location_context is not None
+        assert vc.attributes.location_context.city == "Bangkok"

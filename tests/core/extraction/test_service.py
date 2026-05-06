@@ -13,7 +13,6 @@ from totoro_ai.core.extraction.types import (
 )
 from totoro_ai.core.places import (
     PlaceAttributes,
-    PlaceCreate,
     PlaceObject,
     PlaceProvider,
     PlaceType,
@@ -24,21 +23,6 @@ from totoro_ai.core.places import (
 # ---------------------------------------------------------------------------
 
 
-def _make_place_create(
-    place_name: str = "Fuji Ramen",
-    external_id: str = "place_123",
-) -> PlaceCreate:
-    return PlaceCreate(
-        user_id="user-1",
-        place_name=place_name,
-        place_type=PlaceType.food_and_drink,
-        subcategory="restaurant",
-        attributes=PlaceAttributes(cuisine="ramen"),
-        provider=PlaceProvider.google,
-        external_id=external_id,
-    )
-
-
 def _make_validated(
     place_name: str = "Fuji Ramen",
     external_id: str = "place_123",
@@ -46,9 +30,14 @@ def _make_validated(
     resolved_by: ExtractionLevel = ExtractionLevel.LLM_NER,
 ) -> ValidatedCandidate:
     return ValidatedCandidate(
-        place=_make_place_create(place_name=place_name, external_id=external_id),
+        place_name=place_name,
+        place_type=PlaceType.food_and_drink,
+        provider=PlaceProvider.google,
+        external_id=external_id,
         confidence=confidence,
         resolved_by=resolved_by,
+        subcategory="restaurant",
+        attributes=PlaceAttributes(cuisine="ramen"),
         corroborated=False,
     )
 
@@ -73,7 +62,7 @@ def _saved_outcome(
     vc = validated or _make_validated()
     return PlaceSaveOutcome(
         metadata=vc,
-        place=_make_place_object(place_id=place_id, place_name=vc.place.place_name),
+        place=_make_place_object(place_id=place_id, place_name=vc.place_name),
         place_id=place_id,
         status="saved",
     )

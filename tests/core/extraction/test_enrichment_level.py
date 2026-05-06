@@ -10,20 +10,16 @@ from totoro_ai.core.extraction.types import (
 )
 from totoro_ai.core.places import (
     PlaceAttributes,
-    PlaceCreate,
     PlaceType,
 )
 
 
 def _candidate(name: str = "Place") -> CandidatePlace:
     return CandidatePlace(
-        place=PlaceCreate(
-            user_id="u1",
-            place_name=name,
-            place_type=PlaceType.food_and_drink,
-            attributes=PlaceAttributes(),
-        ),
+        place_name=name,
+        place_type=PlaceType.food_and_drink,
         source=ExtractionLevel.LLM_NER,
+        attributes=PlaceAttributes(),
     )
 
 

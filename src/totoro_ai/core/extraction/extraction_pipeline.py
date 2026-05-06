@@ -20,6 +20,8 @@ _ENRICHER_LABELS = {
     "SubtitleCheckEnricher": "subtitles",
     "WhisperAudioEnricher": "audio transcript",
     "VisionFramesEnricher": "video frames",
+    "VisionImagesEnricher": "post images",
+    "PhotoDetectorEnricher": "photo detection",
     "TikTokOEmbedEnricher": "TikTok metadata",
     "YtDlpMetadataEnricher": "video metadata",
     "GoogleMapsListEnricher": "Google Maps list",
