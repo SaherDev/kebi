@@ -1,6 +1,6 @@
 """Tests for extraction-cascade types."""
 
-from totoro_ai.core.extraction.types import (
+from kebi.core.extraction.types import (
     Evidence,
     EvidenceField,
     ExtractionContext,
@@ -10,7 +10,7 @@ from totoro_ai.core.extraction.types import (
     SearchMatch,
     ValidatedCandidate,
 )
-from totoro_ai.core.places import (
+from kebi.core.places import (
     LocationContext,
     PlaceAttributes,
     PlaceProvider,

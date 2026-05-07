@@ -40,7 +40,7 @@ Add production dependencies and extend the database schema to store extraction m
 
 - [X] T002 Add three columns to `Place` model
 
-  **File**: `src/totoro_ai/db/models.py`
+  **File**: `src/kebi/db/models.py`
   **Task**: Add to `Place` class:
   ```python
   google_place_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
@@ -71,7 +71,7 @@ Build shared extraction infrastructure: schemas, protocols, clients, confidence 
 
 - [X] T004 Create Pydantic schemas for extract-place endpoint
 
-  **File**: `src/totoro_ai/api/schemas/extract_place.py`
+  **File**: `src/kebi/api/schemas/extract_place.py`
   **Task**: Define four Pydantic models:
   - `PlaceExtraction` — LLM output with `place_name`, `address`, `cuisine` (optional), `price_range` (optional)
   - `ExtractPlaceRequest` — `user_id: str`, `raw_input: str`
@@ -79,20 +79,20 @@ Build shared extraction infrastructure: schemas, protocols, clients, confidence 
 
 - [X] T005 [P] Create extraction result and confidence modules
 
-  **File**: `src/totoro_ai/core/extraction/result.py`
+  **File**: `src/kebi/core/extraction/result.py`
   **Task**: Define `ExtractionResult(BaseModel)` with:
   - `extraction: PlaceExtraction`
   - `source: ExtractionSource` (enum)
   - `source_url: str | None`
 
-  **File**: `src/totoro_ai/core/extraction/confidence.py`
+  **File**: `src/kebi/core/extraction/confidence.py`
   **Task**: Define:
   - `ExtractionSource(str, Enum)` — `CAPTION`, `PLAIN_TEXT`, `SPEECH`, `OCR`
   - `compute_confidence(source: ExtractionSource, match_quality: PlacesMatchQuality, corroborated: bool) -> float` — pure function, reads weights from config, applies base score → Places modifier → multi-source bonus → NONE cap → max cap (0.95)
 
 - [X] T006 [P] Create extraction protocols
 
-  **File**: `src/totoro_ai/core/extraction/protocols.py`
+  **File**: `src/kebi/core/extraction/protocols.py`
   **Task**: Define `InputExtractor` Protocol:
   ```python
   async def extract(self, raw_input: str) -> ExtractionResult | None: ...
@@ -101,7 +101,7 @@ Build shared extraction infrastructure: schemas, protocols, clients, confidence 
 
 - [X] T007 [P] Create places client protocol and implementation
 
-  **File**: `src/totoro_ai/core/extraction/places_client.py`
+  **File**: `src/kebi/core/extraction/places_client.py`
   **Task**: Define:
   - `PlacesMatchQuality(str, Enum)` — `EXACT` (≥0.95 similarity), `FUZZY` (≥0.80), `CATEGORY_ONLY`, `NONE`
   - `PlacesMatchResult(BaseModel)` — `match_quality`, `validated_name`, `google_place_id`, `lat`, `lng`
@@ -110,21 +110,21 @@ Build shared extraction infrastructure: schemas, protocols, clients, confidence 
 
 - [X] T008 [P] Create Instructor client wrapper and factory
 
-  **File**: `src/totoro_ai/providers/llm.py`
+  **File**: `src/kebi/providers/llm.py`
   **Task**: Add to existing file:
   - `InstructorClient` — wraps `instructor.from_openai(AsyncOpenAI(...))`, exposes `async def extract(response_model, messages, max_retries=3)` with Instructor exception handling
   - `get_instructor_client(role: str) -> InstructorClient` factory — reads model name from `models.yaml`, instantiates Instructor client
 
 - [X] T009 Create extraction dispatcher
 
-  **File**: `src/totoro_ai/core/extraction/dispatcher.py`
+  **File**: `src/kebi/core/extraction/dispatcher.py`
   **Task**: Define:
   - `UnsupportedInputError(Exception)`
   - `ExtractionDispatcher` — `__init__(self, extractors: list[InputExtractor])`, `async def dispatch(raw_input: str) -> ExtractionResult | None` — iterates extractors, first `supports()` match wins, raises `UnsupportedInputError` if none match
 
 - [X] T010 [P] Create HTTP error handlers
 
-  **File**: `src/totoro_ai/api/errors.py`
+  **File**: `src/kebi/api/errors.py`
   **Task**: Define FastAPI exception handlers for:
   - `ValueError` → 400 `bad_request`
   - `UnsupportedInputError` → 422 `unsupported_input`
@@ -135,19 +135,19 @@ Build shared extraction infrastructure: schemas, protocols, clients, confidence 
 
 - [X] T011 [P] Create API dependencies module
 
-  **File**: `src/totoro_ai/api/deps.py`
+  **File**: `src/kebi/api/deps.py`
   **Task**: Define:
   - `build_dispatcher() -> ExtractionDispatcher` — creates TikTok and plain text extractors with `get_instructor_client("intent_parser")`, returns `ExtractionDispatcher([tiktok, plain_text])`
   - `get_extraction_service()` FastAPI dependency — creates `ExtractionService` with dispatcher, `GooglePlacesClient()`, and DB session
 
 - [X] T012 Create core extraction __init__.py
 
-  **File**: `src/totoro_ai/core/extraction/__init__.py`
+  **File**: `src/kebi/core/extraction/__init__.py`
   **Task**: Create empty marker file (or export public classes if desired)
 
 - [X] T013 Create extractors __init__.py
 
-  **File**: `src/totoro_ai/core/extraction/extractors/__init__.py`
+  **File**: `src/kebi/core/extraction/extractors/__init__.py`
   **Task**: Create empty marker file
 
 - [X] T014 Create unit tests for confidence scoring
@@ -189,14 +189,14 @@ A user pastes a TikTok video URL. The system extracts the caption, identifies th
 
 - [X] T017 [US1] Create TikTok extractor
 
-  **File**: `src/totoro_ai/core/extraction/extractors/tiktok.py`
+  **File**: `src/kebi/core/extraction/extractors/tiktok.py`
   **Task**: Implement `TikTokExtractor(InputExtractor)`:
   - `supports(raw_input)`: `urllib.parse.urlparse(raw_input).netloc` contains `"tiktok.com"`
   - `extract(raw_input)`: httpx GET to `https://www.tiktok.com/oembed?url={raw_input}` with 3s timeout, extract `title`, pass to `self._instructor_client.extract(PlaceExtraction, [...])`, return `ExtractionResult(extraction=result, source=ExtractionSource.CAPTION, source_url=raw_input)`
 
 - [X] T018 [US1] Create extraction service
 
-  **File**: `src/totoro_ai/core/extraction/service.py`
+  **File**: `src/kebi/core/extraction/service.py`
   **Task**: Implement `ExtractionService`:
   - `__init__(self, dispatcher, places_client, db_session_factory)`
   - `async def run(raw_input, user_id) -> ExtractPlaceResponse`:
@@ -211,14 +211,14 @@ A user pastes a TikTok video URL. The system extracts the caption, identifies th
 
 - [X] T019 [US1] Create extract-place API route
 
-  **File**: `src/totoro_ai/api/routes/extract_place.py`
+  **File**: `src/kebi/api/routes/extract_place.py`
   **Task**: Implement:
   - `router = APIRouter()`
   - `@router.post("/extract-place")` receives `ExtractPlaceRequest`, calls `service.run(body.raw_input, body.user_id)`, returns `ExtractPlaceResponse`. Under 30 lines.
 
 - [X] T020 [US1] Include extract-place router in main app
 
-  **File**: `src/totoro_ai/api/main.py`
+  **File**: `src/kebi/api/main.py`
   **Task**: Import `extract_place_router` and add `app.include_router(extract_place_router, prefix="")`. Register error handlers from `errors.py`.
 
 - [X] T021 [US1] Create TikTok extractor unit tests
@@ -261,7 +261,7 @@ A user types a restaurant name and optionally a location. The system extracts th
 
 - [X] T023 [US2] Create plain text extractor
 
-  **File**: `src/totoro_ai/core/extraction/extractors/plain_text.py`
+  **File**: `src/kebi/core/extraction/extractors/plain_text.py`
   **Task**: Implement `PlainTextExtractor(InputExtractor)`:
   - `supports(raw_input)`: `urllib.parse.urlparse(raw_input).scheme not in ("http", "https")`
   - `extract(raw_input)`: pass `raw_input` directly to `self._instructor_client.extract(PlaceExtraction, [...])`, return `ExtractionResult(extraction=result, source=ExtractionSource.PLAIN_TEXT, source_url=None)`
@@ -351,7 +351,7 @@ Configure thresholds, document API contract, and add integration testing via Bru
 
 - [X] T028 Create Bruno request file for extract-place
 
-  **File**: `totoro-config/bruno/extract-place.bru`
+  **File**: `kebi-config/bruno/extract-place.bru`
   **Task**: Create request:
   - `POST {{baseUrl}}/v1/extract-place`
   - Body: `{ "user_id": "test-user", "raw_input": "<TikTok URL or plain text>" }`

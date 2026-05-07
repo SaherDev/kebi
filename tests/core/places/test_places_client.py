@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from totoro_ai.core.places.models import PlaceType
-from totoro_ai.core.places.places_client import (
+from kebi.core.places.models import PlaceType
+from kebi.core.places.places_client import (
     GooglePlacesClient,
     PlacesMatchQuality,
     PlacesMatchResult,
@@ -83,7 +83,7 @@ async def test_reverse_geocode_returns_city_country_on_match() -> None:
     client = _make_client()
 
     with patch(
-        "totoro_ai.core.places.places_client.httpx.AsyncClient",
+        "kebi.core.places.places_client.httpx.AsyncClient",
         return_value=_patch_httpx_get(payload),
     ):
         label = await client.reverse_geocode(52.12, 11.62)
@@ -97,7 +97,7 @@ async def test_reverse_geocode_falls_back_to_admin_area_when_no_locality() -> No
     client = _make_client()
 
     with patch(
-        "totoro_ai.core.places.places_client.httpx.AsyncClient",
+        "kebi.core.places.places_client.httpx.AsyncClient",
         return_value=_patch_httpx_get(payload),
     ):
         label = await client.reverse_geocode(49.5, 11.0)
@@ -110,7 +110,7 @@ async def test_reverse_geocode_returns_none_on_zero_results() -> None:
     client = _make_client()
 
     with patch(
-        "totoro_ai.core.places.places_client.httpx.AsyncClient",
+        "kebi.core.places.places_client.httpx.AsyncClient",
         return_value=_patch_httpx_get(payload),
     ):
         label = await client.reverse_geocode(0.0, 0.0)
@@ -132,7 +132,7 @@ async def test_reverse_geocode_returns_none_on_http_error() -> None:
 
     client = _make_client()
     with patch(
-        "totoro_ai.core.places.places_client.httpx.AsyncClient",
+        "kebi.core.places.places_client.httpx.AsyncClient",
         return_value=mock_client,
     ):
         label = await client.reverse_geocode(52.12, 11.62)

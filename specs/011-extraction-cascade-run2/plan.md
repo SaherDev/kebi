@@ -57,7 +57,7 @@ specs/011-extraction-cascade-run2/
 ### Source Code Changes
 
 ```text
-src/totoro_ai/
+src/kebi/
 ├── core/
 │   ├── config.py                              MODIFY (add groq to ProvidersConfig + _EnvSource)
 │   └── extraction/
@@ -104,7 +104,7 @@ Multi-candidate parallel validator returning `list[ExtractionResult] | None`. Co
 ### Files
 | Action | Path |
 |--------|------|
-| CREATE | `src/totoro_ai/core/extraction/validator.py` |
+| CREATE | `src/kebi/core/extraction/validator.py` |
 | CREATE | `tests/core/extraction/test_validator.py` |
 
 ### Implementation Notes
@@ -163,8 +163,8 @@ Enrichment-phase name dedup as pure function; `EnrichmentPipeline` runner that s
 ### Files
 | Action | Path |
 |--------|------|
-| CREATE | `src/totoro_ai/core/extraction/dedup.py` |
-| CREATE | `src/totoro_ai/core/extraction/enrichment_pipeline.py` |
+| CREATE | `src/kebi/core/extraction/dedup.py` |
+| CREATE | `src/kebi/core/extraction/enrichment_pipeline.py` |
 | CREATE | `tests/core/extraction/test_dedup.py` |
 | CREATE | `tests/core/extraction/test_enrichment_pipeline.py` |
 
@@ -221,13 +221,13 @@ Three background enrichers (subtitle, audio, vision), the top-level three-phase 
 
 ### Prerequisite: Minor Modifications
 
-**`src/totoro_ai/core/extraction/types.py`** — add one line to `ExtractionPending`:
+**`src/kebi/core/extraction/types.py`** — add one line to `ExtractionPending`:
 ```python
 event_type: str = "extraction_pending"
 ```
 This field has a default value — no existing code is broken.
 
-**`src/totoro_ai/core/config.py`** — add `groq` to `ProvidersConfig`:
+**`src/kebi/core/config.py`** — add `groq` to `ProvidersConfig`:
 ```python
 groq: ProviderKey = ProviderKey()
 ```
@@ -239,15 +239,15 @@ And add to `_EnvSource.load()`:
 ### Files
 | Action | Path |
 |--------|------|
-| MODIFY | `src/totoro_ai/core/extraction/types.py` |
-| MODIFY | `src/totoro_ai/core/config.py` |
-| CREATE | `src/totoro_ai/providers/groq_client.py` |
-| CREATE | `src/totoro_ai/core/extraction/enrichers/subtitle_check.py` |
-| CREATE | `src/totoro_ai/core/extraction/enrichers/whisper_audio.py` |
-| CREATE | `src/totoro_ai/core/extraction/enrichers/vision_frames.py` |
-| CREATE | `src/totoro_ai/core/extraction/extraction_pipeline.py` |
-| CREATE | `src/totoro_ai/core/extraction/handlers/__init__.py` |
-| CREATE | `src/totoro_ai/core/extraction/handlers/extraction_pending.py` |
+| MODIFY | `src/kebi/core/extraction/types.py` |
+| MODIFY | `src/kebi/core/config.py` |
+| CREATE | `src/kebi/providers/groq_client.py` |
+| CREATE | `src/kebi/core/extraction/enrichers/subtitle_check.py` |
+| CREATE | `src/kebi/core/extraction/enrichers/whisper_audio.py` |
+| CREATE | `src/kebi/core/extraction/enrichers/vision_frames.py` |
+| CREATE | `src/kebi/core/extraction/extraction_pipeline.py` |
+| CREATE | `src/kebi/core/extraction/handlers/__init__.py` |
+| CREATE | `src/kebi/core/extraction/handlers/extraction_pending.py` |
 | CREATE | `tests/core/extraction/test_extraction_pipeline.py` |
 | CREATE | `tests/core/extraction/handlers/__init__.py` |
 | CREATE | `tests/core/extraction/handlers/test_extraction_pending_handler.py` |

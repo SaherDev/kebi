@@ -31,7 +31,7 @@
 
 ### Decision: Error type for LLM failure → HTTP 503
 
-**Decision**: Define `LLMUnavailableError` in `src/totoro_ai/api/errors.py` and register a 503 handler.  
+**Decision**: Define `LLMUnavailableError` in `src/kebi/api/errors.py` and register a 503 handler.  
 **Rationale**: ADR-023 maps: 400 bad input, 422 unparseable, 500 internal failure. HTTP 503 (Service Unavailable) is the correct status for upstream provider unavailability. Adding a named exception class keeps error handling explicit and testable, matching the existing `ValueError → 400` pattern.  
 **Alternatives considered**: Raise `RuntimeError` and map to 503 — would conflict with any existing `RuntimeError → 500` mappings; handle in route handler directly — violates ADR-034 (no business logic in route handler).
 
@@ -58,6 +58,6 @@
 All decisions derived from:
 - Reading existing service patterns (`IntentParser`, `OpenAIVisionExtractor`, `ConsultService`)
 - Reading `config/app.yaml` to understand existing model role format
-- Reading `src/totoro_ai/api/errors.py` to understand error handler registration
-- Reading `src/totoro_ai/api/deps.py` to understand dependency injection patterns
-- Reading `src/totoro_ai/providers/llm.py` to understand `get_llm()` factory
+- Reading `src/kebi/api/errors.py` to understand error handler registration
+- Reading `src/kebi/api/deps.py` to understand dependency injection patterns
+- Reading `src/kebi/providers/llm.py` to understand `get_llm()` factory

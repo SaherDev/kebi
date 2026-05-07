@@ -4,12 +4,12 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from totoro_ai.core.extraction.circuit_breaker import (
+from kebi.core.extraction.circuit_breaker import (
     CircuitBreakerEnricher,
     CircuitState,
     ParallelEnricherGroup,
 )
-from totoro_ai.core.extraction.types import ExtractionContext
+from kebi.core.extraction.types import ExtractionContext
 
 
 def _ctx() -> ExtractionContext:

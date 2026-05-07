@@ -13,7 +13,7 @@ from unittest.mock import MagicMock, patch
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
-from totoro_ai.core.agent.state import add_messages_capped
+from kebi.core.agent.state import add_messages_capped
 
 
 def _agent_cfg(cap: int, floor: int) -> Any:
@@ -26,7 +26,7 @@ def _agent_cfg(cap: int, floor: int) -> Any:
 
 def _patch_cfg(cap: int, floor: int) -> Any:
     return patch(
-        "totoro_ai.core.config.get_config",
+        "kebi.core.config.get_config",
         new=_agent_cfg(cap, floor),
     )
 

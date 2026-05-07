@@ -1,12 +1,12 @@
-# System Architecture — Totoro AI Repo
+# System Architecture — Kebi
 
 ## Overview
 
-This repo (totoro-ai) is the AI engine of Totoro. It owns all AI logic: intent parsing, place extraction, embedding generation, vector retrieval, external discovery, ranking, taste model, and agent orchestration. It runs as a standalone FastAPI service that the product repo calls over HTTP.
+This repo (kebi) is the AI engine of Kebi. It owns all AI logic: intent parsing, place extraction, embedding generation, vector retrieval, external discovery, ranking, taste model, and agent orchestration. It runs as a standalone FastAPI service that the product repo calls over HTTP.
 
 ```
 ┌──────────────────────────────────┐
-│   totoro (product repo)          │
+│   product repo                   │
 │   NestJS backend                 │
 │   Sends auth-verified requests   │
 └───────────────┬──────────────────┘
@@ -16,7 +16,7 @@ This repo (totoro-ai) is the AI engine of Totoro. It owns all AI logic: intent p
                 │  GET  /v1/health
                 ▼
 ┌──────────────────────────────────────────────────────────┐
-│                totoro-ai (this repo)                      │
+│                kebi (this repo)                      │
 │                                                           │
 │  FastAPI HTTP layer                                       │
 │  LangGraph agent orchestration (tool dispatch)            │
@@ -415,14 +415,14 @@ Behavioral and implementation patterns live in docs/decisions.md.
 Route handlers are the HTTP entry point only. Each handler makes
 exactly one service call and returns the result. No SQLAlchemy,
 no Redis, no pgvector, no Google Places API calls appear inside
-src/totoro_ai/api/routes/. All orchestration lives in
-src/totoro_ai/core/.
+src/kebi/api/routes/. All orchestration lives in
+src/kebi/core/.
 
 ### Protocol — Swappable Dependencies
 
 Any external dependency lives behind a Python Protocol. Concrete
-implementations live in src/totoro_ai/providers/ for cross-cutting
-dependencies or inside the relevant src/totoro_ai/core/ module for
+implementations live in src/kebi/providers/ for cross-cutting
+dependencies or inside the relevant src/kebi/core/ module for
 domain-specific ones. Service layers, agent nodes, and LangGraph
 graphs import the Protocol only. Nothing in core/ imports a concrete
 provider class directly.
@@ -473,7 +473,7 @@ The hybrid_search query is a single PostgreSQL CTE (Common Table Expression) wit
   RRF score: 1/(k + vector_rank) + 1/(k + text_rank), where k=60
 - Final SELECT: top limit results by RRF score, with match_reason derived from which CTEs matched
 
-The Protocol lives in src/totoro_ai/db/repositories/ alongside the
+The Protocol lives in src/kebi/db/repositories/ alongside the
 concrete SQLAlchemyRecallRepository implementation. Service layers
 depend on the Protocol only, not the concrete class. This allows
 testing with mock repositories and swapping implementations without

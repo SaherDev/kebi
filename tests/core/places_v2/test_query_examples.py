@@ -10,8 +10,8 @@ import inspect
 
 import pytest
 
-import totoro_ai.core.places_v2.query_examples as examples
-from totoro_ai.core.places_v2.models import PlaceQuery
+import kebi.core.places_v2.query_examples as examples
+from kebi.core.places_v2.models import PlaceQuery
 
 # ---------------------------------------------------------------------------
 # Collect all PlaceQuery instances defined at module level

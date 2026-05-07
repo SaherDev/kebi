@@ -7,13 +7,13 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from totoro_ai.api.schemas.recall import RecallResponse
-from totoro_ai.api.schemas.recall import RecallResult as RecallResultSchema
-from totoro_ai.core.agent.tools.recall_tool import (
+from kebi.api.schemas.recall import RecallResponse
+from kebi.api.schemas.recall import RecallResult as RecallResultSchema
+from kebi.core.agent.tools.recall_tool import (
     RecallToolInput,
     build_recall_tool,
 )
-from totoro_ai.core.places.models import PlaceObject, PlaceType
+from kebi.core.places.models import PlaceObject, PlaceType
 
 
 def _place(pid: str) -> PlaceObject:

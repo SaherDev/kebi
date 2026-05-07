@@ -59,7 +59,7 @@ specs/022-recommendations-context-signals/
 ### Source Code (repository root)
 
 ```text
-src/totoro_ai/
+src/kebi/
 ├── api/
 │   ├── main.py                          # MODIFY: swap feedback_router → signal_router, add user_context_router
 │   ├── routes/
@@ -94,7 +94,7 @@ tests/
     └── test_recommendation_repository.py # CREATE (if test existed for consult_log)
 ```
 
-**Structure Decision**: Follows existing `src/totoro_ai/` layout (ADR-001/002). Each new endpoint gets its own route file and schema file per ADR-018 pattern. Repository follows existing Protocol + SQLAlchemy + Null pattern.
+**Structure Decision**: Follows existing `src/kebi/` layout (ADR-001/002). Each new endpoint gets its own route file and schema file per ADR-018 pattern. Repository follows existing Protocol + SQLAlchemy + Null pattern.
 
 ## Complexity Tracking
 

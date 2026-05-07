@@ -7,7 +7,7 @@
 
 **Decision**: Delete `_city_filter.py`. Also update `emoji_regex.py` to remove its `CITY_BLOCKLIST` import and the filtering logic in `_extract_city_hint()`.  
 **Rationale**: The blocklist was code-level compensation for what the LLM should handle natively. Now that all metadata (hashtags, platform, location_tag) is passed structurally to the LLM, city correctness is the model's responsibility. The blocklist is dead weight — it doesn't belong in the enricher layer at all.  
-**Impact**: `emoji_regex.py` must be updated: remove `from totoro_ai.core.extraction.enrichers._city_filter import CITY_BLOCKLIST` and update `_extract_city_hint()` to omit the blocklist filter (or simplify/remove the method entirely if the blocklist was its only guard).  
+**Impact**: `emoji_regex.py` must be updated: remove `from kebi.core.extraction.enrichers._city_filter import CITY_BLOCKLIST` and update `_extract_city_hint()` to omit the blocklist filter (or simplify/remove the method entirely if the blocklist was its only guard).  
 **Alternatives considered**: Keeping `_city_filter.py` for `emoji_regex.py` — rejected by user; the blocklist is unnecessary code that should be deleted.
 
 ## Finding 2: Langfuse API — `get_langfuse_client()` (not `get_langfuse_handler()`)
@@ -18,13 +18,13 @@
 
 ## Finding 3: `ExtractionContext` Missing 4 Fields
 
-**Decision**: Add `platform: str | None = None`, `title: str | None = None`, `hashtags: list[str] = field(default_factory=list)`, `location_tag: str | None = None` to the `ExtractionContext` dataclass in `src/totoro_ai/core/extraction/types.py`.  
+**Decision**: Add `platform: str | None = None`, `title: str | None = None`, `hashtags: list[str] = field(default_factory=list)`, `location_tag: str | None = None` to the `ExtractionContext` dataclass in `src/kebi/core/extraction/types.py`.  
 **Rationale**: The enricher needs these fields from context. They do not exist today. Adding optional fields with safe defaults is backwards-compatible — no existing caller sets them, so all existing `ExtractionContext(...)` constructors continue to work.  
 **Impact**: All tests constructing `ExtractionContext` still pass (defaults cover missing args).
 
 ## Finding 4: `CandidatePlace` Missing 2 Fields
 
-**Decision**: Add `price_range: str | None = None` and `place_type: str | None = None` to the `CandidatePlace` dataclass in `src/totoro_ai/core/extraction/types.py`.  
+**Decision**: Add `price_range: str | None = None` and `place_type: str | None = None` to the `CandidatePlace` dataclass in `src/kebi/core/extraction/types.py`.  
 **Rationale**: The new `NERPlace` schema includes these fields and they should be carried forward to `CandidatePlace` without loss. Optional with `None` defaults is backwards-compatible.  
 **Impact**: All existing `CandidatePlace(name=..., city=..., cuisine=..., source=...)` constructors continue to work; `price_range` and `place_type` default to `None`.
 

@@ -7,14 +7,14 @@ from datetime import UTC, datetime
 import pytest
 from pydantic import ValidationError
 
-from totoro_ai.core.places.filters import ConsultFilters, PlaceFilters
-from totoro_ai.core.places.models import (
+from kebi.core.places.filters import ConsultFilters, PlaceFilters
+from kebi.core.places.models import (
     LocationContext,
     PlaceAttributes,
     PlaceSource,
     PlaceType,
 )
-from totoro_ai.core.recall.types import RecallFilters
+from kebi.core.recall.types import RecallFilters
 
 
 def test_place_filters_defaults_are_all_none() -> None:

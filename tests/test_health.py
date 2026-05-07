@@ -1,6 +1,6 @@
 from fastapi.testclient import TestClient
 
-from totoro_ai.api.main import app
+from kebi.api.main import app
 
 client = TestClient(app)
 

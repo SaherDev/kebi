@@ -39,7 +39,7 @@ embeddings
 
 ### EmbedderProtocol
 
-An async interface for any embedding provider. Lives in `src/totoro_ai/providers/embeddings.py`.
+An async interface for any embedding provider. Lives in `src/kebi/providers/embeddings.py`.
 
 ```
 EmbedderProtocol
@@ -63,7 +63,7 @@ VoyageEmbedder
 
 ### EmbeddingRepository (Protocol)
 
-Async interface for embedding persistence. Lives in `src/totoro_ai/db/repositories/embedding_repository.py`.
+Async interface for embedding persistence. Lives in `src/kebi/db/repositories/embedding_repository.py`.
 
 ```
 EmbeddingRepository

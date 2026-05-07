@@ -10,7 +10,7 @@
 ## Module surface
 
 ```python
-# src/totoro_ai/core/places/__init__.py
+# src/kebi/core/places/__init__.py
 from .service import PlacesService
 from .models import (
     PlaceObject,
@@ -28,7 +28,7 @@ from .models import (
 )
 ```
 
-These are the only names callers import from `totoro_ai.core.places`. The `PlacesRepository` and `PlacesCache` classes are internal (not re-exported) — callers receive a fully-wired `PlacesService` from a FastAPI `Depends(get_places_service)` factory in a follow-up feature.
+These are the only names callers import from `kebi.core.places`. The `PlacesRepository` and `PlacesCache` classes are internal (not re-exported) — callers receive a fully-wired `PlacesService` from a FastAPI `Depends(get_places_service)` factory in a follow-up feature.
 
 ---
 
@@ -255,5 +255,5 @@ All emit at `WARNING` (or `ERROR` for failures the caller cannot recover from). 
 ## Backwards compatibility
 
 - The legacy `SQLAlchemyPlaceRepository` remains untouched and continues to serve `ExtractionService`. There is no shared state between it and `PlacesRepository` beyond the `places` table itself.
-- The new contract does not break any existing import path. `from totoro_ai.core.places import PlacesService, ...` is brand new; `from totoro_ai.core.places import PlacesClient, GooglePlacesClient` (existing per ADR-049) is unchanged.
+- The new contract does not break any existing import path. `from kebi.core.places import PlacesService, ...` is brand new; `from kebi.core.places import PlacesClient, GooglePlacesClient` (existing per ADR-049) is unchanged.
 - No public Pydantic schema is renamed or repurposed in this feature. `PlacesMatchResult` and `PlacesMatchQuality` from `places_client.py` are untouched.

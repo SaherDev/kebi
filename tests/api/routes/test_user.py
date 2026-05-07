@@ -7,16 +7,16 @@ from unittest.mock import AsyncMock
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from totoro_ai.api.deps import get_places_service, get_taste_service
-from totoro_ai.api.routes.user import router as user_router
-from totoro_ai.core.places.service import PlacesService
-from totoro_ai.core.taste.schemas import (
+from kebi.api.deps import get_places_service, get_taste_service
+from kebi.api.routes.user import router as user_router
+from kebi.core.places.service import PlacesService
+from kebi.core.taste.schemas import (
     Chip,
     ChipStatus,
     TasteContext,
     TasteProfile,
 )
-from totoro_ai.core.taste.service import TasteModelService
+from kebi.core.taste.service import TasteModelService
 
 
 def _make_app(
@@ -42,15 +42,15 @@ def _stub_service(
     user_id: str = "user_abc",
 ) -> AsyncMock:
     """Build a TasteModelService stub that runs the real get_taste_context."""
-    from totoro_ai.core.taste.service import TasteModelService as _Real
+    from kebi.core.taste.service import TasteModelService as _Real
 
     svc = AsyncMock(spec=_Real)
     svc.get_taste_profile = AsyncMock(return_value=profile)
 
     async def _get_taste_context(uid: str) -> TasteContext:
-        from totoro_ai.core.config import get_config
-        from totoro_ai.core.taste.schemas import ChipView
-        from totoro_ai.core.taste.tier import derive_signal_tier, selection_round_name
+        from kebi.core.config import get_config
+        from kebi.core.taste.schemas import ChipView
+        from kebi.core.taste.tier import derive_signal_tier, selection_round_name
 
         config = get_config()
         stages = config.taste_model.chip_selection_stages

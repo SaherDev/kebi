@@ -2,8 +2,8 @@
 
 from unittest.mock import AsyncMock, MagicMock
 
-from totoro_ai.core.extraction.enrichment_level import EnrichmentLevel
-from totoro_ai.core.extraction.types import ExtractionContext
+from kebi.core.extraction.enrichment_level import EnrichmentLevel
+from kebi.core.extraction.types import ExtractionContext
 
 
 def _summary(_ctx: ExtractionContext, _fired: list[str], _picks: int) -> str:

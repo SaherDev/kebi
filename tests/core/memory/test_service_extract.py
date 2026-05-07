@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock
 
-from totoro_ai.core.config import MemoryConfidenceConfig
-from totoro_ai.core.memory.schemas import PersonalFact
-from totoro_ai.core.memory.service import UserMemoryService
+from kebi.core.config import MemoryConfidenceConfig
+from kebi.core.memory.schemas import PersonalFact
+from kebi.core.memory.service import UserMemoryService
 
 
 class _FakeBuffer:

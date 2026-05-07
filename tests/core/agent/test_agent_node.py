@@ -13,7 +13,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
-from totoro_ai.core.agent.graph import make_agent_node
+from kebi.core.agent.graph import make_agent_node
 
 
 def _system_text(msg: SystemMessage) -> str:
@@ -125,7 +125,7 @@ async def test_agent_node_trims_history_to_max_history_messages(
     """60-turn conversation: only the last max_history_messages are sent to the LLM."""
     node = make_agent_node(captured_llm, [])
     messages = [HumanMessage(content=f"msg {i}") for i in range(60)]
-    with patch("totoro_ai.core.agent.graph.get_config") as mock_cfg:
+    with patch("kebi.core.agent.graph.get_config") as mock_cfg:
         mock_cfg.return_value.agent.max_history_messages = 40
         mock_cfg.return_value.agent.tool_result_window = 2
         mock_cfg.return_value.prompts = {
@@ -167,7 +167,7 @@ async def test_agent_node_trim_before_sanitize_no_orphaned_tool_message(
     messages.append(tool_result)
 
     node = make_agent_node(captured_llm, [])
-    with patch("totoro_ai.core.agent.graph.get_config") as mock_cfg:
+    with patch("kebi.core.agent.graph.get_config") as mock_cfg:
         mock_cfg.return_value.agent.max_history_messages = 40
         mock_cfg.return_value.agent.tool_result_window = 2
         mock_cfg.return_value.prompts = {

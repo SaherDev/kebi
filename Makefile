@@ -1,7 +1,7 @@
 .PHONY: dev test lint format typecheck
 
 dev:
-	poetry run uvicorn totoro_ai.api.main:app --reload --port $${AI_PORT:-8000}
+	poetry run uvicorn kebi.api.main:app --reload --port $${AI_PORT:-8000}
 
 test:
 	poetry run pytest

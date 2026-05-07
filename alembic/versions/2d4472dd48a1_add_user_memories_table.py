@@ -20,7 +20,7 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     """Upgrade schema."""
-    # Create user_memories table (owned by totoro-ai repo via Alembic)
+    # Create user_memories table (owned by kebi repo via Alembic)
     # Note: users and user_settings tables are managed by NestJS/TypeORM, not Alembic
     op.create_table('user_memories',
     sa.Column('id', sa.String(), nullable=False),

@@ -1,7 +1,7 @@
 """Tests for CacheBackend Protocol and RedisCacheBackend structural compliance (US3)."""
 
-from totoro_ai.providers.cache import CacheBackend
-from totoro_ai.providers.redis_cache import RedisCacheBackend
+from kebi.providers.cache import CacheBackend
+from kebi.providers.redis_cache import RedisCacheBackend
 
 # ---------------------------------------------------------------------------
 # In-memory stub for Protocol verification

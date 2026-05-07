@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from langchain_core.messages import AIMessage, HumanMessage
 
-from totoro_ai.core.agent.graph import NODE_FALLBACK, fallback_node, should_continue
-from totoro_ai.core.agent.state import AgentState
-from totoro_ai.core.config import get_config
+from kebi.core.agent.graph import NODE_FALLBACK, fallback_node, should_continue
+from kebi.core.agent.state import AgentState
+from kebi.core.config import get_config
 
 
 def _base_state(steps_taken: int = 0, error_count: int = 0) -> AgentState:

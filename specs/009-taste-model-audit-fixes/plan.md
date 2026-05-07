@@ -25,7 +25,7 @@ Fix seven correctness gaps in the taste model implementation: wire EMA updates f
 
 | Gate | Status | Notes |
 |------|--------|-------|
-| Repo boundary respected | ✓ PASS | All changes in `src/totoro_ai/` — no UI, auth, or product CRUD |
+| Repo boundary respected | ✓ PASS | All changes in `src/kebi/` — no UI, auth, or product CRUD |
 | ADR compliance | ✓ PASS | No new architectural decisions; existing patterns followed (repository protocol, Pydantic, Alembic) |
 | Database write ownership | ✓ PASS | `places` and `taste_model` are owned by this repo; Alembic migration is correct migration tool |
 | Provider abstraction | ✓ PASS | No LLM calls added; no model names hardcoded |
@@ -52,7 +52,7 @@ specs/009-taste-model-audit-fixes/
 ### Source Code (repository root)
 
 ```text
-src/totoro_ai/
+src/kebi/
 ├── core/
 │   └── taste/
 │       └── service.py              # Fixes 1, 2, 5; delete _increment_and_update_confidence

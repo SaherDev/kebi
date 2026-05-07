@@ -28,7 +28,7 @@
 > **Status:** accepted (supersedes ADR-041)
 > **Context:** The original `places` schema used a composite `(external_provider, external_id)` unique key with upsert semantics on `SQLAlchemyPlaceRepository.save()`. Upsert hides intent at the data layer and was made when the only caller was the extraction pipeline. The PlacesService data layer (feature 019) introduces three callers (save, recall, consult) and the save tool needs to detect collisions explicitly so manual saves are not silently overwritten by background extractions.
 > **Decision:** Replace the composite `(external_provider, external_id)` columns with a single namespaced `provider_id` column on the `places` table. The format is `"{provider}:{external_id}"`, constructed only inside the `PlacesRepository` (never elsewhere). A partial unique index enforces that any non-null `provider_id` is unique across the table. `PlacesRepository.create()` raises `DuplicatePlaceError` (with the existing `place_id` attached) on collision instead of upserting. `PlacesRepository.create_batch()` runs in a single transaction and raises `DuplicatePlaceError` (listing every conflicting `provider_id`) if any row collides — partial inserts are not permitted. Callers wanting idempotency call `get_by_external_id(provider, external_id)` first and decide what to do.
-> **Consequences:** ADR-041's upsert semantics and composite-key field naming are superseded. The legacy `SQLAlchemyPlaceRepository` in `src/totoro_ai/db/repositories/place_repository.py` remains as a temporary shim (see ADR-055 below) until ExtractionService is migrated to `PlacesRepository` in a follow-up feature. NestJS does not read `external_provider` or `external_id`, so no product-side coordination is needed. The migration relocates the values via the seed script before the columns are dropped (see data-model.md).
+> **Consequences:** ADR-041's upsert semantics and composite-key field naming are superseded. The legacy `SQLAlchemyPlaceRepository` in `src/kebi/db/repositories/place_repository.py` remains as a temporary shim (see ADR-055 below) until ExtractionService is migrated to `PlacesRepository` in a follow-up feature. NestJS does not read `external_provider` or `external_id`, so no product-side coordination is needed. The migration relocates the values via the seed script before the columns are dropped (see data-model.md).
 
 **User action required**: confirm ADR-054 before `/speckit.tasks`.
 
@@ -42,7 +42,7 @@
 
 **Decision (RESCINDED)**: Phase the schema migration in **two Alembic revisions**, not one. The first revision lands in this feature; the second lands in a follow-up feature after ExtractionService is migrated. Document this as **ADR-055**.
 
-**Why it is needed**: The brief is internally inconsistent. It says "Do not modify ExtractionService" *and* "drop `address`, `lat`, `lng`, `cuisine`, `price_range`, `confidence`, `validated_at`, `external_provider`, `external_id`". Those columns are written directly by `src/totoro_ai/core/extraction/persistence.py:96-110`:
+**Why it is needed**: The brief is internally inconsistent. It says "Do not modify ExtractionService" *and* "drop `address`, `lat`, `lng`, `cuisine`, `price_range`, `confidence`, `validated_at`, `external_provider`, `external_id`". Those columns are written directly by `src/kebi/core/extraction/persistence.py:96-110`:
 
 ```python
 place = Place(
@@ -76,7 +76,7 @@ If we drop those columns in this feature, the next extraction request crashes at
 
 **Revision B** — *follow-up feature, e.g. `020-extraction-on-placesservice`*:
 1. Migrate `ExtractionService.persistence` to call `PlacesService.create()` / `create_batch()` instead of `SQLAlchemyPlaceRepository.save()`.
-2. Delete `src/totoro_ai/db/repositories/place_repository.py` (and its tests).
+2. Delete `src/kebi/db/repositories/place_repository.py` (and its tests).
 3. Drop the legacy columns from `places` in a second Alembic revision: `address`, `cuisine`, `price_range`, `lat`, `lng`, `external_provider`, `external_id`, `confidence`, `validated_at`, `ambiance`, `photo_url`, `hours`, `rating`, `phone`, `popularity`.
 4. Drop the composite uniqueness `uq_places_provider_external` (now redundant — replaced by the partial unique on `provider_id` from revision A).
 
@@ -115,7 +115,7 @@ If we drop those columns in this feature, the next extraction request crashes at
 **Decision**: Name the new class `PlacesRepository` (plural). Mirror `PlacesService`. Do **not** call it `PlaceRepository`.
 
 **Rationale**:
-- `src/totoro_ai/db/repositories/place_repository.py` already exports a `PlaceRepository` Protocol used by `ExtractionService.persistence` and `core/extraction/persistence.py`. It will continue to exist throughout this feature (per Decision 2). Two classes with the same name in different modules works in Python but breaks code search ("which one does this import?"), confuses agent context loaders, and invites future merge bugs.
+- `src/kebi/db/repositories/place_repository.py` already exports a `PlaceRepository` Protocol used by `ExtractionService.persistence` and `core/extraction/persistence.py`. It will continue to exist throughout this feature (per Decision 2). Two classes with the same name in different modules works in Python but breaks code search ("which one does this import?"), confuses agent context loaders, and invites future merge bugs.
 - Plural matches the rest of the new module (`PlacesService`, `PlacesClient`, `PlacesMatchResult`, `core/places/`).
 - The brief's literal name was `PlaceRepository`. This is a small, justifiable deviation from the brief and is called out in the plan's Complexity Tracking. We carry the deviation explicitly into the data-model.md and contracts/places-service.md.
 

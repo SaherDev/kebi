@@ -58,18 +58,18 @@ specs/017-unified-chat-router/
 
 ```text
 ; NEW FILES
-src/totoro_ai/core/chat/
+src/kebi/core/chat/
 ├── __init__.py                    (already exists — keep)
 ├── router.py                      (NEW — IntentClassification model + classify_intent)
 └── service.py                     (NEW — ChatService)
 
-src/totoro_ai/api/
+src/kebi/api/
 ├── schemas/
 │   └── chat.py                    (NEW — ChatRequest, ChatResponse)
 └── routes/
     └── chat.py                    (NEW — POST /chat route)
 
-src/totoro_ai/db/
+src/kebi/db/
 ├── models.py                      (MODIFIED — add ConsultLog model)
 └── repositories/
     └── consult_log_repository.py  (NEW — Protocol + SQLAlchemy impl)
@@ -79,29 +79,29 @@ alembic/versions/
 
 ; MODIFIED FILES
 config/app.yaml                    (add intent_router role)
-src/totoro_ai/api/deps.py          (add get_chat_service, get_consult_log_repo)
-src/totoro_ai/api/main.py          (register chat_router, remove old routers)
+src/kebi/api/deps.py          (add get_chat_service, get_consult_log_repo)
+src/kebi/api/main.py          (register chat_router, remove old routers)
 docs/decisions.md                  (add ADR-052, ADR-053)
 docs/api-contract.md               (update to /v1/chat contract)
 
 ; DELETED FILES
-src/totoro_ai/api/routes/extract_place.py
-src/totoro_ai/api/routes/consult.py
-src/totoro_ai/api/routes/recall.py
-src/totoro_ai/api/routes/chat_assistant.py
+src/kebi/api/routes/extract_place.py
+src/kebi/api/routes/consult.py
+src/kebi/api/routes/recall.py
+src/kebi/api/routes/chat_assistant.py
 
 ; TESTS (new)
 tests/core/chat/test_router.py
 tests/core/chat/test_service.py
 tests/api/routes/test_chat.py
 
-; BRUNO (totoro-config)
-totoro-config/bruno/ai-service/chat.bru     (NEW)
-totoro-config/bruno/ai-service/chat-assistant.bru   (DELETE)
-totoro-config/bruno/ai-service/consult.bru          (DELETE)
-totoro-config/bruno/ai-service/extract-place.bru    (DELETE)
-totoro-config/bruno/ai-service/extract-place-status.bru  (DELETE)
-totoro-config/bruno/ai-service/recall.bru           (DELETE)
+; BRUNO (kebi-config)
+kebi-config/bruno/ai-service/chat.bru     (NEW)
+kebi-config/bruno/ai-service/chat-assistant.bru   (DELETE)
+kebi-config/bruno/ai-service/consult.bru          (DELETE)
+kebi-config/bruno/ai-service/extract-place.bru    (DELETE)
+kebi-config/bruno/ai-service/extract-place-status.bru  (DELETE)
+kebi-config/bruno/ai-service/recall.bru           (DELETE)
 ```
 
 ---
@@ -123,7 +123,7 @@ Groq is already configured in `providers:` and `GROQ_API_KEY` is already in secr
 ---
 
 ### Step 2 — Core: intent router
-**File**: `src/totoro_ai/core/chat/router.py`
+**File**: `src/kebi/core/chat/router.py`
 
 ```python
 class IntentClassification(BaseModel):
@@ -145,10 +145,10 @@ async def classify_intent(message: str) -> IntentClassification:
 ---
 
 ### Step 3 — Schemas: ChatRequest and ChatResponse
-**File**: `src/totoro_ai/api/schemas/chat.py`
+**File**: `src/kebi/api/schemas/chat.py`
 
 ```python
-from totoro_ai.api.schemas.consult import Location   # reuse existing typed model
+from kebi.api.schemas.consult import Location   # reuse existing typed model
 
 class ChatRequest(BaseModel):
     user_id: str
@@ -166,8 +166,8 @@ class ChatResponse(BaseModel):
 ---
 
 ### Step 4 — DB: ConsultLog model and repository
-**File**: `src/totoro_ai/db/models.py` — add `ConsultLog` class  
-**File**: `src/totoro_ai/db/repositories/consult_log_repository.py` — Protocol + impl
+**File**: `src/kebi/db/models.py` — add `ConsultLog` class  
+**File**: `src/kebi/db/repositories/consult_log_repository.py` — Protocol + impl
 
 `ConsultLog` table name: `"consult_logs"` (not `"recommendations"` — see ADR-053)
 
@@ -191,7 +191,7 @@ Review generated migration before running — ensure only `consult_logs` table i
 ---
 
 ### Step 6 — Core: ChatService
-**File**: `src/totoro_ai/core/chat/service.py`
+**File**: `src/kebi/core/chat/service.py`
 
 ```python
 class ChatService:
@@ -225,7 +225,7 @@ class ChatService:
 ---
 
 ### Step 7 — Route: POST /v1/chat
-**File**: `src/totoro_ai/api/routes/chat.py`
+**File**: `src/kebi/api/routes/chat.py`
 
 ```python
 router = APIRouter()
@@ -241,7 +241,7 @@ async def chat(
 ---
 
 ### Step 8 — Deps: wire ChatService and ConsultService with repo
-**File**: `src/totoro_ai/api/deps.py`
+**File**: `src/kebi/api/deps.py`
 
 Add:
 - `get_consult_log_repo(session: AsyncSession = Depends(get_session)) -> ConsultLogRepository` — wired in US4
@@ -251,20 +251,20 @@ Add:
 ---
 
 ### Step 9 — main.py: register chat, remove old routers
-**File**: `src/totoro_ai/api/main.py`
+**File**: `src/kebi/api/main.py`
 
 Remove:
 ```python
-from totoro_ai.api.routes.chat_assistant import router as chat_assistant_router
-from totoro_ai.api.routes.consult import router as consult_router
-from totoro_ai.api.routes.extract_place import router as extract_place_router
-from totoro_ai.api.routes.recall import router as recall_router
+from kebi.api.routes.chat_assistant import router as chat_assistant_router
+from kebi.api.routes.consult import router as consult_router
+from kebi.api.routes.extract_place import router as extract_place_router
+from kebi.api.routes.recall import router as recall_router
 # and their router.include_router(...) calls
 ```
 
 Add:
 ```python
-from totoro_ai.api.routes.chat import router as chat_router
+from kebi.api.routes.chat import router as chat_router
 router.include_router(chat_router, prefix="")
 ```
 
@@ -274,10 +274,10 @@ Keep: `feedback_router` registration unchanged.
 
 ### Step 10 — Delete old route files
 ```
-src/totoro_ai/api/routes/extract_place.py   ← DELETE
-src/totoro_ai/api/routes/consult.py         ← DELETE
-src/totoro_ai/api/routes/recall.py          ← DELETE
-src/totoro_ai/api/routes/chat_assistant.py  ← DELETE
+src/kebi/api/routes/extract_place.py   ← DELETE
+src/kebi/api/routes/consult.py         ← DELETE
+src/kebi/api/routes/recall.py          ← DELETE
+src/kebi/api/routes/chat_assistant.py  ← DELETE
 ```
 
 ---
@@ -311,10 +311,10 @@ Replace the three-endpoint section with `POST /v1/chat` contract from `contracts
 ---
 
 ### Step 14 — Bruno
-Delete from `totoro-config/bruno/ai-service/`:
+Delete from `kebi-config/bruno/ai-service/`:
 - `chat-assistant.bru`, `consult.bru`, `extract-place.bru`, `extract-place-status.bru`, `recall.bru`
 
-Add `totoro-config/bruno/ai-service/chat.bru` with 5 request bodies:
+Add `kebi-config/bruno/ai-service/chat.bru` with 5 request bodies:
 1. `"cheap dinner nearby"` → consult intent
 2. TikTok URL → extract-place intent
 3. `"that ramen place I saved"` → recall intent

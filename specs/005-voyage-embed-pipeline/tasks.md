@@ -44,7 +44,7 @@ These tasks establish the abstractions required by all user stories. All must co
 
 #### T002: Create EmbedderProtocol and VoyageEmbedder
 
-- [x] T002 [P] Create `src/totoro_ai/providers/embeddings.py` with EmbedderProtocol and VoyageEmbedder
+- [x] T002 [P] Create `src/kebi/providers/embeddings.py` with EmbedderProtocol and VoyageEmbedder
 
 **Goal**: Define the embedding abstraction and Voyage implementation.
 
@@ -59,13 +59,13 @@ These tasks establish the abstractions required by all user stories. All must co
 - Langfuse tracing is optional (graceful degradation when `get_langfuse_client()` returns None)
 - `input_type` parameter is passed through to voyageai (supports "document" and "query")
 
-**Independent Test**: `mypy src/totoro_ai/providers/embeddings.py --strict` passes; `ruff check src/totoro_ai/providers/embeddings.py` passes.
+**Independent Test**: `mypy src/kebi/providers/embeddings.py --strict` passes; `ruff check src/kebi/providers/embeddings.py` passes.
 
 ---
 
 #### T003: Create EmbeddingRepository implementations
 
-- [x] T003 [P] Create `src/totoro_ai/db/repositories/embedding_repository.py` with EmbeddingRepository Protocol and SQLAlchemyEmbeddingRepository
+- [x] T003 [P] Create `src/kebi/db/repositories/embedding_repository.py` with EmbeddingRepository Protocol and SQLAlchemyEmbeddingRepository
 
 **Goal**: Define embedding persistence abstraction and async implementation.
 
@@ -83,19 +83,19 @@ These tasks establish the abstractions required by all user stories. All must co
 - No duplicate rows per place (upsert key is `place_id`)
 - Error handling includes rollback and logging
 
-**Independent Test**: `mypy src/totoro_ai/db/repositories/embedding_repository.py --strict` passes; `ruff check src/totoro_ai/db/repositories/embedding_repository.py` passes.
+**Independent Test**: `mypy src/kebi/db/repositories/embedding_repository.py --strict` passes; `ruff check src/kebi/db/repositories/embedding_repository.py` passes.
 
 ---
 
 #### T004: Update repositories __init__ to export types
 
-- [x] T004 Update `src/totoro_ai/db/repositories/__init__.py` to export EmbeddingRepository and SQLAlchemyEmbeddingRepository
+- [x] T004 Update `src/kebi/db/repositories/__init__.py` to export EmbeddingRepository and SQLAlchemyEmbeddingRepository
 
 **Goal**: Make new types importable from the repositories package.
 
-**Implementation**: Add `from totoro_ai.db.repositories.embedding_repository import EmbeddingRepository, SQLAlchemyEmbeddingRepository` and update `__all__`.
+**Implementation**: Add `from kebi.db.repositories.embedding_repository import EmbeddingRepository, SQLAlchemyEmbeddingRepository` and update `__all__`.
 
-**Independent Test**: `python -c "from totoro_ai.db.repositories import EmbeddingRepository, SQLAlchemyEmbeddingRepository"` succeeds (no import error).
+**Independent Test**: `python -c "from kebi.db.repositories import EmbeddingRepository, SQLAlchemyEmbeddingRepository"` succeeds (no import error).
 
 ---
 
@@ -115,7 +115,7 @@ These tasks establish the abstractions required by all user stories. All must co
 
 #### T005: Update ExtractionService to wire in embedder and embedding repository
 
-- [x] T005 [US1] Update `src/totoro_ai/core/extraction/service.py` to accept embedder and embedding_repo, call after place save
+- [x] T005 [US1] Update `src/kebi/core/extraction/service.py` to accept embedder and embedding_repo, call after place save
 
 **Goal**: Orchestrate embedding generation in the service layer after a new place is written.
 
@@ -133,13 +133,13 @@ These tasks establish the abstractions required by all user stories. All must co
 - Embedding is awaited synchronously before response returns (no background task)
 - All orchestration in service layer; route handler unchanged
 
-**Independent Test**: `mypy src/totoro_ai/core/extraction/service.py --strict` passes; unit test (mocked embedder/repo) confirms `embedder.embed()` and `embedding_repo.upsert_embedding()` called with correct args on new-place path, not called on dedup path.
+**Independent Test**: `mypy src/kebi/core/extraction/service.py --strict` passes; unit test (mocked embedder/repo) confirms `embedder.embed()` and `embedding_repo.upsert_embedding()` called with correct args on new-place path, not called on dedup path.
 
 ---
 
 #### T006: Update deps.py to inject embedder and embedding_repo
 
-- [x] T006 [US1] Update `src/totoro_ai/api/deps.py` to inject VoyageEmbedder and SQLAlchemyEmbeddingRepository into ExtractionService
+- [x] T006 [US1] Update `src/kebi/api/deps.py` to inject VoyageEmbedder and SQLAlchemyEmbeddingRepository into ExtractionService
 
 **Goal**: Wire concrete implementations into the service via FastAPI dependency injection.
 
@@ -153,7 +153,7 @@ These tasks establish the abstractions required by all user stories. All must co
 - Use `Depends()` only for pre-existing dependencies; factories return concrete instances directly
 - No changes to route handlers
 
-**Independent Test**: `mypy src/totoro_ai/api/deps.py --strict` passes; import check: `python -c "from totoro_ai.api.deps import get_extraction_service"` succeeds.
+**Independent Test**: `mypy src/kebi/api/deps.py --strict` passes; import check: `python -c "from kebi.api.deps import get_extraction_service"` succeeds.
 
 ---
 
@@ -179,10 +179,10 @@ These tasks establish the abstractions required by all user stories. All must co
 **Goal**: Verify the complete flow: place save → embedding generation → database write → response return.
 
 **Implementation**:
-1. Start dev server: `poetry run uvicorn totoro_ai.api.main:app --reload`
+1. Start dev server: `poetry run uvicorn kebi.api.main:app --reload`
 2. Submit place: `curl -X POST http://localhost:8000/v1/extract-place -H "Content-Type: application/json" -d '{"raw_input": "Ramen Nagi, Shinjuku, Tokyo", "user_id": "test-user-e2e-001"}'`
 3. Confirm HTTP 200 response with `place_id` set
-4. Query embeddings: `psql -d totoro_dev -c "SELECT id, place_id, model_name, array_length(vector, 1) as dims FROM embeddings WHERE place_id = '<returned_place_id>' LIMIT 1;"`
+4. Query embeddings: `psql -d kebi -c "SELECT id, place_id, model_name, array_length(vector, 1) as dims FROM embeddings WHERE place_id = '<returned_place_id>' LIMIT 1;"`
 5. Verify: 1 row, `dims = 1024`, `model_name = 'voyage-4-lite'`
 
 **Independent Test**: All above checks pass; HTTP 200, DB row exists, dims = 1024, model_name matches config.
@@ -198,7 +198,7 @@ These tasks establish the abstractions required by all user stories. All must co
 - No concrete EmbedderProtocol implementation imported in route code
 - `get_embedder()` factory is the only place embedder is instantiated
 
-**Independent Test**: Grep for `VoyageEmbedder` in `src/totoro_ai/core/` and `src/totoro_ai/api/` → expect 0 results (concrete class not imported). Verify `get_embedder()` is only place instantiated.
+**Independent Test**: Grep for `VoyageEmbedder` in `src/kebi/core/` and `src/kebi/api/` → expect 0 results (concrete class not imported). Verify `get_embedder()` is only place instantiated.
 
 ---
 
@@ -209,8 +209,8 @@ These tasks establish the abstractions required by all user stories. All must co
 **Goal**: Enforce the Protocol abstraction per ADR-038.
 
 **Implementation**:
-1. Grep across `src/totoro_ai/core/` and `src/totoro_ai/api/`: `grep -r "VoyageEmbedder" src/totoro_ai/core/ src/totoro_ai/api/` → expect empty result
-2. Grep for imports: `grep -r "from.*providers.embeddings import" src/totoro_ai/` → expect only `from totoro_ai.providers.embeddings import get_embedder` (factory, not class)
+1. Grep across `src/kebi/core/` and `src/kebi/api/`: `grep -r "VoyageEmbedder" src/kebi/core/ src/kebi/api/` → expect empty result
+2. Grep for imports: `grep -r "from.*providers.embeddings import" src/kebi/` → expect only `from kebi.providers.embeddings import get_embedder` (factory, not class)
 3. Confirm only `get_embedder()` is imported, never `VoyageEmbedder`
 
 **Independent Test**: Both grep commands return empty results (no concrete imports).

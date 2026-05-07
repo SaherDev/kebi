@@ -63,7 +63,7 @@ specs/023-onboarding-signal-tier/
 Changes are localized within the existing layout (ADR-001, ADR-002). Files marked `[M]` = modified, `[N]` = new.
 
 ```text
-src/totoro_ai/
+src/kebi/
 ├── api/
 │   ├── routes/
 │   │   ├── signal.py                    [M] accept discriminated union (chip_confirm variant)
@@ -117,7 +117,7 @@ tests/
 │       ├── test_service.py              [M] confirmed-chip preservation across regen cycles
 │       └── test_tier.py                 [N] unit tests for derive_signal_tier at each threshold
 
-totoro-config/bruno/                     [M] new request file: signal-chip-confirm.bru (Constitution X)
+kebi-config/bruno/                     [M] new request file: signal-chip-confirm.bru (Constitution X)
 ```
 
 **Structure Decision**: Single-project src layout (ADR-001, ADR-002). All changes sit within existing module boundaries — taste model, events, signal service, consult service, chat service, api schemas, db. Two new pure-function modules (`taste/tier.py`, `taste/chip_merge.py`) absorb the derivation + merge logic so they are trivially unit-testable and keep services thin.

@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import cast
 from unittest.mock import AsyncMock, MagicMock
 
-from totoro_ai.core.places_v2.models import (
+from kebi.core.places_v2.models import (
     HoursDict,
     LocationContext,
     PlaceCategory,
@@ -14,8 +14,8 @@ from totoro_ai.core.places_v2.models import (
     PlaceQuery,
     PlaceTag,
 )
-from totoro_ai.core.places_v2.search_service import PlacesSearchService
-from totoro_ai.core.places_v2.tags import CuisineTag
+from kebi.core.places_v2.search_service import PlacesSearchService
+from kebi.core.places_v2.tags import CuisineTag
 
 
 def _make_service(

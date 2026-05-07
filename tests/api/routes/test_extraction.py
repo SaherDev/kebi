@@ -7,11 +7,11 @@ from unittest.mock import AsyncMock
 import pytest
 from fastapi.testclient import TestClient
 
-from totoro_ai.api.deps import get_extraction_service, get_status_repo
-from totoro_ai.api.main import app
-from totoro_ai.api.schemas.extract_place import ExtractPlaceResponse
-from totoro_ai.core.extraction.service import ExtractionService
-from totoro_ai.core.extraction.status_repository import ExtractionStatusRepository
+from kebi.api.deps import get_extraction_service, get_status_repo
+from kebi.api.main import app
+from kebi.api.schemas.extract_place import ExtractPlaceResponse
+from kebi.core.extraction.service import ExtractionService
+from kebi.core.extraction.status_repository import ExtractionStatusRepository
 
 
 @pytest.fixture
@@ -194,7 +194,7 @@ class TestPollingStatusRepoWritesV2Prefix:
     """Verify the status repo uses the bumped `extraction:v2:` prefix."""
 
     async def test_write_uses_v2_prefix(self) -> None:
-        from totoro_ai.providers.cache import CacheBackend
+        from kebi.providers.cache import CacheBackend
 
         mock_cache = AsyncMock(spec=CacheBackend)
         repo = ExtractionStatusRepository(cache=mock_cache)
@@ -204,7 +204,7 @@ class TestPollingStatusRepoWritesV2Prefix:
         assert written_key == "extraction:v2:req_123"
 
     async def test_read_uses_v2_prefix(self) -> None:
-        from totoro_ai.providers.cache import CacheBackend
+        from kebi.providers.cache import CacheBackend
 
         mock_cache = AsyncMock(spec=CacheBackend)
         mock_cache.get.return_value = None

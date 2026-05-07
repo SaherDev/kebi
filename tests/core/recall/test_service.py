@@ -14,13 +14,13 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from totoro_ai.api.schemas.recall import RecallResponse
-from totoro_ai.core.config import RecallConfig
-from totoro_ai.core.places.models import PlaceObject, PlaceType
-from totoro_ai.core.recall.service import RecallService
-from totoro_ai.core.recall.types import RecallFilters
-from totoro_ai.core.recall.types import RecallResult as InternalRecallResult
-from totoro_ai.providers.embeddings import EmbedderProtocol
+from kebi.api.schemas.recall import RecallResponse
+from kebi.core.config import RecallConfig
+from kebi.core.places.models import PlaceObject, PlaceType
+from kebi.core.recall.service import RecallService
+from kebi.core.recall.types import RecallFilters
+from kebi.core.recall.types import RecallResult as InternalRecallResult
+from kebi.providers.embeddings import EmbedderProtocol
 
 
 @pytest.fixture

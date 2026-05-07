@@ -1,8 +1,8 @@
-# Totoro AI Constitution
+# Kebi Constitution
 
 ## I. Repo Boundary (NON-NEGOTIABLE)
 
-This repo is the autonomous AI brain. It owns everything AI/ML. It never touches UI, auth, user management, or product CRUD. The product repo (totoro) calls this repo over HTTP only — two endpoints.
+This repo is the autonomous AI brain. It owns everything AI/ML. It never touches UI, auth, user management, or product CRUD. The product repo calls this repo over HTTP only — two endpoints.
 
 This repo owns:
 
@@ -24,7 +24,7 @@ All ADRs in `docs/decisions.md` are accepted constraints. A new approach contrad
 
 Current binding decisions:
 
-- **ADR-001**: src layout (`src/totoro_ai/`)
+- **ADR-001**: src layout (`src/kebi/`)
 - **ADR-002**: Hybrid directory: `api/`, `core/`, `providers/`, `eval/`
 - **ADR-003**: Ruff (lint+format) + mypy strict
 - **ADR-004**: pytest in `tests/` mirroring `src/` structure
@@ -72,7 +72,7 @@ No raw dicts cross function or module boundaries. All inputs/outputs use Pydanti
 
 - This repo writes: `places`, `embeddings`, `taste_model`, `consult_logs`, `user_memories`, `interaction_log`
 - NestJS writes: `users`, `user_settings`
-- Alembic in this repo owns all AI-table migrations; TypeORM in totoro manages product tables
+- Alembic in this repo owns all AI-table migrations; TypeORM in the product repo manages product tables
 - Embedding dimensions are defined only in this repo's Alembic migrations — NestJS never touches pgvector columns
 
 ## VII. Redis Ownership
@@ -91,7 +91,7 @@ Full contract in `docs/api-contract.md`. NestJS is the only caller. Frontend nev
 
 ## IX. Testing
 
-- pytest in `tests/` mirroring `src/totoro_ai/` structure
+- pytest in `tests/` mirroring `src/kebi/` structure
 - `mypy --strict` must pass
 - `ruff check` must pass
 - Every new module gets a corresponding test file
@@ -103,7 +103,7 @@ Full contract in `docs/api-contract.md`. NestJS is the only caller. Frontend nev
 - Types: `feat|fix|refactor|test|docs|chore|ci`
 - Scopes: module or area (e.g., `intent`, `api`, `providers`, `config`, `ranking`)
 - Feature branches from `dev`, merge to `dev`, milestones merge to `main`
-- New endpoints need a `.bru` file in `totoro-config/bruno/`
+- New endpoints need a `.bru` file in `kebi-config/bruno/`
 
 ## Governance
 

@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 import pytest
 from pydantic import ValidationError
 
-from totoro_ai.core.places.models import (
+from kebi.core.places.models import (
     DuplicatePlaceError,
     DuplicateProviderId,
     GeoData,

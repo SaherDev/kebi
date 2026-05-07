@@ -25,10 +25,10 @@ Build `ChatAssistantService` — a stateless, single-turn food and dining adviso
 
 | ADR | Requirement | Status |
 |-----|------------|--------|
-| ADR-001 | src layout `src/totoro_ai/` | ✓ All new files under `src/totoro_ai/` |
+| ADR-001 | src layout `src/kebi/` | ✓ All new files under `src/kebi/` |
 | ADR-002 | Hybrid directory: `api/`, `core/`, `providers/`, `eval/` | ✓ New domain `core/chat/` follows hybrid pattern |
 | ADR-003 | Ruff + mypy strict | ✓ Verified in Done criteria |
-| ADR-004 | Tests mirror src structure | ✓ `tests/core/chat/` mirrors `src/totoro_ai/core/chat/` |
+| ADR-004 | Tests mirror src structure | ✓ `tests/core/chat/` mirrors `src/kebi/core/chat/` |
 | ADR-014 | `/v1` prefix via APIRouter, loaded from `app.yaml` | ✓ Route registered on existing `router` with prefix from config |
 | ADR-016 | `config/app.yaml` maps logical roles → provider + model | ✓ `chat_assistant` role added to `app.yaml` |
 | ADR-017 | Pydantic BaseModel for all request/response schemas | ✓ `ChatRequest`, `ChatResponse` are Pydantic models |
@@ -62,7 +62,7 @@ specs/016-chat-assistant-service/
 config/
 └── app.yaml             # Add chat_assistant model role
 
-src/totoro_ai/
+src/kebi/
 ├── api/
 │   ├── deps.py          # Add get_chat_assistant_service()
 │   ├── errors.py        # Add LLMUnavailableError + 503 handler
@@ -101,7 +101,7 @@ Temperature 0.9 — slightly higher than `intent_parser` (0) to encourage more n
 
 ---
 
-### Task 2: Add `LLMUnavailableError` and 503 handler to `src/totoro_ai/api/errors.py`
+### Task 2: Add `LLMUnavailableError` and 503 handler to `src/kebi/api/errors.py`
 
 Add a custom exception class and register it in `register_error_handlers()`:
 
@@ -120,7 +120,7 @@ def llm_unavailable_handler(request: Request, exc: LLMUnavailableError) -> JSONR
 
 ---
 
-### Task 3: Create `src/totoro_ai/api/schemas/chat_assistant.py`
+### Task 3: Create `src/kebi/api/schemas/chat_assistant.py`
 
 ```python
 class ChatRequest(BaseModel):
@@ -135,7 +135,7 @@ class ChatResponse(BaseModel):
 
 ---
 
-### Task 4: Create `src/totoro_ai/core/chat/__init__.py` and `chat_assistant_service.py`
+### Task 4: Create `src/kebi/core/chat/__init__.py` and `chat_assistant_service.py`
 
 **System prompt** (persona as defined in spec FR-007):
 
@@ -165,7 +165,7 @@ Be conversational. Be specific. Be useful.
 
 ---
 
-### Task 5: Create `src/totoro_ai/api/routes/chat_assistant.py`
+### Task 5: Create `src/kebi/api/routes/chat_assistant.py`
 
 ```python
 @router.post("/chat-assistant", status_code=200, response_model=ChatResponse)
@@ -179,7 +179,7 @@ async def chat_assistant(
 
 ---
 
-### Task 6: Add `get_chat_assistant_service()` to `src/totoro_ai/api/deps.py`
+### Task 6: Add `get_chat_assistant_service()` to `src/kebi/api/deps.py`
 
 ```python
 def get_chat_assistant_service() -> ChatAssistantService:
@@ -190,10 +190,10 @@ Simple — no DB, no Redis, no extra deps.
 
 ---
 
-### Task 7: Register router in `src/totoro_ai/api/main.py`
+### Task 7: Register router in `src/kebi/api/main.py`
 
 ```python
-from totoro_ai.api.routes.chat_assistant import router as chat_assistant_router
+from kebi.api.routes.chat_assistant import router as chat_assistant_router
 router.include_router(chat_assistant_router, prefix="")
 ```
 
@@ -224,4 +224,4 @@ Use `unittest.mock.AsyncMock` for the LLM client's `complete()` method. Patch `g
 
 - **`config/app.yaml` vs `config/models.yaml`**: The constitution references `config/models.yaml` but the file is actually `config/app.yaml` — all model roles live there under `models:`. This plan follows the actual repo state.
 - **Langfuse None-safety**: `get_langfuse_client()` returns `None` when not configured. Service must guard with `if lf:` before calling `.generation()`, matching the pattern in `IntentParser`.
-- **LLMUnavailableError import**: Route handler and service must import from `totoro_ai.api.errors` — avoid circular imports by importing only in route file (errors.py has no FastAPI route imports).
+- **LLMUnavailableError import**: Route handler and service must import from `kebi.api.errors` — avoid circular imports by importing only in route file (errors.py has no FastAPI route imports).

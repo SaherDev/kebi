@@ -17,7 +17,7 @@ docker compose up -d
 poetry run alembic upgrade head
 
 # Start dev server
-poetry run uvicorn totoro_ai.api.main:app --reload
+poetry run uvicorn kebi.api.main:app --reload
 ```
 
 ---

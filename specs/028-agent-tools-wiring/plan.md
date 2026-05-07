@@ -1,7 +1,7 @@
 # Implementation Plan: Agent Tools & Chat Wiring (M4 + M5 + M6)
 
 **Branch**: `028-agent-tools-wiring` | **Date**: 2026-04-22 | **Spec**: [spec.md](./spec.md)
-**Input**: Feature specification from `/Users/saher/dev/repos/totoro-dev/totoro-ai/specs/028-agent-tools-wiring/spec.md`
+**Input**: Feature specification from `/Users/saher/dev/repos/kebi-dev/kebi/specs/028-agent-tools-wiring/spec.md`
 **Source of truth**: `docs/plans/2026-04-21-agent-tool-migration.md` (milestones M4 / M5 / M6). Binding ADRs: ADR-019, ADR-025, ADR-044, ADR-052, ADR-056, ADR-057, ADR-058, ADR-060, ADR-061, ADR-062, plus the foundation artifacts landed in feature 027 (ADR-063, `core/agent/` skeleton, `PlaceFilters`/`RecallFilters` nested shape, `ReasoningStep` richer schema).
 
 ## Summary
@@ -94,7 +94,7 @@ specs/028-agent-tools-wiring/
 Single-project src layout per ADR-001. This feature touches the following areas:
 
 ```text
-src/totoro_ai/
+src/kebi/
 ├── api/
 │   ├── deps.py                              # EDIT — drop IntentParser/UserMemoryService
 │   │                                          from get_consult_service (M4); add
@@ -188,7 +188,7 @@ docs/
 │                                              value + reasoning_steps shape on data (M6)
 └── decisions.md                             # UNCHANGED (no new ADR this feature)
 │
-totoro-config/bruno/                         # EDIT (external repo path) — one new .bru
+kebi-config/bruno/                         # EDIT (external repo path) — one new .bru
                                               example for the agent-path response
 
 tests/
@@ -311,8 +311,8 @@ Local verification walkthrough (mirrors 027's structure, scoped to the new behav
 4. `poetry run pytest tests/core/agent/tools/` — verify M5 tool wrappers (schemas hide `user_id`/`location`/`saved_places`; summary helpers narrate outcomes correctly).
 5. `poetry run pytest tests/core/agent/test_agent_graph_chain.py tests/core/agent/test_recall_reset_between_turns.py tests/core/agent/test_reasoning_visibility.py tests/core/agent/test_reasoning_invariants.py tests/core/agent/test_agent_decision_truncation.py tests/core/agent/test_agent_decision_fallback.py` — verify M5+M6 integration (recall→consult handoff, per-turn reset, visibility filter, invariants, truncation, fallback).
 6. `poetry run pytest tests/core/chat tests/api/routes/test_chat.py tests/api/schemas/test_chat.py` — verify M6 wiring (flag-off regression, flag-on path with mocked LLM+graph, Literal tightening).
-7. `poetry run python -c "from totoro_ai.core.config import get_config; c = get_config(); print(c.agent.enabled)"` → prints `False`.
-8. Start uvicorn with `config.agent.enabled=false`: `poetry run uvicorn totoro_ai.api.main:app --reload`. `POST /v1/chat` with `{"user_id": "u1", "message": "find me a ramen spot"}` → `type in {"consult", "recall", "assistant"}` (legacy path). No regression.
+7. `poetry run python -c "from kebi.core.config import get_config; c = get_config(); print(c.agent.enabled)"` → prints `False`.
+8. Start uvicorn with `config.agent.enabled=false`: `poetry run uvicorn kebi.api.main:app --reload`. `POST /v1/chat` with `{"user_id": "u1", "message": "find me a ramen spot"}` → `type in {"consult", "recall", "assistant"}` (legacy path). No regression.
 9. Flip `config/app.yaml` locally: `agent.enabled: true`. Restart uvicorn. Same `POST /v1/chat` → `type="agent"`, `message` from Sonnet, `data.reasoning_steps` populated with user-visible step types only.
 10. Agent-path two-turn smoke: Turn 1 `"show me my saved coffee shops"` → `type="agent"`, recall tool called, summary lists count. Turn 2 (same user_id, new message) `"is tipping expected in Japan?"` → `type="agent"`, direct response, exactly one user-visible step (`agent.tool_decision`).
 11. `poetry run ruff check src/ tests/ && poetry run ruff format --check src/ tests/ && poetry run mypy src/` — all green.
@@ -341,7 +341,7 @@ After Phase 1 artifacts are written, re-evaluate the constitution table. Expecte
 These land in normal source code during `/speckit.implement`, not as planning artifacts:
 
 - **`docs/api-contract.md`** updated — document the new `type="agent"` response shape, the `data.reasoning_steps` key, and the three user-visible step types. Note the flag-off default means existing consumers observe no change until M10.
-- **Bruno collection** (`totoro-config/bruno/`) — one new `.bru` example for an agent-path response (flag-on). Documents the contract for the product-repo team whenever they begin consuming the new type.
+- **Bruno collection** (`kebi-config/bruno/`) — one new `.bru` example for an agent-path response (flag-on). Documents the contract for the product-repo team whenever they begin consuming the new type.
 - **Product-repo coordination** — FR-036. Since the flag is off by default, the product repo does not require a code change for this feature's deploy. A heads-up note in the PR description suffices; the actual TypeScript schema update happens before M10's flag flip.
 
 ## Stop & Report

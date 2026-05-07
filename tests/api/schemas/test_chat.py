@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from totoro_ai.api.schemas.chat import ChatResponse
+from kebi.api.schemas.chat import ChatResponse
 
 
 def test_chat_response_accepts_all_valid_types() -> None:

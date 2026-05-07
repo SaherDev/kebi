@@ -22,7 +22,7 @@ Build a deterministic behavioral taste model that learns user preferences from s
 
 | Gate | Status | Notes |
 |------|--------|-------|
-| ADR-001: src layout | PASS | All new code in `src/totoro_ai/` |
+| ADR-001: src layout | PASS | All new code in `src/kebi/` |
 | ADR-002: Hybrid directory | PASS | Events/taste in `core/`, repository in `db/repositories/` |
 | ADR-003: ruff + mypy strict | PASS | Enforced in Done When criteria |
 | ADR-004: tests mirror src | PASS | Test files planned for each new module |
@@ -59,7 +59,7 @@ specs/008-taste-model/
 ### Source Code
 
 ```text
-src/totoro_ai/
+src/kebi/
 ├── api/
 │   ├── routes/
 │   │   └── feedback.py          # NEW — POST /v1/feedback facade
@@ -118,7 +118,7 @@ Tasks are ordered by dependency. Each task is independently completable and test
 
 ### Task 1 — Config: add taste_model and ranking sections
 
-**Files**: `config/app.yaml`, `src/totoro_ai/core/config.py`
+**Files**: `config/app.yaml`, `src/kebi/core/config.py`
 
 Add `taste_model:` (with `ema:` and `signals:` subsections) and `ranking:` (with `weights:` subsection) to `app.yaml`. Add corresponding Pydantic classes to `config.py` and extend `AppConfig`.
 
@@ -159,7 +159,7 @@ Create `interaction_log` table. Create `signaltype` PostgreSQL enum with values:
 
 ### Task 4 — ORM: update TasteModel model, add InteractionLog model
 
-**Files**: `src/totoro_ai/db/models.py`
+**Files**: `src/kebi/db/models.py`
 
 Update `TasteModel`:
 - Remove `performance_score` mapped_column
@@ -178,7 +178,7 @@ Add `SignalType` Python Enum in `models.py` with all 7 values.
 
 ### Task 5 — Repository: TasteModelRepository
 
-**Files**: `src/totoro_ai/db/repositories/taste_model_repository.py`, `src/totoro_ai/db/repositories/__init__.py`
+**Files**: `src/kebi/db/repositories/taste_model_repository.py`, `src/kebi/db/repositories/__init__.py`
 
 Define `TasteModelRepository` Protocol with three methods:
 - `get_by_user_id(user_id: str) -> TasteModel | None`
@@ -193,7 +193,7 @@ Implement `SQLAlchemyTasteModelRepository`. Export both from `__init__.py`. All 
 
 ### Task 6 — Events: domain event models
 
-**Files**: `src/totoro_ai/core/events/__init__.py`, `src/totoro_ai/core/events/events.py`
+**Files**: `src/kebi/core/events/__init__.py`, `src/kebi/core/events/events.py`
 
 Define:
 - `DomainEvent(BaseModel)` — base
@@ -208,7 +208,7 @@ Define:
 
 ### Task 7 — Events: EventDispatcher
 
-**Files**: `src/totoro_ai/core/events/dispatcher.py`
+**Files**: `src/kebi/core/events/dispatcher.py`
 
 Define:
 - `EventHandler = Callable[[DomainEvent], Coroutine[Any, Any, None]]`
@@ -221,7 +221,7 @@ Define:
 
 ### Task 8 — Taste: TasteModelService
 
-**Files**: `src/totoro_ai/core/taste/__init__.py`, `src/totoro_ai/core/taste/service.py`
+**Files**: `src/kebi/core/taste/__init__.py`, `src/kebi/core/taste/service.py`
 
 `TasteModelService(taste_repo: TasteModelRepository, config: TasteModelConfig)`:
 
@@ -243,7 +243,7 @@ Personalization routing thresholds: 0 → default, 1–9 → 40/60 blend, ≥10 
 
 ### Task 9 — Events: handlers
 
-**Files**: `src/totoro_ai/core/events/handlers.py`
+**Files**: `src/kebi/core/events/handlers.py`
 
 Four async handler functions:
 - `on_place_saved(event: PlaceSaved, taste_service: TasteModelService) -> None`
@@ -259,7 +259,7 @@ Each wraps the taste_service call in try/except. On failure: `logger.error(...)`
 
 ### Task 10 — ExtractionService: add EventDispatcher, dispatch PlaceSaved
 
-**Files**: `src/totoro_ai/core/extraction/service.py`
+**Files**: `src/kebi/core/extraction/service.py`
 
 Add `event_dispatcher: EventDispatcherProtocol` to `__init__`.
 
@@ -277,7 +277,7 @@ In `run()`: after successful `_place_repo.save(place)`, dispatch `PlaceSaved(use
 
 ### Task 11 — deps.py: get_event_dispatcher, update get_extraction_service
 
-**Files**: `src/totoro_ai/api/deps.py`
+**Files**: `src/kebi/api/deps.py`
 
 Add:
 - `build_taste_service(db_session) -> TasteModelService` — builds taste service
@@ -291,7 +291,7 @@ Add:
 
 ### Task 12 — Feedback route and schema
 
-**Files**: `src/totoro_ai/api/schemas/feedback.py`, `src/totoro_ai/api/routes/feedback.py`
+**Files**: `src/kebi/api/schemas/feedback.py`, `src/kebi/api/routes/feedback.py`
 
 `FeedbackRequest(BaseModel)`: `user_id: str`, `recommendation_id: str`, `place_id: str`, `signal: Literal["accepted", "rejected"]`
 
@@ -307,7 +307,7 @@ Route handler has one additional dependency: `event_dispatcher: EventDispatcher 
 
 ### Task 13 — main.py: include feedback router
 
-**Files**: `src/totoro_ai/api/main.py`
+**Files**: `src/kebi/api/main.py`
 
 Import `feedback_router` from `routes/feedback.py`. Include in `router.include_router(feedback_router, prefix="")`.
 
@@ -317,7 +317,7 @@ Import `feedback_router` from `routes/feedback.py`. Include in `router.include_r
 
 ### Task 14 — Ranking stub
 
-**Files**: `src/totoro_ai/core/ranking/__init__.py`, `src/totoro_ai/core/ranking/service.py`
+**Files**: `src/kebi/core/ranking/__init__.py`, `src/kebi/core/ranking/service.py`
 
 `RankingService(config: RankingConfig)`:
 - `rank(candidates: list[dict], taste_vector: dict[str, float]) -> list[dict]` — computes weighted score per candidate, returns sorted list. All weights from `config.weights`. No hardcoded floats.
@@ -338,7 +338,7 @@ Where input fields are provided in the candidate dict. Missing fields default to
 
 ### Task 15 — ConsultService: integrate taste vector
 
-**Files**: `src/totoro_ai/core/consult/service.py`, `src/totoro_ai/api/deps.py`
+**Files**: `src/kebi/core/consult/service.py`, `src/kebi/api/deps.py`
 
 Add `taste_service: TasteModelService` and `ranking_service: RankingService` to `ConsultService.__init__`.
 

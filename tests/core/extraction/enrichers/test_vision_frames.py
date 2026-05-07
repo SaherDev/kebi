@@ -4,8 +4,8 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from totoro_ai.core.extraction.enrichers.vision_frames import VisionFramesEnricher
-from totoro_ai.core.extraction.types import (
+from kebi.core.extraction.enrichers.vision_frames import VisionFramesEnricher
+from kebi.core.extraction.types import (
     ExtractionContext,
     Medium,
     Producer,

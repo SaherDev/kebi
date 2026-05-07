@@ -12,18 +12,18 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from totoro_ai.core.events.events import PlaceSaved
-from totoro_ai.core.extraction.persistence import (
+from kebi.core.events.events import PlaceSaved
+from kebi.core.extraction.persistence import (
     ExtractionPersistenceService,
     PlaceSaveOutcome,
 )
-from totoro_ai.core.extraction.types import (
+from kebi.core.extraction.types import (
     Evidence,
     Medium,
     Producer,
     ValidatedCandidate,
 )
-from totoro_ai.core.places import (
+from kebi.core.places import (
     DuplicatePlaceError,
     DuplicateProviderId,
     PlaceAttributes,
@@ -604,7 +604,7 @@ async def test_source_url_and_source_stamped_on_place_create(
 ) -> None:
     """source_url and source passed in to save_and_emit are stamped onto
     every PlaceCreate handed to places_service.create_batch."""
-    from totoro_ai.core.places import PlaceSource
+    from kebi.core.places import PlaceSource
 
     places_service.create_batch.return_value = [_make_saved_object("p1")]
     vc = _make_validated()

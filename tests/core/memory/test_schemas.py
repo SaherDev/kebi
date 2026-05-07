@@ -3,7 +3,7 @@
 import pytest
 from pydantic import ValidationError
 
-from totoro_ai.core.memory.schemas import PersonalFact
+from kebi.core.memory.schemas import PersonalFact
 
 
 class TestPersonalFact:

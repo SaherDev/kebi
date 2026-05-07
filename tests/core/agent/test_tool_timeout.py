@@ -9,7 +9,7 @@ from unittest.mock import MagicMock, patch
 from langchain_core.messages import ToolMessage
 from langgraph.types import Command
 
-from totoro_ai.core.agent.tools._timeout import with_timeout
+from kebi.core.agent.tools._timeout import with_timeout
 
 
 async def _fast_body() -> Command[Any]:
@@ -41,7 +41,7 @@ async def test_with_timeout_increments_error_count_on_timeout() -> None:
     mock_config.agent.tool_timeouts_seconds.recall = 0  # 0s → immediate timeout
 
     with patch(  # noqa: SIM117
-        "totoro_ai.core.agent.tools._timeout.get_config",
+        "kebi.core.agent.tools._timeout.get_config",
         return_value=mock_config,
     ):
         result = await with_timeout("recall", "tc-2", state, slow_coro)
@@ -60,7 +60,7 @@ async def test_with_timeout_surfaces_user_visible_timeout_step() -> None:
     mock_config.agent.tool_timeouts_seconds.save = 0
 
     with patch(  # noqa: SIM117
-        "totoro_ai.core.agent.tools._timeout.get_config",
+        "kebi.core.agent.tools._timeout.get_config",
         return_value=mock_config,
     ):
         result = await with_timeout("save", "tc-3", state, _slow_body(999.0))
@@ -77,7 +77,7 @@ async def test_with_timeout_includes_tool_message_on_timeout() -> None:
     mock_config.agent.tool_timeouts_seconds.consult = 0
 
     with patch(  # noqa: SIM117
-        "totoro_ai.core.agent.tools._timeout.get_config",
+        "kebi.core.agent.tools._timeout.get_config",
         return_value=mock_config,
     ):
         result = await with_timeout("consult", "tc-4", state, _slow_body(999.0))
@@ -104,11 +104,11 @@ async def test_tool_timeout_tagged_correctly() -> None:
 
     with (
         patch(
-            "totoro_ai.core.agent.tools._timeout.get_config",
+            "kebi.core.agent.tools._timeout.get_config",
             return_value=mock_config,
         ),
         patch(
-            "totoro_ai.core.agent.tools._timeout.get_tracing_client",
+            "kebi.core.agent.tools._timeout.get_tracing_client",
             return_value=mock_tracer,
         ),
     ):

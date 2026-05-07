@@ -6,12 +6,12 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from totoro_ai.core.places_v2.models import (
+from kebi.core.places_v2.models import (
     PlaceCore,
     PlaceNameAlias,
     PlaceTag,
 )
-from totoro_ai.core.places_v2.upsert_service import PlaceUpsertService
+from kebi.core.places_v2.upsert_service import PlaceUpsertService
 
 
 @pytest.fixture

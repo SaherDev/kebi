@@ -87,14 +87,14 @@ When a client disconnects mid-stream (e.g., user navigates away, network fails, 
 - **FR-002**: When `stream` is `true`, system MUST return an SSE (Server-Sent Events) response instead of JSON
 - **FR-003**: When `stream` is `false` or absent, system MUST return a synchronous JSON response (existing behavior)
 - **FR-004**: SSE response MUST use `text/event-stream` content type with proper headers (`Cache-Control: no-cache`, `X-Accel-Buffering: no`)
-- **FR-005**: When streaming, system MUST call the configured AI provider using a hardcoded system prompt: "You are Totoro, an AI place recommendation assistant. Answer the user's query helpfully and concisely."
+- **FR-005**: When streaming, system MUST call the configured AI provider using a hardcoded system prompt: "You are Kebi, an AI place recommendation assistant. Answer the user's query helpfully and concisely."
 - **FR-006**: System MUST emit one SSE event per token: `data: {"token": "..."}`
 - **FR-007**: System MUST emit a final done event after all tokens: `data: {"done": true}`
 - **FR-008**: System MUST use the AI provider abstraction layer — model role resolved from config, no model names hardcoded
 - **FR-009**: System MUST detect client disconnection during streaming and immediately terminate the AI call
 - **FR-010**: Upon client disconnect, system MUST clean up all async resources (AI stream, generator) without leaking memory
 - **FR-011**: Route handler MUST remain a facade with exactly one service call (no business logic in route file)
-- **FR-012**: Service logic MUST reside in `src/totoro_ai/core/consult/service.py`
+- **FR-012**: Service logic MUST reside in `src/kebi/core/consult/service.py`
 - **FR-013**: System MUST NOT use SSE decorator libraries — raw `StreamingResponse` with manual headers only
 
 ### Key Entities

@@ -99,7 +99,7 @@ async def save(self, place: Place) -> Place:
 
 ## Decision 5: `PlaceRepository` location in src tree
 
-**Decision**: `src/totoro_ai/db/repositories/place_repository.py` — under `db/` because it is a database access concern, not a domain concern. The `ExtractionService` (in `core/`) depends on the Protocol only; it never imports from `db/repositories/` directly.
+**Decision**: `src/kebi/db/repositories/place_repository.py` — under `db/` because it is a database access concern, not a domain concern. The `ExtractionService` (in `core/`) depends on the Protocol only; it never imports from `db/repositories/` directly.
 
 **Rationale**: ADR-002 hybrid layout puts database concerns under `db/`. ADR-038 says concrete implementations live in the relevant module for domain-specific ones — but the repository is DB-layer, not domain-layer. `core/extraction/service.py` depends on the `PlaceRepository` Protocol (imported from `db/repositories/`), wired by `deps.py`.
 

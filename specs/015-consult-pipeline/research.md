@@ -43,7 +43,7 @@
 
 ## 2. Haversine Distance Calculation
 
-**Decision**: Implement `haversine_m(lat1, lng1, lat2, lng2) -> float` as a pure utility function in `src/totoro_ai/core/utils/geo.py`. Returns distance in metres.
+**Decision**: Implement `haversine_m(lat1, lng1, lat2, lng2) -> float` as a pure utility function in `src/kebi/core/utils/geo.py`. Returns distance in metres.
 
 **Formula**:
 ```python

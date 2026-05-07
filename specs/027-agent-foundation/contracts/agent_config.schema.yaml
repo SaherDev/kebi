@@ -1,5 +1,5 @@
 $schema: "http://json-schema.org/draft-07/schema#"
-$id: "https://totoro.local/schemas/agent-config.yaml"
+$id: "https://kebi.local/schemas/agent-config.yaml"
 title: "agent: block in config/app.yaml"
 description: |
   Shape contract for the `agent:` block that M2 adds to config/app.yaml.

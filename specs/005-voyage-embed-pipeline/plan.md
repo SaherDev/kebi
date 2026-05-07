@@ -29,7 +29,7 @@ After a new place is saved to the database via `POST /v1/extract-place`, the sys
 | Rule | Status | Notes |
 |------|--------|-------|
 | Repo boundary (AI/ML only, no UI/auth) | ✅ PASS | Embedding is AI/ML logic |
-| ADR-001: src layout | ✅ PASS | All new files in `src/totoro_ai/` |
+| ADR-001: src layout | ✅ PASS | All new files in `src/kebi/` |
 | ADR-002: Hybrid directory | ✅ PASS | `providers/` for EmbedderProtocol+VoyageEmbedder; `db/repositories/` for EmbeddingRepository |
 | ADR-003: Ruff + mypy strict | ✅ PASS | Enforced in Verify phase |
 | ADR-004: pytest in `tests/` | ✅ PASS | Tests mirror src structure |
@@ -66,7 +66,7 @@ specs/005-voyage-embed-pipeline/
 ### Source Code Changes
 
 ```text
-src/totoro_ai/
+src/kebi/
 ├── providers/
 │   ├── embeddings.py           ← NEW: EmbedderProtocol + VoyageEmbedder + get_embedder()
 │   ├── llm.py                  ← unchanged
@@ -107,7 +107,7 @@ tests/
 
 ---
 
-### Task 2: Create `src/totoro_ai/providers/embeddings.py`
+### Task 2: Create `src/kebi/providers/embeddings.py`
 
 **What**: Define `EmbedderProtocol`, `VoyageEmbedder`, and `get_embedder()` factory.
 
@@ -154,11 +154,11 @@ except Exception:
 
 **Type annotation note**: `voyageai` is untyped (`# type: ignore[import-untyped]` needed, like pgvector).
 
-**Files**: `src/totoro_ai/providers/embeddings.py` (new)
+**Files**: `src/kebi/providers/embeddings.py` (new)
 
 ---
 
-### Task 3: Create `src/totoro_ai/db/repositories/embedding_repository.py`
+### Task 3: Create `src/kebi/db/repositories/embedding_repository.py`
 
 **What**: Define `EmbeddingRepository` Protocol and `SQLAlchemyEmbeddingRepository` concrete class.
 
@@ -183,19 +183,19 @@ class SQLAlchemyEmbeddingRepository:
 
 **Why delete-then-insert**: Semantically cleaner than in-place mutation for a vector column. Keeps `model_name` fresh if the embedder is swapped. Consistent with how place save works (explicit ORM, no raw SQL).
 
-**Files**: `src/totoro_ai/db/repositories/embedding_repository.py` (new)
+**Files**: `src/kebi/db/repositories/embedding_repository.py` (new)
 
 ---
 
-### Task 4: Update `src/totoro_ai/db/repositories/__init__.py`
+### Task 4: Update `src/kebi/db/repositories/__init__.py`
 
 **What**: Export `EmbeddingRepository` and `SQLAlchemyEmbeddingRepository`.
 
-**Files**: `src/totoro_ai/db/repositories/__init__.py`
+**Files**: `src/kebi/db/repositories/__init__.py`
 
 ---
 
-### Task 5: Update `src/totoro_ai/core/extraction/service.py`
+### Task 5: Update `src/kebi/core/extraction/service.py`
 
 **What**: Add `embedder` and `embedding_repo` parameters to `ExtractionService.__init__()`. After `place_repo.save(place)` succeeds (step 7 only), build the description text, call `embedder.embed()`, and call `embedding_repo.upsert_embedding()`.
 
@@ -225,18 +225,18 @@ await self._embedding_repo.upsert_embedding(
 )
 ```
 
-**Files**: `src/totoro_ai/core/extraction/service.py`
+**Files**: `src/kebi/core/extraction/service.py`
 
 ---
 
-### Task 6: Update `src/totoro_ai/api/deps.py`
+### Task 6: Update `src/kebi/api/deps.py`
 
 **What**: Inject `VoyageEmbedder` and `SQLAlchemyEmbeddingRepository` into `ExtractionService`.
 
 **Change to `get_extraction_service()`**:
 ```python
-from totoro_ai.providers.embeddings import get_embedder
-from totoro_ai.db.repositories import SQLAlchemyEmbeddingRepository
+from kebi.providers.embeddings import get_embedder
+from kebi.db.repositories import SQLAlchemyEmbeddingRepository
 
 async def get_extraction_service(
     db_session: AsyncSession = Depends(get_session),
@@ -252,7 +252,7 @@ async def get_extraction_service(
     )
 ```
 
-**Files**: `src/totoro_ai/api/deps.py`
+**Files**: `src/kebi/api/deps.py`
 
 ---
 

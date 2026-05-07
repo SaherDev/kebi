@@ -4,10 +4,10 @@ from unittest.mock import patch
 
 import pytest
 
-from totoro_ai.core.extraction.enrichers.subtitle_check import (
+from kebi.core.extraction.enrichers.subtitle_check import (
     SubtitleCheckEnricher,
 )
-from totoro_ai.core.extraction.types import (
+from kebi.core.extraction.types import (
     ExtractionContext,
     Medium,
     Producer,

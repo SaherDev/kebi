@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock
 
-from totoro_ai.core.memory.extractor import MemoryExtractor, _FactsResponse
-from totoro_ai.core.memory.schemas import PersonalFact
+from kebi.core.memory.extractor import MemoryExtractor, _FactsResponse
+from kebi.core.memory.schemas import PersonalFact
 
 
 def _make_tracer() -> MagicMock:

@@ -198,8 +198,8 @@ class TasteModelRepository(Protocol):
     ) -> None: ...
 ```
 
-Location: `src/totoro_ai/db/repositories/taste_model_repository.py`
-Exported from: `src/totoro_ai/db/repositories/__init__.py`
+Location: `src/kebi/db/repositories/taste_model_repository.py`
+Exported from: `src/kebi/db/repositories/__init__.py`
 
 ---
 

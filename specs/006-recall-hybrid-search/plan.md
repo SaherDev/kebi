@@ -23,13 +23,13 @@ Replace the 501 stub on `POST /v1/recall` with a full hybrid search implementati
 
 | ADR | Constraint | Status |
 |---|---|---|
-| ADR-001 | `src/totoro_ai/` layout | ✓ All new code under `src/totoro_ai/` |
+| ADR-001 | `src/kebi/` layout | ✓ All new code under `src/kebi/` |
 | ADR-002 | Hybrid directories: `api/`, `core/`, `providers/` | ✓ Route in `api/routes/`, service in `core/recall/`, repo in `db/repositories/` |
 | ADR-003 | Ruff + mypy strict | ✓ Verify step runs both before completion |
 | ADR-004 | Tests mirror `src/` in `tests/` | ✓ `tests/core/recall/`, `tests/db/repositories/`, `tests/api/routes/` |
 | ADR-014 | `/v1/` prefix via `APIRouter` from app.yaml | ✓ Recall router uses existing `router` in `main.py` |
 | ADR-017 | Pydantic for all request/response schemas | ✓ `RecallRequest`, `RecallResult`, `RecallResponse` |
-| ADR-018 | Separate router modules | ✓ `src/totoro_ai/api/routes/recall.py` |
+| ADR-018 | Separate router modules | ✓ `src/kebi/api/routes/recall.py` |
 | ADR-019 | FastAPI `Depends()` only | ✓ `get_recall_service()` dep added to `deps.py` |
 | ADR-020 | No hardcoded model names | ✓ `get_embedder()` reads from config |
 | ADR-025 | Langfuse on every embedding call | ✓ `VoyageEmbedder.embed()` already traces via `get_langfuse_client()` |
@@ -59,7 +59,7 @@ specs/006-recall-hybrid-search/
 ### Source Code Changes
 
 ```text
-src/totoro_ai/
+src/kebi/
 ├── api/
 │   ├── routes/
 │   │   └── recall.py          NEW — route handler (facade)
@@ -95,7 +95,7 @@ tests/
 docs/
 └── decisions.md               MODIFY — add ADR-045
 
-totoro-config/
+kebi-config/
 └── bruno/
     └── ai-service/
         └── recall.bru         NEW (already created)
@@ -139,12 +139,12 @@ recall:
   candidate_multiplier: 2
 ```
 
-#### Task 1.3 — Add `RecallConfig` to `src/totoro_ai/core/config.py`
+#### Task 1.3 — Add `RecallConfig` to `src/kebi/core/config.py`
 
 - Add `RecallConfig(BaseModel)` with fields: `max_results: int`, `rrf_k: int`, `candidate_multiplier: int`
 - Add `recall: RecallConfig` field to `AppConfig`
 
-#### Task 1.4 — Create `src/totoro_ai/api/schemas/recall.py`
+#### Task 1.4 — Create `src/kebi/api/schemas/recall.py`
 
 Three Pydantic models:
 - `RecallRequest`: `query: str` (min_length=1), `user_id: str`
@@ -157,7 +157,7 @@ Three Pydantic models:
 
 **Goal**: Implement the hybrid SQL query behind a Protocol.
 
-#### Task 2.1 — Create `src/totoro_ai/db/repositories/recall_repository.py`
+#### Task 2.1 — Create `src/kebi/db/repositories/recall_repository.py`
 
 **Protocol** `RecallRepository`:
 ```python
@@ -239,7 +239,7 @@ LIMIT :limit
 
 `count_saved_places`: simple `SELECT COUNT(*) FROM places WHERE user_id = :user_id`.
 
-#### Task 2.2 — Export from `src/totoro_ai/db/repositories/__init__.py`
+#### Task 2.2 — Export from `src/kebi/db/repositories/__init__.py`
 
 Add `RecallRepository`, `SQLAlchemyRecallRepository` to the module exports.
 
@@ -249,7 +249,7 @@ Add `RecallRepository`, `SQLAlchemyRecallRepository` to the module exports.
 
 **Goal**: Orchestrate embedding + search + response construction.
 
-#### Task 3.1 — Create `src/totoro_ai/core/recall/service.py`
+#### Task 3.1 — Create `src/kebi/core/recall/service.py`
 
 `RecallService.__init__`: takes `embedder: EmbedderProtocol`, `recall_repo: RecallRepository`, `config: RecallConfig`.
 
@@ -283,7 +283,7 @@ Add `RecallRepository`, `SQLAlchemyRecallRepository` to the module exports.
 
 **Goal**: Expose the service via HTTP and wire all deps.
 
-#### Task 4.1 — Create `src/totoro_ai/api/routes/recall.py`
+#### Task 4.1 — Create `src/kebi/api/routes/recall.py`
 
 ```python
 router = APIRouter()
@@ -296,7 +296,7 @@ async def recall(
     return await service.run(request.query, request.user_id)
 ```
 
-#### Task 4.2 — Add `get_recall_service` to `src/totoro_ai/api/deps.py`
+#### Task 4.2 — Add `get_recall_service` to `src/kebi/api/deps.py`
 
 ```python
 async def get_recall_service(
@@ -310,10 +310,10 @@ async def get_recall_service(
     )
 ```
 
-#### Task 4.3 — Update `src/totoro_ai/api/main.py`
+#### Task 4.3 — Update `src/kebi/api/main.py`
 
 ```python
-from totoro_ai.api.routes.recall import router as recall_router
+from kebi.api.routes.recall import router as recall_router
 router.include_router(recall_router, prefix="")
 ```
 

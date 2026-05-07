@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from totoro_ai.core.places_v2._place_merge import merge_place
-from totoro_ai.core.places_v2.models import (
+from kebi.core.places_v2._place_merge import merge_place
+from kebi.core.places_v2.models import (
     LocationContext,
     PlaceCategory,
     PlaceCore,

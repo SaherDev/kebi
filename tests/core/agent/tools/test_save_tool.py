@@ -7,16 +7,16 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from totoro_ai.api.schemas.extract_place import (
+from kebi.api.schemas.extract_place import (
     ExtractPlaceItem,
     ExtractPlaceResponse,
 )
-from totoro_ai.core.agent.tools.save_tool import (
+from kebi.core.agent.tools.save_tool import (
     SaveToolInput,
     _save_summary,
     build_save_tool,
 )
-from totoro_ai.core.places.models import PlaceObject, PlaceType
+from kebi.core.places.models import PlaceObject, PlaceType
 
 
 def _place_object() -> PlaceObject:

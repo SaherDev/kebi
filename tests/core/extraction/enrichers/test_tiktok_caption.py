@@ -4,8 +4,8 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from totoro_ai.core.extraction.enrichers.tiktok_caption import TikTokCaptionEnricher
-from totoro_ai.core.extraction.types import (
+from kebi.core.extraction.enrichers.tiktok_caption import TikTokCaptionEnricher
+from kebi.core.extraction.types import (
     Evidence,
     ExtractionContext,
     Medium,

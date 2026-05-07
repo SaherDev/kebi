@@ -6,7 +6,7 @@ import time
 from typing import Any
 from unittest.mock import patch
 
-from totoro_ai.core.agent.tools._emit import append_summary, build_emit_closure
+from kebi.core.agent.tools._emit import append_summary, build_emit_closure
 
 
 def test_build_emit_closure_returns_collected_and_emit() -> None:
@@ -77,7 +77,7 @@ def test_stream_writer_fan_out_fires_when_attached() -> None:
         writes.append(payload)
 
     with patch(
-        "totoro_ai.core.agent.tools._emit._get_writer_safe",
+        "kebi.core.agent.tools._emit._get_writer_safe",
         return_value=fake_writer,
     ):
         collected, emit = build_emit_closure("recall")

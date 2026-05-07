@@ -53,7 +53,7 @@ specs/004-consult-structured-output/
 
 ```text
 ; NEW files
-src/totoro_ai/
+src/kebi/
 ├── core/intent/
 │   ├── __init__.py                          ; (new)
 │   └── intent_parser.py                     ; (new) ParsedIntent model + IntentParser class
@@ -65,11 +65,11 @@ tests/
     ├── __init__.py                           ; (new)
     └── test_intent_parser.py                 ; (new)
 
-totoro-config/bruno/ai-service/
+kebi-config/bruno/ai-service/
 └── consult.bru                               ; (new) sync JSON request
 
 ; MODIFIED files
-src/totoro_ai/
+src/kebi/
 ├── api/
 │   ├── schemas/consult.py                   ; add photos to PlaceResult, rename SyncConsultResponse
 │   └── routes/consult.py                    ; update ConsultResponse type reference
@@ -108,7 +108,7 @@ tests/
 - [ ] A3: In `pyproject.toml`:
   - Add `langfuse = "^2.0"` to `[tool.poetry.dependencies]`
   - Run `poetry add langfuse` to update `poetry.lock`
-- [ ] A4: Create `src/totoro_ai/providers/tracing.py`:
+- [ ] A4: Create `src/kebi/providers/tracing.py`:
   ```python
   """Langfuse tracing factory (ADR-025)."""
   import logging
@@ -151,8 +151,8 @@ tests/
 **Goal**: New `core/intent/intent_parser.py` with `ParsedIntent` Pydantic model and `IntentParser` class using `get_instructor_client("intent_parser")`.
 
 **Checklist**:
-- [ ] B1: Create `src/totoro_ai/core/intent/__init__.py` (empty)
-- [ ] B2: Create `src/totoro_ai/core/intent/intent_parser.py`:
+- [ ] B1: Create `src/kebi/core/intent/__init__.py` (empty)
+- [ ] B2: Create `src/kebi/core/intent/intent_parser.py`:
   - `ParsedIntent(BaseModel)` with fields:
     - `cuisine: str | None` — e.g., "ramen", "sushi", None if not specified
     - `occasion: str | None` — e.g., "date night", "quick lunch"
@@ -181,7 +181,7 @@ tests/
 **Goal**: Replace stub `consult()` method with real intent parsing + 6 reasoning steps + LLM-generated recommendations with placeholder photos.
 
 **Checklist**:
-- [ ] C1: Update `src/totoro_ai/core/consult/service.py`:
+- [ ] C1: Update `src/kebi/core/consult/service.py`:
   - Remove stub `consult()` body
   - Import `IntentParser` from `core.intent.intent_parser`
   - Import `get_langfuse_client` from `providers.tracing`
@@ -232,7 +232,7 @@ tests/
 **Goal**: Create Bruno sync consult request. Run all quality gates. Verify end-to-end.
 
 **Checklist**:
-- [ ] D1: Create `totoro-config/bruno/ai-service/consult.bru`:
+- [ ] D1: Create `kebi-config/bruno/ai-service/consult.bru`:
   ```
   meta {
     name: Consult (Sync)
@@ -311,4 +311,4 @@ poetry run mypy src/       ; zero errors
 - **Langfuse None handling**: All callers must check `if lf is not None` before using the client. mypy will enforce this if typed as `langfuse.Langfuse | None`.
 - **Instructor ValidationError**: Do NOT catch `ValidationError` in `IntentParser.parse()`. Let it propagate to FastAPI's exception handler, which returns 422.
 - **Photos placeholder**: Read from `config.consult.placeholder_photo_url` (defaults to `"https://placehold.co/800x450.webp"`). Publicly accessible, no auth needed.
-- **Bruno location**: The existing Bruno file is at `totoro-config/bruno/ai-service/` (not `totoro-config/bruno/consult/` as originally specified). New file goes in the same `ai-service/` directory.
+- **Bruno location**: The existing Bruno file is at `kebi-config/bruno/ai-service/` (not `kebi-config/bruno/consult/` as originally specified). New file goes in the same `ai-service/` directory.

@@ -2,20 +2,20 @@
 
 from unittest.mock import AsyncMock, MagicMock
 
-from totoro_ai.core.config import ConfidenceConfig
-from totoro_ai.core.extraction.enrichers.llm_picker import (
+from kebi.core.config import ConfidenceConfig
+from kebi.core.extraction.enrichers.llm_picker import (
     LLMPlacePicker,
     _PickedPlace,
     _PickerResponse,
 )
-from totoro_ai.core.extraction.types import (
+from kebi.core.extraction.types import (
     EvidenceField,
     ExtractionContext,
     Medium,
     Producer,
     SearchMatch,
 )
-from totoro_ai.core.places import (
+from kebi.core.places import (
     PlaceAttributes,
     PlaceProvider,
     PlacesMatchQuality,

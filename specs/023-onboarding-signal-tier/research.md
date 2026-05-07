@@ -6,7 +6,7 @@ All Technical Context items are resolved from code inspection of the live repo â
 
 ## Decision 1: Where the signal tier is computed
 
-- **Decision**: Pure function `derive_signal_tier(signal_count: int, chips: list[Chip], stages: dict[str, int]) -> Literal["cold","warming","chip_selection","active"]` in a new module `src/totoro_ai/core/taste/tier.py`. Called by `GET /v1/user/context` and by `ConsultService.consult()` at request entry.
+- **Decision**: Pure function `derive_signal_tier(signal_count: int, chips: list[Chip], stages: dict[str, int]) -> Literal["cold","warming","chip_selection","active"]` in a new module `src/kebi/core/taste/tier.py`. Called by `GET /v1/user/context` and by `ConsultService.consult()` at request entry.
 - **Rationale**: The spec (FR-002) bans persisting the tier. The agent's `ContextNode` / `AgentState` do not yet exist (ADR-058 deferred agent build). A shared pure function avoids duplicating derivation logic in two places today and remains trivially importable by a future LangGraph `ContextNode`. Pure-function + `Literal` return is unit-testable at every threshold boundary without fixtures.
 - **Alternatives considered**:
   - Method on `TasteModelService` â€” rejected because derivation has no side-effects and no dependency on a DB session. Pure function is simpler.
@@ -35,7 +35,7 @@ All Technical Context items are resolved from code inspection of the live repo â
 
 ## Decision 4: Chip merge semantics during regen
 
-- **Decision**: New pure function `merge_chips(existing: list[Chip], fresh: list[Chip]) -> list[Chip]` in `src/totoro_ai/core/taste/chip_merge.py`. Rules per spec FR-005, FR-006, clarification Q1 (Option C â€” rejected may re-surface):
+- **Decision**: New pure function `merge_chips(existing: list[Chip], fresh: list[Chip]) -> list[Chip]` in `src/kebi/core/taste/chip_merge.py`. Rules per spec FR-005, FR-006, clarification Q1 (Option C â€” rejected may re-surface):
   - For each `existing` chip keyed by `(source_field, source_value)`:
     - If `status == "confirmed"` â†’ preserve verbatim (ignore any fresh chip with same key).
     - If `status == "rejected"` â†’ look up fresh chip with same key. If fresh's `signal_count > existing.signal_count`, reset to `status="pending"`, `selection_round=null`, update `signal_count` from fresh. Else preserve.
@@ -90,7 +90,7 @@ All Technical Context items are resolved from code inspection of the live repo â
 
 ## Decision 9: Config schema additions (revised 2026-04-18)
 
-- **Decision**: Extend `TasteModelConfig` (`src/totoro_ai/core/config.py`) with:
+- **Decision**: Extend `TasteModelConfig` (`src/kebi/core/config.py`) with:
 
   ```python
   class WarmingBlendConfig(BaseModel):

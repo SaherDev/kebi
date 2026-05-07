@@ -2,9 +2,9 @@
 
 import pytest
 
-from totoro_ai.core.config import ConfidenceConfig
-from totoro_ai.core.extraction.confidence import calculate_confidence
-from totoro_ai.core.extraction.types import Evidence, Medium, Producer
+from kebi.core.config import ConfidenceConfig
+from kebi.core.extraction.confidence import calculate_confidence
+from kebi.core.extraction.types import Evidence, Medium, Producer
 
 _config = ConfidenceConfig(
     producer_scores={

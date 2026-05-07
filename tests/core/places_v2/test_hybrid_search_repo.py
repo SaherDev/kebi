@@ -17,13 +17,13 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from sqlalchemy.dialects import postgresql as pg_dialect
 
-from totoro_ai.core.places_v2.hybrid_search_repo import (
+from kebi.core.places_v2.hybrid_search_repo import (
     _TS_CONFIG,
     HybridSearchRepo,
     _filter_conditions,
     _row_to_hit,
 )
-from totoro_ai.core.places_v2.models import (
+from kebi.core.places_v2.models import (
     HybridSearchFilters,
     HybridSearchHit,
     LocationContext,

@@ -8,7 +8,7 @@
 
 - **[P]**: Can run in parallel (different files, no shared state)
 - **[Story]**: Which user story this task belongs to (US1, US2, US3)
-- Paths are relative to `src/totoro_ai/` unless prefixed otherwise
+- Paths are relative to `src/kebi/` unless prefixed otherwise
 
 ---
 
@@ -32,29 +32,29 @@ against the old locations/assumptions until these are written.
 ### Config
 
 - [ ] T003 [P] Add `consult.radius_defaults` block (default: 2000, nearby: 1000, walking: 500) and `external_services.google_places.nearbysearch_url` to `config/app.yaml`
-- [ ] T004 [P] Add `RadiusDefaultsConfig` Pydantic model and `radius_defaults: RadiusDefaultsConfig` field to `ConsultConfig`; add `nearbysearch_url: str` to `GooglePlacesConfig` in `src/totoro_ai/core/config.py`
+- [ ] T004 [P] Add `RadiusDefaultsConfig` Pydantic model and `radius_defaults: RadiusDefaultsConfig` field to `ConsultConfig`; add `nearbysearch_url: str` to `GooglePlacesConfig` in `src/kebi/core/config.py`
 
 ### PlacesClient relocation (C2)
 
-- [ ] T005 Create `src/totoro_ai/core/places/__init__.py`
-- [ ] T006 Move `src/totoro_ai/core/extraction/places_client.py` → `src/totoro_ai/core/places/places_client.py` (file move only — no logic changes yet)
-- [ ] T007 [P] Update `from totoro_ai.core.extraction.places_client import GooglePlacesClient` → `core.places` in `src/totoro_ai/core/extraction/validator.py`
-- [ ] T008 [P] Update both occurrences of `from totoro_ai.core.extraction.places_client import GooglePlacesClient` → `core.places` in `src/totoro_ai/api/deps.py`
+- [ ] T005 Create `src/kebi/core/places/__init__.py`
+- [ ] T006 Move `src/kebi/core/extraction/places_client.py` → `src/kebi/core/places/places_client.py` (file move only — no logic changes yet)
+- [ ] T007 [P] Update `from kebi.core.extraction.places_client import GooglePlacesClient` → `core.places` in `src/kebi/core/extraction/validator.py`
+- [ ] T008 [P] Update both occurrences of `from kebi.core.extraction.places_client import GooglePlacesClient` → `core.places` in `src/kebi/api/deps.py`
 
 ### RecallResult lat/lng (C8)
 
-- [ ] T009 Add `lat: float | None` and `lng: float | None` to `RecallRow` TypedDict; add `p.lat, p.lng` to `SELECT` in both `_hybrid_vector_text_search()` and `_text_only_search()` in `src/totoro_ai/db/repositories/recall_repository.py`
-- [ ] T010 [P] Add `lat: float | None = None` and `lng: float | None = None` to `RecallResult` in `src/totoro_ai/api/schemas/recall.py`
-- [ ] T011 Update `RecallService.run()` to populate `lat=row["lat"], lng=row["lng"]` when constructing each `RecallResult` in `src/totoro_ai/core/recall/service.py`
+- [ ] T009 Add `lat: float | None` and `lng: float | None` to `RecallRow` TypedDict; add `p.lat, p.lng` to `SELECT` in both `_hybrid_vector_text_search()` and `_text_only_search()` in `src/kebi/db/repositories/recall_repository.py`
+- [ ] T010 [P] Add `lat: float | None = None` and `lng: float | None = None` to `RecallResult` in `src/kebi/api/schemas/recall.py`
+- [ ] T011 Update `RecallService.run()` to populate `lat=row["lat"], lng=row["lng"]` when constructing each `RecallResult` in `src/kebi/core/recall/service.py`
 
 ### Schema fixes (C6, C9)
 
-- [ ] T012 [P] In `src/totoro_ai/api/schemas/consult.py`: remove `stream: bool = False` from `ConsultRequest`; change `photos: list[str] = Field(min_length=1)` → `photos: list[str] = []` on `PlaceResult`
+- [ ] T012 [P] In `src/kebi/api/schemas/consult.py`: remove `stream: bool = False` from `ConsultRequest`; change `photos: list[str] = Field(min_length=1)` → `photos: list[str] = []` on `PlaceResult`
 
 ### Utilities and new types
 
-- [ ] T013 [P] Create `src/totoro_ai/core/utils/geo.py` with `haversine_m(lat1: float, lng1: float, lat2: float, lng2: float) -> float` using the haversine formula (returns distance in metres)
-- [ ] T014 Create `src/totoro_ai/core/consult/types.py` with: `Candidate` Pydantic model (all fields per data-model.md); `CandidateMapper` Protocol with `map()` method; `RecallResultToCandidateMapper` (source="saved", maps RecallResult fields); `ExternalCandidateMapper` (source="discovered", maps Google raw dict, normalises price_level and popularity_score)
+- [ ] T013 [P] Create `src/kebi/core/utils/geo.py` with `haversine_m(lat1: float, lng1: float, lat2: float, lng2: float) -> float` using the haversine formula (returns distance in metres)
+- [ ] T014 Create `src/kebi/core/consult/types.py` with: `Candidate` Pydantic model (all fields per data-model.md); `CandidateMapper` Protocol with `map()` method; `RecallResultToCandidateMapper` (source="saved", maps RecallResult fields); `ExternalCandidateMapper` (source="discovered", maps Google raw dict, normalises price_level and popularity_score)
 
 **Checkpoint**: Run `poetry run ruff check src/ && poetry run mypy src/` — must pass before Phase 3.
 
@@ -68,26 +68,26 @@ against the old locations/assumptions until these are written.
 
 ### ParsedIntent update (C3)
 
-- [ ] T015 [P] [US1] Add `validate_candidates: bool = False`, `discovery_filters: dict[str, Any] = {}`, and `search_location: dict[str, float] | None = None` to `ParsedIntent` in `src/totoro_ai/core/intent/intent_parser.py`
-- [ ] T016 [US1] Update `IntentParser.__init__` to read `get_config().consult.radius_defaults` and build the system prompt string at startup, injecting the three defaults; update `parse(query, location: dict | None = None)` to include request location in the LLM messages as context in `src/totoro_ai/core/intent/intent_parser.py`
+- [ ] T015 [P] [US1] Add `validate_candidates: bool = False`, `discovery_filters: dict[str, Any] = {}`, and `search_location: dict[str, float] | None = None` to `ParsedIntent` in `src/kebi/core/intent/intent_parser.py`
+- [ ] T016 [US1] Update `IntentParser.__init__` to read `get_config().consult.radius_defaults` and build the system prompt string at startup, injecting the three defaults; update `parse(query, location: dict | None = None)` to include request location in the LLM messages as context in `src/kebi/core/intent/intent_parser.py`
 
 ### RankingService update (C4)
 
-- [ ] T017 [P] [US1] Update `RankingService.rank()` signature to `rank(candidates: list[Candidate], taste_vector: dict[str, float], search_location: dict[str, float] | None) -> list[Candidate]` in `src/totoro_ai/core/ranking/service.py`
-- [ ] T018 [US1] Add `_compute_distance_score(candidate: Candidate, search_location: dict | None) -> float` to `RankingService` using `haversine_m()`; set distance score to 0.5 (neutral) when `search_location is None` or candidate has no lat/lng; update `rank()` to use it and return `list[Candidate]` in `src/totoro_ai/core/ranking/service.py`
-- [ ] T019 [US1] Update `RankingService._compute_taste_similarity()` and `_get_place_observation()` to read from `Candidate` fields directly (`.cuisine`, `.price_range`, etc.) instead of `dict.get()` in `src/totoro_ai/core/ranking/service.py`
+- [ ] T017 [P] [US1] Update `RankingService.rank()` signature to `rank(candidates: list[Candidate], taste_vector: dict[str, float], search_location: dict[str, float] | None) -> list[Candidate]` in `src/kebi/core/ranking/service.py`
+- [ ] T018 [US1] Add `_compute_distance_score(candidate: Candidate, search_location: dict | None) -> float` to `RankingService` using `haversine_m()`; set distance score to 0.5 (neutral) when `search_location is None` or candidate has no lat/lng; update `rank()` to use it and return `list[Candidate]` in `src/kebi/core/ranking/service.py`
+- [ ] T019 [US1] Update `RankingService._compute_taste_similarity()` and `_get_place_observation()` to read from `Candidate` fields directly (`.cuisine`, `.price_range`, etc.) instead of `dict.get()` in `src/kebi/core/ranking/service.py`
 
 ### ConsultService core rewrite (C5, C6)
 
-- [ ] T020 [US1] Rewrite `ConsultService.__init__` in `src/totoro_ai/core/consult/service.py` to accept `intent_parser: IntentParser`, `recall_service: RecallService`, `places_client: PlacesClient`, `taste_model_service: TasteModelService`, `ranking_service: RankingService`; remove `_llm`, `_SYSTEM_PROMPT`, and `stream()` method entirely
-- [ ] T021 [US1] Implement Step 1 (parse intent, apply radius fallback from config) and Step 2 (recall, post-filter by cuisine/price_range, post-filter by distance using `haversine_m`, map to `Candidate` via `RecallResultToCandidateMapper`) in `ConsultService.consult()` in `src/totoro_ai/core/consult/service.py`; Steps 3 and 4 are no-op stubs returning empty list / passthrough for this story
-- [ ] T022 [US1] Implement Step 5 (get taste vector, call `ranking_service.rank()`) and Step 6 (map top-3 to `PlaceResult` with deterministic reasoning string from candidate data fields, build `reasoning_steps` from actual step results) in `ConsultService.consult()` in `src/totoro_ai/core/consult/service.py`
-- [ ] T023 [US1] Add HTTP 500 error propagation for intent parser failure in `ConsultService.consult()` (let exception propagate — FastAPI maps to 500 per ADR-023) in `src/totoro_ai/core/consult/service.py`
+- [ ] T020 [US1] Rewrite `ConsultService.__init__` in `src/kebi/core/consult/service.py` to accept `intent_parser: IntentParser`, `recall_service: RecallService`, `places_client: PlacesClient`, `taste_model_service: TasteModelService`, `ranking_service: RankingService`; remove `_llm`, `_SYSTEM_PROMPT`, and `stream()` method entirely
+- [ ] T021 [US1] Implement Step 1 (parse intent, apply radius fallback from config) and Step 2 (recall, post-filter by cuisine/price_range, post-filter by distance using `haversine_m`, map to `Candidate` via `RecallResultToCandidateMapper`) in `ConsultService.consult()` in `src/kebi/core/consult/service.py`; Steps 3 and 4 are no-op stubs returning empty list / passthrough for this story
+- [ ] T022 [US1] Implement Step 5 (get taste vector, call `ranking_service.rank()`) and Step 6 (map top-3 to `PlaceResult` with deterministic reasoning string from candidate data fields, build `reasoning_steps` from actual step results) in `ConsultService.consult()` in `src/kebi/core/consult/service.py`
+- [ ] T023 [US1] Add HTTP 500 error propagation for intent parser failure in `ConsultService.consult()` (let exception propagate — FastAPI maps to 500 per ADR-023) in `src/kebi/core/consult/service.py`
 
 ### Wiring (C7)
 
-- [ ] T024 [US1] Add `get_consult_service(db_session: AsyncSession = Depends(get_session), config: AppConfig = Depends(get_config)) -> ConsultService` to `src/totoro_ai/api/deps.py`, wiring all 5 dependencies
-- [ ] T025 [US1] Remove `get_consult_service()` and `if body.stream` branch from `src/totoro_ai/api/routes/consult.py`; remove `StreamingResponse`, `Request`, `Response` imports; import `get_consult_service` from `api.deps`; return type `ConsultResponse` directly
+- [ ] T024 [US1] Add `get_consult_service(db_session: AsyncSession = Depends(get_session), config: AppConfig = Depends(get_config)) -> ConsultService` to `src/kebi/api/deps.py`, wiring all 5 dependencies
+- [ ] T025 [US1] Remove `get_consult_service()` and `if body.stream` branch from `src/kebi/api/routes/consult.py`; remove `StreamingResponse`, `Request`, `Response` imports; import `get_consult_service` from `api.deps`; return type `ConsultResponse` directly
 
 ### Verification tests for US1
 
@@ -107,12 +107,12 @@ against the old locations/assumptions until these are written.
 
 ### PlacesClient discover() (C1)
 
-- [ ] T029 [P] [US2] Add `async def discover(self, search_location: dict[str, float], filters: dict[str, Any]) -> list[dict[str, Any]]` to `PlacesClient` Protocol in `src/totoro_ai/core/places/places_client.py`
-- [ ] T030 [US2] Implement `GooglePlacesClient.discover()` in `src/totoro_ai/core/places/places_client.py`: call `nearbysearch_url` with `location={lat},{lng}`, `radius`, and any supported filter keys (`keyword`, `type`, `opennow`); return `results` list from response; return `[]` on any `httpx.HTTPError` or `httpx.TimeoutException` (graceful fallback, logs warning)
+- [ ] T029 [P] [US2] Add `async def discover(self, search_location: dict[str, float], filters: dict[str, Any]) -> list[dict[str, Any]]` to `PlacesClient` Protocol in `src/kebi/core/places/places_client.py`
+- [ ] T030 [US2] Implement `GooglePlacesClient.discover()` in `src/kebi/core/places/places_client.py`: call `nearbysearch_url` with `location={lat},{lng}`, `radius`, and any supported filter keys (`keyword`, `type`, `opennow`); return `results` list from response; return `[]` on any `httpx.HTTPError` or `httpx.TimeoutException` (graceful fallback, logs warning)
 
 ### ConsultService Step 3
 
-- [ ] T031 [US2] Implement Step 3 in `ConsultService.consult()` in `src/totoro_ai/core/consult/service.py`: call `places_client.discover(intent.search_location, {**intent.discovery_filters, "radius": radius})` when `search_location` is not None; map results via `ExternalCandidateMapper`; compute distance on each discovered candidate using `haversine_m`; deduplicate against saved candidates by `place_id` (saved entry wins); wrap in try/except for graceful fallback
+- [ ] T031 [US2] Implement Step 3 in `ConsultService.consult()` in `src/kebi/core/consult/service.py`: call `places_client.discover(intent.search_location, {**intent.discovery_filters, "radius": radius})` when `search_location` is not None; map results via `ExternalCandidateMapper`; compute distance on each discovered candidate using `haversine_m`; deduplicate against saved candidates by `place_id` (saved entry wins); wrap in try/except for graceful fallback
 
 ### Verification tests for US2
 
@@ -132,12 +132,12 @@ against the old locations/assumptions until these are written.
 
 ### PlacesClient validate() (C1)
 
-- [ ] T035 [P] [US3] Add `async def validate(self, candidate: Candidate, filters: dict[str, Any]) -> bool` to `PlacesClient` Protocol in `src/totoro_ai/core/places/places_client.py`
-- [ ] T036 [US3] Implement `GooglePlacesClient.validate()` in `src/totoro_ai/core/places/places_client.py`: call `nearbysearch_url` with `location={candidate.lat},{candidate.lng}`, `radius=100`, `keyword=candidate.place_name`, and relevant filter keys (e.g. `opennow`); return `True` if any result is returned, `False` otherwise; return `True` on HTTP error (fail open — don't drop candidates due to API issues)
+- [ ] T035 [P] [US3] Add `async def validate(self, candidate: Candidate, filters: dict[str, Any]) -> bool` to `PlacesClient` Protocol in `src/kebi/core/places/places_client.py`
+- [ ] T036 [US3] Implement `GooglePlacesClient.validate()` in `src/kebi/core/places/places_client.py`: call `nearbysearch_url` with `location={candidate.lat},{candidate.lng}`, `radius=100`, `keyword=candidate.place_name`, and relevant filter keys (e.g. `opennow`); return `True` if any result is returned, `False` otherwise; return `True` on HTTP error (fail open — don't drop candidates due to API issues)
 
 ### ConsultService Step 4
 
-- [ ] T037 [US3] Implement Step 4 in `ConsultService.consult()` in `src/totoro_ai/core/consult/service.py`: if `intent.validate_candidates` is True, iterate saved candidates, call `places_client.validate(candidate, intent.discovery_filters)`, keep only those returning True; if False, passthrough unchanged; update `reasoning_steps` to reflect validation outcome
+- [ ] T037 [US3] Implement Step 4 in `ConsultService.consult()` in `src/kebi/core/consult/service.py`: if `intent.validate_candidates` is True, iterate saved candidates, call `places_client.validate(candidate, intent.discovery_filters)`, keep only those returning True; if False, passthrough unchanged; update `reasoning_steps` to reflect validation outcome
 
 ### Verification tests for US3
 

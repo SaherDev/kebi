@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 import pytest
 from pydantic import ValidationError
 
-from totoro_ai.core.places_v2.models import (
+from kebi.core.places_v2.models import (
     LocationContext,
     PlaceCategory,
     PlaceCore,
@@ -43,13 +43,13 @@ class TestUserPlaceValidation:
                 saved_at=datetime.now(UTC),
             )
 
-    def test_url_forbidden_for_totoro(self) -> None:
+    def test_url_forbidden_for_kebi(self) -> None:
         with pytest.raises(ValidationError, match="source_url must be None"):
             UserPlace(
                 user_place_id="up1",
                 user_id="u1",
                 place_id="p1",
-                source=PlaceSource.totoro,
+                source=PlaceSource.kebi,
                 source_url="https://example.com",
                 saved_at=datetime.now(UTC),
             )
@@ -169,7 +169,7 @@ class TestSavedPlaceView:
             user_place_id="u1",
             user_id="user",
             place_id="p1",
-            source=PlaceSource.totoro,
+            source=PlaceSource.kebi,
             saved_at=datetime.now(UTC),
         )
         view = SavedPlaceView(place=place, user_data=up)

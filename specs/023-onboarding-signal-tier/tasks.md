@@ -22,7 +22,7 @@ description: "Task list for feature 023 — onboarding signal tier"
 
 ## Path Conventions
 
-Single project, src layout (ADR-001). Code under `src/totoro_ai/`, tests under `tests/` mirroring structure, Alembic under `alembic/versions/`, config under `config/`, Bruno under `totoro-config/bruno/`.
+Single project, src layout (ADR-001). Code under `src/kebi/`, tests under `tests/` mirroring structure, Alembic under `alembic/versions/`, config under `config/`, Bruno under `kebi-config/bruno/`.
 
 ---
 
@@ -38,16 +38,16 @@ Skipped — repo is established (Poetry, Alembic, Ruff, mypy, pytest already con
 
 **⚠️ CRITICAL**: Migration + `Interaction.metadata` + `InteractionType.CHIP_CONFIRM` are prerequisites for US3 and US4. Tier derivation + chip schema + config are prerequisites for US1/US2/US5.
 
-- [x] T001 Extend `TasteModelConfig` in `src/totoro_ai/core/config.py` with `chip_threshold: int = 2`, `chip_max_count: int = 8`, and `chip_selection_stages: dict[str, int]` (default_factory `{"round_1": 5, "round_2": 20, "round_3": 50}`). Import `Field` where needed.
+- [x] T001 Extend `TasteModelConfig` in `src/kebi/core/config.py` with `chip_threshold: int = 2`, `chip_max_count: int = 8`, and `chip_selection_stages: dict[str, int]` (default_factory `{"round_1": 5, "round_2": 20, "round_3": 50}`). Import `Field` where needed.
 - [x] T002 Update `config/app.yaml` under `taste_model:` with `chip_threshold: 2`, `chip_max_count: 8`, and the three-round `chip_selection_stages` block (`round_1: 5`, `round_2: 20`, `round_3: 50`).
-- [x] T003 Extend `Chip` Pydantic model in `src/totoro_ai/core/taste/schemas.py` with `status: ChipStatus = PENDING` and `selection_round: str | None = None`. Add the `ChipStatus` enum (`PENDING`, `CONFIRMED`, `REJECTED`).
-- [x] T004 Add `SignalTier` Literal type and `UserContext` / `ChipView` response models to `src/totoro_ai/core/taste/schemas.py`. Extend `TasteProfile` with `generated_from_log_count: int = 0`.
-- [x] T005 Create `src/totoro_ai/core/taste/tier.py` with pure function `derive_signal_tier(signal_count: int, chips: list[Chip], stages: dict[str, int], chip_threshold: int) -> SignalTier`. Iterate `stages.values()` — no stage names hardcoded.
+- [x] T003 Extend `Chip` Pydantic model in `src/kebi/core/taste/schemas.py` with `status: ChipStatus = PENDING` and `selection_round: str | None = None`. Add the `ChipStatus` enum (`PENDING`, `CONFIRMED`, `REJECTED`).
+- [x] T004 Add `SignalTier` Literal type and `UserContext` / `ChipView` response models to `src/kebi/core/taste/schemas.py`. Extend `TasteProfile` with `generated_from_log_count: int = 0`.
+- [x] T005 Create `src/kebi/core/taste/tier.py` with pure function `derive_signal_tier(signal_count: int, chips: list[Chip], stages: dict[str, int], chip_threshold: int) -> SignalTier`. Iterate `stages.values()` — no stage names hardcoded.
 - [x] T006 [P] Add unit tests for tier derivation in `tests/core/taste/test_tier.py` covering cold / warming / chip_selection / active across 2-round and 3-round configs, arbitrary stage names, and dict insertion-order independence.
-- [x] T007 Add `InteractionType.CHIP_CONFIRM = "chip_confirm"` to the enum in `src/totoro_ai/db/models.py`.
-- [x] T008 Add nullable `metadata` JSONB column to the `Interaction` ORM model in `src/totoro_ai/db/models.py`. Use attribute name `metadata_` mapped to DB column `"metadata"` (SQLAlchemy reserves `Base.metadata`).
+- [x] T007 Add `InteractionType.CHIP_CONFIRM = "chip_confirm"` to the enum in `src/kebi/db/models.py`.
+- [x] T008 Add nullable `metadata` JSONB column to the `Interaction` ORM model in `src/kebi/db/models.py`. Use attribute name `metadata_` mapped to DB column `"metadata"` (SQLAlchemy reserves `Base.metadata`).
 - [x] T009 Create Alembic migration `alembic/versions/a7c3d2e9f4b1_chip_confirm_and_interaction_metadata.py`: `ALTER TYPE interactiontype ADD VALUE IF NOT EXISTS 'chip_confirm'` plus `ALTER TABLE interactions ADD COLUMN metadata JSONB NULL`. Downgrade drops only the column; docstring notes enum values cannot cleanly roll back in Postgres.
-- [x] T010 Update `SQLAlchemyTasteModelRepository.log_interaction` in `src/totoro_ai/db/repositories/taste_model_repository.py` to accept `metadata: dict | None = None` kwarg and persist it. Add a `merge_chip_statuses(user_id: str, updated_chips: list[dict]) -> None` method that replaces the `taste_model.chips` JSONB array in a single transaction.
+- [x] T010 Update `SQLAlchemyTasteModelRepository.log_interaction` in `src/kebi/db/repositories/taste_model_repository.py` to accept `metadata: dict | None = None` kwarg and persist it. Add a `merge_chip_statuses(user_id: str, updated_chips: list[dict]) -> None` method that replaces the `taste_model.chips` JSONB array in a single transaction.
 - [x] T011 [P] Add repository tests in `tests/db/repositories/test_taste_model_repository.py` covering `log_interaction(metadata=...)` round-trip and `merge_chip_statuses` transactional replace.
 
 **Checkpoint**: Foundation ready — user stories can start.
@@ -66,9 +66,9 @@ Skipped — repo is established (Poetry, Alembic, Ruff, mypy, pytest already con
 
 ### Implementation for User Story 1
 
-- [x] T013 [US1] Add `TasteModelService.get_user_context(user_id) -> UserContext` in `src/totoro_ai/core/taste/service.py`. Single DB read + `derive_signal_tier` call; handles no-row (cold) path.
-- [x] T014 [US1] Slim `GET /v1/user/context` route in `src/totoro_ai/api/routes/user_context.py` to one-line delegation: `return await taste_service.get_user_context(user_id)`.
-- [x] T015 [US1] Re-export `UserContext` / `ChipView` from `src/totoro_ai/api/schemas/user_context.py` as `UserContextResponse` / `ChipResponse` for backward-compat.
+- [x] T013 [US1] Add `TasteModelService.get_user_context(user_id) -> UserContext` in `src/kebi/core/taste/service.py`. Single DB read + `derive_signal_tier` call; handles no-row (cold) path.
+- [x] T014 [US1] Slim `GET /v1/user/context` route in `src/kebi/api/routes/user_context.py` to one-line delegation: `return await taste_service.get_user_context(user_id)`.
+- [x] T015 [US1] Re-export `UserContext` / `ChipView` from `src/kebi/api/schemas/user_context.py` as `UserContextResponse` / `ChipResponse` for backward-compat.
 
 **Checkpoint**: MVP shipped — product repo can start gating on `signal_tier`.
 
@@ -86,9 +86,9 @@ Skipped — repo is established (Poetry, Alembic, Ruff, mypy, pytest already con
 
 ### Implementation for User Story 2
 
-- [x] T017 [US2] Add `WarmingBlendConfig(discovered: float = 0.8, saved: float = 0.2)` with a `model_validator(mode="after")` requiring the two fields sum to `1.0` (tolerance `1e-6`) to `src/totoro_ai/core/config.py`. Attach as `TasteModelConfig.warming_blend`.
+- [x] T017 [US2] Add `WarmingBlendConfig(discovered: float = 0.8, saved: float = 0.2)` with a `model_validator(mode="after")` requiring the two fields sum to `1.0` (tolerance `1e-6`) to `src/kebi/core/config.py`. Attach as `TasteModelConfig.warming_blend`.
 - [x] T018 [US2] Add matching `warming_blend:` block to `config/app.yaml` (`discovered: 0.8`, `saved: 0.2`).
-- [x] T019 [US2] In `ConsultService.consult` (`src/totoro_ai/core/consult/service.py`), derive `signal_tier` inline via `derive_signal_tier` (reusing the already-loaded `taste_profile`, no extra DB round-trip). When tier is `warming`: compute `saved_cap = round(total_cap * warming_blend.saved)`, `discovered_cap = total_cap - saved_cap`, slice the deduped pool by source, and append `ReasoningStep(step="warming_blend", summary=f"discovered={d}, saved={s}")`.
+- [x] T019 [US2] In `ConsultService.consult` (`src/kebi/core/consult/service.py`), derive `signal_tier` inline via `derive_signal_tier` (reusing the already-loaded `taste_profile`, no extra DB round-trip). When tier is `warming`: compute `saved_cap = round(total_cap * warming_blend.saved)`, `discovered_cap = total_cap - saved_cap`, slice the deduped pool by source, and append `ReasoningStep(step="warming_blend", summary=f"discovered={d}, saved={s}")`.
 
 **Checkpoint**: Warming users see the config-driven candidate mix.
 
@@ -109,13 +109,13 @@ Skipped — repo is established (Poetry, Alembic, Ruff, mypy, pytest already con
 
 ### Implementation for User Story 3
 
-- [x] T024 [P] [US3] Add `ChipConfirmed` domain event in `src/totoro_ai/core/events/events.py` carrying only `user_id`.
-- [x] T025 [P] [US3] Create `src/totoro_ai/core/taste/chip_merge.py` with `merge_chip_statuses` AND `merge_chips_after_regen`.
-- [x] T026 [US3] Add `ChipConfirmChipItem` and `ChipConfirmMetadata` Pydantic models to `src/totoro_ai/api/schemas/signal.py` with round/selection_round consistency validator.
-- [x] T027 [US3] Refactor `SignalRequest` in `src/totoro_ai/api/schemas/signal.py` into a discriminated union.
-- [x] T028 [US3] Extend `SignalService.handle_signal` in `src/totoro_ai/core/signal/service.py` with chip_confirm branch. `SignalService` constructor now takes `taste_service` so it can read/merge chips and reuse the repo. `deps.get_signal_service` updated accordingly.
+- [x] T024 [P] [US3] Add `ChipConfirmed` domain event in `src/kebi/core/events/events.py` carrying only `user_id`.
+- [x] T025 [P] [US3] Create `src/kebi/core/taste/chip_merge.py` with `merge_chip_statuses` AND `merge_chips_after_regen`.
+- [x] T026 [US3] Add `ChipConfirmChipItem` and `ChipConfirmMetadata` Pydantic models to `src/kebi/api/schemas/signal.py` with round/selection_round consistency validator.
+- [x] T027 [US3] Refactor `SignalRequest` in `src/kebi/api/schemas/signal.py` into a discriminated union.
+- [x] T028 [US3] Extend `SignalService.handle_signal` in `src/kebi/core/signal/service.py` with chip_confirm branch. `SignalService` constructor now takes `taste_service` so it can read/merge chips and reuse the repo. `deps.get_signal_service` updated accordingly.
 - [x] T029 [US3] Update `POST /v1/signal` handler to accept the discriminated union via `Body(..., discriminator="signal_type")`. Dispatches to service with variant-specific load-bearing fields.
-- [x] T030 [US3] Add Bruno request file at `totoro-config/bruno/ai-service/signal-chip-confirm.bru`.
+- [x] T030 [US3] Add Bruno request file at `kebi-config/bruno/ai-service/signal-chip-confirm.bru`.
 
 **Checkpoint**: Users in chip_selection get pending chips via `/v1/user/context`, submit chip_confirm, and advance to active.
 
@@ -136,11 +136,11 @@ Skipped — repo is established (Poetry, Alembic, Ruff, mypy, pytest already con
 ### Implementation for User Story 4
 
 - [x] T034 [US4] Extend `config/prompts/taste_regen.txt` with chip status rules and input shape.
-- [x] T035 [US4] Update `build_regen_messages` in `src/totoro_ai/core/taste/regen.py` to accept `existing_chips: list[Chip]` and derive confirmed/rejected sublists. Omits keys when both empty (baseline-identical JSON for pre-chip-confirmation users).
+- [x] T035 [US4] Update `build_regen_messages` in `src/kebi/core/taste/regen.py` to accept `existing_chips: list[Chip]` and derive confirmed/rejected sublists. Omits keys when both empty (baseline-identical JSON for pre-chip-confirmation users).
 - [x] T036 [US4] Update `TasteModelService._run_regen`: read chips, pass to prompt, pipe LLM chips through `merge_chips_after_regen`. Preserves confirmed verbatim, resurfaces rejected when signal grew.
 - [x] T037 [US4] Add `TasteModelService.run_regen_now(user_id)` bypassing the debouncer + stale guard + min-signals guard (passes `force=True` to `_run_regen`).
 - [x] T038 [US4] Add `EventHandlers.on_chip_confirmed` that calls `run_regen_now`. Logs + Langfuse-traces failures per ADR-043.
-- [x] T039 [US4] Register `on_chip_confirmed` under event type `"chip_confirmed"` in `src/totoro_ai/api/deps.py`.
+- [x] T039 [US4] Register `on_chip_confirmed` under event type `"chip_confirmed"` in `src/kebi/api/deps.py`.
 
 **Checkpoint**: Taste summaries reflect explicit user preferences with the right confidence level.
 
@@ -160,7 +160,7 @@ Skipped — repo is established (Poetry, Alembic, Ruff, mypy, pytest already con
 ### Implementation for User Story 5
 
 - [x] T042 [US5] In `ConsultService.consult`, when `signal_tier == "active"`: append `ReasoningStep(step="active_confirmed_signals", summary=<comma-joined confirmed chip labels>)` and `ReasoningStep(step="active_rejected_filter", summary="Filtered N/M candidates matching rejected chips")`.
-- [x] T043 [US5] Add `_place_matches_chip(place: PlaceObject, chip: Chip) -> bool` helper in `src/totoro_ai/core/consult/service.py`. Walks dotted paths for `source`, `subcategory.<place_type>`, and `attributes.*` (including `attributes.location_context.*`). Rejected-chip filter runs before the total_cap slice.
+- [x] T043 [US5] Add `_place_matches_chip(place: PlaceObject, chip: Chip) -> bool` helper in `src/kebi/core/consult/service.py`. Walks dotted paths for `source`, `subcategory.<place_type>`, and `attributes.*` (including `attributes.location_context.*`). Rejected-chip filter runs before the total_cap slice.
 
 **Checkpoint**: Active consults respect explicit user preferences.
 
@@ -181,7 +181,7 @@ Skipped — repo is established (Poetry, Alembic, Ruff, mypy, pytest already con
 
 ### Option B wiring (done post-plan)
 
-- [x] T054 Added `signal_tier: SignalTierHint | None = None` to `ChatRequest` (`src/totoro_ai/api/schemas/chat.py`) and `ConsultRequest` (`src/totoro_ai/api/schemas/consult.py`).
+- [x] T054 Added `signal_tier: SignalTierHint | None = None` to `ChatRequest` (`src/kebi/api/schemas/chat.py`) and `ConsultRequest` (`src/kebi/api/schemas/consult.py`).
 - [x] T055 Updated `ChatService._dispatch` to forward `request.signal_tier or "active"` to `ConsultService.consult`.
 
 ---
@@ -234,8 +234,8 @@ Task T022: tests/api/routes/test_signal.py
 Task T023: tests/api/routes/test_user_context.py
 
 # Event class + pure function (independent files):
-Task T024: src/totoro_ai/core/events/events.py (ChipConfirmed)
-Task T025: src/totoro_ai/core/taste/chip_merge.py (merge_chip_statuses)
+Task T024: src/kebi/core/events/events.py (ChipConfirmed)
+Task T025: src/kebi/core/taste/chip_merge.py (merge_chip_statuses)
 ```
 
 Once T024 / T025 land, T026 → T029 run sequentially (they touch `signal/service.py`, `api/schemas/signal.py`, `api/routes/signal.py`).
@@ -272,9 +272,9 @@ Order: Phase 2 → US1 → US2 → US3 → US4 → US5 → Phase 8. Commit per t
 
 Spot-checks confirm the checklist format:
 
-- ✅ `- [ ] T007 Add InteractionType.CHIP_CONFIRM = "chip_confirm" ... in src/totoro_ai/db/models.py` — foundational, no `[P]` (edits shared file), no `[Story]`.
+- ✅ `- [ ] T007 Add InteractionType.CHIP_CONFIRM = "chip_confirm" ... in src/kebi/db/models.py` — foundational, no `[P]` (edits shared file), no `[Story]`.
 - ✅ `- [ ] T020 [P] [US3] Add tests/core/taste/test_chip_merge.py ...` — `[P]` independent file, `[US3]` story scope, file path present.
-- ✅ `- [x] T005 Create src/totoro_ai/core/taste/tier.py ...` — completed; still valid checklist format.
+- ✅ `- [x] T005 Create src/kebi/core/taste/tier.py ...` — completed; still valid checklist format.
 - ✅ `- [ ] T046 Write ADR-061 in docs/decisions.md ...` — polish phase, no `[Story]` (correct).
 
 Every task has checkbox + ID + optional `[P]` + `[Story]` where required + file path. No violations.

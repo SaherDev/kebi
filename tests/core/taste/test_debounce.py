@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from unittest.mock import AsyncMock
 
-from totoro_ai.core.taste.debounce import RegenDebouncer
+from kebi.core.taste.debounce import RegenDebouncer
 
 
 class TestRegenDebouncer:

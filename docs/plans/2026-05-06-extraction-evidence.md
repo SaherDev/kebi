@@ -172,7 +172,7 @@ A candidate's evidence list is **non-empty** by construction — `LLMNEREnricher
 
 ## Changes by file
 
-### `src/totoro_ai/core/extraction/types.py`
+### `src/kebi/core/extraction/types.py`
 - Rename `ExtractionLevel` → `Producer`. Update value list. Drop `EMOJI_REGEX`. Add the missing producers.
 - Add `Medium` enum.
 - Add `Evidence` frozen dataclass.
@@ -183,46 +183,46 @@ A candidate's evidence list is **non-empty** by construction — `LLMNEREnricher
 
 ### Producer file edits — see *Per-producer evidence contract* table above for the exact write each one makes.
 
-### `src/totoro_ai/core/extraction/enrichers/llm_ner.py`
+### `src/kebi/core/extraction/enrichers/llm_ner.py`
 - Build `evidence` for each emitted candidate by joining:
   - One `Evidence(LLM_NER, <medium>)` for each text source the LLM had access to that contains the candidate name (regex match against caption / transcript / supplementary_text / title — using a normalized check).
   - All `text_evidence` entries that contain the candidate name (so YTDLP_METADATA + LLM_NER both appear when a name was in the caption).
   - All `known_places` entries whose name matches (so VISION_FRAMES, GOOGLE_MAPS_LIST, etc. surface).
 - Drop the `_NERPlace.signals: list[str]` field. The LLM no longer self-reports signals — we infer medium from text content. (Tradeoff: lose `emoji_marker` self-reporting; recover it via regex on the caption.)
 
-### `src/totoro_ai/core/extraction/validator.py`
+### `src/kebi/core/extraction/validator.py`
 - Pass `candidate.evidence` to `calculate_confidence`.
 - Construct `ValidatedCandidate(evidence=list(candidate.evidence), ...)`.
 - Drop `_lookup_city`'s implicit dependency — already on `candidate.attributes.location_context`.
 
-### `src/totoro_ai/core/extraction/confidence.py`
+### `src/kebi/core/extraction/confidence.py`
 - New signature: `calculate_confidence(evidence: list[Evidence], match_modifier, config) -> float`.
 - Base = `max(producer_scores[e.producer.value] for e in evidence ∪ medium_scores[e.medium.value] for e in evidence)`.
 - Bonus = `corroboration_bonus` when `len({(e.producer, e.medium) for e in evidence}) > 1`, else 0.
 - Cap at `config.max_score`.
 - Rename `config.base_scores` → `config.producer_scores`; rename `config.signal_scores` → `config.medium_scores`. Update `config/app.yaml` accordingly.
 
-### `src/totoro_ai/core/extraction/dedup.py`
+### `src/kebi/core/extraction/dedup.py`
 - `dedup_candidates`: group by normalized name, merge evidence lists by union (preserving order), merge attributes.
 - `dedup_validated_by_provider_id`: group by provider_id, merge evidence + attributes, take max confidence, apply corroboration bonus when merged evidence has 2+ distinct `(producer, medium)` pairs.
 - Drop `_LEVEL_ORDER` and the lowest-index winner pick.
 
-### `src/totoro_ai/core/extraction/persistence.py`
+### `src/kebi/core/extraction/persistence.py`
 - `_to_place_create`: unchanged — evidence isn't on `PlaceCreate`.
 - (Future) write evidence to the persistence side. Out of scope for this plan.
 
-### `src/totoro_ai/api/schemas/extract_place.py`
+### `src/kebi/api/schemas/extract_place.py`
 - Add `EvidenceDTO` Pydantic model mirroring `Evidence`.
 - `ExtractPlaceItem.evidence: list[EvidenceDTO] = []` — optional with empty default for one release.
 
-### `src/totoro_ai/core/extraction/service.py`
+### `src/kebi/core/extraction/service.py`
 - `_outcome_to_item_dict` adds `"evidence": [e.to_dto() for e in outcome.metadata.evidence]`.
 
 ### `config/app.yaml`
 - Rename `extraction.confidence.base_scores` → `extraction.confidence.producer_scores`. Add new keys for the producers we just added. Drop `emoji_regex`.
 - Rename `extraction.confidence.signal_scores` → `extraction.confidence.medium_scores`. Re-key the existing values: `caption` → unchanged, `hashtag` → unchanged, `emoji_marker` → unchanged, `location_tag` → unchanged. Add `transcript`, `title`, `frame`, `image`, `list`, `supplementary_text`.
 
-### `src/totoro_ai/core/config.py`
+### `src/kebi/core/config.py`
 - Update `ConfidenceConfig` field names accordingly.
 
 ## Coverage check (one row per producer)

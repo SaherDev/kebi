@@ -1,6 +1,6 @@
 # ChatService — flag-fork dispatch contract (M6)
 
-Internal contract for `src/totoro_ai/core/chat/service.py::ChatService` after M6 wiring.
+Internal contract for `src/kebi/core/chat/service.py::ChatService` after M6 wiring.
 
 ## `ChatService.__init__` — new signature
 
@@ -192,4 +192,4 @@ Eager construction regardless of flag value. If `build_checkpointer` fails (Post
 
 ## Bruno collection update
 
-Add `totoro-config/bruno/chat_agent_example.bru` with a sample agent-path response. Kept as a live reference for the product-repo team whenever they begin consuming the new type. Flag-off default means no product-repo code change is blocking this feature.
+Add `kebi-config/bruno/chat_agent_example.bru` with a sample agent-path response. Kept as a live reference for the product-repo team whenever they begin consuming the new type. Flag-off default means no product-repo code change is blocking this feature.

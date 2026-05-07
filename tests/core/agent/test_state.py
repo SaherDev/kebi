@@ -6,7 +6,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, StateGraph
 
-from totoro_ai.core.agent.state import AgentState
+from kebi.core.agent.state import AgentState
 
 
 def test_agent_state_typed_dict_shape() -> None:

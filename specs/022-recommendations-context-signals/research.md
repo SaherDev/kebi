@@ -30,7 +30,7 @@
 
 ## Decision 4: Signal route replaces feedback route
 
-**Decision**: Delete `src/totoro_ai/api/routes/feedback.py` and `src/totoro_ai/api/schemas/feedback.py`. Create `src/totoro_ai/api/routes/signal.py` and `src/totoro_ai/api/schemas/signal.py`. The new route uses `Literal["recommendation_accepted", "recommendation_rejected"]` for `signal_type` (Pydantic discriminated union via Literal).
+**Decision**: Delete `src/kebi/api/routes/feedback.py` and `src/kebi/api/schemas/feedback.py`. Create `src/kebi/api/routes/signal.py` and `src/kebi/api/schemas/signal.py`. The new route uses `Literal["recommendation_accepted", "recommendation_rejected"]` for `signal_type` (Pydantic discriminated union via Literal).
 
 **Rationale**: The existing feedback route does nearly the same thing but lacks recommendation_id validation. Replacing it avoids two endpoints doing overlapping work. The product repo must update its client to call `/v1/signal` instead of `/v1/feedback`.
 

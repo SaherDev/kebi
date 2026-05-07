@@ -18,7 +18,7 @@
 
 **Purpose**: Create directory structure and empty init files before any implementation.
 
-- [x] T001 Create `src/totoro_ai/core/chat/__init__.py` (empty — marks domain module)
+- [x] T001 Create `src/kebi/core/chat/__init__.py` (empty — marks domain module)
 - [x] T002 [P] Create `tests/core/chat/__init__.py` (empty — marks test package)
 
 ---
@@ -30,8 +30,8 @@
 **⚠️ CRITICAL**: No user story work can begin until this phase is complete.
 
 - [x] T003 Add `chat_assistant` role to `config/app.yaml` under `models:` — `provider: openai`, `model: gpt-4o-mini`, `max_tokens: 1024`, `temperature: 0.9`
-- [x] T004 [P] Add `LLMUnavailableError` exception class to `src/totoro_ai/api/errors.py` and register a 503 handler in `register_error_handlers()` with body `{"error_type": "llm_unavailable", "detail": "<reason>"}`
-- [x] T005 [P] Create `src/totoro_ai/api/schemas/chat_assistant.py` — `ChatRequest(user_id: str, message: str)` with `min_length=1` on `message`, and `ChatResponse(response: str)`
+- [x] T004 [P] Add `LLMUnavailableError` exception class to `src/kebi/api/errors.py` and register a 503 handler in `register_error_handlers()` with body `{"error_type": "llm_unavailable", "detail": "<reason>"}`
+- [x] T005 [P] Create `src/kebi/api/schemas/chat_assistant.py` — `ChatRequest(user_id: str, message: str)` with `min_length=1` on `message`, and `ChatResponse(response: str)`
 
 **Checkpoint**: Config, error class, and schemas are ready. Implementation can now begin.
 
@@ -45,18 +45,18 @@
 
 ### Implementation
 
-- [x] T006 [US1] Implement `ChatAssistantService` in `src/totoro_ai/core/chat/chat_assistant_service.py`:
+- [x] T006 [US1] Implement `ChatAssistantService` in `src/kebi/core/chat/chat_assistant_service.py`:
   - Constructor: `self._llm = get_llm("chat_assistant")`
   - Method: `async def run(self, message: str, user_id: str) -> str`
   - System prompt: position as a knowledgeable food and dining advisor — direct, opinionated, no generic travel-guide language; covers destination food scenes, food culture, etiquette, and discovery strategies
   - Langfuse tracing: `lf = get_langfuse_client()`, `generation = lf.generation(name="chat_assistant", input={"user_id": user_id, "message": message}) if lf else None`, track generation end in both success and exception branches
   - On any exception from `self._llm.complete()`: raise `LLMUnavailableError(str(exc))`
 
-- [x] T007 [US1] Create `src/totoro_ai/api/routes/chat_assistant.py` — `router = APIRouter()`, `POST /chat-assistant` endpoint that calls `Depends(get_chat_assistant_service)` and returns `ChatResponse(response=await service.run(body.message, body.user_id))`
+- [x] T007 [US1] Create `src/kebi/api/routes/chat_assistant.py` — `router = APIRouter()`, `POST /chat-assistant` endpoint that calls `Depends(get_chat_assistant_service)` and returns `ChatResponse(response=await service.run(body.message, body.user_id))`
 
-- [x] T008 [US1] Add `get_chat_assistant_service()` to `src/totoro_ai/api/deps.py` — returns `ChatAssistantService()` (no constructor args beyond the injected LLM)
+- [x] T008 [US1] Add `get_chat_assistant_service()` to `src/kebi/api/deps.py` — returns `ChatAssistantService()` (no constructor args beyond the injected LLM)
 
-- [x] T009 [US1] Register `chat_assistant_router` in `src/totoro_ai/api/main.py` — import and `router.include_router(chat_assistant_router, prefix="")`
+- [x] T009 [US1] Register `chat_assistant_router` in `src/kebi/api/main.py` — import and `router.include_router(chat_assistant_router, prefix="")`
 
 ### Tests for User Story 1
 
@@ -79,7 +79,7 @@
 
 ### Implementation
 
-- [x] T011 [US2] Review and refine the system prompt in `src/totoro_ai/core/chat/chat_assistant_service.py` to ensure food knowledge/culture questions (ramen types, omakase, izakaya vs regular restaurant) receive direct, knowledgeable answers — add explicit guidance in the prompt that conceptual questions should be answered with a clear recommendation, not a list of trade-offs
+- [x] T011 [US2] Review and refine the system prompt in `src/kebi/core/chat/chat_assistant_service.py` to ensure food knowledge/culture questions (ramen types, omakase, izakaya vs regular restaurant) receive direct, knowledgeable answers — add explicit guidance in the prompt that conceptual questions should be answered with a clear recommendation, not a list of trade-offs
 
 ### Tests for User Story 2
 
@@ -99,7 +99,7 @@
 
 ### Implementation
 
-- [x] T013 [US3] Refine the system prompt in `src/totoro_ai/core/chat/chat_assistant_service.py` to explicitly cover etiquette and safety questions — add instruction that tipping, safety, and dining custom questions must be answered with a direct stance first, reasoning second; never "it depends" as a standalone answer
+- [x] T013 [US3] Refine the system prompt in `src/kebi/core/chat/chat_assistant_service.py` to explicitly cover etiquette and safety questions — add instruction that tipping, safety, and dining custom questions must be answered with a direct stance first, reasoning second; never "it depends" as a standalone answer
 
 **Checkpoint**: System prompt handles etiquette and safety query types with appropriate directness instruction.
 
@@ -115,7 +115,7 @@
 
 ### Implementation
 
-- [x] T014 [US4] Refine the system prompt in `src/totoro_ai/core/chat/chat_assistant_service.py` to cover discovery and evaluation strategy questions — add guidance that meta questions about finding good places or spotting tourist traps should be answered with 2–3 specific, testable heuristics rather than vague advice
+- [x] T014 [US4] Refine the system prompt in `src/kebi/core/chat/chat_assistant_service.py` to cover discovery and evaluation strategy questions — add guidance that meta questions about finding good places or spotting tourist traps should be answered with 2–3 specific, testable heuristics rather than vague advice
 
 **Checkpoint**: System prompt covers all four query type families. Service handles the full range of specified use cases.
 
@@ -125,7 +125,7 @@
 
 **Purpose**: Final verification, quality gates, and observability confirmation.
 
-- [x] T015 [P] Add Bruno request file at `totoro-config/bruno/ai-service/chat-assistant.bru` — already created; verify it works against a running server (seq: 8, POST /v1/chat-assistant, test response status 200 and `response` field non-empty)
+- [x] T015 [P] Add Bruno request file at `kebi-config/bruno/ai-service/chat-assistant.bru` — already created; verify it works against a running server (seq: 8, POST /v1/chat-assistant, test response status 200 and `response` field non-empty)
 - [x] T016 [P] Run `poetry run ruff check src/` — fix any lint errors in new files (`chat_assistant_service.py`, `chat_assistant.py` route, `chat_assistant.py` schemas, `errors.py`, `deps.py`, `main.py`)
 - [x] T017 [P] Run `poetry run mypy src/` — resolve any type errors; ensure `LLMUnavailableError` import is clean in route and service; verify `get_llm()` return type is used correctly
 - [x] T018 Run `poetry run pytest tests/core/chat/` — all four test cases pass
@@ -164,7 +164,7 @@
 ## Notes
 
 - All 4 user stories route through the same `ChatAssistantService.run()` — implementation is shared, differentiation is in system prompt quality
-- `LLMUnavailableError` must be imported from `totoro_ai.api.errors` — avoid circular imports (errors.py has no route imports)
+- `LLMUnavailableError` must be imported from `kebi.api.errors` — avoid circular imports (errors.py has no route imports)
 - `get_langfuse_client()` returns `None` when Langfuse is not configured — always guard with `if lf:`
 - `asyncio_mode = "auto"` in pytest config — no `@pytest.mark.asyncio` decorator needed
 - Git comment character in this repo is `;` not `#`

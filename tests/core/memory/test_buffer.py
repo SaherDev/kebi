@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
-from totoro_ai.core.memory.buffer import MessageBuffer
+from kebi.core.memory.buffer import MessageBuffer
 
 
 def _make_redis_mock(eval_returns: Any) -> MagicMock:

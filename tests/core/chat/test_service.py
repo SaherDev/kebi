@@ -6,9 +6,9 @@ from unittest.mock import AsyncMock, MagicMock
 
 from langchain_core.messages import AIMessage
 
-from totoro_ai.api.schemas.chat import ChatRequest
-from totoro_ai.core.agent.reasoning import ReasoningStep
-from totoro_ai.core.chat.service import ChatService
+from kebi.api.schemas.chat import ChatRequest
+from kebi.core.agent.reasoning import ReasoningStep
+from kebi.core.chat.service import ChatService
 
 
 def _make_service(
@@ -18,7 +18,7 @@ def _make_service(
     places_service: AsyncMock | None = None,
 ) -> ChatService:
     """Build a ChatService with all deps mocked."""
-    from totoro_ai.core.config import get_config
+    from kebi.core.config import get_config
 
     config = get_config()
     cfg_copy = config.model_copy(deep=True)
@@ -142,7 +142,7 @@ async def test_run_returns_error_on_graph_exception() -> None:
 async def test_run_resolves_location_label_when_location_present() -> None:
     """ChatService passes lat/lng to PlacesService.resolve_location_label and
     threads the result into the agent payload as `location_label`."""
-    from totoro_ai.api.schemas.consult import Location
+    from kebi.api.schemas.consult import Location
 
     graph = AsyncMock()
     graph.ainvoke = AsyncMock(
@@ -187,7 +187,7 @@ async def test_run_skips_label_resolution_when_no_location() -> None:
 
 async def test_run_uses_none_label_when_geocode_fails() -> None:
     """resolve_location_label returns None on failure → payload carries None."""
-    from totoro_ai.api.schemas.consult import Location
+    from kebi.api.schemas.consult import Location
 
     graph = AsyncMock()
     graph.ainvoke = AsyncMock(

@@ -7,13 +7,13 @@ from unittest.mock import AsyncMock, MagicMock
 from langchain_core.messages import AIMessage
 from langgraph.errors import GraphInterrupt
 
-from totoro_ai.api.schemas.chat import ChatRequest
-from totoro_ai.core.chat.service import ChatService
-from totoro_ai.core.events.events import TurnCompleted
+from kebi.api.schemas.chat import ChatRequest
+from kebi.core.chat.service import ChatService
+from kebi.core.events.events import TurnCompleted
 
 
 def _make_service(agent_graph: MagicMock, dispatcher: MagicMock) -> ChatService:
-    from totoro_ai.core.config import get_config
+    from kebi.core.config import get_config
 
     cfg = get_config().model_copy(deep=True)
 

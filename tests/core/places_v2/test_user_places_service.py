@@ -7,14 +7,14 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from totoro_ai.core.places_v2.models import (
+from kebi.core.places_v2.models import (
     LocationContext,
     PlaceCore,
     PlaceSource,
     SavedPlaceView,
     UserPlace,
 )
-from totoro_ai.core.places_v2.user_places_service import UserPlacesService
+from kebi.core.places_v2.user_places_service import UserPlacesService
 
 
 def _now() -> datetime:

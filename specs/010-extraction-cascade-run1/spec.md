@@ -131,8 +131,8 @@ A developer can call `calculate_confidence()` with an `ExtractionLevel`, a float
 
 ## Assumptions
 
-- `get_langfuse_client()` (not `get_langfuse_handler()`) is the correct import from `totoro_ai.providers.tracing`; `LLMNEREnricher` creates a manual generation span via `client.generation(...)` (resolved in research R-001)
-- `get_llm("intent_parser")` and `get_instructor_client("intent_parser")` are available from `totoro_ai.providers.llm` as used by existing extractors
+- `get_langfuse_client()` (not `get_langfuse_handler()`) is the correct import from `kebi.providers.tracing`; `LLMNEREnricher` creates a manual generation span via `client.generation(...)` (resolved in research R-001)
+- `get_llm("intent_parser")` and `get_instructor_client("intent_parser")` are available from `kebi.providers.llm` as used by existing extractors
 - `yt-dlp` is available as a CLI command in the execution environment
 - Adding new optional fields with defaults to `ExtractionConfig` is backward-compatible — existing `service.py` consumers continue to work unchanged
 - `app.yaml` is updated with the new `extraction.confidence` and `circuit_breaker_*` fields as part of this run; if absent, startup fails fast rather than silently defaulting

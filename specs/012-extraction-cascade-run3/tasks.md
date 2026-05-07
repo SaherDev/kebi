@@ -18,13 +18,13 @@
 
 **⚠️ CRITICAL**: Verify zero residual `place_id` references before moving to Phase 2:
 ```bash
-grep -r "\.place_id\b\|place_id=event" src/totoro_ai/core/events/ src/totoro_ai/core/taste/ src/totoro_ai/core/events/handlers.py tests/
+grep -r "\.place_id\b\|place_id=event" src/kebi/core/events/ src/kebi/core/taste/ src/kebi/core/events/handlers.py tests/
 ```
 
-- [ ] T001 [P] Update `PlaceSaved` in `src/totoro_ai/core/events/events.py`: rename field `place_id: str` → `place_ids: list[str]`
-- [ ] T002 [P] Add dataclass comment to `ExtractionPending` in `src/totoro_ai/core/extraction/types.py` explaining why it is intentionally not a `DomainEvent` subclass
-- [ ] T003 [P] Update `EventHandlers.on_place_saved` in `src/totoro_ai/core/events/handlers.py`: change `place_id=event.place_id` → `place_ids=event.place_ids`
-- [ ] T004 [P] Update `TasteModelService.handle_place_saved` in `src/totoro_ai/core/taste/service.py`: change signature to `place_ids: list[str]`, log one `InteractionLog` row per place_id, run ONE `_apply_taste_update()` for the batch (not N separate calls)
+- [ ] T001 [P] Update `PlaceSaved` in `src/kebi/core/events/events.py`: rename field `place_id: str` → `place_ids: list[str]`
+- [ ] T002 [P] Add dataclass comment to `ExtractionPending` in `src/kebi/core/extraction/types.py` explaining why it is intentionally not a `DomainEvent` subclass
+- [ ] T003 [P] Update `EventHandlers.on_place_saved` in `src/kebi/core/events/handlers.py`: change `place_id=event.place_id` → `place_ids=event.place_ids`
+- [ ] T004 [P] Update `TasteModelService.handle_place_saved` in `src/kebi/core/taste/service.py`: change signature to `place_ids: list[str]`, log one `InteractionLog` row per place_id, run ONE `_apply_taste_update()` for the batch (not N separate calls)
 - [ ] T005 [P] Create `tests/core/events/test_events.py`: test `PlaceSaved` constructs with `place_ids` list, `event_type` is `"place_saved"`, and `place_metadata` defaults to `{}`
 - [ ] T006 [P] Update `tests/core/taste/test_service_integration.py`: replace all `place_id=` references on `PlaceSaved` or `handle_place_saved` with `place_ids=`
 
@@ -38,14 +38,14 @@ grep -r "\.place_id\b\|place_id=event" src/totoro_ai/core/events/ src/totoro_ai/
 
 **Independent Test**: `POST /v1/extract-place` with a multi-mention TikTok URL → response has `provisional: false`, `places` contains one entry per validated place, `extraction_status: "saved"`.
 
-- [ ] T007 Add `bulk_upsert_embeddings(records: list[tuple[str, list[float], str]]) -> None` to `EmbeddingRepository` Protocol in `src/totoro_ai/db/repositories/embedding_repository.py`
-- [ ] T008 Implement `bulk_upsert_embeddings` in `SQLAlchemyEmbeddingRepository` in `src/totoro_ai/db/repositories/embedding_repository.py` using `sqlalchemy.dialects.postgresql.insert` with `on_conflict_do_update(index_elements=["place_id"])` — NOT a loop of individual upserts; empty `records` list → early return; on error: rollback, log, raise `RuntimeError`
-- [ ] T009 [P] [US1] Update `SavedPlace` and `ExtractPlaceResponse` in `src/totoro_ai/api/schemas/extract_place.py`: add `SavedPlace` model; rewrite `ExtractPlaceResponse` with fields `provisional`, `places`, `pending_levels`, `extraction_status`, `source_url`; delete `PlaceExtraction`, old `place_id`/`place`/`confidence`/`requires_confirmation` fields
-- [ ] T010 [US1] Create `src/totoro_ai/core/extraction/persistence.py`: implement `ExtractionPersistenceService` with `save_and_emit(results, user_id) -> list[str]` and `_build_description(result) -> str`; dedup guard only when `result.external_id is not None`; `result.address or ""` fallback; dispatch `PlaceSaved` AFTER all DB writes, BEFORE embedding batch; call `bulk_upsert_embeddings` (not individual upserts); catch `Exception` broadly on embedding failure (non-fatal, log warning)
-- [ ] T011 [US1] Rewrite `src/totoro_ai/core/extraction/service.py`: `ExtractionService(pipeline, persistence)` — 2 deps replacing 7; `run()` calls `parse_input()`, `pipeline.run()`, branches on `ProvisionalResponse` vs `list[ExtractionResult]`, calls `persistence.save_and_emit()`, builds `places` list via `zip(saved_ids, result)`
+- [ ] T007 Add `bulk_upsert_embeddings(records: list[tuple[str, list[float], str]]) -> None` to `EmbeddingRepository` Protocol in `src/kebi/db/repositories/embedding_repository.py`
+- [ ] T008 Implement `bulk_upsert_embeddings` in `SQLAlchemyEmbeddingRepository` in `src/kebi/db/repositories/embedding_repository.py` using `sqlalchemy.dialects.postgresql.insert` with `on_conflict_do_update(index_elements=["place_id"])` — NOT a loop of individual upserts; empty `records` list → early return; on error: rollback, log, raise `RuntimeError`
+- [ ] T009 [P] [US1] Update `SavedPlace` and `ExtractPlaceResponse` in `src/kebi/api/schemas/extract_place.py`: add `SavedPlace` model; rewrite `ExtractPlaceResponse` with fields `provisional`, `places`, `pending_levels`, `extraction_status`, `source_url`; delete `PlaceExtraction`, old `place_id`/`place`/`confidence`/`requires_confirmation` fields
+- [ ] T010 [US1] Create `src/kebi/core/extraction/persistence.py`: implement `ExtractionPersistenceService` with `save_and_emit(results, user_id) -> list[str]` and `_build_description(result) -> str`; dedup guard only when `result.external_id is not None`; `result.address or ""` fallback; dispatch `PlaceSaved` AFTER all DB writes, BEFORE embedding batch; call `bulk_upsert_embeddings` (not individual upserts); catch `Exception` broadly on embedding failure (non-fatal, log warning)
+- [ ] T011 [US1] Rewrite `src/kebi/core/extraction/service.py`: `ExtractionService(pipeline, persistence)` — 2 deps replacing 7; `run()` calls `parse_input()`, `pipeline.run()`, branches on `ProvisionalResponse` vs `list[ExtractionResult]`, calls `persistence.save_and_emit()`, builds `places` list via `zip(saved_ids, result)`
 - [ ] T012 [P] [US1] Create `tests/core/extraction/test_persistence.py`: test new place write + PlaceSaved dispatch; duplicate skip; all-duplicates → no dispatch; embedding RuntimeError non-fatal; single-place (1 description, 1-element bulk call); multi-place (5 descriptions, one bulk_upsert_embeddings call with 5 records); `bulk_upsert_embeddings([])` no-op; returns saved place ID list
 - [ ] T013 [US1] Rewrite `tests/core/extraction/test_service.py`: test list[ExtractionResult] path → `provisional=False`; ProvisionalResponse path → `provisional=True, persistence NOT called`; empty raw_input → ValueError; all-duplicates → `extraction_status="duplicate"`; places length matches saved_ids length
-- [ ] T014 [US1] Add factory functions to `src/totoro_ai/api/deps.py`: `get_place_repo`, `get_embedding_repo`, `get_extraction_config`, `get_embedder_dep`, `get_extraction_persistence`, `get_extraction_pipeline` (wires all enrichers, validator, background enrichers), updated `get_extraction_service(pipeline, persistence)`
+- [ ] T014 [US1] Add factory functions to `src/kebi/api/deps.py`: `get_place_repo`, `get_embedding_repo`, `get_extraction_config`, `get_embedder_dep`, `get_extraction_persistence`, `get_extraction_pipeline` (wires all enrichers, validator, background enrichers), updated `get_extraction_service(pipeline, persistence)`
 - [ ] T015 [US1] Update `tests/api/test_extract_place.py`: remove assertions on old fields (`place_id`, `place`, `confidence`, `requires_confirmation`); add assertions on `provisional`, `places`, `extraction_status`, `pending_levels`; mock `get_extraction_service` to return new `ExtractPlaceResponse` shape
 
 **Checkpoint**: `poetry run pytest tests/core/extraction/test_persistence.py tests/core/extraction/test_service.py tests/api/test_extract_place.py -v` — all pass
@@ -60,9 +60,9 @@ grep -r "\.place_id\b\|place_id=event" src/totoro_ai/core/events/ src/totoro_ai/
 
 **⚠️ Circular dep guard**: `get_event_dispatcher` MUST NOT take `Depends(get_extraction_persistence)` — construct `ExtractionPersistenceService` inline using the already-injected `db_session`. See plan.md Phase 12 for the correct pattern.
 
-- [ ] T016 [US2] Update `src/totoro_ai/core/extraction/handlers/extraction_pending.py`: replace `persistence: Any` with `persistence: ExtractionPersistenceService`; import from `persistence.py`; remove TODO comment
+- [ ] T016 [US2] Update `src/kebi/core/extraction/handlers/extraction_pending.py`: replace `persistence: Any` with `persistence: ExtractionPersistenceService`; import from `persistence.py`; remove TODO comment
 - [ ] T017 [US2] Update `tests/core/extraction/handlers/test_extraction_pending_handler.py`: replace `MagicMock()` for persistence with `AsyncMock(spec=ExtractionPersistenceService)`
-- [ ] T018 [US2] Register `ExtractionPendingHandler` in `get_event_dispatcher()` in `src/totoro_ai/api/deps.py`: construct `ExtractionPersistenceService` directly with `db_session` (NOT via `Depends(get_extraction_persistence)`); wire background enrichers and validator; `dispatcher.register_handler("extraction_pending", handler.handle)`
+- [ ] T018 [US2] Register `ExtractionPendingHandler` in `get_event_dispatcher()` in `src/kebi/api/deps.py`: construct `ExtractionPersistenceService` directly with `db_session` (NOT via `Depends(get_extraction_persistence)`); wire background enrichers and validator; `dispatcher.register_handler("extraction_pending", handler.handle)`
 
 **Checkpoint**: `poetry run pytest tests/core/extraction/handlers/ tests/api/test_extract_place.py -v` — all pass
 
@@ -82,14 +82,14 @@ grep -r "\.place_id\b\|place_id=event" src/totoro_ai/core/events/ src/totoro_ai/
 
 **Independent Test**: `grep -r "ExtractionDispatcher\|InputExtractor\|ExtractionSource\|compute_confidence\|UnsupportedInputError\|PlainTextExtractor\|TikTokExtractor\|ExtractionFailedNoMatchError" src/ tests/` → zero matches.
 
-- [ ] T020 [P] Delete `src/totoro_ai/core/extraction/dispatcher.py`
-- [ ] T021 [P] Delete `src/totoro_ai/core/extraction/extractors/tiktok.py`
-- [ ] T022 [P] Delete `src/totoro_ai/core/extraction/extractors/plain_text.py`
-- [ ] T023 [P] Delete `src/totoro_ai/core/extraction/result.py`
-- [ ] T024 Remove `ExtractionSource` enum and `compute_confidence()` function from `src/totoro_ai/core/extraction/confidence.py`; keep `calculate_confidence()` and `ConfidenceConfig`
-- [ ] T025 Remove `InputExtractor` Protocol and its import of legacy `ExtractionResult` from `src/totoro_ai/core/extraction/protocols.py`
-- [ ] T026 Remove `ExtractionFailedNoMatchError` from `src/totoro_ai/api/errors.py`
-- [ ] T027 Update NOTE comment on `ExtractionResult` in `src/totoro_ai/core/extraction/types.py`: remove "coexists with legacy" language
+- [ ] T020 [P] Delete `src/kebi/core/extraction/dispatcher.py`
+- [ ] T021 [P] Delete `src/kebi/core/extraction/extractors/tiktok.py`
+- [ ] T022 [P] Delete `src/kebi/core/extraction/extractors/plain_text.py`
+- [ ] T023 [P] Delete `src/kebi/core/extraction/result.py`
+- [ ] T024 Remove `ExtractionSource` enum and `compute_confidence()` function from `src/kebi/core/extraction/confidence.py`; keep `calculate_confidence()` and `ConfidenceConfig`
+- [ ] T025 Remove `InputExtractor` Protocol and its import of legacy `ExtractionResult` from `src/kebi/core/extraction/protocols.py`
+- [ ] T026 Remove `ExtractionFailedNoMatchError` from `src/kebi/api/errors.py`
+- [ ] T027 Update NOTE comment on `ExtractionResult` in `src/kebi/core/extraction/types.py`: remove "coexists with legacy" language
 - [ ] T028 [P] [US4] Rewrite "Data Flow: Extract a Place" section in `docs/architecture.md` to describe the three-phase cascade (enrichment → validation → background dispatch)
 - [ ] T029 [P] [US4] Update `docs/api-contract.md` extract-place response to the multi-place provisional shape per `specs/012-extraction-cascade-run3/contracts/extract-place-v2.md`
 

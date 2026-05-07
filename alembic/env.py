@@ -5,9 +5,9 @@ from pathlib import Path
 from dotenv import load_dotenv
 from sqlalchemy import engine_from_config, pool
 
-import totoro_ai.db.models  # noqa: F401 — registers models with Base
+import kebi.db.models  # noqa: F401 — registers models with Base
 from alembic import context
-from totoro_ai.db.base import Base
+from kebi.db.base import Base
 
 config = context.config
 
@@ -28,9 +28,9 @@ config.set_main_option("sqlalchemy.url", _url)
 # Feature 027 FR-031: exclude library-owned checkpointer tables.
 # `langgraph-checkpoint-postgres` manages its own schema via
 # AsyncPostgresSaver.setup(). Pure logic lives in
-# `src/totoro_ai/db/alembic_exclusion.py` so it is testable without
+# `src/kebi/db/alembic_exclusion.py` so it is testable without
 # booting Alembic's context.
-from totoro_ai.db.alembic_exclusion import (  # noqa: E402
+from kebi.db.alembic_exclusion import (  # noqa: E402
     include_object as _include_object,
 )
 

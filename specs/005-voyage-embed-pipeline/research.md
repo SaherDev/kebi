@@ -63,7 +63,7 @@ except Exception:
 
 ## 4. EmbedderProtocol Design
 
-**Decision**: Define `EmbedderProtocol` as a `typing.Protocol` with a single async method in `src/totoro_ai/providers/embeddings.py`, co-located with the concrete `VoyageEmbedder` and factory — matching the pattern of `llm.py`.
+**Decision**: Define `EmbedderProtocol` as a `typing.Protocol` with a single async method in `src/kebi/providers/embeddings.py`, co-located with the concrete `VoyageEmbedder` and factory — matching the pattern of `llm.py`.
 
 **Rationale**: Follows the established pattern from `llm.py` (Protocol + concrete class + factory in one file). Service and route code import only the Protocol, never the concrete class. Adding `@runtime_checkable` is consistent with `LLMClientProtocol`.
 
@@ -113,7 +113,7 @@ class EmbeddingRepository(Protocol):
 
 ## 7. Factory: `get_embedder()`
 
-**Decision**: Add `get_embedder() -> EmbedderProtocol` factory to `src/totoro_ai/providers/embeddings.py`, reading from `get_config().models["embedder"]` and `get_secrets().providers.voyage.api_key`.
+**Decision**: Add `get_embedder() -> EmbedderProtocol` factory to `src/kebi/providers/embeddings.py`, reading from `get_config().models["embedder"]` and `get_secrets().providers.voyage.api_key`.
 
 **Config entry** (already in `config/app.yaml`):
 ```yaml
@@ -131,7 +131,7 @@ providers:
     api_key: "..."
 ```
 
-**Verified by**: `src/totoro_ai/core/config.py` already handles `voyage` in `_secrets_from_env()` (line 233: `"voyage": {"api_key": os.environ.get("VOYAGE_API_KEY")}`), and `tests/conftest.py` sets `VOYAGE_API_KEY` dummy value.
+**Verified by**: `src/kebi/core/config.py` already handles `voyage` in `_secrets_from_env()` (line 233: `"voyage": {"api_key": os.environ.get("VOYAGE_API_KEY")}`), and `tests/conftest.py` sets `VOYAGE_API_KEY` dummy value.
 
 ---
 

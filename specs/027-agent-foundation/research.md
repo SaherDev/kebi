@@ -46,7 +46,7 @@
 
 ## R3. Prompt-slot validation placement
 
-**Decision**: Extend `_load_prompts()` in `src/totoro_ai/core/config.py` with an optional per-prompt `required_slots: list[str]` argument. For the `agent` prompt, assert both `{taste_profile_summary}` and `{memory_summary}` appear verbatim in the loaded content. Missing slot → `ValueError` that names the prompt and the missing slot — propagates as a boot failure.
+**Decision**: Extend `_load_prompts()` in `src/kebi/core/config.py` with an optional per-prompt `required_slots: list[str]` argument. For the `agent` prompt, assert both `{taste_profile_summary}` and `{memory_summary}` appear verbatim in the loaded content. Missing slot → `ValueError` that names the prompt and the missing slot — propagates as a boot failure.
 
 **Rationale**:
 - Keeps validation in the same eager-boot layer as other config (FR-018a).
@@ -84,7 +84,7 @@ def _load_prompts(raw: dict[str, str]) -> dict[str, PromptConfig]:
 
 ## R4. Redis prefix migration strategy
 
-**Decision**: Change the `_KEY_PREFIX` module-level constant in `src/totoro_ai/core/extraction/status_repository.py` from `"extraction"` to `"extraction:v2"`. Do NOT add a compatibility read path. The polling route returns 404 for `v1:` keys (identical to TTL expiry) per clarification.
+**Decision**: Change the `_KEY_PREFIX` module-level constant in `src/kebi/core/extraction/status_repository.py` from `"extraction"` to `"extraction:v2"`. Do NOT add a compatibility read path. The polling route returns 404 for `v1:` keys (identical to TTL expiry) per clarification.
 
 **Rationale**:
 - Clarification resolves the design question: no coercion, no back-compat layer, no two-deploy rollout.
@@ -154,7 +154,7 @@ All reads and writes flow through `f"{_KEY_PREFIX}:{request_id}"`, so both sides
 ```python
 # core/agent/graph.py
 from langchain_core.messages import AIMessage
-from totoro_ai.core.agent.reasoning import ReasoningStep
+from kebi.core.agent.reasoning import ReasoningStep
 
 def fallback_node(state: AgentState) -> dict:
     max_steps = get_config().agent.max_steps
@@ -239,7 +239,7 @@ context.configure(
 1. **AI repo (this branch)**: land ADR-063 + schema rewrite + Redis prefix bump + Bruno updates + inline-await refactor + config scaffolding + agent graph skeleton in one branch. Merge to `dev` when green.
 2. **Product repo**: ship matching TypeScript `ExtractPlaceResponse` schema + callsite updates (any consumer reading `results[0].status` flips to `response.status`; any consumer reading `source_url` renames to `raw_input`) in a parallel PR. Merge to its `dev` when green.
 3. **Deploy window**: during a low-traffic window, (a) ensure no extractions are in flight, (b) deploy AI repo first (writes new `extraction:v2:*` keys, returns new envelope shape), (c) deploy product repo (reads new shape). FR-036: product-repo PR must be merged before the AI repo's final deploy.
-4. **Observable signal that coordination succeeded**: Bruno `.bru` example responses in `totoro-config/bruno/` reflect the new shape, and a smoke test of the product repo's chat flow against the deployed AI repo shows no schema-parse errors.
+4. **Observable signal that coordination succeeded**: Bruno `.bru` example responses in `kebi-config/bruno/` reflect the new shape, and a smoke test of the product repo's chat flow against the deployed AI repo shows no schema-parse errors.
 
 **Rationale**:
 - The coordination surface is small (one schema, one field rename). A single merge-window approach is simpler than a dual-deploy compatibility shim.
@@ -274,5 +274,5 @@ To be completed after `data-model.md`, `contracts/`, and `quickstart.md` are wri
 ## Known non-blockers to address at M6+
 
 - The deprecation-warning is the most obvious follow-up. The plan's M6 brings the real LLM wiring online; bump `langgraph` at that point and re-verify.
-- The baseline pre-existing mypy error in `src/totoro_ai/core/taste/service.py:58` ("Cannot infer type of lambda") predates this feature and was preserved unchanged.
+- The baseline pre-existing mypy error in `src/kebi/core/taste/service.py:58` ("Cannot infer type of lambda") predates this feature and was preserved unchanged.
 - `ruff check` baseline had 5 errors (1 src UP038, 4 tests E501); post-feature it's 4 (the 1 test that went away was one I rewrote). No new ruff errors introduced by feature 027.

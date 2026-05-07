@@ -25,7 +25,7 @@ Add a cache-backed status polling endpoint (`GET /v1/extract-place/status/{reque
 
 | ADR | Requirement | Status |
 |-----|-------------|--------|
-| ADR-001 | src layout (`src/totoro_ai/`) | ✓ All new files in `src/totoro_ai/` |
+| ADR-001 | src layout (`src/kebi/`) | ✓ All new files in `src/kebi/` |
 | ADR-003 | ruff + mypy strict | ✓ All new code typed; no `Any` in public interfaces |
 | ADR-004 | Tests in `tests/` mirroring src | ✓ Test files planned for all new modules |
 | ADR-014 | `/v1` prefix via APIRouter | ✓ New route added to existing `extract_place` router |
@@ -55,7 +55,7 @@ specs/013-extraction-status-polling/
 ### Source Code changes
 
 ```text
-src/totoro_ai/
+src/kebi/
 ├── providers/
 │   ├── cache.py                          ← NEW: CacheBackend Protocol
 │   └── redis_cache.py                    ← NEW: RedisCacheBackend concrete impl
@@ -84,14 +84,14 @@ tests/
     └── routes/
         └── test_extract_place_status.py  ← NEW: status route integration tests
 
-totoro-config/bruno/ai-service/
+kebi-config/bruno/ai-service/
 └── extract-place-status.bru             ← NEW: Bruno request for status polling
 
 docs/
 └── decisions.md                         ← MODIFY: add ADR-048
 ```
 
-**Structure Decision**: Single project layout (existing `src/totoro_ai/` structure). All new files follow the hybrid `providers/` + `core/` + `api/` directory pattern (ADR-002).
+**Structure Decision**: Single project layout (existing `src/kebi/` structure). All new files follow the hybrid `providers/` + `core/` + `api/` directory pattern (ADR-002).
 
 ---
 
@@ -121,7 +121,7 @@ routes/extract_place.py as it is part of the extract-place resource. Constitutio
 VIII is updated to reflect three endpoints.
 **Consequences:** Product repo can poll for results after provisional responses. Cache
 backend must be available for status reads; if cache is unavailable, the endpoint returns
-"processing" gracefully. New endpoint requires a .bru file in totoro-config/bruno/. ADR-048
+"processing" gracefully. New endpoint requires a .bru file in kebi-config/bruno/. ADR-048
 supersedes the "two endpoints only" constraint in Constitution Section VIII.
 ```
 
@@ -131,7 +131,7 @@ Update `.specify/memory/constitution.md` Section VIII to reflect three endpoints
 
 ### Step 1 — CacheBackend Protocol
 
-**File**: `src/totoro_ai/providers/cache.py`
+**File**: `src/kebi/providers/cache.py`
 
 ```python
 """CacheBackend Protocol — ADR-038 abstraction for all cache implementations."""
@@ -157,7 +157,7 @@ class CacheBackend(Protocol):
 
 ### Step 2 — RedisCacheBackend
 
-**File**: `src/totoro_ai/providers/redis_cache.py`
+**File**: `src/kebi/providers/redis_cache.py`
 
 ```python
 """RedisCacheBackend — concrete CacheBackend implementation using redis[asyncio]."""
@@ -190,7 +190,7 @@ class RedisCacheBackend:
 
 ### Step 3 — ExtractionStatusRepository
 
-**File**: `src/totoro_ai/core/extraction/status_repository.py`
+**File**: `src/kebi/core/extraction/status_repository.py`
 
 ```python
 """ExtractionStatusRepository — cache-backed status store for deferred extractions."""
@@ -200,7 +200,7 @@ from __future__ import annotations
 import json
 import logging
 
-from totoro_ai.providers.cache import CacheBackend
+from kebi.providers.cache import CacheBackend
 
 logger = logging.getLogger(__name__)
 
@@ -235,7 +235,7 @@ class ExtractionStatusRepository:
 
 ### Step 4 — Add request_id to ExtractPlaceResponse
 
-**File**: `src/totoro_ai/api/schemas/extract_place.py`
+**File**: `src/kebi/api/schemas/extract_place.py`
 
 Add `request_id: str | None = None` field to `ExtractPlaceResponse`:
 
@@ -253,7 +253,7 @@ class ExtractPlaceResponse(BaseModel):
 
 ### Step 5 — Wire request_id in ExtractionService
 
-**File**: `src/totoro_ai/core/extraction/service.py`
+**File**: `src/kebi/core/extraction/service.py`
 
 In the provisional branch (lines 49–56), pass `request_id` to `ExtractPlaceResponse`:
 
@@ -273,7 +273,7 @@ if isinstance(result, ProvisionalResponse):
 
 ### Step 6 — Update ExtractionPendingHandler
 
-**File**: `src/totoro_ai/core/extraction/handlers/extraction_pending.py`
+**File**: `src/kebi/core/extraction/handlers/extraction_pending.py`
 
 Inject `ExtractionStatusRepository` and write status after each outcome:
 
@@ -351,22 +351,22 @@ def _build_status_payload(
 
 **Import additions**:
 ```python
-from totoro_ai.core.extraction.status_repository import ExtractionStatusRepository
-from totoro_ai.core.extraction.types import ExtractionResult
+from kebi.core.extraction.status_repository import ExtractionStatusRepository
+from kebi.core.extraction.types import ExtractionResult
 ```
 
 ---
 
 ### Step 7 — Wire CacheBackend in deps.py
 
-**File**: `src/totoro_ai/api/deps.py`
+**File**: `src/kebi/api/deps.py`
 
 Add two new dependency functions:
 
 ```python
-from totoro_ai.providers.cache import CacheBackend
-from totoro_ai.providers.redis_cache import RedisCacheBackend
-from totoro_ai.core.extraction.status_repository import ExtractionStatusRepository
+from kebi.providers.cache import CacheBackend
+from kebi.providers.redis_cache import RedisCacheBackend
+from kebi.core.extraction.status_repository import ExtractionStatusRepository
 
 
 def get_cache_backend() -> CacheBackend:
@@ -402,14 +402,14 @@ pending_handler = ExtractionPendingHandler(
 
 ### Step 8 — Add status route
 
-**File**: `src/totoro_ai/api/routes/extract_place.py`
+**File**: `src/kebi/api/routes/extract_place.py`
 
 ```python
 from fastapi import APIRouter, Depends
-from totoro_ai.api.deps import get_extraction_service, get_status_repo
-from totoro_ai.api.schemas.extract_place import ExtractPlaceRequest, ExtractPlaceResponse
-from totoro_ai.core.extraction.service import ExtractionService
-from totoro_ai.core.extraction.status_repository import ExtractionStatusRepository
+from kebi.api.deps import get_extraction_service, get_status_repo
+from kebi.api.schemas.extract_place import ExtractPlaceRequest, ExtractPlaceResponse
+from kebi.core.extraction.service import ExtractionService
+from kebi.core.extraction.status_repository import ExtractionStatusRepository
 
 router = APIRouter()
 
@@ -443,7 +443,7 @@ async def get_extraction_status(
 
 ### Step 9 — Add Bruno request
 
-**File**: `totoro-config/bruno/ai-service/extract-place-status.bru`
+**File**: `kebi-config/bruno/ai-service/extract-place-status.bru`
 
 ```bru
 meta {

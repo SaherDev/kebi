@@ -11,7 +11,7 @@ import json
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
-from totoro_ai.core.agent.graph import (
+from kebi.core.agent.graph import (
     _compact_old_tool_results,
     _summarize_tool_payload,
 )

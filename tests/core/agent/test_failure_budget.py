@@ -7,13 +7,13 @@ from unittest.mock import MagicMock
 
 from langchain_core.messages import AIMessage, HumanMessage
 
-from totoro_ai.core.agent.graph import NODE_FALLBACK, should_continue
-from totoro_ai.core.agent.state import AgentState
+from kebi.core.agent.graph import NODE_FALLBACK, should_continue
+from kebi.core.agent.state import AgentState
 
 
 async def test_should_continue_routes_to_fallback_on_max_errors() -> None:
     """should_continue returns NODE_FALLBACK when error_count >= max_errors."""
-    from totoro_ai.core.config import get_config
+    from kebi.core.config import get_config
 
     max_errors = get_config().agent.max_errors
     state: AgentState = {
@@ -37,8 +37,8 @@ async def test_error_count_increments_on_agent_node_failure(
     """agent_node increments error_count after exhausting LLM retries,
     appends an AIMessage explaining the connection error, and emits a
     user-visible reasoning step."""
-    from totoro_ai.core.agent import graph as graph_module
-    from totoro_ai.core.agent.graph import make_agent_node
+    from kebi.core.agent import graph as graph_module
+    from kebi.core.agent.graph import make_agent_node
 
     # Keep the test fast — skip backoff sleeps.
     monkeypatch.setattr(graph_module, "_LLM_BACKOFF_BASE_SECONDS", 0)
@@ -82,8 +82,8 @@ async def test_error_count_increments_on_agent_node_failure(
 async def test_llm_retry_recovers_on_second_attempt(monkeypatch: Any) -> None:
     """First LLM call fails, second succeeds — agent_node returns the
     successful AIMessage without incrementing error_count."""
-    from totoro_ai.core.agent import graph as graph_module
-    from totoro_ai.core.agent.graph import make_agent_node
+    from kebi.core.agent import graph as graph_module
+    from kebi.core.agent.graph import make_agent_node
 
     monkeypatch.setattr(graph_module, "_LLM_BACKOFF_BASE_SECONDS", 0)
 
@@ -122,7 +122,7 @@ async def test_llm_retry_recovers_on_second_attempt(monkeypatch: Any) -> None:
 
 async def test_fallback_node_emits_user_visible_step() -> None:
     """fallback_node always emits a user-visible 'fallback' ReasoningStep."""
-    from totoro_ai.core.agent.graph import fallback_node
+    from kebi.core.agent.graph import fallback_node
 
     state: AgentState = {
         "messages": [],

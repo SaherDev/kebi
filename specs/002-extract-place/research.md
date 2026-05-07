@@ -8,7 +8,7 @@ No NEEDS CLARIFICATION items were found — the stack is fully defined by existi
 
 ## 1. Instructor integration with existing LLM provider abstraction
 
-**Decision**: Add `get_instructor_client(role: str) -> InstructorClient` to `src/totoro_ai/providers/llm.py`. `InstructorClient` is a thin wrapper that holds an instructor-patched async OpenAI client and the config-resolved model name. The wrapper exposes a single typed `extract()` method that callers use instead of calling Instructor directly. This keeps the config-driven model selection (ADR-020) intact — no model name is hardcoded in extractor classes.
+**Decision**: Add `get_instructor_client(role: str) -> InstructorClient` to `src/kebi/providers/llm.py`. `InstructorClient` is a thin wrapper that holds an instructor-patched async OpenAI client and the config-resolved model name. The wrapper exposes a single typed `extract()` method that callers use instead of calling Instructor directly. This keeps the config-driven model selection (ADR-020) intact — no model name is hardcoded in extractor classes.
 
 **Rationale**: Instructor's `from_openai()` wraps an `AsyncOpenAI` client. The model name must be passed at call time, not at client construction. A wrapper class bundles both so extractor classes receive a single injectable dependency and never touch config directly.
 

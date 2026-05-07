@@ -23,7 +23,7 @@ Add a user memory layer that extracts declarative personal facts from every user
 | Gate | Status | Notes |
 |------|--------|-------|
 | Repo boundary (AI/ML only, no product CRUD) | PASS | `user_memories` is AI/inference data owned by this repo |
-| ADR-001 src layout | PASS | New modules under `src/totoro_ai/core/memory/` |
+| ADR-001 src layout | PASS | New modules under `src/kebi/core/memory/` |
 | ADR-002 hybrid directory | PASS | `core/memory/` follows existing pattern |
 | ADR-003 Ruff + mypy strict | PASS | All new code must comply |
 | ADR-004 pytest tests | PASS | New test files required per new module |
@@ -57,7 +57,7 @@ specs/018-user-memory-layer/
 ### Source Code (repository root)
 
 ```text
-src/totoro_ai/
+src/kebi/
 ├── core/
 │   └── memory/                          ← NEW module
 │       ├── __init__.py
@@ -109,10 +109,10 @@ No constitution violations requiring justification.
 
 - [ ] Add `memory.confidence.stated` and `memory.confidence.inferred` to `config/app.yaml`
 - [ ] Add `MemoryConfidenceConfig` and `MemoryConfig` to `core/config.py`; wire into `AppConfig`
-- [ ] Create `src/totoro_ai/core/memory/__init__.py` (empty)
-- [ ] Create `src/totoro_ai/core/memory/schemas.py` — `PersonalFact` Pydantic model
-- [ ] Create `src/totoro_ai/core/memory/repository.py` — `UserMemoryRepository` Protocol + `NullUserMemoryRepository` + `SQLAlchemyUserMemoryRepository`
-- [ ] Create `src/totoro_ai/core/memory/service.py` — `UserMemoryService` wrapping the repo; exposes `save_facts()` and `load_memories()`; only class that instantiates `SQLAlchemyUserMemoryRepository` (via `api/deps.py`)
+- [ ] Create `src/kebi/core/memory/__init__.py` (empty)
+- [ ] Create `src/kebi/core/memory/schemas.py` — `PersonalFact` Pydantic model
+- [ ] Create `src/kebi/core/memory/repository.py` — `UserMemoryRepository` Protocol + `NullUserMemoryRepository` + `SQLAlchemyUserMemoryRepository`
+- [ ] Create `src/kebi/core/memory/service.py` — `UserMemoryService` wrapping the repo; exposes `save_facts()` and `load_memories()`; only class that instantiates `SQLAlchemyUserMemoryRepository` (via `api/deps.py`)
 - [ ] Add `UserMemory` SQLAlchemy ORM model to `db/models.py`
 - [ ] Generate Alembic migration for `user_memories` table
 

@@ -10,7 +10,7 @@
 
 ```bash
 docker compose up -d
-poetry run uvicorn totoro_ai.api.main:app --reload
+poetry run uvicorn kebi.api.main:app --reload
 ```
 
 ## Test the consult endpoint (sync, with location)

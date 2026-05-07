@@ -4,8 +4,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from totoro_ai.core.extraction.enrichers.vision_images import VisionImagesEnricher
-from totoro_ai.core.extraction.types import ExtractionContext, Medium, Producer
+from kebi.core.extraction.enrichers.vision_images import VisionImagesEnricher
+from kebi.core.extraction.types import ExtractionContext, Medium, Producer
 
 
 @pytest.fixture

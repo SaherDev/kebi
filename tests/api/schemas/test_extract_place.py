@@ -15,11 +15,11 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from totoro_ai.api.schemas.extract_place import (
+from kebi.api.schemas.extract_place import (
     ExtractPlaceItem,
     ExtractPlaceResponse,
 )
-from totoro_ai.core.places import PlaceObject, PlaceType
+from kebi.core.places import PlaceObject, PlaceType
 
 
 def _make_place(name: str = "Nara Eatery", place_id: str = "pl_01HZ001") -> PlaceObject:

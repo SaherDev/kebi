@@ -33,11 +33,11 @@ description: "Implementation task list for Consult Endpoint — Structured Outpu
 
 ⚠️ **CRITICAL**: No user story work can begin until this phase is complete
 
-- [x] T002 [P] In `src/totoro_ai/api/schemas/consult.py`: Add `photos: list[str] = Field(min_length=1)` field to `PlaceResult` class
-- [x] T003 [P] In `src/totoro_ai/api/schemas/consult.py`: Rename class `SyncConsultResponse` → `ConsultResponse`
-- [x] T004 [P] In `src/totoro_ai/api/routes/consult.py`: Update import `SyncConsultResponse` → `ConsultResponse` and update `responses` dict model reference
-- [x] T005 Create `src/totoro_ai/providers/tracing.py` with `get_langfuse_client()` factory function per plan Phase A4 specification
-- [x] T006 Update `src/totoro_ai/providers/__init__.py` to export `get_langfuse_client`
+- [x] T002 [P] In `src/kebi/api/schemas/consult.py`: Add `photos: list[str] = Field(min_length=1)` field to `PlaceResult` class
+- [x] T003 [P] In `src/kebi/api/schemas/consult.py`: Rename class `SyncConsultResponse` → `ConsultResponse`
+- [x] T004 [P] In `src/kebi/api/routes/consult.py`: Update import `SyncConsultResponse` → `ConsultResponse` and update `responses` dict model reference
+- [x] T005 Create `src/kebi/providers/tracing.py` with `get_langfuse_client()` factory function per plan Phase A4 specification
+- [x] T006 Update `src/kebi/providers/__init__.py` to export `get_langfuse_client`
 - [x] T007 In `config/app.yaml`, add consult service config under `consult:` section: `max_alternatives: 2`, `placeholder_photo_url: "https://placehold.co/800x450.webp"`, `response_timeout_seconds: 10`
 - [x] T008 Verify `config/app.yaml` has `intent_parser` role mapped to openai/gpt-4o-mini under `models:`
 - [x] T009 Verify `config/app.yaml` has `orchestrator` role already mapped (should exist from prior work)
@@ -56,8 +56,8 @@ description: "Implementation task list for Consult Endpoint — Structured Outpu
 
 ### Implementation for User Story 2
 
-- [x] T010 Create `src/totoro_ai/core/intent/__init__.py` (empty init file)
-- [x] T011 Create `src/totoro_ai/core/intent/intent_parser.py` with:
+- [x] T010 Create `src/kebi/core/intent/__init__.py` (empty init file)
+- [x] T011 Create `src/kebi/core/intent/intent_parser.py` with:
   - `ParsedIntent(BaseModel)` with fields: `cuisine: str | None`, `occasion: str | None`, `price_range: str | None`, `radius: int | None`, `constraints: list[str] = []`
   - `IntentParser` class with `__init__` calling `get_instructor_client("intent_parser")` internally
   - `async def parse(self, query: str) -> ParsedIntent` method that extracts intent via Instructor
@@ -89,7 +89,7 @@ description: "Implementation task list for Consult Endpoint — Structured Outpu
 
 ### Implementation for User Stories 1 & 3
 
-- [x] T014 [US1][US3] Update `src/totoro_ai/core/consult/service.py`:
+- [x] T014 [US1][US3] Update `src/kebi/core/consult/service.py`:
   - Import `IntentParser` from `core.intent.intent_parser`
   - Import `get_langfuse_client` from `providers.tracing`
   - Import `get_config` from `core.config`
@@ -140,14 +140,14 @@ description: "Implementation task list for Consult Endpoint — Structured Outpu
 
 ### Implementation for User Story 4
 
-- [x] T017 Create `totoro-config/bruno/ai-service/consult.bru` with sync consult request per plan Phase D1:
+- [x] T017 Create `kebi-config/bruno/ai-service/consult.bru` with sync consult request per plan Phase D1:
   - POST to `{{ai_url}}/v1/consult`
   - Request body: `user_id: "user-123"`, `query: "good ramen near Sukhumvit for a date night"`, `location: {lat: 13.7563, lng: 100.5018}`
   - Tests: verify status 200, primary recommendation present with photos, 6 reasoning_steps
 - [x] T018 Run full test suite: `poetry run pytest` — all tests pass (including pre-existing tests)
 - [x] T019 Run linter: `poetry run ruff check src/ tests/` — zero violations
 - [x] T020 Run type checker: `poetry run mypy src/` — zero errors
-- [x] T021 Manual verification: Start dev server (`poetry run uvicorn totoro_ai.api.main:app --reload`) and test with curl:
+- [x] T021 Manual verification: Start dev server (`poetry run uvicorn kebi.api.main:app --reload`) and test with curl:
   ```bash
   curl -X POST http://localhost:8000/v1/consult \
     -H "Content-Type: application/json" \

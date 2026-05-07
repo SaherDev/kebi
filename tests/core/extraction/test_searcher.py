@@ -2,12 +2,12 @@
 
 from unittest.mock import AsyncMock, MagicMock
 
-from totoro_ai.core.config import ConfidenceConfig
-from totoro_ai.core.extraction.searcher import (
+from kebi.core.config import ConfidenceConfig
+from kebi.core.extraction.searcher import (
     PlacesSearcher,
     reconcile_picks,
 )
-from totoro_ai.core.extraction.types import (
+from kebi.core.extraction.types import (
     Evidence,
     ExtractionContext,
     KnownPlace,
@@ -16,7 +16,7 @@ from totoro_ai.core.extraction.types import (
     SearchMatch,
     ValidatedCandidate,
 )
-from totoro_ai.core.places import (
+from kebi.core.places import (
     PlaceAttributes,
     PlaceProvider,
     PlacesMatchQuality,

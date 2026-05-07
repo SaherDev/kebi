@@ -12,7 +12,7 @@ This is **not** a tutorial for using the data layer in production. It is the min
 - The `019-places-service` branch is checked out (`git branch --show-current` should print `019-places-service`).
 - Docker Desktop is running.
 - `poetry` is installed and available on PATH.
-- A populated `.env` file at the repo root (already a symlink to `totoro-config/secrets/ai.env.local` per ADR-051). At minimum the following keys must be present and non-empty: `DATABASE_URL`, `REDIS_URL`, `GOOGLE_API_KEY`. Other keys can be empty for this verification.
+- A populated `.env` file at the repo root (already a symlink to `kebi-config/secrets/ai.env.local` per ADR-051). At minimum the following keys must be present and non-empty: `DATABASE_URL`, `REDIS_URL`, `GOOGLE_API_KEY`. Other keys can be empty for this verification.
 
 ---
 
@@ -68,7 +68,7 @@ Verify the schema change landed:
 ```bash
 poetry run python -c "
 from sqlalchemy import inspect
-from totoro_ai.db.session import engine
+from kebi.db.session import engine
 import asyncio
 
 async def main():
@@ -85,7 +85,7 @@ The output should include the new columns: `place_type`, `subcategory`, `tags`, 
 Verify the partial unique index exists:
 
 ```bash
-docker compose exec -T postgres psql -U postgres -d totoro -c "\\d+ places" | grep uq_places_provider_id
+docker compose exec -T postgres psql -U postgres -d kebi -c "\\d+ places" | grep uq_places_provider_id
 ```
 
 Expected: a line containing `uq_places_provider_id` and `WHERE provider_id IS NOT NULL`.
@@ -107,8 +107,8 @@ If any test fails, do **not** continue. Read the failure, fix the implementation
 ## Step 5 — Type-check and lint the new module
 
 ```bash
-poetry run mypy src/totoro_ai/core/places/
-poetry run ruff check src/totoro_ai/core/places/ tests/core/places/
+poetry run mypy src/kebi/core/places/
+poetry run ruff check src/kebi/core/places/ tests/core/places/
 ```
 
 Both must exit 0. `mypy --strict` is the bar (constitution IX).
@@ -125,7 +125,7 @@ import asyncio
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock
 
-from totoro_ai.core.places import (
+from kebi.core.places import (
     PlacesService,
     PlaceCreate,
     PlaceObject,
@@ -135,10 +135,10 @@ from totoro_ai.core.places import (
     PlaceAttributes,
     DuplicatePlaceError,
 )
-from totoro_ai.core.places.repository import PlacesRepository
-from totoro_ai.core.places.cache import PlacesCache
-from totoro_ai.db.session import async_session
-from totoro_ai.providers.redis_cache import get_redis
+from kebi.core.places.repository import PlacesRepository
+from kebi.core.places.cache import PlacesCache
+from kebi.db.session import async_session
+from kebi.providers.redis_cache import get_redis
 
 async def main():
     redis = await get_redis()

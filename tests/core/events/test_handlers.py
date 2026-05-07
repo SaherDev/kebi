@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from totoro_ai.core.events.events import (
+from kebi.core.events.events import (
     ChipConfirmed,
     OnboardingSignal,
     PlaceSaved,
@@ -12,8 +12,8 @@ from totoro_ai.core.events.events import (
     RecommendationRejected,
     TurnCompleted,
 )
-from totoro_ai.core.events.handlers import EventHandlers
-from totoro_ai.db.models import InteractionType
+from kebi.core.events.handlers import EventHandlers
+from kebi.db.models import InteractionType
 
 
 class TestOnTasteSignal:

@@ -6,12 +6,12 @@ Entity shapes, field types, constraints, and transitions. Every Pydantic model i
 
 ## 0. `EmitFn` — primitive callback type (Protocol)
 
-**Location**: `src/totoro_ai/core/emit.py` (NEW — small module).
+**Location**: `src/kebi/core/emit.py` (NEW — small module).
 **Kind**: `typing.Protocol` (required; not a plain `Callable` alias, because the third positional argument has a default).
 **Purpose**: Cross-cutting emission pattern introduced in the plan-doc revision. Services (`RecallService`, `ConsultService`, `ExtractionService`) accept an optional `emit: EmitFn | None` parameter and call `emit(step_name, summary)` — or `emit(step_name, summary, duration_ms=elapsed)` when they measured the operation — at each pipeline boundary with primitive values. Tool wrappers supply a closure that adds agent-layer fields (`source`, `tool_name`, `visibility`, `timestamp`, `duration_ms`) and fans out to `langgraph.config.get_stream_writer()`.
 
 ```python
-# src/totoro_ai/core/emit.py
+# src/kebi/core/emit.py
 from typing import Protocol
 
 
@@ -36,7 +36,7 @@ Contract invariants:
 
 ## 0a. `ReasoningStep` — `duration_ms` field addition
 
-**Location**: `src/totoro_ai/core/agent/reasoning.py` (EDIT — shipped in feature 027; one field added in this feature).
+**Location**: `src/kebi/core/agent/reasoning.py` (EDIT — shipped in feature 027; one field added in this feature).
 
 Add a new field:
 ```python
@@ -63,7 +63,7 @@ Contract invariants:
 
 ## 1. `PlaceFilters` — shared filter base
 
-**Location**: `src/totoro_ai/core/places/filters.py` (NEW).
+**Location**: `src/kebi/core/places/filters.py` (NEW).
 **Kind**: Pydantic `BaseModel`.
 **Purpose**: Common filter shape for any tool or service that operates on places. Mirrors `PlaceObject` 1:1 per ADR-056.
 
@@ -81,7 +81,7 @@ No validators; Pydantic type checking is sufficient. No state transitions.
 
 ## 2. `RecallFilters` — retrieval-time constraints
 
-**Location**: `src/totoro_ai/core/recall/types.py` (REWRITE — currently dataclass; migrate to Pydantic extending `PlaceFilters`).
+**Location**: `src/kebi/core/recall/types.py` (REWRITE — currently dataclass; migrate to Pydantic extending `PlaceFilters`).
 **Kind**: Pydantic `BaseModel` extending `PlaceFilters`.
 **Purpose**: Tool input shape for `recall_tool`; also used by the flag-off `ChatService._dispatch` recall branch and by `RecallService.run`.
 
@@ -104,7 +104,7 @@ Fields inherited from `PlaceFilters`, plus:
 
 ## 3. `ConsultFilters` — discovery-time constraints
 
-**Location**: `src/totoro_ai/core/places/filters.py` (NEW, sibling of `PlaceFilters`).
+**Location**: `src/kebi/core/places/filters.py` (NEW, sibling of `PlaceFilters`).
 **Kind**: Pydantic `BaseModel` extending `PlaceFilters`.
 **Purpose**: Tool input shape for `consult_tool`; passed to `ConsultService.consult(...)`.
 
@@ -122,7 +122,7 @@ No validators. Defaults are Pydantic `None`, resolved to config values inside `C
 
 ## 4. `RecallToolInput` — recall tool's LLM-visible schema
 
-**Location**: `src/totoro_ai/core/agent/tools/recall_tool.py` (NEW).
+**Location**: `src/kebi/core/agent/tools/recall_tool.py` (NEW).
 **Kind**: Pydantic `BaseModel`.
 **Purpose**: `@tool("recall", args_schema=RecallToolInput)` — the schema Sonnet sees when deciding how to call the recall tool.
 
@@ -139,7 +139,7 @@ No validators. Defaults are Pydantic `None`, resolved to config values inside `C
 
 ## 5. `SaveToolInput` — save tool's LLM-visible schema
 
-**Location**: `src/totoro_ai/core/agent/tools/save_tool.py` (NEW).
+**Location**: `src/kebi/core/agent/tools/save_tool.py` (NEW).
 **Kind**: Pydantic `BaseModel`.
 
 | Field | Type | Default | `Field(description=...)` text (verbatim from plan doc) |
@@ -152,7 +152,7 @@ No validators. Defaults are Pydantic `None`, resolved to config values inside `C
 
 ## 6. `ConsultToolInput` — consult tool's LLM-visible schema
 
-**Location**: `src/totoro_ai/core/agent/tools/consult_tool.py` (NEW).
+**Location**: `src/kebi/core/agent/tools/consult_tool.py` (NEW).
 **Kind**: Pydantic `BaseModel`.
 
 | Field | Type | Default | `Field(description=...)` text (verbatim from plan doc) |
@@ -167,7 +167,7 @@ No validators. Defaults are Pydantic `None`, resolved to config values inside `C
 
 ## 7. `ConsultService.consult(...)` — new signature
 
-**Location**: `src/totoro_ai/core/consult/service.py` (MAJOR EDIT).
+**Location**: `src/kebi/core/consult/service.py` (MAJOR EDIT).
 
 ```python
 async def consult(
@@ -225,7 +225,7 @@ def __init__(
 
 ## 7a. `RecallService.run(...)` — `emit` parameter addition
 
-**Location**: `src/totoro_ai/core/recall/service.py` (LIGHT EDIT).
+**Location**: `src/kebi/core/recall/service.py` (LIGHT EDIT).
 
 Signature gains an optional `emit: EmitFn | None = None` parameter. The body inserts `_emit = emit or (lambda _s, _m: None)` near the top and calls:
 - `_emit("recall.mode", f"mode={mode}; limit={limit}; sort_by={sort_by}")` immediately after the retrieval mode is determined.
@@ -235,7 +235,7 @@ Signature gains an optional `emit: EmitFn | None = None` parameter. The body ins
 
 ## 7b. `ExtractionService.run(...)` — `emit` parameter addition
 
-**Location**: `src/totoro_ai/core/extraction/service.py` (LIGHT EDIT).
+**Location**: `src/kebi/core/extraction/service.py` (LIGHT EDIT).
 
 Signature gains an optional `emit: EmitFn | None = None` parameter. The inline-await body (from feature 027 M1) inserts `_emit = emit or (lambda _s, _m: None)` and calls:
 - `_emit("save.parse_input", f"url={url}; supplementary_text={n} chars")` after input parsing.
@@ -248,7 +248,7 @@ Signature gains an optional `emit: EmitFn | None = None` parameter. The inline-a
 
 ## 7c. `ConsultResponse` — drop `reasoning_steps` field
 
-**Location**: `src/totoro_ai/api/schemas/consult.py` (EDIT).
+**Location**: `src/kebi/api/schemas/consult.py` (EDIT).
 
 Before (feature 027):
 ```python
@@ -276,7 +276,7 @@ Per the plan-doc revision — steps are now delivered live via the `emit` callba
 
 ## 8. `ChatResponse` — Literal tightening + new value
 
-**Location**: `src/totoro_ai/api/schemas/chat.py` (EDIT).
+**Location**: `src/kebi/api/schemas/chat.py` (EDIT).
 
 ```python
 ChatResponseType = Literal[
@@ -303,7 +303,7 @@ Docstring updated to list all seven values. `data` continues to be `dict[str, An
 
 ## 9. Compiled agent graph (FastAPI app-state attribute)
 
-**Location**: `src/totoro_ai/api/main.py` (lifespan) + `src/totoro_ai/api/deps.py` (`get_agent_graph`).
+**Location**: `src/kebi/api/main.py` (lifespan) + `src/kebi/api/deps.py` (`get_agent_graph`).
 
 ```python
 # api/main.py (inside lifespan async context manager)
@@ -335,7 +335,7 @@ def get_agent_graph(request: Request) -> Any:
 
 ## 10. `ChatService._run_agent` — invocation shape
 
-**Location**: `src/totoro_ai/core/chat/service.py` (EDIT — new private method).
+**Location**: `src/kebi/core/chat/service.py` (EDIT — new private method).
 
 Input: `ChatRequest`.
 
@@ -357,7 +357,7 @@ Sequence:
 
 ## 11. `ChatService._dispatch` — consult branch (flag-off scaffolding per spec Q2)
 
-**Location**: `src/totoro_ai/core/chat/service.py` (EDIT).
+**Location**: `src/kebi/core/chat/service.py` (EDIT).
 
 Today the consult branch reads `request.message` and calls `self._consult.consult(user_id, message, location)`. After this feature:
 

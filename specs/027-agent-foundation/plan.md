@@ -1,7 +1,7 @@
 # Implementation Plan: Agent Foundation (M0.5 + M1 + M2 + M3)
 
 **Branch**: `027-agent-foundation` | **Date**: 2026-04-21 | **Spec**: [spec.md](./spec.md)
-**Input**: Feature specification from `/Users/saher/dev/repos/totoro-dev/totoro-ai/specs/027-agent-foundation/spec.md`
+**Input**: Feature specification from `/Users/saher/dev/repos/kebi-dev/kebi/specs/027-agent-foundation/spec.md`
 **Source of truth**: `docs/plans/2026-04-21-agent-tool-migration.md` (milestones M0.5 / M1 / M2 / M3). Binding ADRs: ADR-044, ADR-048, ADR-051, ADR-052, ADR-057, ADR-059, ADR-062, plus new ADR-063 landing in this feature.
 
 ## Summary
@@ -88,7 +88,7 @@ specs/027-agent-foundation/
 The repo is a single-project Python service (src layout, ADR-001). This feature touches four areas:
 
 ```text
-src/totoro_ai/
+src/kebi/
 ├── api/
 │   ├── routes/
 │   │   └── extraction.py                # UNCHANGED (returns new ExtractPlaceResponse shape via Pydantic)
@@ -127,7 +127,7 @@ docs/
 ├── api-contract.md                      # EDIT — new ExtractPlaceResponse shape (M0.5, FR-007)
 └── decisions.md                         # EDIT — add ADR-063 entry (M0.5, FR-007)
 │
-totoro-config/bruno/                     # EDIT (external repo path) — update .bru example responses (M0.5, FR-008)
+kebi-config/bruno/                     # EDIT (external repo path) — update .bru example responses (M0.5, FR-008)
 
 tests/
 ├── api/
@@ -212,9 +212,9 @@ Local verification walkthrough:
 4. `poetry run pytest tests/core/extraction/test_service.py` — verify inline-await behavior.
 5. `poetry run pytest tests/core/agent/` — verify graph skeleton with `InMemorySaver` + mocked LLM.
 6. `poetry run pytest tests/core/agent/test_checkpointer.py` — integration: setup() idempotency against docker-compose Postgres.
-7. `poetry run python -c "from totoro_ai.core.config import get_config; c = get_config(); print(c.agent.enabled, c.prompts['agent'].file)"` → prints `False agent.txt`.
+7. `poetry run python -c "from kebi.core.config import get_config; c = get_config(); print(c.agent.enabled, c.prompts['agent'].file)"` → prints `False agent.txt`.
 8. `poetry run alembic check` — confirm checkpointer tables not flagged.
-9. Start uvicorn: `poetry run uvicorn totoro_ai.api.main:app --reload`. `POST /v1/chat` with `{"user_id": "u1", "message": "https://tiktok.com/@x/video/123"}` → `data.status="pending"`, `data.raw_input="https://tiktok.com/@x/video/123"`, `data.request_id=<uuid>`. `GET /v1/extraction/<uuid>` → eventually `data.status="completed"` with real `results`.
+9. Start uvicorn: `poetry run uvicorn kebi.api.main:app --reload`. `POST /v1/chat` with `{"user_id": "u1", "message": "https://tiktok.com/@x/video/123"}` → `data.status="pending"`, `data.raw_input="https://tiktok.com/@x/video/123"`, `data.request_id=<uuid>`. `GET /v1/extraction/<uuid>` → eventually `data.status="completed"` with real `results`.
 10. `poetry run ruff check src/ tests/ && poetry run ruff format --check src/ tests/ && poetry run mypy src/` — all green.
 
 ### 4. Agent context update
@@ -238,7 +238,7 @@ These land in normal source code during `/speckit.implement`, not as planning ar
 
 - **ADR-063** written into `docs/decisions.md` (short entry: context + decision + consequences covering two-level status + `raw_input` rename + Redis prefix bump).
 - **`docs/api-contract.md`** updated — move `status` to envelope, drop nullability on `place`/`confidence`, rename `source_url → raw_input`.
-- **Bruno collection** (`totoro-config/bruno/`) updated — example responses reflect v2 shape.
+- **Bruno collection** (`kebi-config/bruno/`) updated — example responses reflect v2 shape.
 - **Product-repo coordination** — FR-036. Merge order documented in `research.md` item 8.
 
 ## Stop & Report

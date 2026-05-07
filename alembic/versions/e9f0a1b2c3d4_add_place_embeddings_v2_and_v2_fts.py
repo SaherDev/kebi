@@ -45,7 +45,7 @@ depends_on: str | Sequence[str] | None = None
 
 
 # Keep in sync with EMBEDDING_DIMENSIONS in
-# src/totoro_ai/core/places_v2/embeddings_repo.py.
+# src/kebi/core/places_v2/embeddings_repo.py.
 EMBEDDING_DIMENSIONS = 1024
 
 

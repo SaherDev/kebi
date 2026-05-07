@@ -15,8 +15,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
-from totoro_ai.core.config import get_config, get_env
-from totoro_ai.core.places_v2 import (
+from kebi.core.config import get_config, get_env
+from kebi.core.places_v2 import (
     AccessibilityTag,
     AtmosphereTag,
     CachedEmbedder,
@@ -49,11 +49,11 @@ from totoro_ai.core.places_v2 import (
     UserPlacesRepo,
     UserPlacesService,
 )
-from totoro_ai.core.places_v2._place_merge import merge_place
-from totoro_ai.core.places_v2 import query_examples as qx
-from totoro_ai.core.places_v2.embedding_service import EmbeddingService
-from totoro_ai.db.session import _get_session_factory
-from totoro_ai.providers.embeddings import VoyageEmbedder
+from kebi.core.places_v2._place_merge import merge_place
+from kebi.core.places_v2 import query_examples as qx
+from kebi.core.places_v2.embedding_service import EmbeddingService
+from kebi.db.session import _get_session_factory
+from kebi.providers.embeddings import VoyageEmbedder
 
 OUT = Path(__file__).resolve().parent / "places_v2_calls.json"
 
@@ -570,7 +570,7 @@ async def main() -> None:
 
                 # Build varied UserPlace rows: mix of sources, visited/liked
                 # combinations, and saved_at dates. The validator on UserPlace
-                # forbids source_url for manual/totoro and requires it
+                # forbids source_url for manual/kebi and requires it
                 # otherwise — distribution respects that.
                 base_time = datetime.now(UTC)
                 user_places_in: list[UserPlace] = []
@@ -791,7 +791,7 @@ async def main() -> None:
 
                 async def _row_count() -> int:
                     from sqlalchemy import func, select
-                    from totoro_ai.core.places_v2.places_repo import _PlacesV2Table
+                    from kebi.core.places_v2.places_repo import _PlacesV2Table
                     r = await session.execute(select(func.count()).select_from(_PlacesV2Table))
                     return r.scalar_one()
 

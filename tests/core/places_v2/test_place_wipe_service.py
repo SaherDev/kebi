@@ -5,17 +5,17 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
 
-from totoro_ai.core.places_v2.models import (
+from kebi.core.places_v2.models import (
     LocationContext,
     PlaceCore,
     PlaceObject,
     PlaceQuery,
 )
-from totoro_ai.core.places_v2.place_wipe_service import (
+from kebi.core.places_v2.place_wipe_service import (
     DEFAULT_RETENTION_DAYS,
     PlaceWipeService,
 )
-from totoro_ai.core.places_v2.search_service import PlacesSearchService
+from kebi.core.places_v2.search_service import PlacesSearchService
 
 
 def _wiped_core(pid: str | None) -> PlaceCore:

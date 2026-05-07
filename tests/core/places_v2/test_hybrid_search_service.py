@@ -7,8 +7,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from totoro_ai.core.places_v2.hybrid_search_service import HybridSearchService
-from totoro_ai.core.places_v2.models import (
+from kebi.core.places_v2.hybrid_search_service import HybridSearchService
+from kebi.core.places_v2.models import (
     HybridSearchFilters,
     HybridSearchHit,
     PlaceCategory,

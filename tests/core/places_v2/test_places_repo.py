@@ -8,15 +8,15 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from sqlalchemy.dialects import postgresql as pg_dialect
 
-from totoro_ai.core.places_v2.models import (
+from kebi.core.places_v2.models import (
     LocationContext,
     PlaceCategory,
     PlaceCore,
     PlaceNameAlias,
     PlaceQuery,
 )
-from totoro_ai.core.places_v2.places_repo import PlacesRepo, _core_to_dict, _row_to_core
-from totoro_ai.core.places_v2.tags import CuisineTag
+from kebi.core.places_v2.places_repo import PlacesRepo, _core_to_dict, _row_to_core
+from kebi.core.places_v2.tags import CuisineTag
 
 
 def _make_repo(rows: list[dict] | None = None) -> tuple[PlacesRepo, MagicMock]:

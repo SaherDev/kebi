@@ -12,8 +12,8 @@ from typing import Any
 
 from langchain_core.messages import AIMessage, HumanMessage
 
-from totoro_ai.core.agent.graph import NODE_TOOLS, should_continue
-from totoro_ai.core.agent.state import AgentState
+from kebi.core.agent.graph import NODE_TOOLS, should_continue
+from kebi.core.agent.state import AgentState
 
 
 def _state_with_tool_calls(tool_calls: list[dict[str, Any]]) -> AgentState:

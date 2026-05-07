@@ -1,6 +1,6 @@
 # ConsultService — signature contract (M4)
 
-Internal contract for `src/totoro_ai/core/consult/service.py::ConsultService` after the M4 refactor. Consumers are (a) the flag-off `ChatService._dispatch` consult branch and (b) the M5 `consult_tool` wrapper.
+Internal contract for `src/kebi/core/consult/service.py::ConsultService` after the M4 refactor. Consumers are (a) the flag-off `ChatService._dispatch` consult branch and (b) the M5 `consult_tool` wrapper.
 
 ## Constructor
 

@@ -6,8 +6,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from totoro_ai.core.places_v2.cache import RedisPlacesCache
-from totoro_ai.core.places_v2.models import PlaceObject
+from kebi.core.places_v2.cache import RedisPlacesCache
+from kebi.core.places_v2.models import PlaceObject
 
 
 def _make_cache(redis: MagicMock) -> RedisPlacesCache:

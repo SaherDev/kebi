@@ -2,8 +2,8 @@
 
 import pytest
 
-from totoro_ai.core.extraction.url_source import normalize_url, source_from_url
-from totoro_ai.core.places import PlaceSource
+from kebi.core.extraction.url_source import normalize_url, source_from_url
+from kebi.core.places import PlaceSource
 
 
 class TestSourceFromUrl:

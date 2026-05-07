@@ -4,8 +4,8 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from totoro_ai.core.extraction.enrichers.whisper_audio import WhisperAudioEnricher
-from totoro_ai.core.extraction.types import (
+from kebi.core.extraction.enrichers.whisper_audio import WhisperAudioEnricher
+from kebi.core.extraction.types import (
     Evidence,
     ExtractionContext,
     Medium,

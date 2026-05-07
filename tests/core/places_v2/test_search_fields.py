@@ -38,7 +38,7 @@ _MIGRATION_PATH = (
 _EMBEDDING_SERVICE_PATH = (
     _REPO_ROOT
     / "src"
-    / "totoro_ai"
+    / "kebi"
     / "core"
     / "places_v2"
     / "embedding_service.py"
@@ -46,7 +46,7 @@ _EMBEDDING_SERVICE_PATH = (
 _HYBRID_SEARCH_REPO_PATH = (
     _REPO_ROOT
     / "src"
-    / "totoro_ai"
+    / "kebi"
     / "core"
     / "places_v2"
     / "hybrid_search_repo.py"

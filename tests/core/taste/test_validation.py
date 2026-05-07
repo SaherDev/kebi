@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import pytest
 
-from totoro_ai.core.taste.aggregation import (
+from kebi.core.taste.aggregation import (
     AttributeCounts,
     SignalCounts,
     TotalCounts,
 )
-from totoro_ai.core.taste.regen import format_summary_for_agent, validate_grounded
-from totoro_ai.core.taste.schemas import Chip, SummaryLine, TasteArtifacts
+from kebi.core.taste.regen import format_summary_for_agent, validate_grounded
+from kebi.core.taste.schemas import Chip, SummaryLine, TasteArtifacts
 
 
 @pytest.fixture()

@@ -28,9 +28,9 @@
 
 **⚠️ CRITICAL**: No user story work can begin until this phase is complete.
 
-- [x] T003 [P] Create `CacheBackend` Protocol in `src/totoro_ai/providers/cache.py` (two async methods: `get(key) → str | None`, `set(key, value, ttl) → None`)
-- [x] T004 [P] Create `RedisCacheBackend` in `src/totoro_ai/providers/redis_cache.py` (wraps `redis.asyncio.Redis`; `decode_responses=True`; only file that imports `redis` directly)
-- [x] T005 Create `ExtractionStatusRepository` in `src/totoro_ai/core/extraction/status_repository.py` (constructor takes `CacheBackend`; `write(request_id, payload, ttl=3600)` and `read(request_id) → dict | None`; key format `extraction:{request_id}`)
+- [x] T003 [P] Create `CacheBackend` Protocol in `src/kebi/providers/cache.py` (two async methods: `get(key) → str | None`, `set(key, value, ttl) → None`)
+- [x] T004 [P] Create `RedisCacheBackend` in `src/kebi/providers/redis_cache.py` (wraps `redis.asyncio.Redis`; `decode_responses=True`; only file that imports `redis` directly)
+- [x] T005 Create `ExtractionStatusRepository` in `src/kebi/core/extraction/status_repository.py` (constructor takes `CacheBackend`; `write(request_id, payload, ttl=3600)` and `read(request_id) → dict | None`; key format `extraction:{request_id}`)
 
 **Checkpoint**: Cache Protocol + concrete implementation + repository all exist. US1 implementation can begin.
 
@@ -44,11 +44,11 @@
 
 ### Implementation for User Story 1
 
-- [x] T006 [US1] Add `request_id: str | None = None` field to `ExtractPlaceResponse` in `src/totoro_ai/api/schemas/extract_place.py`
-- [x] T007 [US1] Wire `request_id` into provisional `ExtractPlaceResponse` in `src/totoro_ai/core/extraction/service.py` (pass `result.request_id or None` when `isinstance(result, ProvisionalResponse)`)
-- [x] T008 [US1] Inject `ExtractionStatusRepository` into `ExtractionPendingHandler` via constructor in `src/totoro_ai/core/extraction/handlers/extraction_pending.py` (add `status_repo: ExtractionStatusRepository` param; add `_build_status_payload()` module-level helper; call `status_repo.write()` on both success and failure paths)
-- [x] T009 [US1] Add `get_cache_backend()` and `get_status_repo()` dependency functions to `src/totoro_ai/api/deps.py`; update `get_event_dispatcher()` to construct `ExtractionStatusRepository` inline and pass it to `ExtractionPendingHandler`
-- [x] T010 [US1] Add `GET /v1/extract-place/status/{request_id}` route to `src/totoro_ai/api/routes/extract_place.py` (inject `get_status_repo`; return `result if result is not None else {"extraction_status": "processing"}`)
+- [x] T006 [US1] Add `request_id: str | None = None` field to `ExtractPlaceResponse` in `src/kebi/api/schemas/extract_place.py`
+- [x] T007 [US1] Wire `request_id` into provisional `ExtractPlaceResponse` in `src/kebi/core/extraction/service.py` (pass `result.request_id or None` when `isinstance(result, ProvisionalResponse)`)
+- [x] T008 [US1] Inject `ExtractionStatusRepository` into `ExtractionPendingHandler` via constructor in `src/kebi/core/extraction/handlers/extraction_pending.py` (add `status_repo: ExtractionStatusRepository` param; add `_build_status_payload()` module-level helper; call `status_repo.write()` on both success and failure paths)
+- [x] T009 [US1] Add `get_cache_backend()` and `get_status_repo()` dependency functions to `src/kebi/api/deps.py`; update `get_event_dispatcher()` to construct `ExtractionStatusRepository` inline and pass it to `ExtractionPendingHandler`
+- [x] T010 [US1] Add `GET /v1/extract-place/status/{request_id}` route to `src/kebi/api/routes/extract_place.py` (inject `get_status_repo`; return `result if result is not None else {"extraction_status": "processing"}`)
 
 ### Tests for User Story 1
 
@@ -103,7 +103,7 @@ The Protocol and injection pattern are already in place from Phase 2. No additio
 
 **Purpose**: External documentation, API collection, and final quality gates.
 
-- [x] T019 [P] Write `totoro-config/bruno/ai-service/extract-place-status.bru` (GET request with `{{ai_url}}/v1/extract-place/status/{{request_id}}`; tests for 200 status and `extraction_status` field presence)
+- [x] T019 [P] Write `kebi-config/bruno/ai-service/extract-place-status.bru` (GET request with `{{ai_url}}/v1/extract-place/status/{{request_id}}`; tests for 200 status and `extraction_status` field presence)
 - [x] T020 Run full test suite and fix any failures: `poetry run pytest -x`
 - [x] T021 [P] Run linter and fix violations: `poetry run ruff check src/ tests/`
 - [x] T022 [P] Run type checker and fix violations: `poetry run mypy src/`
@@ -149,10 +149,10 @@ The Protocol and injection pattern are already in place from Phase 2. No additio
 
 ```bash
 # T003 and T004 can run simultaneously (different files):
-Task: "Create CacheBackend Protocol in src/totoro_ai/providers/cache.py"
-Task: "Create RedisCacheBackend in src/totoro_ai/providers/redis_cache.py"
+Task: "Create CacheBackend Protocol in src/kebi/providers/cache.py"
+Task: "Create RedisCacheBackend in src/kebi/providers/redis_cache.py"
 # Then T005 after both complete:
-Task: "Create ExtractionStatusRepository in src/totoro_ai/core/extraction/status_repository.py"
+Task: "Create ExtractionStatusRepository in src/kebi/core/extraction/status_repository.py"
 ```
 
 ## Parallel Execution Example: Phase 3

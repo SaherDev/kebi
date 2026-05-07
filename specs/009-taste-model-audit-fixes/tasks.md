@@ -26,7 +26,7 @@
 
 **⚠️ CRITICAL**: US2 work cannot begin until T001 and T002 are complete.
 
-- [X] T001 Add `ambiance: Mapped[str | None] = mapped_column(String, nullable=True)` to `Place` in `src/totoro_ai/db/models.py`
+- [X] T001 Add `ambiance: Mapped[str | None] = mapped_column(String, nullable=True)` to `Place` in `src/kebi/db/models.py`
 - [X] T002 Create Alembic migration `add_ambiance_to_places` with `op.add_column("places", sa.Column("ambiance", sa.String(), nullable=True))` and matching downgrade `op.drop_column`; run `poetry run alembic revision --autogenerate -m "add_ambiance_to_places"` and verify
 
 **Checkpoint**: `Place.ambiance` attribute exists; migration runs without error against local DB.
@@ -39,8 +39,8 @@
 
 **Independent Test**: After `handle_onboarding_signal(confirmed=True)` for a `price_range=low` place, `price_comfort` in `taste_model.parameters` increases above 0.5. After `confirmed=False`, it decreases.
 
-- [X] T003 [US1] In `src/totoro_ai/core/taste/service.py` — update `handle_onboarding_signal`: replace the `await self._increment_and_update_confidence(user_id)` call with: fetch place via `await self.place_repo.get_by_id(place_id)`, then call `await self._apply_taste_update(user_id, self._place_to_metadata(place), gain, is_positive=confirmed)`
-- [X] T004 [US1] In `src/totoro_ai/core/taste/service.py` — delete the `_increment_and_update_confidence` method entirely (FR-011: it has no callers after T003)
+- [X] T003 [US1] In `src/kebi/core/taste/service.py` — update `handle_onboarding_signal`: replace the `await self._increment_and_update_confidence(user_id)` call with: fetch place via `await self.place_repo.get_by_id(place_id)`, then call `await self._apply_taste_update(user_id, self._place_to_metadata(place), gain, is_positive=confirmed)`
+- [X] T004 [US1] In `src/kebi/core/taste/service.py` — delete the `_increment_and_update_confidence` method entirely (FR-011: it has no callers after T003)
 
 **Checkpoint**: `poetry run pytest tests/core/taste/` passes; `handle_onboarding_signal` moves the taste vector for both `confirmed=True` and `confirmed=False`.
 
@@ -52,7 +52,7 @@
 
 **Independent Test**: Inspect the generated SQL — the UPDATE path must use `interaction_count = interaction_count + 1` with no prior SELECT. A brand-new user call produces `interaction_count=1`.
 
-- [X] T005 [US4] In `src/totoro_ai/db/repositories/taste_model_repository.py` — replace the INSERT fallback path: change from `TasteModel(...)` inserted directly to a PostgreSQL `insert(TasteModel).values(...).on_conflict_do_update(index_elements=["user_id"], set_=dict(interaction_count=TasteModel.interaction_count + 1, confidence=..., parameters=...))`. Add `from sqlalchemy.dialects.postgresql import insert as pg_insert`. The UPDATE path (existing row) already uses `update(TasteModel)...` — keep it; only change the INSERT fallback to use `pg_insert` with `on_conflict_do_update`.
+- [X] T005 [US4] In `src/kebi/db/repositories/taste_model_repository.py` — replace the INSERT fallback path: change from `TasteModel(...)` inserted directly to a PostgreSQL `insert(TasteModel).values(...).on_conflict_do_update(index_elements=["user_id"], set_=dict(interaction_count=TasteModel.interaction_count + 1, confidence=..., parameters=...))`. Add `from sqlalchemy.dialects.postgresql import insert as pg_insert`. The UPDATE path (existing row) already uses `update(TasteModel)...` — keep it; only change the INSERT fallback to use `pg_insert` with `on_conflict_do_update`.
 
 **Checkpoint**: `poetry run pytest tests/db/repositories/` passes; new-user upsert produces `interaction_count=1`; second call produces `interaction_count=2`; no `IntegrityError` on concurrent first inserts.
 
@@ -66,7 +66,7 @@
 
 **Depends on**: T001, T002 (Place.ambiance must exist in model and DB)
 
-- [X] T006 [US2] In `src/totoro_ai/core/taste/service.py` — update `_place_to_metadata()`: add `ambiance` to the returned dict when `place.ambiance` is not None. Result: `{"price_range": place.price_range, "ambiance": place.ambiance}` (price_range already there; omit keys whose values are None)
+- [X] T006 [US2] In `src/kebi/core/taste/service.py` — update `_place_to_metadata()`: add `ambiance` to the returned dict when `place.ambiance` is not None. Result: `{"price_range": place.price_range, "ambiance": place.ambiance}` (price_range already there; omit keys whose values are None)
 
 **Checkpoint**: `poetry run pytest tests/core/taste/` passes; a place with `ambiance="casual"` causes `ambiance_preference` to decrease; `ambiance=None` causes no change.
 
@@ -80,7 +80,7 @@
 
 **Buckets**: breakfast=5–10, lunch=11–14, dinner=15–20, late_night=21–4 (wraps midnight).
 
-- [X] T007 [US3] In `src/totoro_ai/core/taste/service.py` — update `_place_to_metadata()`: derive `time_of_day` from `place.created_at.hour` using bucket logic and include it in the returned dict. Final method returns all three available keys: `price_range`, `ambiance`, `time_of_day` (each only if available/derivable).
+- [X] T007 [US3] In `src/kebi/core/taste/service.py` — update `_place_to_metadata()`: derive `time_of_day` from `place.created_at.hour` using bucket logic and include it in the returned dict. Final method returns all three available keys: `price_range`, `ambiance`, `time_of_day` (each only if available/derivable).
 
 **Checkpoint**: `poetry run pytest tests/core/taste/` passes; hours 5/11/15/21 produce breakfast/lunch/dinner/late_night respectively; `time_of_day_preference` moves in the correct direction.
 
@@ -90,7 +90,7 @@
 
 **Purpose**: Docstring removal, YAML comment verification, and full suite validation.
 
-- [X] T008 [P] Remove all docstrings and inline comments from `src/totoro_ai/db/repositories/taste_model_repository.py` (FR-008): delete module-level docstring, class docstrings, all method docstrings, and all `#` inline comments within method bodies
+- [X] T008 [P] Remove all docstrings and inline comments from `src/kebi/db/repositories/taste_model_repository.py` (FR-008): delete module-level docstring, class docstrings, all method docstrings, and all `#` inline comments within method bodies
 - [X] T009 [P] Verify `config/app.yaml` — search for `;` comment chars under `taste_model.observations`; replace any found with `#` (FR-009). Run `grep ";" config/app.yaml` to confirm zero matches.
 - [X] T010 Run `poetry run pytest` — all 84 tests must pass
 - [X] T011 [P] Run `poetry run ruff check src/` — zero errors

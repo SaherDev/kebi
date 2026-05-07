@@ -6,11 +6,11 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from totoro_ai.api.schemas.signal import ChipConfirmChipItem, ChipConfirmMetadata
-from totoro_ai.core.events.events import ChipConfirmed
-from totoro_ai.core.signal.service import SignalService
-from totoro_ai.core.taste.schemas import Chip, ChipStatus, TasteProfile
-from totoro_ai.db.models import InteractionType
+from kebi.api.schemas.signal import ChipConfirmChipItem, ChipConfirmMetadata
+from kebi.core.events.events import ChipConfirmed
+from kebi.core.signal.service import SignalService
+from kebi.core.taste.schemas import Chip, ChipStatus, TasteProfile
+from kebi.db.models import InteractionType
 
 
 def _metadata(status_for_ramen: str = "confirmed") -> ChipConfirmMetadata:

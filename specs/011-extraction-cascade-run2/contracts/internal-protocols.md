@@ -6,7 +6,7 @@
 
 ## `PlacesValidatorProtocol`
 
-**Location**: `src/totoro_ai/core/extraction/validator.py`  
+**Location**: `src/kebi/core/extraction/validator.py`  
 **Concrete implementation**: `GooglePlacesValidator`
 
 ```python
@@ -26,7 +26,7 @@ class PlacesValidatorProtocol(Protocol):
 
 ## `GroqTranscriptionProtocol`
 
-**Location**: `src/totoro_ai/providers/groq_client.py`  
+**Location**: `src/kebi/providers/groq_client.py`  
 **Concrete implementation**: `GroqWhisperClient`
 
 ```python
@@ -44,7 +44,7 @@ class GroqTranscriptionProtocol(Protocol):
 
 ## `Enricher` (from Run 1, repeated for reference)
 
-**Location**: `src/totoro_ai/core/extraction/protocols.py`
+**Location**: `src/kebi/core/extraction/protocols.py`
 
 ```python
 class Enricher(Protocol):
@@ -61,7 +61,7 @@ class Enricher(Protocol):
 
 ## Event: `ExtractionPending`
 
-**Location**: `src/totoro_ai/core/extraction/types.py`  
+**Location**: `src/kebi/core/extraction/types.py`  
 **Dispatched by**: `ExtractionPipeline`  
 **Handled by**: `ExtractionPendingHandler`
 

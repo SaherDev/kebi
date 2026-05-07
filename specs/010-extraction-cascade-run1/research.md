@@ -8,7 +8,7 @@
 
 **Assumption in spec**: `LLMNEREnricher` attaches Langfuse via `get_langfuse_handler()`
 
-**Finding**: `src/totoro_ai/providers/tracing.py` exposes only `get_langfuse_client() -> Any | None`. There is no `get_langfuse_handler()` function. The existing `InstructorClient.extract()` in `providers/llm.py` does not attach any Langfuse tracing — tracing is not yet wired for structured extraction calls.
+**Finding**: `src/kebi/providers/tracing.py` exposes only `get_langfuse_client() -> Any | None`. There is no `get_langfuse_handler()` function. The existing `InstructorClient.extract()` in `providers/llm.py` does not attach any Langfuse tracing — tracing is not yet wired for structured extraction calls.
 
 **Decision**: `LLMNEREnricher` uses `get_langfuse_client()` to manually create a Langfuse generation span around the `InstructorClient.extract()` call. Pattern:
 ```python

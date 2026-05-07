@@ -53,7 +53,7 @@ This feature stores state in cache only. No Alembic migration required.
 
 ## Updated API Schema: ExtractPlaceResponse
 
-**File**: `src/totoro_ai/api/schemas/extract_place.py`
+**File**: `src/kebi/api/schemas/extract_place.py`
 
 | Field | Type | Notes |
 |-------|------|-------|
@@ -68,7 +68,7 @@ This feature stores state in cache only. No Alembic migration required.
 
 ## Entity: CacheBackend (Protocol)
 
-**File**: `src/totoro_ai/providers/cache.py`
+**File**: `src/kebi/providers/cache.py`
 
 | Method | Signature | Notes |
 |--------|-----------|-------|
@@ -79,7 +79,7 @@ This feature stores state in cache only. No Alembic migration required.
 
 ## Entity: ExtractionStatusRepository
 
-**File**: `src/totoro_ai/core/extraction/status_repository.py`
+**File**: `src/kebi/core/extraction/status_repository.py`
 
 | Method | Signature | Notes |
 |--------|-----------|-------|

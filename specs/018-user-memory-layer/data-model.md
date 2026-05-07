@@ -3,7 +3,7 @@
 ## New Entity: UserMemory (SQLAlchemy ORM + PostgreSQL)
 
 **Table**: `user_memories`  
-**File**: `src/totoro_ai/db/models.py` (append to existing file)
+**File**: `src/kebi/db/models.py` (append to existing file)
 
 | Column | Type | Nullable | Constraints | Notes |
 |--------|------|----------|-------------|-------|
@@ -24,7 +24,7 @@
 
 ## New Schema: PersonalFact (Pydantic)
 
-**File**: `src/totoro_ai/core/memory/schemas.py`
+**File**: `src/kebi/core/memory/schemas.py`
 
 ```python
 from typing import Literal
@@ -43,7 +43,7 @@ class PersonalFact(BaseModel):
 
 ## Extended Schema: IntentClassification (modified)
 
-**File**: `src/totoro_ai/core/chat/router.py`
+**File**: `src/kebi/core/chat/router.py`
 
 ```python
 class IntentClassification(BaseModel):
@@ -60,7 +60,7 @@ class IntentClassification(BaseModel):
 
 ## New Event: PersonalFactsExtracted (Pydantic + DomainEvent)
 
-**File**: `src/totoro_ai/core/events/events.py`
+**File**: `src/kebi/core/events/events.py`
 
 ```python
 class PersonalFactsExtracted(DomainEvent):
@@ -76,7 +76,7 @@ class PersonalFactsExtracted(DomainEvent):
 
 ## New Config: MemoryConfig (Pydantic)
 
-**File**: `src/totoro_ai/core/config.py`
+**File**: `src/kebi/core/config.py`
 
 ```python
 class MemoryConfidenceConfig(BaseModel):
@@ -100,7 +100,7 @@ memory:
 
 ## Repository Protocol: UserMemoryRepository
 
-**File**: `src/totoro_ai/core/memory/repository.py`
+**File**: `src/kebi/core/memory/repository.py`
 
 ```python
 class UserMemoryRepository(Protocol):
@@ -124,7 +124,7 @@ class UserMemoryRepository(Protocol):
 
 ## Service: UserMemoryService
 
-**File**: `src/totoro_ai/core/memory/service.py`
+**File**: `src/kebi/core/memory/service.py`
 
 ```python
 class UserMemoryService:

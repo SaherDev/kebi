@@ -5,7 +5,7 @@
 
 ## Modified Entities
 
-### ExtractionContext (dataclass — `src/totoro_ai/core/extraction/types.py`)
+### ExtractionContext (dataclass — `src/kebi/core/extraction/types.py`)
 
 Shared mutable state threaded through all enrichers. Four new optional fields added.
 
@@ -27,7 +27,7 @@ Shared mutable state threaded through all enrichers. Four new optional fields ad
 
 ---
 
-### CandidatePlace (dataclass — `src/totoro_ai/core/extraction/types.py`)
+### CandidatePlace (dataclass — `src/kebi/core/extraction/types.py`)
 
 Unvalidated place candidate produced by an enricher. Two new optional fields added.
 
@@ -76,7 +76,7 @@ The following code is deleted and has no replacement in `llm_ner.py`:
 | Removed | Was In | Reason |
 |---------|--------|--------|
 | `_sanitize_city()` call | `llm_ner.py` `enrich()` | LLM handles city correctness; no post-processing |
-| `from totoro_ai.core.extraction.enrichers._city_filter import sanitize_city as _sanitize_city` | `llm_ner.py` imports | Import no longer needed |
+| `from kebi.core.extraction.enrichers._city_filter import sanitize_city as _sanitize_city` | `llm_ner.py` imports | Import no longer needed |
 
 `_city_filter.py` is **deleted entirely**. `emoji_regex.py` also removes its `CITY_BLOCKLIST` import and the blocklist guard in `_extract_city_hint()`.
 

@@ -1,10 +1,10 @@
-# totoro-ai
+# kebi
 
-The AI engine behind [Totoro](https://github.com/SaherDev/totoro) — live at [totoro-ten-phi.vercel.app](https://totoro-ten-phi.vercel.app).
+The AI engine behind [Kebi](https://github.com/SaherDev/kebi-app).
 
 > Google Maps and Yelp return 50 options. People want one.
 
-Totoro replaces browse-based place discovery with a single intent-driven consultation. Users save places over time, the system builds a behavioral taste profile, and when they state intent like "cheap dinner nearby" it returns one confident recommendation.
+Kebi replaces browse-based place discovery with a single intent-driven consultation. Users save places over time, the system builds a behavioral taste profile, and when they state intent like "cheap dinner nearby" it returns one confident recommendation.
 
 This repo is the AI brain. It owns place extraction, embedding generation, hybrid RAG retrieval, deterministic ranking, taste modeling, and LangGraph agent orchestration (a Claude Sonnet agent dispatches `recall`, `save`, and `consult` tools). The product repo (NestJS + Next.js) calls this service over HTTP and handles auth, UI, and recommendation history. See [docs/api-contract.md](docs/api-contract.md) for the full contract.
 
@@ -51,7 +51,7 @@ Full data flows live in [docs/architecture.md](docs/architecture.md). Design rat
 
 ## Modules
 
-Domain surface under `src/totoro_ai/core/`:
+Domain surface under `src/kebi/core/`:
 
 | Module        | Responsibility                                                          |
 | ------------- | ----------------------------------------------------------------------- |
@@ -104,7 +104,7 @@ docker compose up -d
 poetry run alembic upgrade head
 
 # 5 — Run the API with hot reload
-poetry run uvicorn totoro_ai.api.main:app --reload
+poetry run uvicorn kebi.api.main:app --reload
 ```
 
 Verify the service is up: `curl http://localhost:8000/v1/health` → `{"status": "ok", "db": "connected", ...}`

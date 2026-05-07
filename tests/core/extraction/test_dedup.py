@@ -2,15 +2,15 @@
 
 import pytest
 
-from totoro_ai.core.config import ConfidenceConfig
-from totoro_ai.core.extraction.dedup import dedup_validated_by_provider_id
-from totoro_ai.core.extraction.types import (
+from kebi.core.config import ConfidenceConfig
+from kebi.core.extraction.dedup import dedup_validated_by_provider_id
+from kebi.core.extraction.types import (
     Evidence,
     Medium,
     Producer,
     ValidatedCandidate,
 )
-from totoro_ai.core.places import (
+from kebi.core.places import (
     LocationContext,
     PlaceAttributes,
     PlaceProvider,

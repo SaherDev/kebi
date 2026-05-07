@@ -4,16 +4,16 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from totoro_ai.api.schemas.extract_place import ExtractPlaceResponse
-from totoro_ai.core.extraction.persistence import PlaceSaveOutcome
-from totoro_ai.core.extraction.service import ExtractionService
-from totoro_ai.core.extraction.types import (
+from kebi.api.schemas.extract_place import ExtractPlaceResponse
+from kebi.core.extraction.persistence import PlaceSaveOutcome
+from kebi.core.extraction.service import ExtractionService
+from kebi.core.extraction.types import (
     Evidence,
     Medium,
     Producer,
     ValidatedCandidate,
 )
-from totoro_ai.core.places import (
+from kebi.core.places import (
     PlaceAttributes,
     PlaceObject,
     PlaceProvider,
@@ -284,7 +284,7 @@ async def test_tiktok_url_stamps_source(
     pipeline: MagicMock,
     persistence: MagicMock,
 ) -> None:
-    from totoro_ai.core.places import PlaceSource
+    from kebi.core.places import PlaceSource
 
     results = [_make_validated()]
     pipeline.run = AsyncMock(return_value=results)

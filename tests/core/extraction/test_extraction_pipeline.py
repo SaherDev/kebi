@@ -4,14 +4,14 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from totoro_ai.core.extraction.types import (
+from kebi.core.extraction.types import (
     Evidence,
     KnownPlace,
     Medium,
     Producer,
     ValidatedCandidate,
 )
-from totoro_ai.core.places import (
+from kebi.core.places import (
     PlaceAttributes,
     PlaceProvider,
     PlaceType,
@@ -57,14 +57,14 @@ def _make_pipeline(  # type: ignore[no-untyped-def]
         pre-search cap check.
     `deep_seeds_known_places`: same for the deep level.
     """
-    from totoro_ai.core.config import (
+    from kebi.core.config import (
         ConfidenceConfig,
         ConfidenceWeights,
         ExtractionConfig,
         ExtractionThresholds,
     )
-    from totoro_ai.core.extraction.enrichment_level import EnrichmentLevel
-    from totoro_ai.core.extraction.extraction_pipeline import (
+    from kebi.core.extraction.enrichment_level import EnrichmentLevel
+    from kebi.core.extraction.extraction_pipeline import (
         ExtractionPipeline,
         deep_summary,
         inline_summary,
@@ -321,7 +321,7 @@ async def test_searcher_receives_context() -> None:
 async def test_too_many_known_places_drops_request_before_search() -> None:
     """When producers contributed more known_places than `limit`, the
     pipeline raises before any Google Places call."""
-    from totoro_ai.core.extraction.extraction_pipeline import (
+    from kebi.core.extraction.extraction_pipeline import (
         TooManyCandidatesError,
     )
 
@@ -356,7 +356,7 @@ async def test_known_places_at_limit_proceed_normally() -> None:
 async def test_deep_known_places_trip_cap() -> None:
     """The deep level can balloon known_places past the cap; the
     pipeline must enforce the cap before that level's Search call."""
-    from totoro_ai.core.extraction.extraction_pipeline import (
+    from kebi.core.extraction.extraction_pipeline import (
         TooManyCandidatesError,
     )
 
@@ -375,7 +375,7 @@ async def test_deep_known_places_trip_cap() -> None:
 
 async def test_tight_limit_drops_request() -> None:
     """A tight per-call limit trips even with relatively few known_places."""
-    from totoro_ai.core.extraction.extraction_pipeline import (
+    from kebi.core.extraction.extraction_pipeline import (
         TooManyCandidatesError,
     )
 
@@ -401,7 +401,7 @@ async def test_loose_limit_allows_many_known_places() -> None:
 
 async def test_too_many_known_places_emits_cap_exceeded_step() -> None:
     """The pipeline emits a `save.cap_exceeded` reasoning step before raising."""
-    from totoro_ai.core.extraction.extraction_pipeline import (
+    from kebi.core.extraction.extraction_pipeline import (
         TooManyCandidatesError,
     )
 

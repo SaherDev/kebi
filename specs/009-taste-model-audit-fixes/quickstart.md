@@ -111,12 +111,12 @@ poetry run mypy src/               # zero new errors
 
 | Fix | File(s) |
 |-----|---------|
-| Fix 1 | `src/totoro_ai/core/taste/service.py` |
-| Fix 2 | `src/totoro_ai/core/taste/service.py` (already partially done) |
-| Fix 3 | `src/totoro_ai/db/repositories/taste_model_repository.py` |
-| Fix 4 | `src/totoro_ai/db/models.py`, `alembic/versions/<new>.py` |
-| Fix 5 | `src/totoro_ai/core/taste/service.py` |
-| Fix 6 | `src/totoro_ai/db/repositories/taste_model_repository.py` |
+| Fix 1 | `src/kebi/core/taste/service.py` |
+| Fix 2 | `src/kebi/core/taste/service.py` (already partially done) |
+| Fix 3 | `src/kebi/db/repositories/taste_model_repository.py` |
+| Fix 4 | `src/kebi/db/models.py`, `alembic/versions/<new>.py` |
+| Fix 5 | `src/kebi/core/taste/service.py` |
+| Fix 6 | `src/kebi/db/repositories/taste_model_repository.py` |
 | Fix 7 | `config/app.yaml` |
-| FR-011 | `src/totoro_ai/core/taste/service.py` (delete method) |
-| FR-012 | `src/totoro_ai/db/repositories/taste_model_repository.py` (ON CONFLICT) |
+| FR-011 | `src/kebi/core/taste/service.py` (delete method) |
+| FR-012 | `src/kebi/db/repositories/taste_model_repository.py` (ON CONFLICT) |

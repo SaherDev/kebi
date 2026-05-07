@@ -37,12 +37,12 @@ description: "Task list for 008-taste-model feature implementation"
 
 ⚠️ **CRITICAL**: No user story work can begin until this phase is complete
 
-- [ ] T006 Create TasteModelRepository Protocol in src/totoro_ai/db/repositories/taste_model_repository.py with methods: get_by_user_id(user_id) → TasteModel | None, upsert(user_id, parameters, confidence, interaction_count) → TasteModel, log_interaction(user_id, signal_type, place_id, gain, context) → None
+- [ ] T006 Create TasteModelRepository Protocol in src/kebi/db/repositories/taste_model_repository.py with methods: get_by_user_id(user_id) → TasteModel | None, upsert(user_id, parameters, confidence, interaction_count) → TasteModel, log_interaction(user_id, signal_type, place_id, gain, context) → None
 - [ ] T007 Implement TasteModelRepository concrete SQLAlchemy class in same file with atomic SQL increment for interaction_count updates and abort-on-failure semantics for log writes
-- [ ] T008 Export TasteModelRepository from src/totoro_ai/db/repositories/__init__.py
-- [ ] T009 [P] Create DomainEvent base class and concrete event models (PlaceSaved, RecommendationAccepted, RecommendationRejected, OnboardingSignal) in src/totoro_ai/core/events/events.py
-- [ ] T010 [P] Create EventDispatcherProtocol and EventDispatcher concrete implementation in src/totoro_ai/core/events/dispatcher.py, accepting BackgroundTasks and handler registry, implementing dispatch(event) → None
-- [ ] T011 Create event handler functions (on_place_saved, on_recommendation_accepted, on_recommendation_rejected, on_onboarding_signal) in src/totoro_ai/core/events/handlers.py with try/except logging and Langfuse tracing for failures
+- [ ] T008 Export TasteModelRepository from src/kebi/db/repositories/__init__.py
+- [ ] T009 [P] Create DomainEvent base class and concrete event models (PlaceSaved, RecommendationAccepted, RecommendationRejected, OnboardingSignal) in src/kebi/core/events/events.py
+- [ ] T010 [P] Create EventDispatcherProtocol and EventDispatcher concrete implementation in src/kebi/core/events/dispatcher.py, accepting BackgroundTasks and handler registry, implementing dispatch(event) → None
+- [ ] T011 Create event handler functions (on_place_saved, on_recommendation_accepted, on_recommendation_rejected, on_onboarding_signal) in src/kebi/core/events/handlers.py with try/except logging and Langfuse tracing for failures
 
 **Checkpoint**: Repository pattern implemented, event system ready, handlers defined
 
@@ -56,11 +56,11 @@ description: "Task list for 008-taste-model feature implementation"
 
 ### Implementation for User Story 1
 
-- [ ] T012 [US1] Create TasteModelService in src/totoro_ai/core/taste/service.py with handle_place_saved(user_id, place_id, place_metadata) method implementing: log_interaction(signal_type="save", gain=1.0), EMA update for all 8 dimensions using positive formula, confidence recomputation
+- [ ] T012 [US1] Create TasteModelService in src/kebi/core/taste/service.py with handle_place_saved(user_id, place_id, place_metadata) method implementing: log_interaction(signal_type="save", gain=1.0), EMA update for all 8 dimensions using positive formula, confidence recomputation
 - [ ] T013 [US1] Implement get_taste_vector(user_id) → dict[str, float] in TasteModelService applying personalization routing: 0 interactions → all-0.5 defaults, 1–9 interactions → 40/60 blend, ≥10 interactions → stored vector
-- [ ] T014 [US1] Update ExtractionService in src/totoro_ai/core/extraction/service.py to accept event_dispatcher: EventDispatcherProtocol, dispatch PlaceSaved event after _place_repo.save() succeeds and before embedding block (document BackgroundTasks failure mode choice in code comment)
-- [ ] T015 [US1] Update src/totoro_ai/api/deps.py: create get_event_dispatcher(background_tasks: BackgroundTasks, db_session) dependency that constructs TasteModelService, builds handler registry mapping event types → handler functions, returns EventDispatcher instance
-- [ ] T016 [US1] Update get_extraction_service in src/totoro_ai/api/deps.py to accept event_dispatcher: EventDispatcherProtocol via Depends(get_event_dispatcher), pass to ExtractionService constructor
+- [ ] T014 [US1] Update ExtractionService in src/kebi/core/extraction/service.py to accept event_dispatcher: EventDispatcherProtocol, dispatch PlaceSaved event after _place_repo.save() succeeds and before embedding block (document BackgroundTasks failure mode choice in code comment)
+- [ ] T015 [US1] Update src/kebi/api/deps.py: create get_event_dispatcher(background_tasks: BackgroundTasks, db_session) dependency that constructs TasteModelService, builds handler registry mapping event types → handler functions, returns EventDispatcher instance
+- [ ] T016 [US1] Update get_extraction_service in src/kebi/api/deps.py to accept event_dispatcher: EventDispatcherProtocol via Depends(get_event_dispatcher), pass to ExtractionService constructor
 
 **Checkpoint**: User Story 1 complete and independently testable. Saves trigger taste model updates and confidence routing works.
 
@@ -75,8 +75,8 @@ description: "Task list for 008-taste-model feature implementation"
 ### Implementation for User Story 2
 
 - [ ] T017 [P] [US2] Implement handle_onboarding_signal(user_id, place_id, confirmed: bool) in TasteModelService: confirmed=True → signal_type="onboarding_explicit", gain=1.2; confirmed=False → signal_type="onboarding_explicit", gain=-0.8. Use positive formula for confirmed, negative formula for dismissed.
-- [ ] T018 [US2] Create on_onboarding_signal handler in src/totoro_ai/core/events/handlers.py dispatching to TasteModelService.handle_onboarding_signal()
-- [ ] T019 [US2] Register on_onboarding_signal handler in EventDispatcher handler registry in src/totoro_ai/api/deps.py
+- [ ] T018 [US2] Create on_onboarding_signal handler in src/kebi/core/events/handlers.py dispatching to TasteModelService.handle_onboarding_signal()
+- [ ] T019 [US2] Register on_onboarding_signal handler in EventDispatcher handler registry in src/kebi/api/deps.py
 
 **Checkpoint**: User Story 2 complete and independently testable. Onboarding signals create taste updates with correct gain signs.
 
@@ -92,10 +92,10 @@ description: "Task list for 008-taste-model feature implementation"
 
 - [ ] T020 [US3] Implement handle_recommendation_accepted(user_id, place_id) in TasteModelService: signal_type="accepted", gain=2.0, use positive EMA formula
 - [ ] T021 [US3] Implement handle_recommendation_rejected(user_id, place_id) in TasteModelService: signal_type="rejected", gain=-1.5, use negative EMA formula
-- [ ] T022 [US3] Create on_recommendation_accepted and on_recommendation_rejected handlers in src/totoro_ai/core/events/handlers.py dispatching to TasteModelService methods
-- [ ] T023 [US3] Register both handlers in EventDispatcher handler registry in src/totoro_ai/api/deps.py
-- [ ] T024 [US3] Create POST /v1/feedback route handler in src/totoro_ai/api/routes/feedback.py: accept FeedbackRequest (user_id, recommendation_id, place_id, signal: "accepted" | "rejected"), dispatch RecommendationAccepted or RecommendationRejected event, return FeedbackResponse with status: "received"
-- [ ] T025 [US3] Include feedback_router in src/totoro_ai/api/main.py under app.include_router(feedback_router, prefix="/v1")
+- [ ] T022 [US3] Create on_recommendation_accepted and on_recommendation_rejected handlers in src/kebi/core/events/handlers.py dispatching to TasteModelService methods
+- [ ] T023 [US3] Register both handlers in EventDispatcher handler registry in src/kebi/api/deps.py
+- [ ] T024 [US3] Create POST /v1/feedback route handler in src/kebi/api/routes/feedback.py: accept FeedbackRequest (user_id, recommendation_id, place_id, signal: "accepted" | "rejected"), dispatch RecommendationAccepted or RecommendationRejected event, return FeedbackResponse with status: "received"
+- [ ] T025 [US3] Include feedback_router in src/kebi/api/main.py under app.include_router(feedback_router, prefix="/v1")
 
 **Checkpoint**: User Story 3 complete and independently testable. POST /v1/feedback endpoint wired to taste model updates.
 
@@ -121,10 +121,10 @@ description: "Task list for 008-taste-model feature implementation"
 
 **Purpose**: Ranking integration and final quality checks
 
-- [ ] T029 [P] Implement taste_similarity metric in RankingService in src/totoro_ai/core/ranking/service.py: create _compute_taste_similarity(candidate_place, taste_vector) method that maps place metadata (cuisine, price_range, ambiance, distance, time_of_day, dietary, crowd, adventurousness) to 8-dimension observation vector, returns dot-product similarity score [0, 1]
-- [ ] T030 [P] Create RankingService.rank(candidates, taste_vector) method in src/totoro_ai/core/ranking/service.py reading all weights from config/app.yaml ranking.weights, computing final score = taste_similarity × w_taste + distance_score × w_distance + price_fit_score × w_price + popularity_score × w_popularity (no hardcoded floats), returning candidates sorted descending by score
-- [ ] T031 [P] Update ConsultService in src/totoro_ai/core/consult/service.py to call TasteModelService.get_taste_vector(user_id), pass vector to RankingService.rank()
-- [ ] T032 Create .bru request file for POST /v1/feedback in totoro-config/bruno/ documenting endpoint contract
+- [ ] T029 [P] Implement taste_similarity metric in RankingService in src/kebi/core/ranking/service.py: create _compute_taste_similarity(candidate_place, taste_vector) method that maps place metadata (cuisine, price_range, ambiance, distance, time_of_day, dietary, crowd, adventurousness) to 8-dimension observation vector, returns dot-product similarity score [0, 1]
+- [ ] T030 [P] Create RankingService.rank(candidates, taste_vector) method in src/kebi/core/ranking/service.py reading all weights from config/app.yaml ranking.weights, computing final score = taste_similarity × w_taste + distance_score × w_distance + price_fit_score × w_price + popularity_score × w_popularity (no hardcoded floats), returning candidates sorted descending by score
+- [ ] T031 [P] Update ConsultService in src/kebi/core/consult/service.py to call TasteModelService.get_taste_vector(user_id), pass vector to RankingService.rank()
+- [ ] T032 Create .bru request file for POST /v1/feedback in kebi-config/bruno/ documenting endpoint contract
 - [ ] T033 Run all verify commands: `poetry run pytest` (all tests pass), `poetry run ruff check src/` (no lint errors), `poetry run mypy src/` (no type errors)
 - [ ] T034 Verify data integrity: query interaction_log for signal_type distribution, confirm all interaction_count values match log replay, confirm all gain values match config snapshot at write time
 

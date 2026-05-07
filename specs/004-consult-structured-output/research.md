@@ -78,7 +78,7 @@ if generation:
 
 ## Decision: Intent Parser Structure
 
-**Decision**: New module `src/totoro_ai/core/intent/intent_parser.py`. Defines `ParsedIntent` (Pydantic model with fields: `cuisine: str | None`, `occasion: str | None`, `price_range: str | None`, `radius: int | None`, `constraints: list[str]`). Defines `IntentParser` class using `get_instructor_client("intent_parser")` for structured extraction. `IntentParser.parse(query)` returns `ParsedIntent`. Malformed LLM output raises `ValidationError` → FastAPI returns 422.
+**Decision**: New module `src/kebi/core/intent/intent_parser.py`. Defines `ParsedIntent` (Pydantic model with fields: `cuisine: str | None`, `occasion: str | None`, `price_range: str | None`, `radius: int | None`, `constraints: list[str]`). Defines `IntentParser` class using `get_instructor_client("intent_parser")` for structured extraction. `IntentParser.parse(query)` returns `ParsedIntent`. Malformed LLM output raises `ValidationError` → FastAPI returns 422.
 
 **Rationale**: Instructor handles schema validation and retry logic transparently. The `intent_parser` role maps to `openai/gpt-4o-mini` in `app.yaml` — no config changes needed. Instructor's `extract()` already raises `ValidationError` on final schema failure, satisfying the 422 requirement.
 

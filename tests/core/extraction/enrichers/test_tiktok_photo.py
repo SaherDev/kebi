@@ -5,10 +5,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from totoro_ai.core.extraction.enrichers.tiktok_photo import (
+from kebi.core.extraction.enrichers.tiktok_photo import (
     TikTokPhotoEnricher,
 )
-from totoro_ai.core.extraction.types import (
+from kebi.core.extraction.types import (
     ExtractionContext,
     Medium,
     Producer,

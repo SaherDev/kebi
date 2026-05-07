@@ -6,11 +6,11 @@ from unittest.mock import MagicMock, patch
 import httpx
 import pytest
 
-from totoro_ai.core.extraction.enrichers.google_maps_list import (
+from kebi.core.extraction.enrichers.google_maps_list import (
     GoogleMapsListEnricher,
 )
-from totoro_ai.core.extraction.types import ExtractionContext
-from totoro_ai.core.places import PlaceSource
+from kebi.core.extraction.types import ExtractionContext
+from kebi.core.places import PlaceSource
 
 
 def _ctx(url: str = "https://maps.app.goo.gl/9KPNCHsoi5s69xE59") -> ExtractionContext:

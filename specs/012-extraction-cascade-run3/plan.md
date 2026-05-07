@@ -25,7 +25,7 @@ Wire the cascade architecture built in Runs 1–2 into production by: migrating 
 
 | Rule | Status | Notes |
 |------|--------|-------|
-| ADR-001: src layout | ✅ PASS | All new files under `src/totoro_ai/` |
+| ADR-001: src layout | ✅ PASS | All new files under `src/kebi/` |
 | ADR-003: ruff + mypy strict | ✅ PASS | Hard gate after Phase 11; verified in Phase 13 |
 | ADR-004: tests mirror src | ✅ PASS | New files get corresponding test files |
 | ADR-008: extract-place is sequential async | ✅ PASS | ExtractionPipeline is sequential async, not LangGraph |
@@ -61,7 +61,7 @@ specs/012-extraction-cascade-run3/
 ### Source Code Changes
 
 ```text
-src/totoro_ai/
+src/kebi/
 ├── core/
 │   ├── events/
 │   │   ├── events.py                          [MODIFY] PlaceSaved: place_id→place_ids
@@ -103,11 +103,11 @@ docs/
 ├── architecture.md                            [MODIFY] rewrite "Data Flow: Extract a Place"
 └── api-contract.md                            [MODIFY] update extract-place response shape
 
-src/totoro_ai/db/repositories/
+src/kebi/db/repositories/
 └── embedding_repository.py                    [MODIFY] add bulk_upsert_embeddings to Protocol + impl
 ```
 
-**Structure Decision**: Single Python project, src layout. All new code under `src/totoro_ai/core/extraction/`. Tests mirror src structure under `tests/`.
+**Structure Decision**: Single Python project, src layout. All new code under `src/kebi/core/extraction/`. Tests mirror src structure under `tests/`.
 
 ---
 
@@ -116,9 +116,9 @@ src/totoro_ai/db/repositories/
 **Goal**: Migrate `PlaceSaved.place_id: str` → `place_ids: list[str]`; update all three consumers atomically in one commit.
 
 **Files touched**:
-- `src/totoro_ai/core/events/events.py`
-- `src/totoro_ai/core/events/handlers.py`
-- `src/totoro_ai/core/taste/service.py`
+- `src/kebi/core/events/events.py`
+- `src/kebi/core/events/handlers.py`
+- `src/kebi/core/taste/service.py`
 - `tests/core/events/test_events.py` (create)
 - `tests/core/taste/test_service_integration.py` (update)
 
@@ -178,7 +178,7 @@ async def handle_place_saved(
 
 **Verification**:
 ```bash
-grep -r "place_id" src/totoro_ai/core/events/ src/totoro_ai/core/taste/ src/totoro_ai/core/events/handlers.py tests/
+grep -r "place_id" src/kebi/core/events/ src/kebi/core/taste/ src/kebi/core/events/handlers.py tests/
 # Expected: zero matches for .place_id or place_id= referencing PlaceSaved
 poetry run pytest tests/core/events/ tests/core/taste/ -v
 ```
@@ -190,8 +190,8 @@ poetry run pytest tests/core/events/ tests/core/taste/ -v
 **Goal**: Create the shared write-path service used by both inline and background extraction paths.
 
 **Files touched**:
-- `src/totoro_ai/db/repositories/embedding_repository.py` (modify — add `bulk_upsert_embeddings`)
-- `src/totoro_ai/core/extraction/persistence.py` (create)
+- `src/kebi/db/repositories/embedding_repository.py` (modify — add `bulk_upsert_embeddings`)
+- `src/kebi/core/extraction/persistence.py` (create)
 - `tests/core/extraction/test_persistence.py` (create)
 
 **Critical implementation notes**:
@@ -267,13 +267,13 @@ poetry run pytest tests/core/extraction/test_persistence.py -v
 **Goal**: Replace `persistence: Any` stub with typed `ExtractionPersistenceService`.
 
 **Files touched**:
-- `src/totoro_ai/core/extraction/handlers/extraction_pending.py`
+- `src/kebi/core/extraction/handlers/extraction_pending.py`
 - `tests/core/extraction/handlers/test_extraction_pending_handler.py`
 
 **extraction_pending.py changes**:
 ```python
-from totoro_ai.core.extraction.persistence import ExtractionPersistenceService
-from totoro_ai.core.extraction.protocols import Enricher
+from kebi.core.extraction.persistence import ExtractionPersistenceService
+from kebi.core.extraction.protocols import Enricher
 
 class ExtractionPendingHandler:
     def __init__(
@@ -308,16 +308,16 @@ poetry run pytest tests/core/extraction/handlers/ -v
 **Goal**: Replace 9-step linear pipeline with `ExtractionPipeline.run()` + `ExtractionPersistenceService.save_and_emit()`.
 
 **Files touched**:
-- `src/totoro_ai/core/extraction/service.py` (rewrite)
+- `src/kebi/core/extraction/service.py` (rewrite)
 - `tests/core/extraction/test_service.py` (rewrite)
 
 **New service.py**:
 ```python
-from totoro_ai.api.schemas.extract_place import ExtractPlaceResponse, SavedPlace
-from totoro_ai.core.extraction.extraction_pipeline import ExtractionPipeline
-from totoro_ai.core.extraction.input_parser import parse_input
-from totoro_ai.core.extraction.persistence import ExtractionPersistenceService
-from totoro_ai.core.extraction.types import ProvisionalResponse
+from kebi.api.schemas.extract_place import ExtractPlaceResponse, SavedPlace
+from kebi.core.extraction.extraction_pipeline import ExtractionPipeline
+from kebi.core.extraction.input_parser import parse_input
+from kebi.core.extraction.persistence import ExtractionPersistenceService
+from kebi.core.extraction.types import ProvisionalResponse
 
 class ExtractionService:
     def __init__(
@@ -401,8 +401,8 @@ poetry run mypy src/
 **Goal**: Update ExtractPlaceResponse to multi-place shape; wire all new deps; register ExtractionPendingHandler.
 
 **Files touched**:
-- `src/totoro_ai/api/schemas/extract_place.py`
-- `src/totoro_ai/api/deps.py`
+- `src/kebi/api/schemas/extract_place.py`
+- `src/kebi/api/deps.py`
 - `tests/api/test_extract_place.py`
 
 **New extract_place.py schema**:
@@ -467,18 +467,18 @@ def get_extraction_pipeline(
     event_dispatcher: EventDispatcher = Depends(get_event_dispatcher),
     extraction_config: ExtractionConfig = Depends(get_extraction_config),
 ) -> ExtractionPipeline:
-    from totoro_ai.core.extraction.enrichers.emoji_regex import EmojiRegexEnricher
-    from totoro_ai.core.extraction.enrichers.llm_ner import LLMNEREnricher
-    from totoro_ai.core.extraction.enrichers.tiktok_oembed import TikTokOEmbedEnricher
-    from totoro_ai.core.extraction.enrichers.yt_dlp import YtDlpMetadataEnricher
-    from totoro_ai.core.extraction.enrichers.circuit_breaker import CircuitBreakerEnricher
-    from totoro_ai.core.extraction.enrichers.parallel import ParallelEnricherGroup
-    from totoro_ai.core.extraction.enrichers.subtitle_check import SubtitleCheckEnricher
-    from totoro_ai.core.extraction.enrichers.whisper_audio import WhisperAudioEnricher
-    from totoro_ai.core.extraction.enrichers.vision_frames import VisionFramesEnricher
-    from totoro_ai.core.extraction.enrichment_pipeline import EnrichmentPipeline
-    from totoro_ai.core.extraction.validator import GooglePlacesValidator
-    from totoro_ai.core.extraction.places_client import GooglePlacesClient
+    from kebi.core.extraction.enrichers.emoji_regex import EmojiRegexEnricher
+    from kebi.core.extraction.enrichers.llm_ner import LLMNEREnricher
+    from kebi.core.extraction.enrichers.tiktok_oembed import TikTokOEmbedEnricher
+    from kebi.core.extraction.enrichers.yt_dlp import YtDlpMetadataEnricher
+    from kebi.core.extraction.enrichers.circuit_breaker import CircuitBreakerEnricher
+    from kebi.core.extraction.enrichers.parallel import ParallelEnricherGroup
+    from kebi.core.extraction.enrichers.subtitle_check import SubtitleCheckEnricher
+    from kebi.core.extraction.enrichers.whisper_audio import WhisperAudioEnricher
+    from kebi.core.extraction.enrichers.vision_frames import VisionFramesEnricher
+    from kebi.core.extraction.enrichment_pipeline import EnrichmentPipeline
+    from kebi.core.extraction.validator import GooglePlacesValidator
+    from kebi.core.extraction.places_client import GooglePlacesClient
 
     enrichment = EnrichmentPipeline([
         ParallelEnricherGroup([
@@ -521,12 +521,12 @@ async def get_event_dispatcher(
 ) -> EventDispatcher:
     ...
     # After existing registrations:
-    from totoro_ai.core.extraction.handlers.extraction_pending import ExtractionPendingHandler
-    from totoro_ai.core.extraction.validator import GooglePlacesValidator
-    from totoro_ai.core.extraction.places_client import GooglePlacesClient
-    from totoro_ai.core.extraction.enrichers.subtitle_check import SubtitleCheckEnricher
-    from totoro_ai.core.extraction.enrichers.whisper_audio import WhisperAudioEnricher
-    from totoro_ai.core.extraction.enrichers.vision_frames import VisionFramesEnricher
+    from kebi.core.extraction.handlers.extraction_pending import ExtractionPendingHandler
+    from kebi.core.extraction.validator import GooglePlacesValidator
+    from kebi.core.extraction.places_client import GooglePlacesClient
+    from kebi.core.extraction.enrichers.subtitle_check import SubtitleCheckEnricher
+    from kebi.core.extraction.enrichers.whisper_audio import WhisperAudioEnricher
+    from kebi.core.extraction.enrichers.vision_frames import VisionFramesEnricher
 
     handler = ExtractionPendingHandler(
         background_enrichers=[
@@ -591,10 +591,10 @@ poetry run pytest tests/api/test_extract_place.py -v
 
 **Delete entirely**:
 ```bash
-rm src/totoro_ai/core/extraction/dispatcher.py
-rm src/totoro_ai/core/extraction/extractors/tiktok.py
-rm src/totoro_ai/core/extraction/extractors/plain_text.py
-rm src/totoro_ai/core/extraction/result.py
+rm src/kebi/core/extraction/dispatcher.py
+rm src/kebi/core/extraction/extractors/tiktok.py
+rm src/kebi/core/extraction/extractors/plain_text.py
+rm src/kebi/core/extraction/result.py
 ```
 
 **Remove from existing files**:

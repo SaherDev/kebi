@@ -37,9 +37,9 @@ Build the additive foundation for the extraction cascade migration. Creates 11 n
 
 | Constraint | Status | Notes |
 |-----------|--------|-------|
-| ADR-001: `src/totoro_ai/` src layout | ✓ Pass | All new files under `src/totoro_ai/core/extraction/` |
+| ADR-001: `src/kebi/` src layout | ✓ Pass | All new files under `src/kebi/core/extraction/` |
 | ADR-003: ruff + mypy strict | ✓ Pass | Verification gate after each phase |
-| ADR-004: pytest in `tests/` mirroring src | ✓ Pass | `tests/core/extraction/enrichers/` mirrors `src/totoro_ai/core/extraction/enrichers/` |
+| ADR-004: pytest in `tests/` mirroring src | ✓ Pass | `tests/core/extraction/enrichers/` mirrors `src/kebi/core/extraction/enrichers/` |
 | ADR-008: extract-place NOT LangGraph | ✓ Pass | No LangGraph used; this run is pure Python enricher classes |
 | ADR-017: Pydantic for API boundaries | ✓ Pass | New types are internal pipeline types (dataclasses); API boundary types unchanged |
 | ADR-020: No hardcoded model names | ✓ Pass | `LLMNEREnricher` uses `get_instructor_client("intent_parser")` at wiring time |
@@ -66,7 +66,7 @@ specs/010-extraction-cascade-run1/
 ### Source Code
 
 ```text
-src/totoro_ai/core/extraction/
+src/kebi/core/extraction/
 ├── types.py                    (NEW — Phase 1)
 ├── confidence.py               (MODIFIED — Phase 2: add ConfidenceConfig + calculate_confidence)
 ├── protocols.py                (MODIFIED — Phase 3: add Enricher Protocol)
@@ -78,7 +78,7 @@ src/totoro_ai/core/extraction/
     ├── tiktok_oembed.py        (NEW — Phase 4)
     └── ytdlp_metadata.py       (NEW — Phase 4)
 
-src/totoro_ai/core/config.py    (MODIFIED — Phase 2: add ConfidenceConfig, extend ExtractionConfig)
+src/kebi/core/config.py    (MODIFIED — Phase 2: add ConfidenceConfig, extend ExtractionConfig)
 config/app.yaml                 (MODIFIED — Phase 2: add extraction.confidence block)
 
 tests/core/extraction/
@@ -101,7 +101,7 @@ tests/core/extraction/
 ### Task 1.1 — Create `types.py`
 
 **Files:**
-- Create: `src/totoro_ai/core/extraction/types.py`
+- Create: `src/kebi/core/extraction/types.py`
 
 - [ ] **Step 1: Write `types.py`**
 
@@ -109,7 +109,7 @@ tests/core/extraction/
 """New cascade types — zero dependencies on existing extraction modules.
 
 These types coexist with the legacy ExtractionResult (result.py) until Run 3.
-Import from totoro_ai.core.extraction.types to get these new types.
+Import from kebi.core.extraction.types to get these new types.
 """
 
 from __future__ import annotations
@@ -200,7 +200,7 @@ class ExtractionPending:
 ```python
 """Tests for new cascade types in types.py."""
 
-from totoro_ai.core.extraction.types import (
+from kebi.core.extraction.types import (
     CandidatePlace,
     ExtractionContext,
     ExtractionLevel,
@@ -320,8 +320,8 @@ Expected: All tests PASS
 - [ ] **Step 4: Run mypy and ruff on new file**
 
 ```bash
-poetry run mypy src/totoro_ai/core/extraction/types.py --strict
-poetry run ruff check src/totoro_ai/core/extraction/types.py
+poetry run mypy src/kebi/core/extraction/types.py --strict
+poetry run ruff check src/kebi/core/extraction/types.py
 ```
 
 Expected: Zero errors, zero violations
@@ -329,7 +329,7 @@ Expected: Zero errors, zero violations
 - [ ] **Step 5: Commit Phase 1**
 
 ```bash
-git add src/totoro_ai/core/extraction/types.py tests/core/extraction/test_types.py
+git add src/kebi/core/extraction/types.py tests/core/extraction/test_types.py
 git commit -m "feat(extraction): add cascade types layer — ExtractionLevel, CandidatePlace, ExtractionContext, ExtractionResult, ProvisionalResponse, ExtractionPending"
 ```
 
@@ -342,7 +342,7 @@ git commit -m "feat(extraction): add cascade types layer — ExtractionLevel, Ca
 ### Task 2.1 — Add `ConfidenceConfig` to `config.py` and extend `ExtractionConfig`
 
 **Files:**
-- Modify: `src/totoro_ai/core/config.py`
+- Modify: `src/kebi/core/config.py`
 
 - [ ] **Step 1: Add `ConfidenceConfig` class and extend `ExtractionConfig`**
 
@@ -400,15 +400,15 @@ Under `extraction:`, add after the `mutable_fields` block:
 ### Task 2.3 — Add `calculate_confidence()` to `confidence.py`
 
 **Files:**
-- Modify: `src/totoro_ai/core/extraction/confidence.py`
+- Modify: `src/kebi/core/extraction/confidence.py`
 
 - [ ] **Step 3: Add imports and new function to `confidence.py`**
 
 Add to the top of `confidence.py` (after existing imports):
 
 ```python
-from totoro_ai.core.config import ConfidenceConfig
-from totoro_ai.core.extraction.types import ExtractionLevel
+from kebi.core.config import ConfidenceConfig
+from kebi.core.extraction.types import ExtractionLevel
 ```
 
 Add after the existing `compute_confidence()` function:
@@ -453,9 +453,9 @@ def calculate_confidence(
 
 import pytest
 
-from totoro_ai.core.config import ConfidenceConfig
-from totoro_ai.core.extraction.confidence import calculate_confidence
-from totoro_ai.core.extraction.types import ExtractionLevel
+from kebi.core.config import ConfidenceConfig
+from kebi.core.extraction.confidence import calculate_confidence
+from kebi.core.extraction.types import ExtractionLevel
 
 _config = ConfidenceConfig(
     base_scores={
@@ -531,8 +531,8 @@ Expected: All tests PASS
 - [ ] **Step 6: Run mypy and ruff on modified files**
 
 ```bash
-poetry run mypy src/totoro_ai/core/config.py src/totoro_ai/core/extraction/confidence.py --strict
-poetry run ruff check src/totoro_ai/core/config.py src/totoro_ai/core/extraction/confidence.py
+poetry run mypy src/kebi/core/config.py src/kebi/core/extraction/confidence.py --strict
+poetry run ruff check src/kebi/core/config.py src/kebi/core/extraction/confidence.py
 ```
 
 Expected: Zero errors
@@ -548,7 +548,7 @@ Expected: All existing tests PASS (no regression)
 - [ ] **Step 8: Commit Phase 2**
 
 ```bash
-git add src/totoro_ai/core/config.py src/totoro_ai/core/extraction/confidence.py config/app.yaml tests/core/extraction/test_confidence_new.py
+git add src/kebi/core/config.py src/kebi/core/extraction/confidence.py config/app.yaml tests/core/extraction/test_confidence_new.py
 git commit -m "feat(extraction): add ConfidenceConfig, calculate_confidence multiplicative formula, extend ExtractionConfig"
 ```
 
@@ -561,14 +561,14 @@ git commit -m "feat(extraction): add ConfidenceConfig, calculate_confidence mult
 ### Task 3.1 — Add `Enricher` Protocol to `protocols.py`
 
 **Files:**
-- Modify: `src/totoro_ai/core/extraction/protocols.py`
+- Modify: `src/kebi/core/extraction/protocols.py`
 
 - [ ] **Step 1: Add `Enricher` Protocol alongside `InputExtractor`**
 
 Add to the top of `protocols.py` after existing imports:
 
 ```python
-from totoro_ai.core.extraction.types import ExtractionContext
+from kebi.core.extraction.types import ExtractionContext
 ```
 
 Add after the existing `InputExtractor` class:
@@ -588,8 +588,8 @@ class Enricher(Protocol):
 ### Task 3.2 — Create enrichers package and `EmojiRegexEnricher`
 
 **Files:**
-- Create: `src/totoro_ai/core/extraction/enrichers/__init__.py`
-- Create: `src/totoro_ai/core/extraction/enrichers/emoji_regex.py`
+- Create: `src/kebi/core/extraction/enrichers/__init__.py`
+- Create: `src/kebi/core/extraction/enrichers/emoji_regex.py`
 - Create: `tests/core/extraction/enrichers/__init__.py`
 
 - [ ] **Step 2: Create `enrichers/__init__.py` and `tests/core/extraction/enrichers/__init__.py`** (both empty)
@@ -601,7 +601,7 @@ class Enricher(Protocol):
 
 import re
 
-from totoro_ai.core.extraction.types import (
+from kebi.core.extraction.types import (
     CandidatePlace,
     ExtractionContext,
     ExtractionLevel,
@@ -680,7 +680,7 @@ class EmojiRegexEnricher:
 ### Task 3.3 — Write `LLMNEREnricher`
 
 **Files:**
-- Create: `src/totoro_ai/core/extraction/enrichers/llm_ner.py`
+- Create: `src/kebi/core/extraction/enrichers/llm_ner.py`
 
 - [ ] **Step 4: Write `llm_ner.py`**
 
@@ -691,13 +691,13 @@ import logging
 
 from pydantic import BaseModel
 
-from totoro_ai.core.extraction.types import (
+from kebi.core.extraction.types import (
     CandidatePlace,
     ExtractionContext,
     ExtractionLevel,
 )
-from totoro_ai.providers.llm import InstructorClient
-from totoro_ai.providers.tracing import get_langfuse_client
+from kebi.providers.llm import InstructorClient
+from kebi.providers.tracing import get_langfuse_client
 
 logger = logging.getLogger(__name__)
 
@@ -805,8 +805,8 @@ class LLMNEREnricher:
 
 import pytest
 
-from totoro_ai.core.extraction.enrichers.emoji_regex import EmojiRegexEnricher
-from totoro_ai.core.extraction.types import ExtractionContext, ExtractionLevel
+from kebi.core.extraction.enrichers.emoji_regex import EmojiRegexEnricher
+from kebi.core.extraction.types import ExtractionContext, ExtractionLevel
 
 
 @pytest.fixture
@@ -849,7 +849,7 @@ class TestEmojiRegexEnricher:
 
     async def test_does_not_skip_when_candidates_exist(self, enricher: EmojiRegexEnricher) -> None:
         """No skip guard — appends even when candidates already present."""
-        from totoro_ai.core.extraction.types import CandidatePlace
+        from kebi.core.extraction.types import CandidatePlace
         ctx = ExtractionContext(url=None, user_id="u1", caption="📍New Place")
         ctx.candidates.append(
             CandidatePlace(name="Existing", city=None, cuisine=None, source=ExtractionLevel.LLM_NER)
@@ -880,9 +880,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from totoro_ai.core.extraction.enrichers.llm_ner import LLMNEREnricher, _NERResponse, _NERPlace
-from totoro_ai.core.extraction.types import CandidatePlace, ExtractionContext, ExtractionLevel
-from totoro_ai.providers.llm import InstructorClient
+from kebi.core.extraction.enrichers.llm_ner import LLMNEREnricher, _NERResponse, _NERPlace
+from kebi.core.extraction.types import CandidatePlace, ExtractionContext, ExtractionLevel
+from kebi.providers.llm import InstructorClient
 
 
 def _mock_instructor(places: list[dict]) -> InstructorClient:
@@ -984,8 +984,8 @@ Expected: All tests PASS
 - [ ] **Step 8: Run mypy and ruff**
 
 ```bash
-poetry run mypy src/totoro_ai/core/extraction/protocols.py src/totoro_ai/core/extraction/enrichers/ --strict
-poetry run ruff check src/totoro_ai/core/extraction/protocols.py src/totoro_ai/core/extraction/enrichers/
+poetry run mypy src/kebi/core/extraction/protocols.py src/kebi/core/extraction/enrichers/ --strict
+poetry run ruff check src/kebi/core/extraction/protocols.py src/kebi/core/extraction/enrichers/
 ```
 
 Expected: Zero errors
@@ -993,7 +993,7 @@ Expected: Zero errors
 - [ ] **Step 9: Commit Phase 3**
 
 ```bash
-git add src/totoro_ai/core/extraction/protocols.py src/totoro_ai/core/extraction/enrichers/ tests/core/extraction/enrichers/
+git add src/kebi/core/extraction/protocols.py src/kebi/core/extraction/enrichers/ tests/core/extraction/enrichers/
 git commit -m "feat(extraction): add Enricher protocol, EmojiRegexEnricher, LLMNEREnricher (ADR-044, ADR-025)"
 ```
 
@@ -1006,7 +1006,7 @@ git commit -m "feat(extraction): add Enricher protocol, EmojiRegexEnricher, LLMN
 ### Task 4.1 — Create `circuit_breaker.py`
 
 **Files:**
-- Create: `src/totoro_ai/core/extraction/circuit_breaker.py`
+- Create: `src/kebi/core/extraction/circuit_breaker.py`
 
 - [ ] **Step 1: Write `circuit_breaker.py`**
 
@@ -1017,7 +1017,7 @@ import asyncio
 import time
 from enum import Enum
 
-from totoro_ai.core.extraction.types import ExtractionContext
+from kebi.core.extraction.types import ExtractionContext
 
 
 class CircuitState(Enum):
@@ -1097,7 +1097,7 @@ class ParallelEnricherGroup:
 ### Task 4.2 — Create `TikTokOEmbedEnricher`
 
 **Files:**
-- Create: `src/totoro_ai/core/extraction/enrichers/tiktok_oembed.py`
+- Create: `src/kebi/core/extraction/enrichers/tiktok_oembed.py`
 
 - [ ] **Step 2: Write `tiktok_oembed.py`**
 
@@ -1106,7 +1106,7 @@ class ParallelEnricherGroup:
 
 import httpx
 
-from totoro_ai.core.extraction.types import ExtractionContext
+from kebi.core.extraction.types import ExtractionContext
 
 _TIKTOK_OEMBED_URL = "https://www.tiktok.com/oembed"
 _TIMEOUT_SECONDS = 10.0  ; TODO: move to config if oEmbed URL needs to change per environment
@@ -1146,7 +1146,7 @@ class TikTokOEmbedEnricher:
 ### Task 4.3 — Create `YtDlpMetadataEnricher`
 
 **Files:**
-- Create: `src/totoro_ai/core/extraction/enrichers/ytdlp_metadata.py`
+- Create: `src/kebi/core/extraction/enrichers/ytdlp_metadata.py`
 
 - [ ] **Step 3: Write `ytdlp_metadata.py`**
 
@@ -1156,7 +1156,7 @@ class TikTokOEmbedEnricher:
 import asyncio
 import json
 
-from totoro_ai.core.extraction.types import ExtractionContext
+from kebi.core.extraction.types import ExtractionContext
 
 
 class YtDlpMetadataEnricher:
@@ -1208,12 +1208,12 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from totoro_ai.core.extraction.circuit_breaker import (
+from kebi.core.extraction.circuit_breaker import (
     CircuitBreakerEnricher,
     CircuitState,
     ParallelEnricherGroup,
 )
-from totoro_ai.core.extraction.types import ExtractionContext
+from kebi.core.extraction.types import ExtractionContext
 
 
 def _ctx() -> ExtractionContext:
@@ -1312,8 +1312,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from totoro_ai.core.extraction.enrichers.tiktok_oembed import TikTokOEmbedEnricher
-from totoro_ai.core.extraction.types import ExtractionContext
+from kebi.core.extraction.enrichers.tiktok_oembed import TikTokOEmbedEnricher
+from kebi.core.extraction.types import ExtractionContext
 
 
 @pytest.fixture
@@ -1359,8 +1359,8 @@ Expected: All tests PASS
 - [ ] **Step 7: Run mypy and ruff**
 
 ```bash
-poetry run mypy src/totoro_ai/core/extraction/circuit_breaker.py src/totoro_ai/core/extraction/enrichers/ --strict
-poetry run ruff check src/totoro_ai/core/extraction/circuit_breaker.py src/totoro_ai/core/extraction/enrichers/
+poetry run mypy src/kebi/core/extraction/circuit_breaker.py src/kebi/core/extraction/enrichers/ --strict
+poetry run ruff check src/kebi/core/extraction/circuit_breaker.py src/kebi/core/extraction/enrichers/
 ```
 
 Expected: Zero errors
@@ -1368,7 +1368,7 @@ Expected: Zero errors
 - [ ] **Step 8: Commit Phase 4**
 
 ```bash
-git add src/totoro_ai/core/extraction/circuit_breaker.py src/totoro_ai/core/extraction/enrichers/tiktok_oembed.py src/totoro_ai/core/extraction/enrichers/ytdlp_metadata.py tests/core/extraction/test_circuit_breaker.py tests/core/extraction/enrichers/test_tiktok_oembed.py
+git add src/kebi/core/extraction/circuit_breaker.py src/kebi/core/extraction/enrichers/tiktok_oembed.py src/kebi/core/extraction/enrichers/ytdlp_metadata.py tests/core/extraction/test_circuit_breaker.py tests/core/extraction/enrichers/test_tiktok_oembed.py
 git commit -m "feat(extraction): add CircuitBreakerEnricher, ParallelEnricherGroup, TikTokOEmbedEnricher, YtDlpMetadataEnricher"
 ```
 
