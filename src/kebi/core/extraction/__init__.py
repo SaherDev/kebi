@@ -1,0 +1,1 @@
+"""Place extraction module."""
