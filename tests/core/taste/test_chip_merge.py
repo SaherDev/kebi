@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from totoro_ai.api.schemas.signal import ChipConfirmChipItem
-from totoro_ai.core.taste.chip_merge import (
+from kebi.api.schemas.signal import ChipConfirmChipItem
+from kebi.core.taste.chip_merge import (
     merge_chip_statuses,
     merge_chips_after_regen,
 )
-from totoro_ai.core.taste.schemas import Chip, ChipStatus
+from kebi.core.taste.schemas import Chip, ChipStatus
 
 
 def _chip(

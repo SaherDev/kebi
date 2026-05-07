@@ -1,17 +1,18 @@
-"""Tests for ExtractionPipeline (feature 019)."""
+"""Tests for ExtractionPipeline (search-first flow)."""
 
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from totoro_ai.core.extraction.types import (
-    CandidatePlace,
-    ExtractionLevel,
+from kebi.core.extraction.types import (
+    Evidence,
+    KnownPlace,
+    Medium,
+    Producer,
     ValidatedCandidate,
 )
-from totoro_ai.core.places import (
+from kebi.core.places import (
     PlaceAttributes,
-    PlaceCreate,
     PlaceProvider,
     PlaceType,
 )
@@ -20,100 +21,109 @@ from totoro_ai.core.places import (
 def _make_validated(
     name: str = "Chez Claude",
     external_id: str = "place_abc",
-    resolved_by: ExtractionLevel = ExtractionLevel.EMOJI_REGEX,
     confidence: float = 0.85,
+    evidence: list[Evidence] | None = None,
 ) -> ValidatedCandidate:
     return ValidatedCandidate(
-        place=PlaceCreate(
-            user_id="u1",
-            place_name=name,
-            place_type=PlaceType.food_and_drink,
-            attributes=PlaceAttributes(),
-            provider=PlaceProvider.google,
-            external_id=external_id,
-        ),
+        place_name=name,
+        place_type=PlaceType.food_and_drink,
+        provider=PlaceProvider.google,
+        external_id=external_id,
         confidence=confidence,
-        resolved_by=resolved_by,
-        corroborated=False,
+        evidence=evidence or [Evidence(Producer.LLM_NER, Medium.CAPTION)],
+        attributes=PlaceAttributes(),
     )
 
 
 _TEST_LIMIT = 25  # default cap used by tests that don't care about the limit
 
 
-def _make_pipeline(
-    inline_validator_returns=None,  # type: ignore[no-untyped-def]
-    background_validator_returns=None,
-    background_enrichers=None,
-    enrichment_seeds_candidates=0,
-    finalizer=None,
-) -> tuple:
-    """Returns (pipeline, inline_level, validator_mock, bg_enrichers).
+def _make_pipeline(  # type: ignore[no-untyped-def]
+    inline_picks=None,
+    deep_picks=None,
+    deep_enrichers=None,
+    inline_seeds_known_places=0,
+    deep_seeds_known_places=0,
+):
+    """Returns (pipeline, inline_level, searcher_mock, picker_mock, deep_enrichers).
 
-    `enrichment_seeds_candidates`: when non-zero, the inline level's
-    enricher appends that many `CandidatePlace`s to context.candidates
-    so the cap check has something real to count. Tests pass the cap
-    value via `pipeline.run(..., limit=N)` directly — the pipeline
-    requires `limit` and no longer reads it from config.
-    `finalizer`: optional pipeline-level enricher that runs after every
-    executed level (in production this is `LLMNEREnricher`).
+    `inline_picks`: list[ValidatedCandidate] | None — what the picker
+        returns after the inline level fires.
+    `deep_picks`: list[ValidatedCandidate] | None — what the picker
+        returns after the deep level fires (when inline_picks was empty).
+    `deep_enrichers`: enrichers wired into the deep (URL-only) level.
+    `inline_seeds_known_places`: when non-zero, the inline level's
+        enricher appends that many `KnownPlace`s — used to drive the
+        pre-search cap check.
+    `deep_seeds_known_places`: same for the deep level.
     """
-    from totoro_ai.core.config import (
+    from kebi.core.config import (
+        ConfidenceConfig,
         ConfidenceWeights,
         ExtractionConfig,
         ExtractionThresholds,
     )
-    from totoro_ai.core.extraction.enrichment_level import EnrichmentLevel
-    from totoro_ai.core.extraction.extraction_pipeline import (
+    from kebi.core.extraction.enrichment_level import EnrichmentLevel
+    from kebi.core.extraction.extraction_pipeline import (
         ExtractionPipeline,
         deep_summary,
         inline_summary,
     )
 
-    seeder = MagicMock()
+    inline_enricher = MagicMock()
 
-    async def _seed(ctx) -> None:  # type: ignore[no-untyped-def]
-        for i in range(enrichment_seeds_candidates):
-            ctx.candidates.append(
-                CandidatePlace(
-                    place=PlaceCreate(
-                        user_id="u1",
-                        place_name=f"Place {i}",
-                        place_type=PlaceType.food_and_drink,
-                        attributes=PlaceAttributes(),
-                    ),
-                    source=ExtractionLevel.LLM_NER,
+    async def _seed_inline(ctx) -> None:  # type: ignore[no-untyped-def]
+        for i in range(inline_seeds_known_places):
+            ctx.known_places.append(
+                KnownPlace(
+                    name=f"Place {i}",
+                    producer=Producer.GOOGLE_MAPS_LIST,
+                    medium=Medium.LIST,
                 )
             )
 
-    seeder.enrich = AsyncMock(side_effect=_seed)
+    inline_enricher.enrich = AsyncMock(side_effect=_seed_inline)
 
     inline_level = EnrichmentLevel(
         name="enrich",
-        enrichers=[seeder],
+        enrichers=[inline_enricher],
         summary_fn=inline_summary,
     )
 
-    # validator returns inline_validator_returns on first call,
-    # background_validator_returns on second (deep level re-validation)
-    if background_validator_returns is not None:
-        validator = MagicMock()
-        validator.validate = AsyncMock(
-            side_effect=[inline_validator_returns, background_validator_returns]
-        )
-    else:
-        validator = MagicMock()
-        validator.validate = AsyncMock(return_value=inline_validator_returns)
+    if deep_enrichers is None:
+        deep_enrichers = []
 
-    if background_enrichers is None:
-        background_enrichers = []
+    if deep_seeds_known_places:
+        seeder = MagicMock()
+
+        async def _seed_deep(ctx) -> None:  # type: ignore[no-untyped-def]
+            for i in range(deep_seeds_known_places):
+                ctx.known_places.append(
+                    KnownPlace(
+                        name=f"Deep Place {i}",
+                        producer=Producer.VISION_FRAMES,
+                        medium=Medium.FRAME,
+                    )
+                )
+
+        seeder.enrich = AsyncMock(side_effect=_seed_deep)
+        deep_enrichers = [*deep_enrichers, seeder]
 
     deep_level = EnrichmentLevel(
         name="deep_enrichment",
-        enrichers=background_enrichers,
+        enrichers=deep_enrichers,
         summary_fn=deep_summary,
         requires_url=True,
     )
+
+    searcher = MagicMock()
+    searcher.search = AsyncMock()
+
+    picker = MagicMock()
+    if deep_picks is not None:
+        picker.pick = AsyncMock(side_effect=[inline_picks or [], deep_picks])
+    else:
+        picker.pick = AsyncMock(return_value=inline_picks or [])
 
     weights = ConfidenceWeights(
         base_scores={"CAPTION": 0.7},
@@ -121,21 +131,22 @@ def _make_pipeline(
     )
     extraction_config = ExtractionConfig(
         confidence_weights=weights,
+        confidence=ConfidenceConfig(),
         thresholds=ExtractionThresholds(),
     )
 
     pipeline = ExtractionPipeline(
         levels=[inline_level, deep_level],
-        validator=validator,
+        searcher=searcher,
+        picker=picker,
         extraction_config=extraction_config,
-        finalizer=finalizer,
     )
-    return pipeline, inline_level, validator, background_enrichers
+    return pipeline, inline_level, searcher, picker, deep_enrichers
 
 
-async def test_inline_candidates_found_returns_results() -> None:
+async def test_inline_picks_returns_results() -> None:
     results = [_make_validated()]
-    pipeline, _, _, _ = _make_pipeline(inline_validator_returns=results)
+    pipeline, _, _, _, _ = _make_pipeline(inline_picks=results)
 
     output = await pipeline.run(
         url="https://tiktok.com/1", user_id="u1", limit=_TEST_LIMIT
@@ -144,8 +155,8 @@ async def test_inline_candidates_found_returns_results() -> None:
     assert output == results
 
 
-async def test_no_inline_candidates_no_bg_enrichers_returns_empty() -> None:
-    pipeline, _, _, _ = _make_pipeline(inline_validator_returns=None)
+async def test_no_inline_picks_no_deep_enrichers_returns_empty() -> None:
+    pipeline, _, _, _, _ = _make_pipeline(inline_picks=None)
 
     output = await pipeline.run(
         url="https://tiktok.com/1", user_id="u1", limit=_TEST_LIMIT
@@ -154,15 +165,15 @@ async def test_no_inline_candidates_no_bg_enrichers_returns_empty() -> None:
     assert output == []
 
 
-async def test_no_inline_candidates_bg_enrichers_run_inline() -> None:
+async def test_no_inline_picks_deep_enrichers_run_and_picker_re_runs() -> None:
     bg_enricher = MagicMock()
     bg_enricher.enrich = AsyncMock()
-    bg_results = [_make_validated()]
+    deep_results = [_make_validated()]
 
-    pipeline, _, _, _ = _make_pipeline(
-        inline_validator_returns=None,
-        background_validator_returns=bg_results,
-        background_enrichers=[bg_enricher],
+    pipeline, _, _, picker, _ = _make_pipeline(
+        inline_picks=None,
+        deep_picks=deep_results,
+        deep_enrichers=[bg_enricher],
     )
 
     output = await pipeline.run(
@@ -170,17 +181,18 @@ async def test_no_inline_candidates_bg_enrichers_run_inline() -> None:
     )
 
     bg_enricher.enrich.assert_awaited_once()
-    assert output == bg_results
+    assert picker.pick.await_count == 2
+    assert output == deep_results
 
 
-async def test_bg_enrichers_find_nothing_returns_empty() -> None:
+async def test_deep_enrichers_find_nothing_returns_empty() -> None:
     bg_enricher = MagicMock()
     bg_enricher.enrich = AsyncMock()
 
-    pipeline, _, _, _ = _make_pipeline(
-        inline_validator_returns=None,
-        background_validator_returns=None,
-        background_enrichers=[bg_enricher],
+    pipeline, _, _, _, _ = _make_pipeline(
+        inline_picks=None,
+        deep_picks=None,
+        deep_enrichers=[bg_enricher],
     )
 
     output = await pipeline.run(
@@ -190,39 +202,42 @@ async def test_bg_enrichers_find_nothing_returns_empty() -> None:
     assert output == []
 
 
-async def test_plain_text_no_url_skips_bg_enrichers() -> None:
+async def test_plain_text_no_url_skips_deep_enrichers() -> None:
     bg_enricher = MagicMock()
     bg_enricher.enrich = AsyncMock()
 
-    pipeline, _, _, _ = _make_pipeline(
-        inline_validator_returns=None,
-        background_enrichers=[bg_enricher],
+    pipeline, _, _, _, _ = _make_pipeline(
+        inline_picks=None,
+        deep_enrichers=[bg_enricher],
     )
 
     output = await pipeline.run(
-        url=None, user_id="u1", supplementary_text="Some place", limit=_TEST_LIMIT
+        url=None,
+        user_id="u1",
+        supplementary_text="Some place",
+        limit=_TEST_LIMIT,
     )
 
     bg_enricher.enrich.assert_not_called()
     assert output == []
 
 
-async def test_same_provider_id_deduped_after_validation() -> None:
-    """Two validated candidates resolving to the same provider_id are
-    collapsed into one with the corroboration bonus applied."""
-    emoji = _make_validated(
+async def test_same_provider_id_deduped_after_picking() -> None:
+    """Two picks resolving to the same provider_id are collapsed into
+    one with merged evidence and the corroboration bonus."""
+    a = _make_validated(
         name="RAMEN KAISUGI Bangkok",
         external_id="ChIJrUYs1Xuf4jARDnd40CFUUAE",
-        resolved_by=ExtractionLevel.EMOJI_REGEX,
         confidence=0.76,
+        evidence=[Evidence(Producer.LLM_NER, Medium.CAPTION)],
     )
-    ner = _make_validated(
+    b = _make_validated(
         name="RAMEN KAISUGI",
         external_id="ChIJrUYs1Xuf4jARDnd40CFUUAE",
-        resolved_by=ExtractionLevel.LLM_NER,
         confidence=0.64,
+        evidence=[Evidence(Producer.VISION_FRAMES, Medium.FRAME)],
     )
-    pipeline, _, _, _ = _make_pipeline(inline_validator_returns=[emoji, ner])
+    pipeline, _, _, _, _ = _make_pipeline(inline_picks=[a, b])
 
     output = await pipeline.run(
         url=None,
@@ -233,13 +248,13 @@ async def test_same_provider_id_deduped_after_validation() -> None:
 
     assert isinstance(output, list)
     assert len(output) == 1
-    assert output[0].resolved_by == ExtractionLevel.EMOJI_REGEX
-    assert output[0].corroborated is True
+    producers = {e.producer for e in output[0].evidence}
+    assert producers == {Producer.LLM_NER, Producer.VISION_FRAMES}
 
 
 async def test_plain_text_input_url_none_passes_through() -> None:
     results = [_make_validated()]
-    pipeline, inline_level, _, _ = _make_pipeline(inline_validator_returns=results)
+    pipeline, inline_level, _, _, _ = _make_pipeline(inline_picks=results)
 
     output = await pipeline.run(
         url=None,
@@ -256,69 +271,63 @@ async def test_plain_text_input_url_none_passes_through() -> None:
     assert ctx.supplementary_text == "Ramen House Paris"
 
 
-async def test_validator_receives_only_candidates() -> None:
-    """validator.validate(candidates) — no user_id positional arg."""
-    pipeline, _, validator, _ = _make_pipeline(inline_validator_returns=None)
-
-    await pipeline.run(url="https://tiktok.com/1", user_id="u-xyz", limit=_TEST_LIMIT)
-
-    assert validator.validate.await_count >= 1
-    args = validator.validate.call_args.args
-    kwargs = validator.validate.call_args.kwargs
-    assert len(args) + len(kwargs) == 1
-
-
-async def test_pipeline_finalizer_runs_after_each_executed_level() -> None:
-    """The pipeline-level finalizer (typically NER) runs after every
-    executed level — both inline and deep when both fire — and never
-    when a level was skipped via requires_url."""
-    finalizer = MagicMock()
-    finalizer.enrich = AsyncMock()
-
+async def test_searcher_runs_on_each_executed_level() -> None:
+    """Search runs after every executed level. Inline-only when deep skipped."""
     bg_enricher = MagicMock()
     bg_enricher.enrich = AsyncMock()
 
-    # Inline returns nothing → deep level fires → both should call finalizer.
-    pipeline, _, _, _ = _make_pipeline(
-        inline_validator_returns=None,
-        background_validator_returns=None,
-        background_enrichers=[bg_enricher],
-        finalizer=finalizer,
+    pipeline, _, searcher, _, _ = _make_pipeline(
+        inline_picks=None,
+        deep_picks=None,
+        deep_enrichers=[bg_enricher],
     )
 
     await pipeline.run(url="https://tiktok.com/x", user_id="u1", limit=_TEST_LIMIT)
 
-    assert finalizer.enrich.await_count == 2
+    assert searcher.search.await_count == 2
 
 
-async def test_pipeline_finalizer_skipped_when_level_skipped() -> None:
-    """A requires_url level on a text-only input is skipped — and the
-    finalizer must not run for that skipped level."""
-    finalizer = MagicMock()
-    finalizer.enrich = AsyncMock()
-
-    pipeline, _, _, _ = _make_pipeline(
-        inline_validator_returns=None,
-        background_enrichers=[MagicMock(enrich=AsyncMock())],
-        finalizer=finalizer,
+async def test_searcher_skipped_when_level_skipped() -> None:
+    """A requires_url level on a text-only input is skipped — search
+    must not run for that skipped level."""
+    pipeline, _, searcher, _, _ = _make_pipeline(
+        inline_picks=None,
+        deep_enrichers=[MagicMock(enrich=AsyncMock())],
     )
 
-    # url=None → deep level is skipped, only inline fires the finalizer.
     await pipeline.run(
         url=None, user_id="u1", supplementary_text="something", limit=_TEST_LIMIT
     )
 
-    assert finalizer.enrich.await_count == 1
+    # url=None → deep level skipped; only inline runs the searcher.
+    assert searcher.search.await_count == 1
 
 
-async def test_too_many_candidates_drops_request_before_validation() -> None:
-    """When Phase 1 produces more candidates than `limit`, the pipeline
-    raises `TooManyCandidatesError` and never calls the validator."""
-    from totoro_ai.core.extraction.extraction_pipeline import (
+async def test_searcher_receives_context() -> None:
+    """searcher.search(context) is called with the shared ExtractionContext."""
+    pipeline, _, searcher, _, _ = _make_pipeline(inline_picks=None)
+
+    await pipeline.run(
+        url="https://tiktok.com/1", user_id="u-xyz", limit=_TEST_LIMIT
+    )
+
+    args = searcher.search.call_args.args
+    kwargs = searcher.search.call_args.kwargs
+    assert len(args) + len(kwargs) == 1
+    ctx = args[0] if args else kwargs.get("context")
+    assert ctx.user_id == "u-xyz"
+
+
+async def test_too_many_known_places_drops_request_before_search() -> None:
+    """When producers contributed more known_places than `limit`, the
+    pipeline raises before any Google Places call."""
+    from kebi.core.extraction.extraction_pipeline import (
         TooManyCandidatesError,
     )
 
-    pipeline, _, validator, _ = _make_pipeline(enrichment_seeds_candidates=30)
+    pipeline, _, searcher, picker, _ = _make_pipeline(
+        inline_seeds_known_places=30
+    )
 
     with pytest.raises(TooManyCandidatesError) as exc_info:
         await pipeline.run(
@@ -327,100 +336,76 @@ async def test_too_many_candidates_drops_request_before_validation() -> None:
 
     assert exc_info.value.found == 30
     assert exc_info.value.limit == 25
-    validator.validate.assert_not_called()
+    searcher.search.assert_not_called()
+    picker.pick.assert_not_called()
 
 
-async def test_candidates_at_limit_proceed_normally() -> None:
-    """Exactly `limit` candidates is allowed — no exception."""
-    pipeline, _, validator, _ = _make_pipeline(
-        inline_validator_returns=None,
-        enrichment_seeds_candidates=25,
+async def test_known_places_at_limit_proceed_normally() -> None:
+    """Exactly `limit` known_places is allowed — no exception."""
+    pipeline, _, searcher, _, _ = _make_pipeline(
+        inline_picks=None, inline_seeds_known_places=25
     )
 
     await pipeline.run(
         url=None, user_id="u1", supplementary_text="...", limit=25
     )
 
-    validator.validate.assert_awaited()
+    searcher.search.assert_awaited()
 
 
-async def test_phase3_too_many_candidates_drops_request() -> None:
-    """Phase 3 background enrichers can push the candidate count back
-    over the cap. The pipeline must enforce the same hard drop before
-    the Phase 3 re-validation."""
-    from totoro_ai.core.extraction.extraction_pipeline import (
+async def test_deep_known_places_trip_cap() -> None:
+    """The deep level can balloon known_places past the cap; the
+    pipeline must enforce the cap before that level's Search call."""
+    from kebi.core.extraction.extraction_pipeline import (
         TooManyCandidatesError,
     )
 
-    # Phase 1 returns nothing (validator returns None) so Phase 3 fires.
-    # The bg enricher then balloons the candidate set past the cap.
-    bg_enricher = MagicMock()
-
-    async def _balloon(ctx) -> None:  # type: ignore[no-untyped-def]
-        for i in range(30):
-            ctx.candidates.append(
-                CandidatePlace(
-                    place=PlaceCreate(
-                        user_id="u1",
-                        place_name=f"BG Place {i}",
-                        place_type=PlaceType.food_and_drink,
-                        attributes=PlaceAttributes(),
-                    ),
-                    source=ExtractionLevel.WHISPER_AUDIO,
-                )
-            )
-
-    bg_enricher.enrich = AsyncMock(side_effect=_balloon)
-
-    pipeline, _, validator, _ = _make_pipeline(
-        inline_validator_returns=None,
-        background_enrichers=[bg_enricher],
+    pipeline, _, searcher, _, _ = _make_pipeline(
+        inline_picks=None,
+        deep_seeds_known_places=30,
     )
 
     with pytest.raises(TooManyCandidatesError) as exc_info:
         await pipeline.run(url="https://tiktok.com/1", user_id="u1", limit=25)
 
     assert exc_info.value.found == 30
-    # Validator was called once (Phase 2 with 0 candidates) but never
-    # again — Phase 3 raised before re-validation.
-    assert validator.validate.await_count == 1
+    # Inline searched (with 0 known_places) but deep's search must not fire.
+    assert searcher.search.await_count == 1
 
 
 async def test_tight_limit_drops_request() -> None:
-    """A tight per-call limit trips even with relatively few candidates."""
-    from totoro_ai.core.extraction.extraction_pipeline import (
+    """A tight per-call limit trips even with relatively few known_places."""
+    from kebi.core.extraction.extraction_pipeline import (
         TooManyCandidatesError,
     )
 
-    pipeline, _, validator, _ = _make_pipeline(enrichment_seeds_candidates=12)
+    pipeline, _, searcher, _, _ = _make_pipeline(inline_seeds_known_places=12)
 
     with pytest.raises(TooManyCandidatesError) as exc_info:
         await pipeline.run(url=None, user_id="u1", limit=10)
 
     assert exc_info.value.found == 12
     assert exc_info.value.limit == 10
-    validator.validate.assert_not_called()
+    searcher.search.assert_not_called()
 
 
-async def test_loose_limit_allows_many_candidates() -> None:
+async def test_loose_limit_allows_many_known_places() -> None:
     """A high per-call limit lets the pipeline through with a big set."""
-    pipeline, _, validator, _ = _make_pipeline(
-        inline_validator_returns=None,
-        enrichment_seeds_candidates=40,
+    pipeline, _, searcher, _, _ = _make_pipeline(
+        inline_picks=None, inline_seeds_known_places=40
     )
 
-    # No exception — caller raised the ceiling to 50.
     await pipeline.run(url=None, user_id="u1", limit=50)
-    validator.validate.assert_awaited()
+    searcher.search.assert_awaited()
 
 
-async def test_too_many_candidates_emits_cap_exceeded_step() -> None:
+async def test_too_many_known_places_emits_cap_exceeded_step() -> None:
     """The pipeline emits a `save.cap_exceeded` reasoning step before raising."""
-    from totoro_ai.core.extraction.extraction_pipeline import (
+    from kebi.core.extraction.extraction_pipeline import (
         TooManyCandidatesError,
     )
 
-    pipeline, _, _, _ = _make_pipeline(enrichment_seeds_candidates=30)
+    pipeline, _, _, _, _ = _make_pipeline(inline_seeds_known_places=30)
 
     emitted: list[tuple[str, str]] = []
 
@@ -429,7 +414,11 @@ async def test_too_many_candidates_emits_cap_exceeded_step() -> None:
 
     with pytest.raises(TooManyCandidatesError):
         await pipeline.run(
-            url=None, user_id="u1", supplementary_text="...", emit=spy, limit=25
+            url=None,
+            user_id="u1",
+            supplementary_text="...",
+            emit=spy,
+            limit=25,
         )
 
     steps = [s for s, _ in emitted]

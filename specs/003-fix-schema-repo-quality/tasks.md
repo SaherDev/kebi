@@ -26,7 +26,7 @@ description: "Task list for Schema, Repository, and Code Quality Fixes feature"
 **Purpose**: Initialize Alembic and project configuration
 
 - [ ] T001 Initialize Alembic migrations framework with `poetry run alembic init migrations`
-- [ ] T002 Configure `migrations/env.py` to use asyncpg URL from `get_secrets().database.url` and load `Base` from `totoro_ai.db.base`
+- [ ] T002 Configure `migrations/env.py` to use asyncpg URL from `get_secrets().database.url` and load `Base` from `kebi.db.base`
 
 **Checkpoint**: Alembic ready for schema migration
 
@@ -38,11 +38,11 @@ description: "Task list for Schema, Repository, and Code Quality Fixes feature"
 
 **⚠️ CRITICAL**: No user story work can begin until this phase is complete
 
-- [ ] T003 Update `Place` model in `src/totoro_ai/db/models.py`: replace `google_place_id` with `external_provider` (NOT NULL) and `external_id` (nullable), add UniqueConstraint on the pair
-- [ ] T004 [P] Create `PlaceRepository` Protocol in `src/totoro_ai/db/repositories/place_repository.py` with `get_by_provider()` and `save()` methods
-- [ ] T005 [P] Create `SQLAlchemyPlaceRepository` implementation in `src/totoro_ai/db/repositories/place_repository.py` with try/except/rollback in `save()` and structured error logging
-- [ ] T006 [P] Create `src/totoro_ai/db/repositories/__init__.py` and export `PlaceRepository` and `SQLAlchemyPlaceRepository`
-- [ ] T007 Add explicit rollback to `get_session()` in `src/totoro_ai/db/session.py`: wrap yield in try/except with `await session.rollback()` on exception
+- [ ] T003 Update `Place` model in `src/kebi/db/models.py`: replace `google_place_id` with `external_provider` (NOT NULL) and `external_id` (nullable), add UniqueConstraint on the pair
+- [ ] T004 [P] Create `PlaceRepository` Protocol in `src/kebi/db/repositories/place_repository.py` with `get_by_provider()` and `save()` methods
+- [ ] T005 [P] Create `SQLAlchemyPlaceRepository` implementation in `src/kebi/db/repositories/place_repository.py` with try/except/rollback in `save()` and structured error logging
+- [ ] T006 [P] Create `src/kebi/db/repositories/__init__.py` and export `PlaceRepository` and `SQLAlchemyPlaceRepository`
+- [ ] T007 Add explicit rollback to `get_session()` in `src/kebi/db/session.py`: wrap yield in try/except with `await session.rollback()` on exception
 - [ ] T008 Create Alembic migration `migrations/versions/001_provider_agnostic_place_identity.py` with: (1) add columns with defaults, (2) backfill existing data (`external_provider='google'`, copy `google_place_id` to `external_id`), (3) drop default from `external_provider`, (4) create partial unique index, (5) drop `google_place_id` column
 
 **Checkpoint**: Foundation ready - user story implementation can now begin in parallel
@@ -66,10 +66,10 @@ description: "Task list for Schema, Repository, and Code Quality Fixes feature"
 
 ### Implementation for User Story 1
 
-- [ ] T015 [P] [US1] Update `PlacesMatchResult` in `src/totoro_ai/core/extraction/places_client.py`: rename `google_place_id` → `external_id`, add `external_provider: str = "google"` default
-- [ ] T016 [P] [US1] Update `GooglePlacesClient.validate_place()` in `src/totoro_ai/core/extraction/places_client.py` to set `external_id=...` (was `google_place_id=...`)
-- [ ] T017 [US1] Refactor `ExtractionService` in `src/totoro_ai/core/extraction/service.py`: replace constructor param `db_session: AsyncSession` with `place_repo: PlaceRepository`, update docstring to reference `(external_provider, external_id)`, update step 6 dedup to use `place_repo.get_by_provider()`, update step 7 to create Place with `external_provider` and `external_id` fields, remove raw `session.add()` + `session.commit()` calls
-- [ ] T018 [US1] Update `get_extraction_service()` in `src/totoro_ai/api/deps.py`: wire `SQLAlchemyPlaceRepository(db_session)` instead of passing `db_session` directly
+- [ ] T015 [P] [US1] Update `PlacesMatchResult` in `src/kebi/core/extraction/places_client.py`: rename `google_place_id` → `external_id`, add `external_provider: str = "google"` default
+- [ ] T016 [P] [US1] Update `GooglePlacesClient.validate_place()` in `src/kebi/core/extraction/places_client.py` to set `external_id=...` (was `google_place_id=...`)
+- [ ] T017 [US1] Refactor `ExtractionService` in `src/kebi/core/extraction/service.py`: replace constructor param `db_session: AsyncSession` with `place_repo: PlaceRepository`, update docstring to reference `(external_provider, external_id)`, update step 6 dedup to use `place_repo.get_by_provider()`, update step 7 to create Place with `external_provider` and `external_id` fields, remove raw `session.add()` + `session.commit()` calls
+- [ ] T018 [US1] Update `get_extraction_service()` in `src/kebi/api/deps.py`: wire `SQLAlchemyPlaceRepository(db_session)` instead of passing `db_session` directly
 - [ ] T019 [US1] Update all existing tests in `tests/api/test_extract_place.py` and `tests/core/extraction/test_service.py` to pass a `MagicMock` or `AsyncMock` implementing `PlaceRepository` instead of `db_session`
 - [ ] T020 [US1] Update all test assertions in extraction tests to use `external_id` instead of `google_place_id`
 
@@ -92,9 +92,9 @@ description: "Task list for Schema, Repository, and Code Quality Fixes feature"
 
 ### Implementation for User Story 2
 
-- [ ] T025 [US2] Verify `SQLAlchemyPlaceRepository.save()` in `src/totoro_ai/db/repositories/place_repository.py` has complete error handling: try/except catching all exceptions, explicit `await session.rollback()`, structured error logging with `external_provider`, `external_id`, `error` in extra dict, and re-raising as `RuntimeError` with context
-- [ ] T026 [US2] Verify `get_session()` in `src/totoro_ai/db/session.py` has explicit rollback in exception handler (already added in Phase 2, verify here)
-- [ ] T027 [US2] Update API error handlers in `src/totoro_ai/api/errors.py` to return structured error response with context when `RuntimeError` from repository is caught
+- [ ] T025 [US2] Verify `SQLAlchemyPlaceRepository.save()` in `src/kebi/db/repositories/place_repository.py` has complete error handling: try/except catching all exceptions, explicit `await session.rollback()`, structured error logging with `external_provider`, `external_id`, `error` in extra dict, and re-raising as `RuntimeError` with context
+- [ ] T026 [US2] Verify `get_session()` in `src/kebi/db/session.py` has explicit rollback in exception handler (already added in Phase 2, verify here)
+- [ ] T027 [US2] Update API error handlers in `src/kebi/api/errors.py` to return structured error response with context when `RuntimeError` from repository is caught
 - [ ] T028 [US2] Run existing test suite to ensure all 40 existing tests still pass after error handling changes
 
 **Checkpoint**: User Story 2 (Error Recovery) is complete and independently testable
@@ -114,7 +114,7 @@ description: "Task list for Schema, Repository, and Code Quality Fixes feature"
 
 ### Implementation for User Story 3
 
-- [ ] T031 [US3] Update `@router.post` decorator in `src/totoro_ai/api/routes/consult.py`: add `status_code=200, responses={200: {"description": "Synchronous recommendation response (stream=false)", "model": SyncConsultResponse}}`. Do NOT set `response_model` (breaks StreamingResponse)
+- [ ] T031 [US3] Update `@router.post` decorator in `src/kebi/api/routes/consult.py`: add `status_code=200, responses={200: {"description": "Synchronous recommendation response (stream=false)", "model": SyncConsultResponse}}`. Do NOT set `response_model` (breaks StreamingResponse)
 - [ ] T032 [US3] Update `docs/api-contract.md`: find all occurrences of embedding dimension `1536` in the embeddings section and replace with `1024`
 - [ ] T033 [US3] Confirm in PR description that pgvector columns remain owned exclusively by this repo's Alembic migrations (1024 dimensions)
 
@@ -136,7 +136,7 @@ description: "Task list for Schema, Repository, and Code Quality Fixes feature"
 ### Implementation for User Story 4
 
 - [ ] T035 [US4] Add `healthcheckPath = "/v1/health"` to `[deploy]` section in `railway.toml`
-- [ ] T036 [US4] Verify health endpoint exists in `src/totoro_ai/api/main.py` at `GET /v1/health` (should already exist, verify in code)
+- [ ] T036 [US4] Verify health endpoint exists in `src/kebi/api/main.py` at `GET /v1/health` (should already exist, verify in code)
 
 **Checkpoint**: User Story 4 (Deployment Health Checks) is complete and independently testable
 
@@ -146,9 +146,9 @@ description: "Task list for Schema, Repository, and Code Quality Fixes feature"
 
 **Purpose**: Final improvements and provider abstraction fixes affecting multiple layers
 
-- [ ] T037 [P] Export `get_instructor_client` from `src/totoro_ai/providers/__init__.py`: add to imports and `__all__` list
-- [ ] T038 [P] Update import in `src/totoro_ai/api/deps.py` from `from totoro_ai.providers.llm import get_instructor_client` to `from totoro_ai.providers import get_instructor_client` (fixes M2)
-- [ ] T039 [P] Add `# type: ignore[import-untyped]` comment after `import instructor` on line 7 of `src/totoro_ai/providers/llm.py` (fixes L2)
+- [ ] T037 [P] Export `get_instructor_client` from `src/kebi/providers/__init__.py`: add to imports and `__all__` list
+- [ ] T038 [P] Update import in `src/kebi/api/deps.py` from `from kebi.providers.llm import get_instructor_client` to `from kebi.providers import get_instructor_client` (fixes M2)
+- [ ] T039 [P] Add `# type: ignore[import-untyped]` comment after `import instructor` on line 7 of `src/kebi/providers/llm.py` (fixes L2)
 - [ ] T040 Run verification suite: `poetry run pytest` (all tests pass), `poetry run ruff check src/ tests/`, `poetry run ruff format --check src/ tests/`, `poetry run mypy src/`
 - [ ] T041 Run migration verification: `poetry run alembic upgrade head`, `poetry run alembic downgrade -1`, `poetry run alembic upgrade head` (requires running DB)
 

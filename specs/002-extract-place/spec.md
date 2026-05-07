@@ -8,7 +8,7 @@
 
 ### User Story 1 - Share a TikTok food video, get a saved place (Priority: P1)
 
-A user pastes a TikTok URL into the Totoro app after watching a food video. The product system sends that URL to the extraction endpoint. The system reads the video caption, identifies the restaurant name and any available details, validates it against a places database, and saves a structured place record linked to the user. The product system receives confirmation that the place was saved — or a flag indicating the user should confirm the name before saving.
+A user pastes a TikTok URL into the Kebi app after watching a food video. The product system sends that URL to the extraction endpoint. The system reads the video caption, identifies the restaurant name and any available details, validates it against a places database, and saves a structured place record linked to the user. The product system receives confirmation that the place was saved — or a flag indicating the user should confirm the name before saving.
 
 **Why this priority**: This is the primary Phase 2 use case. TikTok is the dominant source of food discovery content. Capturing places from TikTok URLs without requiring the user to manually type anything is the core value proposition.
 

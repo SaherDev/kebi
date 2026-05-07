@@ -37,7 +37,7 @@ def upgrade() -> None:
 
     # Add the generated tsvector column. The expression must stay in sync
     # with config/app.yaml embeddings.description_fields per ADR-055 — the
-    # startup validator in totoro_ai.api.main checks the alignment on boot.
+    # startup validator in kebi.api.main checks the alignment on boot.
     op.execute(
         """
         ALTER TABLE places ADD COLUMN search_vector tsvector

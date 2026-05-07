@@ -223,7 +223,7 @@ Similarly, `args_schema.model_json_schema()` exposes each field's `description` 
 
 ## 10. `EmitFn` primitive callback pattern (plan-doc revision)
 
-**Decision**: Introduce `EmitFn` in `src/totoro_ai/core/emit.py` as a `typing.Protocol` (not a plain `Callable` alias) whose `__call__` accepts `step: str`, `summary: str`, and an optional `duration_ms: float | None = None`. Each of `RecallService.run`, `ConsultService.consult`, and `ExtractionService.run` gains an optional `emit: EmitFn | None = None` parameter. Services call `emit(step_name, summary)` at each pipeline boundary with primitive string tuples, or `emit(step, summary, duration_ms=elapsed)` when they have measured the work directly. Either form is valid. Services never construct `ReasoningStep` objects and never import from `core/agent/`. Tool wrappers own the agent-layer fields (`source`, `tool_name`, `visibility`, `timestamp`, `duration_ms`) via a shared closure pattern in `src/totoro_ai/core/agent/tools/_emit.py` (`build_emit_closure` + `append_summary` helpers). The closure fans out to both (a) a collected list consumed by `Command.update["reasoning_steps"]` at node return and (b) `langgraph.config.get_stream_writer()` for live SSE frames.
+**Decision**: Introduce `EmitFn` in `src/kebi/core/emit.py` as a `typing.Protocol` (not a plain `Callable` alias) whose `__call__` accepts `step: str`, `summary: str`, and an optional `duration_ms: float | None = None`. Each of `RecallService.run`, `ConsultService.consult`, and `ExtractionService.run` gains an optional `emit: EmitFn | None = None` parameter. Services call `emit(step_name, summary)` at each pipeline boundary with primitive string tuples, or `emit(step, summary, duration_ms=elapsed)` when they have measured the work directly. Either form is valid. Services never construct `ReasoningStep` objects and never import from `core/agent/`. Tool wrappers own the agent-layer fields (`source`, `tool_name`, `visibility`, `timestamp`, `duration_ms`) via a shared closure pattern in `src/kebi/core/agent/tools/_emit.py` (`build_emit_closure` + `append_summary` helpers). The closure fans out to both (a) a collected list consumed by `Command.update["reasoning_steps"]` at node return and (b) `langgraph.config.get_stream_writer()` for live SSE frames.
 
 **Rationale**:
 - **Services emit; wrappers frame.** Services carry domain semantics (what pipeline stage completed, what the headline number is, optionally how long it took). Agent-layer fields (source, tool_name, visibility, timestamp, optionally duration when the service didn't measure) are concerns of the agent runtime, not the domain. Keeping them split means services stay reusable outside the agent (legacy flag-off path, future CLI consumers, future eval harnesses) without dragging the `ReasoningStep` import.
@@ -236,12 +236,12 @@ Similarly, `args_schema.model_json_schema()` exposes each field's `description` 
 **Helper signatures** (the plan doc uses `ToolRuntime`; we substitute `get_stream_writer()` per research item 2 and access `runtime.state` / `runtime.tool_call_id` via the `Annotated[..., Injected*]` parameters):
 
 ```python
-# src/totoro_ai/core/agent/tools/_emit.py
+# src/kebi/core/agent/tools/_emit.py
 from datetime import UTC, datetime
 from typing import Literal
 from langgraph.config import get_stream_writer
-from totoro_ai.core.agent.reasoning import ReasoningStep
-from totoro_ai.core.emit import EmitFn
+from kebi.core.agent.reasoning import ReasoningStep
+from kebi.core.emit import EmitFn
 
 ToolName = Literal["recall", "save", "consult"]
 

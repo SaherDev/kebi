@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from totoro_ai.core.memory.repository import (
+from kebi.core.memory.repository import (
     NullUserMemoryRepository,
     SQLAlchemyUserMemoryRepository,
 )

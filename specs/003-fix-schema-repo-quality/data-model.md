@@ -84,7 +84,7 @@ The following fields are **immutable** after creation:
 
 ## Changed Model: PlacesMatchResult
 
-Located in `src/totoro_ai/core/extraction/places_client.py`.
+Located in `src/kebi/core/extraction/places_client.py`.
 
 ### Before
 
@@ -113,7 +113,7 @@ class PlacesMatchResult(BaseModel):
 
 ## New Protocol: PlaceRepository
 
-Located in `src/totoro_ai/db/repositories/place_repository.py`.
+Located in `src/kebi/db/repositories/place_repository.py`.
 
 ```python
 class PlaceRepository(Protocol):

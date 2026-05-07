@@ -16,7 +16,7 @@ Replace the intent-router-based dispatch in `ChatService` with a single LangGrap
 - **Tool docstrings are the contract the LLM reads.** Query-shaping rules (when to rewrite the user's message into a retrieval phrase) live in each tool's `@tool` docstring, not in the system prompt. The system prompt stays persona + safety + ADR-044 mitigations only.
 - **`saved_places` is passed tool→tool via AgentState, not via tool args.** `recall_tool` writes results to `state.last_recall_results`; `consult_tool` reads from `ToolRuntime.state`. The LLM never re-serializes the place blob. `last_recall_results` is **reset to `None` on every new user message** (caller writes the reset into the invocation payload) so the agent cannot skip recall on turn N and pick up stale results from turn N-1.
 - **Tool filter shapes mirror `PlaceObject`.** One `PlaceFilters` base type with the same keys as `PlaceObject` (`place_type`, `subcategory`, `tags_include`, nested `attributes: PlaceAttributes`, `source`). `RecallFilters` and `ConsultFilters` extend it with their retrieval-specific vs discovery-specific fields. No ad-hoc flat filter bags. `cuisine`, `price_hint`, `ambiance`, `dietary`, `good_for`, `location_context` live under `attributes` — matching `PlaceObject.attributes` exactly, per ADR-056.
-- **No category persona.** The agent is a **places advisor**, not a food/dining advisor. Totoro handles restaurants, bars, cafes, museums, shops, hotels — anything in `PlaceType`. System prompt and docstring examples use the full range of `place_type` values.
+- **No category persona.** The agent is a **places advisor**, not a food/dining advisor. Kebi handles restaurants, bars, cafes, museums, shops, hotels — anything in `PlaceType`. System prompt and docstring examples use the full range of `place_type` values.
 - **Reasoning is a first-class, structured artifact.** Every turn produces a `reasoning_steps` trace covering (a) what each tool did and (b) why the agent picked the tool it picked. Steps are typed (`source`, `tool_name`, `visibility`) so consumers filter without string-parsing the `step` field — the mistake the old `ConsultResponse.reasoning_steps` made. Only `visibility="user"` steps land in the JSON response; `"debug"` steps stay in SSE + Langfuse.
 - **Three user-visible step types only** — the JSON payload is for trust/debug, not a live thinking animation. `agent.tool_decision` (Sonnet's own "why" behind each tool choice), `tool.summary` (one human line per tool invocation combining mode + result — e.g. `"Checked your saves for ramen — found 2 matches"`), and `fallback` (terminal error). All granular sub-steps (`recall.mode`, `recall.result`, `consult.discover`, `consult.merge`, `consult.dedupe`, `consult.enrich`, `consult.tier_blend`, `consult.chip_filter`, `consult.geocode`, `save.parse_input`, `save.enrich`, `save.validate`, `save.persist`) are `visibility="debug"` — Langfuse and SSE debug mode still see them; the JSON payload and default SSE stream do not.
 - **`agent.tool_decision`** uses Sonnet's actual `AIMessage.content` (truncated to 200 chars in the JSON payload, full text on SSE), with a synthesized fallback when content is empty.
@@ -87,11 +87,11 @@ class ExtractPlaceItem(BaseModel):
 
 No more null-place placeholders. Mixed-outcome extractions (1 saved + 1 duplicate) represent naturally. Pipeline states live where they belong.
 
-### Change — `src/totoro_ai/api/schemas/extract_place.py`
+### Change — `src/kebi/api/schemas/extract_place.py`
 
 Rewrite both models per the shape above. `ExtractPlaceItem.place` / `.confidence` become required (not optional); `ExtractPlaceItem.status` Literal drops `"pending"` and `"failed"`.
 
-### Change — `src/totoro_ai/core/extraction/service.py` + `core/extraction/persistence.py`
+### Change — `src/kebi/core/extraction/service.py` + `core/extraction/persistence.py`
 
 Build the new shape:
 - When the pipeline produces outcomes → `ExtractPlaceResponse(status="completed", results=[...])`.
@@ -100,11 +100,11 @@ Build the new shape:
 
 `_outcome_to_dict` helper simplifies — no more `below_threshold` → `{"place": None, "status": "failed"}` synthesis; below-threshold outcomes collapse into the pipeline-level `failed` or are absent from `results`.
 
-### Change — `src/totoro_ai/core/chat/service.py::_dispatch_extraction`
+### Change — `src/kebi/core/chat/service.py::_dispatch_extraction`
 
 Read `extract_result.status` instead of `any(r.status == "pending" for r in extract_result.results)`. Message composition reads `extract_result.results` which is now a clean list of real outcomes (or empty).
 
-### Change — `src/totoro_ai/api/routes/extraction.py`
+### Change — `src/kebi/api/routes/extraction.py`
 
 The polling route returns the new shape. Redis-stored payloads written by `ExtractionService` now conform to it — existing keys become incompatible, but TTL is 1 hour so the old format disappears within a deploy window. Optional: bump the Redis key prefix (`extraction:v2:{request_id}`) to avoid a read-time schema confusion during the rollout.
 
@@ -132,7 +132,7 @@ NestJS consumes this shape at its `/v1/chat` call site and any extraction-pollin
 
 - `poetry run mypy src/` clean with the new schema.
 - `poetry run pytest` green.
-- Bruno collection at `totoro-config/bruno/` updated so the example responses reflect the new shape.
+- Bruno collection at `kebi-config/bruno/` updated so the example responses reflect the new shape.
 - Manual smoke: `POST /v1/chat` with a TikTok URL returns `status="pending"`, `results=[]`, `request_id=…`; `GET /v1/extraction/{request_id}` eventually returns `status="completed"`, `results=[...]` with real place data.
 - Product repo's corresponding PR is merged before this milestone's final deploy.
 
@@ -142,7 +142,7 @@ NestJS consumes this shape at its `/v1/chat` call site and any extraction-pollin
 
 **Why first (after M0.5):** The Save tool must see the real `status` (`saved` / `duplicate` / `needs_review` / `failed`), not `pending`. Without this, the agent cannot compose a meaningful response.
 
-### Change — `src/totoro_ai/core/extraction/service.py`
+### Change — `src/kebi/core/extraction/service.py`
 
 Remove the internal `asyncio.create_task` at `ExtractionService.run()` line 74. Inline the body of `_run_background` into `run()` so `run()` returns the real `ExtractPlaceResponse` synchronously. `_run_background` is deleted; the Redis status write remains (now fired from `run()` itself). All response construction uses the M0.5-clean schema — `ExtractPlaceItem` always carries a real `place`/`confidence`/per-place `status`; the pipeline-level `pending`/`failed` states live on the envelope only.
 
@@ -187,7 +187,7 @@ async def run(self, raw_input: str, user_id: str) -> ExtractPlaceResponse:
 
 `_outcome_to_item_dict` replaces the current `_outcome_to_dict` — it only maps real outcomes (`saved` / `needs_review` / `duplicate`) to the new per-place item shape. `_is_real(o)` filters out `below_threshold` outcomes; these contribute only to the envelope-level `failed` decision, never to `results`.
 
-### Change — `src/totoro_ai/core/chat/service.py`
+### Change — `src/kebi/core/chat/service.py`
 
 `_dispatch_extraction` (the extract-place branch) wraps `self._extraction.run(...)` in `asyncio.create_task` to preserve the current HTTP behavior (returns `pending` + `request_id` immediately, background writes to Redis). This keeps the non-agent path identical externally until M10. Response is built via the M0.5-clean envelope — no fake `ExtractPlaceItem` with null fields:
 
@@ -228,12 +228,12 @@ async def _dispatch_extraction(self, request: ChatRequest) -> ChatResponse:
 
 ### Add — `config/prompts/agent.txt`
 
-New file. Places advisor persona (not food-specific — Totoro covers restaurants, bars, cafes, museums, shops, hotels, services), tool-use guidance, safety rules. Takes these template slots:
+New file. Places advisor persona (not food-specific — Kebi covers restaurants, bars, cafes, museums, shops, hotels, services), tool-use guidance, safety rules. Takes these template slots:
 - `{taste_profile_summary}` — behavior-derived bullet list with signal counts (from `taste_model.taste_profile_summary`).
 - `{memory_summary}` — user-stated facts with confidence scores (from `user_memories`).
 
 Key instructions:
-- "You are Totoro, a places advisor. You help the user find, remember, and choose between places they might want to go — any kind of place: restaurants, bars, cafes, museums, shops, hotels, services."
+- "You are Kebi, a places advisor. You help the user find, remember, and choose between places they might want to go — any kind of place: restaurants, bars, cafes, museums, shops, hotels, services."
 - "You have three tools: recall, save, consult. Decide which to call based on the user's message."
 - "For recommendation requests, call recall first, then consult."
 - "If the user shares a URL or names a specific place, call save."
@@ -265,7 +265,7 @@ prompts:
 
 **TTL note.** Postgres has no Redis-style native TTL. Options: (a) accept that checkpoints accumulate and add a periodic cleanup job later, or (b) rely on `thread_id` cleanup on explicit session end. For M3, document and defer cleanup. The `checkpointer_ttl_seconds` field stays in config for future use.
 
-### Change — `src/totoro_ai/core/config.py`
+### Change — `src/kebi/core/config.py`
 
 Add `AgentConfig` nested under `AppConfig`:
 
@@ -287,7 +287,7 @@ No code reads it yet — wired up in M5 (tool wrappers use `tool_timeouts_second
 
 ### Acceptance
 
-- `poetry run python -c "from totoro_ai.core.config import get_config; c = get_config(); print(c.agent.enabled, c.prompts['agent'])"` prints `False agent.txt`.
+- `poetry run python -c "from kebi.core.config import get_config; c = get_config(); print(c.agent.enabled, c.prompts['agent'])"` prints `False agent.txt`.
 - `poetry run mypy src/` clean.
 
 ---
@@ -296,14 +296,14 @@ No code reads it yet — wired up in M5 (tool wrappers use `tool_timeouts_second
 
 Greenfield build in a new `core/agent/` module. No route wiring yet.
 
-### Add — `src/totoro_ai/core/agent/state.py`
+### Add — `src/kebi/core/agent/state.py`
 
 ```python
 from typing import TypedDict, Annotated
 from langchain_core.messages import BaseMessage
 from langgraph.graph.message import add_messages
-from totoro_ai.core.places.models import PlaceObject
-from totoro_ai.core.agent.reasoning import ReasoningStep
+from kebi.core.places.models import PlaceObject
+from kebi.core.agent.reasoning import ReasoningStep
 
 class AgentState(TypedDict):
     messages: Annotated[list[BaseMessage], add_messages]
@@ -326,7 +326,7 @@ class AgentState(TypedDict):
 Both transient fields — `last_recall_results` and `reasoning_steps` — reset on every new user message. Centralize the reset in one helper so they cannot drift:
 
 ```python
-# src/totoro_ai/core/agent/invocation.py
+# src/kebi/core/agent/invocation.py
 from langchain_core.messages import HumanMessage
 
 def build_turn_payload(
@@ -352,7 +352,7 @@ def build_turn_payload(
 
 `ChatService._run_agent` is the only caller of `graph.ainvoke` — it always routes through `build_turn_payload`. If future code adds a second invocation site (streaming endpoint, retry path), it reuses the helper. The checkpointer preserves the full `messages` history across turns via `add_messages`; the two transient fields get overwritten.
 
-### Add — `src/totoro_ai/core/agent/reasoning.py`
+### Add — `src/kebi/core/agent/reasoning.py`
 
 ```python
 from datetime import datetime, UTC
@@ -373,7 +373,7 @@ class ReasoningStep(BaseModel):
 
 The existing `api/schemas/consult.py::ReasoningStep` (just `step` + `summary`) becomes obsolete — `ConsultResponse.reasoning_steps` is **deleted** at M4 (not renamed, not migrated). Services never import `ReasoningStep`; see the "Reasoning emission pattern" subsection at the top of M4 for how steps reach `AgentState` via the wrapper's emit closure.
 
-### Add — `src/totoro_ai/core/agent/graph.py`
+### Add — `src/kebi/core/agent/graph.py`
 
 ```python
 from langgraph.graph import StateGraph, END
@@ -414,11 +414,11 @@ langgraph-checkpoint-postgres = "^2.0"
 
 Pin the exact minor version at install time. Verify current latest on PyPI before committing.
 
-### Add — `src/totoro_ai/core/agent/checkpointer.py`
+### Add — `src/kebi/core/agent/checkpointer.py`
 
 ```python
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
-from totoro_ai.core.config import get_secrets
+from kebi.core.config import get_secrets
 
 async def build_checkpointer() -> AsyncPostgresSaver:
     """Build the Postgres-backed checkpointer. Call setup() once at startup."""
@@ -484,7 +484,7 @@ No LLM calls in tests for this milestone — the graph builder is tested for str
 
 All three services (`RecallService`, `ConsultService`, `ExtractionService`) gain an optional `emit: EmitFn | None` parameter. Services call `emit(step_name, summary)` at each pipeline boundary as it completes. Tool wrappers (M5) provide the callback and fan out to two places: an accumulator list (→ `Command.update["reasoning_steps"]` at node return → `AgentState.reasoning_steps` → JSON payload at end of turn) and `runtime.stream_writer` (→ live SSE frame). Services never import `ReasoningStep` — they emit primitive `(step, summary)` string tuples only. The wrapper owns `source`, `tool_name`, `visibility`, and `timestamp`.
 
-#### Add — `src/totoro_ai/core/emit.py`
+#### Add — `src/kebi/core/emit.py`
 
 ```python
 from typing import Protocol
@@ -535,7 +535,7 @@ Sonnet → tool_call: recall
 - **`ReasoningStep` stays at `core/agent/reasoning.py`** (from M3) — never imported by services, so the location is fine.
 - **Step names follow the M5 catalog** — each service has a fixed vocabulary of step names it emits.
 
-### Change — `src/totoro_ai/core/consult/service.py`
+### Change — `src/kebi/core/consult/service.py`
 
 Replace the current signature:
 ```python
@@ -596,7 +596,7 @@ _emit("consult.merge",
 # ... dedupe, enrich, tier_blend, chip_filter — same pattern
 ```
 
-### Change — `src/totoro_ai/core/recall/service.py`
+### Change — `src/kebi/core/recall/service.py`
 
 Add `emit: EmitFn | None = None` parameter to `RecallService.run(...)`. Emit points:
 - `emit("recall.mode", f"mode={mode}; limit={limit}; sort_by={sort_by}")` right after mode is determined
@@ -604,7 +604,7 @@ Add `emit: EmitFn | None = None` parameter to `RecallService.run(...)`. Emit poi
 
 `RecallResponse` does not gain a new field — emission is purely side-effect via the callback.
 
-### Change — `src/totoro_ai/core/extraction/service.py`
+### Change — `src/kebi/core/extraction/service.py`
 
 Add `emit: EmitFn | None = None` parameter to `ExtractionService.run(...)`. Emit points at each pipeline boundary:
 - `emit("save.parse_input", f"url={url}; supplementary_text={n} chars")` after input parse
@@ -615,14 +615,14 @@ Add `emit: EmitFn | None = None` parameter to `ExtractionService.run(...)`. Emit
 
 `ExtractPlaceResponse` shape unchanged from M0.5 — no `metadata` field added; no `reasoning_steps` field added.
 
-### Add — `src/totoro_ai/core/places/filters.py` (shared base)
+### Add — `src/kebi/core/places/filters.py` (shared base)
 
 Per ADR-056, every filter shape the agent tools expose mirrors `PlaceObject`. One base type, one nested `attributes` model matching `PlaceAttributes`.
 
 ```python
 from datetime import datetime
 from pydantic import BaseModel
-from totoro_ai.core.places.models import PlaceType, PlaceSource, PlaceAttributes
+from kebi.core.places.models import PlaceType, PlaceSource, PlaceAttributes
 
 class PlaceFilters(BaseModel):
     """Shared filter shape. Keys mirror PlaceObject 1:1 (ADR-056)."""
@@ -645,15 +645,15 @@ class ConsultFilters(PlaceFilters):
     discovery_filters: dict | None = None
 ```
 
-### Restructure — `src/totoro_ai/core/recall/types.py`
+### Restructure — `src/kebi/core/recall/types.py`
 
 Existing `RecallFilters` is **flat** today (top-level `cuisine`, `price_hint`, `ambiance`, `neighborhood`, `city`, `country`). Replace with the nested version above (extends `PlaceFilters`).
 
-### Change — `src/totoro_ai/db/repositories/recall_repository.py`
+### Change — `src/kebi/db/repositories/recall_repository.py`
 
 `hybrid_search` builds WHERE clauses from filter fields. Update to walk `filters.attributes.cuisine`, `filters.attributes.price_hint`, `filters.attributes.location_context.city`, etc., instead of the flat keys. Pure SQL path change, no logic change — JSONB paths on the `attributes` column already exist.
 
-### Delete — `_filters_from_parsed` in `src/totoro_ai/core/chat/service.py`
+### Delete — `_filters_from_parsed` in `src/kebi/core/chat/service.py`
 
 No longer needed — `IntentParser` is gone; the agent tools take `PlaceFilters`-shaped input directly from Sonnet's tool call. This helper had no reason to exist post-M4.
 
@@ -676,11 +676,11 @@ No longer needed — `IntentParser` is gone; the agent tools take `PlaceFilters`
 - `poetry run pytest tests/db/repositories/test_recall_repository.py` passes.
 - `poetry run mypy src/` clean.
 
-### Change — `src/totoro_ai/api/deps.py`
+### Change — `src/kebi/api/deps.py`
 
 `get_consult_service` stops injecting `IntentParser`, `UserMemoryService`. The chat assistant's `TasteModelService` injection stays (for chip filtering only).
 
-### Change — `src/totoro_ai/core/chat/service.py`
+### Change — `src/kebi/core/chat/service.py`
 
 The current `_dispatch_consult` branch still calls `ConsultService.consult`, but now must build a `ConsultFilters` object and load saved places via `RecallService` itself (temporary — this path is deleted in M11). Keeps the non-agent flow working behind the feature flag.
 
@@ -694,7 +694,7 @@ Wrap `RecallService`, `ExtractionService` (save), `ConsultService` as `@tool`-de
 
 Sonnet reads the `@tool` docstring along with the `args_schema` when deciding how to call a tool. Docstrings carry **per-field guidance the LLM must follow** — query-rewriting rules, null-vs-filter-mode semantics, chaining hints. Keep them short, concrete, and example-driven.
 
-### Shared emit infrastructure — `src/totoro_ai/core/agent/tools/_emit.py`
+### Shared emit infrastructure — `src/kebi/core/agent/tools/_emit.py`
 
 All three tool wrappers share one fan-out pattern: build a `collected` list, build an `emit(step, summary)` closure, pass `emit` into the service, append a `tool.summary` at the end, return a `Command` that extends `AgentState.reasoning_steps`. Factored into two helpers so every wrapper reads the same.
 
@@ -702,8 +702,8 @@ All three tool wrappers share one fan-out pattern: build a `collected` list, bui
 from datetime import datetime, UTC
 from typing import Literal
 from langgraph.runtime import ToolRuntime
-from totoro_ai.core.reasoning import ReasoningStep
-from totoro_ai.core.emit import EmitFn
+from kebi.core.reasoning import ReasoningStep
+from kebi.core.emit import EmitFn
 
 ToolName = Literal["recall", "save", "consult"]
 
@@ -769,7 +769,7 @@ def append_summary(
 
 **Catalog enforcement:** `ToolName` Literal means mypy flags `build_emit_closure(runtime, "recal")` at the call site.
 
-### Add — `src/totoro_ai/core/agent/tools/recall_tool.py`
+### Add — `src/kebi/core/agent/tools/recall_tool.py`
 
 ```python
 from typing import Literal
@@ -778,7 +778,7 @@ from langchain_core.messages import ToolMessage
 from langgraph.runtime import ToolRuntime
 from langgraph.types import Command
 from pydantic import BaseModel, Field
-from totoro_ai.core.recall.types import RecallFilters
+from kebi.core.recall.types import RecallFilters
 
 class RecallToolInput(BaseModel):
     query: str | None = Field(
@@ -845,7 +845,7 @@ def _recall_summary(query: str | None, filters: RecallFilters | None, places: li
     return f"Checked your saves for {query} — found {len(places)} {noun}"
 ```
 
-### Add — `src/totoro_ai/core/agent/tools/consult_tool.py`
+### Add — `src/kebi/core/agent/tools/consult_tool.py`
 
 `saved_places` is **removed from the LLM-visible schema** — it comes from `runtime.state.last_recall_results`.
 
@@ -907,7 +907,7 @@ def build_consult_tool(service):
     return consult_tool
 ```
 
-### Add — `src/totoro_ai/core/agent/tools/save_tool.py`
+### Add — `src/kebi/core/agent/tools/save_tool.py`
 
 `raw_input: str` is the only LLM-visible field. Docstring: "Call when the user shares a URL (TikTok, Instagram, YouTube) or names a specific place they want to save. Pass the raw URL or text — do not reformat."
 
@@ -1142,7 +1142,7 @@ User: *"save this https://broken-url.com/..."*
 
 These examples are the target output shape — implementers should verify their tool wrappers produce traces that match.
 
-### Add — `src/totoro_ai/core/agent/tools/__init__.py`
+### Add — `src/kebi/core/agent/tools/__init__.py`
 
 ```python
 def build_tools(recall: RecallService, extraction: ExtractionService, consult: ConsultService):
@@ -1161,7 +1161,7 @@ Tools cannot accept service instances via closures if they're module-level `@too
 
 Plan uses **Option A**.
 
-### Add — `src/totoro_ai/core/agent/tools/__init__.py`
+### Add — `src/kebi/core/agent/tools/__init__.py`
 
 ```python
 def build_tools(recall: RecallService, extraction: ExtractionService, consult: ConsultService):
@@ -1185,7 +1185,7 @@ def build_tools(recall: RecallService, extraction: ExtractionService, consult: C
 
 ## M6 — Wire `/v1/chat` to agent behind flag
 
-### Change — `src/totoro_ai/core/chat/service.py`
+### Change — `src/kebi/core/chat/service.py`
 
 ```python
 async def run(self, request: ChatRequest) -> ChatResponse:
@@ -1227,11 +1227,11 @@ async def run(self, request: ChatRequest) -> ChatResponse:
    )
    ```
 
-### Change — `src/totoro_ai/api/schemas/chat.py`
+### Change — `src/kebi/api/schemas/chat.py`
 
 Add `reasoning_steps: list[ReasoningStep]` to the `ChatResponseData` shape (or to `ChatResponse.data` as a typed dict). Add `"agent"` to the `ChatResponse.type` Literal.
 
-### Change — `src/totoro_ai/api/deps.py`
+### Change — `src/kebi/api/deps.py`
 
 Add `get_agent_graph` dependency — builds the graph once at startup (cached in app state), wires tools via `build_tools(...)`, awaits `build_checkpointer()` to instantiate `AsyncPostgresSaver` (calls `setup()` on first boot).
 
@@ -1260,7 +1260,7 @@ Add `get_agent_graph` dependency — builds the graph once at startup (cached in
 
 Tool-side emission was already wired in M5 — each wrapper's `emit` closure fans out to `runtime.stream_writer` when set. Agent-node emission uses `get_stream_writer()` from `langgraph.config` (M5 agent_node example). M7 is therefore just the **HTTP route** that opens the stream.
 
-### Change — `src/totoro_ai/api/routes/chat.py`
+### Change — `src/kebi/api/routes/chat.py`
 
 Add a `POST /v1/chat/stream` route (or query param `?stream=true` on the existing route) that uses FastAPI's `StreamingResponse` + `graph.astream_events(...)` to forward LangGraph stream events as SSE frames. The non-streaming `POST /v1/chat` stays intact.
 
@@ -1283,7 +1283,7 @@ Frame format: one SSE `event: reasoning_step` per `runtime.stream_writer` call, 
 
 ADR-062 requirement 2: pause execution when save confidence lands in the `needs_review` band (0.30 ≤ c < 0.70 per ADR-057). Resume after user confirms/rejects in a follow-up turn.
 
-### Change — `src/totoro_ai/core/agent/tools/save_tool.py`
+### Change — `src/kebi/core/agent/tools/save_tool.py`
 
 ```python
 from langgraph.errors import NodeInterrupt
@@ -1301,7 +1301,7 @@ async def save_tool(raw_input, state):
     return response.model_dump()
 ```
 
-### Change — `src/totoro_ai/core/chat/service.py`
+### Change — `src/kebi/core/chat/service.py`
 
 When the graph returns with an interrupt, map to `ChatResponse(type="clarification", message="Low confidence on <name> — is this the place you meant?", data={"interrupt": {...}})`. Product repo surfaces a confirm/reject UI. Next `/v1/chat` turn with the user's answer resumes the checkpointed graph via `Command(resume=<answer>)`.
 
@@ -1321,11 +1321,11 @@ When the graph returns with an interrupt, map to `ChatResponse(type="clarificati
 
 Already scaffolded in M3 — this milestone is **operationalization**: tune thresholds, add per-tool timeouts, add Langfuse spans, verify behavior under synthetic failure and synthetic hang.
 
-### Change — `src/totoro_ai/core/agent/graph.py`
+### Change — `src/kebi/core/agent/graph.py`
 
 Wrap `agent_node` and each tool call in a try/except that increments `error_count` on exception, logs the exception via `logger.exception`, and traces via Langfuse. `should_continue` routes to `fallback_node` at `error_count >= config.agent.max_errors` (default 3) or `steps_taken >= config.agent.max_steps` (default 10).
 
-### Add — `src/totoro_ai/core/agent/tools/_timeout.py`
+### Add — `src/kebi/core/agent/tools/_timeout.py`
 
 Per-tool `asyncio.wait_for` guard. Wraps each tool body; timeouts become counted errors (not infinite hangs):
 
@@ -1333,8 +1333,8 @@ Per-tool `asyncio.wait_for` guard. Wraps each tool body; timeouts become counted
 import asyncio
 from langchain_core.messages import ToolMessage
 from langgraph.types import Command
-from totoro_ai.core.agent.reasoning import ReasoningStep
-from totoro_ai.core.config import get_config
+from kebi.core.agent.reasoning import ReasoningStep
+from kebi.core.config import get_config
 
 async def with_timeout(
     tool_name: str,
@@ -1367,7 +1367,7 @@ Each tool wrapper (M5) wraps its body with `return await with_timeout("recall", 
 
 **Heartbeat is no longer a separate mechanism** — the M4 emit pattern already delivers per-step events live via `runtime.stream_writer`. For known-slow paths (e.g. save Phase 3), the service's `emit("save.deep_enrichment", …)` call IS the heartbeat. No separate "progress ping" abstraction needed.
 
-### Change — `src/totoro_ai/core/agent/graph.py` — fallback_node
+### Change — `src/kebi/core/agent/graph.py` — fallback_node
 
 Returns a user-facing message + sets `ChatResponse.type="error"` via downstream mapper. Preserves the partial message history for debugging. The `max_steps_detail` / `max_errors_detail` debug steps (see M5 catalog) are appended here alongside the user-visible `fallback` step.
 
@@ -1417,11 +1417,11 @@ agent:
 
 ### Delete
 
-- `src/totoro_ai/core/chat/router.py` (`classify_intent` function)
-- `src/totoro_ai/core/chat/chat_assistant_service.py`
-- `src/totoro_ai/core/intent/` (entire module — `IntentParser`, `ParsedIntent`, schemas)
-- `src/totoro_ai/core/chat/service.py::_run_legacy` path (agent is the only path)
-- `src/totoro_ai/core/chat/service.py::_filters_from_parsed` (no longer called)
+- `src/kebi/core/chat/router.py` (`classify_intent` function)
+- `src/kebi/core/chat/chat_assistant_service.py`
+- `src/kebi/core/intent/` (entire module — `IntentParser`, `ParsedIntent`, schemas)
+- `src/kebi/core/chat/service.py::_run_legacy` path (agent is the only path)
+- `src/kebi/core/chat/service.py::_filters_from_parsed` (no longer called)
 - `tests/core/chat/test_router.py`
 - `tests/core/chat/test_chat_assistant_service.py`
 - `tests/core/intent/` (entire directory)
@@ -1432,13 +1432,13 @@ Remove role blocks:
 - `models.intent_router`
 - `models.intent_parser`
 - `models.chat_assistant`
-- `models.evaluator` — reserved-but-unused since repo inception (no `get_llm("evaluator")` call in `src/` or `tests/`, no `src/totoro_ai/eval/` module exists). Pruning alongside the agent-cutover cleanup. If an eval harness lands later it can re-add the role in the same PR that introduces its first `get_llm` call.
+- `models.evaluator` — reserved-but-unused since repo inception (no `get_llm("evaluator")` call in `src/` or `tests/`, no `src/kebi/eval/` module exists). Pruning alongside the agent-cutover cleanup. If an eval harness lands later it can re-add the role in the same PR that introduces its first `get_llm` call.
 
-### Change — `src/totoro_ai/api/deps.py`
+### Change — `src/kebi/api/deps.py`
 
 Remove providers: `get_intent_parser`, `get_chat_assistant_service`. Simplify `get_chat_service` to take only the agent graph + event dispatcher + taste/memory services.
 
-### Change — `src/totoro_ai/core/chat/service.py`
+### Change — `src/kebi/core/chat/service.py`
 
 Reduce `ChatService.run` to:
 ```python
@@ -1468,7 +1468,7 @@ External contract's shape is unchanged; the `ChatResponse.type` Literal changes.
 - 024-agent-tool-migration: LangGraph agent (Claude Sonnet) replaces intent-router dispatch (ADR-062, ADR-065). Three tools — recall, save, consult. ConsultService signature changed to take agent-parsed args. ExtractPlaceResponse schema upgraded to two-level status (ADR-063). Reasoning traces via service-emit / wrapper-wrap pattern (ADR-064). Deleted: IntentParser, classify_intent, ChatAssistantService, and the intent_router / intent_parser / chat_assistant / evaluator model roles (evaluator was reserved but never wired). `GET /v1/extraction/{request_id}` polling route retained for background extractions.
 ```
 
-### Update — `src/totoro_ai/core/consult/service.py` docstring
+### Update — `src/kebi/core/consult/service.py` docstring
 
 Remove the "6-step pipeline" phrasing. New shape is a 4-step pipeline: geocode → discover → merge+dedupe → enrich+persist.
 

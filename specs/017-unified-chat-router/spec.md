@@ -130,5 +130,5 @@ Every completed consult response is stored in a recommendations table alongside 
 - "intent_router" logical role is not yet in config/app.yaml; it must be added pointing to llama-3.1-8b-instant via the Groq provider for ~100ms classification latency
 - The recommendations table does not yet exist; an Alembic migration is required
 - The previous /v1/consult used streaming (SSE); the unified /v1/chat endpoint is non-streaming JSON. If ConsultService currently only exposes a streaming interface, a non-streaming adapter method must be added as part of this feature
-- Bruno collection exists at totoro-config/bruno/; .bru files for old endpoints will be deleted and a new chat.bru added
+- Bruno collection exists at kebi-config/bruno/; .bru files for old endpoints will be deleted and a new chat.bru added
 - The location field is a plain dict (not a typed sub-model) to match the existing consult contract

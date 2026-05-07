@@ -29,7 +29,7 @@ Read your plan. Which ADRs does it relate to? Examples:
 Plan: Add real-time notifications
 
 Related ADRs:
-- ADR-002: Separate AI repo (does this touch totoro-ai? No ✓)
+- ADR-002: Separate AI repo (does this touch kebi? No ✓)
 - ADR-004: Clerk (does this affect auth? No ✓)
 - ADR-011: PORT env-var (does this change bootstrap? No ✓)
 - ADR-014: One module per domain (should notifications be a module? Yes ✓)
@@ -113,7 +113,7 @@ Then update plan:
 ## Common ADRs to Check
 
 ### Architecture & Boundaries
-- **ADR-002:** Separate AI repo (totoro-ai is independent)
+- **ADR-002:** Separate AI repo (kebi is independent)
 - **ADR-014:** One NestJS module per domain
 - **ADR-001:** Nx monorepo tool
 

@@ -10,7 +10,7 @@
 
 A user saves places over time. The system silently learns what they like — cuisine preferences, price comfort, distance tolerance, ambiance — and the recommendations they receive become progressively more aligned with those patterns. The user never fills in a preference form. Their behavior is the input.
 
-**Why this priority**: This is the core product promise. Without a taste model that learns from saves, every recommendation is generic. This is what makes Totoro different from a generic search.
+**Why this priority**: This is the core product promise. Without a taste model that learns from saves, every recommendation is generic. This is what makes Kebi different from a generic search.
 
 **Independent Test**: Save 5 places in the same cuisine and price range. Run a consultation. The primary recommendation should reflect that pattern without the user stating it explicitly.
 

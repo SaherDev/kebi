@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from totoro_ai.core.config import (
+from kebi.core.config import (
     AgentConfig,
     ToolTimeoutsConfig,
     _load_prompts,
@@ -109,10 +109,10 @@ class TestAgentPromptSlotValidation:
         prompts_dir.mkdir(parents=True)
         # Missing {memory_summary} slot
         (prompts_dir / "agent.txt").write_text(
-            "You are Totoro. Taste: {taste_profile_summary}. No memory slot here."
+            "You are Kebi. Taste: {taste_profile_summary}. No memory slot here."
         )
 
-        import totoro_ai.core.config as config_module
+        import kebi.core.config as config_module
 
         original = config_module.find_project_root
         config_module.find_project_root = lambda: tmp_path  # type: ignore[assignment]
@@ -129,7 +129,7 @@ class TestAgentPromptSlotValidation:
             "Taste: {taste_profile_summary}\nMemory: {memory_summary}"
         )
 
-        import totoro_ai.core.config as config_module
+        import kebi.core.config as config_module
 
         original = config_module.find_project_root
         config_module.find_project_root = lambda: tmp_path  # type: ignore[assignment]
@@ -145,7 +145,7 @@ class TestAgentPromptSlotValidation:
         prompts_dir = tmp_path / "config" / "prompts"
         prompts_dir.mkdir(parents=True)
 
-        import totoro_ai.core.config as config_module
+        import kebi.core.config as config_module
 
         original = config_module.find_project_root
         config_module.find_project_root = lambda: tmp_path  # type: ignore[assignment]

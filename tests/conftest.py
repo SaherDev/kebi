@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from totoro_ai.api.main import app
+from kebi.api.main import app
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -40,6 +40,6 @@ def mock_session() -> AsyncMock:
 @pytest.fixture(autouse=True)
 def override_session_dependency(mock_session: AsyncMock) -> None:
     """Override the get_session dependency for all tests."""
-    from totoro_ai.api import deps
+    from kebi.api import deps
 
     app.dependency_overrides[deps.get_session] = lambda: mock_session

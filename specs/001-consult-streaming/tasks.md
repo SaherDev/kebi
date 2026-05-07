@@ -15,9 +15,9 @@ description: "Task list for SSE streaming mode on POST /v1/consult"
 
 **Purpose**: Project initialization and directory structure
 
-- [X] T001 Create API schemas directory: `src/totoro_ai/api/schemas/` with `__init__.py`
-- [X] T002 Create routes directory: `src/totoro_ai/api/routes/` with `__init__.py`
-- [X] T003 Create consult service directory: `src/totoro_ai/core/consult/` with `__init__.py`
+- [X] T001 Create API schemas directory: `src/kebi/api/schemas/` with `__init__.py`
+- [X] T002 Create routes directory: `src/kebi/api/routes/` with `__init__.py`
+- [X] T003 Create consult service directory: `src/kebi/core/consult/` with `__init__.py`
 - [X] T004 Create tests for consult: `tests/api/` and `tests/core/consult/` directories with `__init__.py` files
 
 ---
@@ -28,10 +28,10 @@ description: "Task list for SSE streaming mode on POST /v1/consult"
 
 **⚠️ CRITICAL**: No user story work can begin until this phase is complete
 
-- [X] T005 [P] Create ConsultRequest, Location, SyncConsultResponse, PlaceResult, ReasoningStep Pydantic models in `src/totoro_ai/api/schemas/consult.py`
-- [X] T006 [P] Create LLMClientProtocol abstract base class in `src/totoro_ai/core/consult/service.py` for type hints
-- [X] T007 Add SYSTEM_PROMPT constant to `src/totoro_ai/core/consult/service.py`: "You are Totoro, an AI place recommendation assistant. Answer the user's query helpfully and concisely."
-- [X] T008 Create ConsultService class constructor in `src/totoro_ai/core/consult/service.py` accepting LLMClientProtocol
+- [X] T005 [P] Create ConsultRequest, Location, SyncConsultResponse, PlaceResult, ReasoningStep Pydantic models in `src/kebi/api/schemas/consult.py`
+- [X] T006 [P] Create LLMClientProtocol abstract base class in `src/kebi/core/consult/service.py` for type hints
+- [X] T007 Add SYSTEM_PROMPT constant to `src/kebi/core/consult/service.py`: "You are Kebi, an AI place recommendation assistant. Answer the user's query helpfully and concisely."
+- [X] T008 Create ConsultService class constructor in `src/kebi/core/consult/service.py` accepting LLMClientProtocol
 
 **Checkpoint**: Foundational schemas and service structure ready - user story implementation can now begin in parallel
 
@@ -45,27 +45,27 @@ description: "Task list for SSE streaming mode on POST /v1/consult"
 
 ### Implementation for User Story 1
 
-- [X] T009 [US1] Implement ConsultService.stream() async generator method in `src/totoro_ai/core/consult/service.py` that:
+- [X] T009 [US1] Implement ConsultService.stream() async generator method in `src/kebi/core/consult/service.py` that:
   - Calls `self._llm.stream(SYSTEM_PROMPT, query)` with system prompt and user query
   - Emits `data: {"token": "..."}\\n\\n` per token from AI provider
   - Handles request.is_disconnected() to break early on client disconnect
   - Yields final `data: {"done": true}\\n\\n` when all tokens complete
   - Uses try/finally for resource cleanup of AI stream
 
-- [X] T010 [US1] Create consult route handler in `src/totoro_ai/api/routes/consult.py` that:
+- [X] T010 [US1] Create consult route handler in `src/kebi/api/routes/consult.py` that:
   - Accepts ConsultRequest body and FastAPI Request object
   - Returns StreamingResponse when stream=true
   - Sets media_type="text/event-stream"
   - Sets headers: Cache-Control: no-cache, X-Accel-Buffering: no
   - Calls service.stream() with proper parameters
 
-- [X] T011 [US1] Create get_consult_service() dependency factory in `src/totoro_ai/api/routes/consult.py` that:
+- [X] T011 [US1] Create get_consult_service() dependency factory in `src/kebi/api/routes/consult.py` that:
   - Returns ConsultService instance with LLM client from get_llm("orchestrator")
   - Used via Depends() in route handler
 
-- [X] T012 [US1] Register consult router in `src/totoro_ai/api/main.py` to include routes from `consult.py`
+- [X] T012 [US1] Register consult router in `src/kebi/api/main.py` to include routes from `consult.py`
 
-- [X] T013 [US1] Create Bruno request file at `totoro-config/bruno/ai-service/consult-stream.bru` for manual testing of streaming mode with stream=true parameter
+- [X] T013 [US1] Create Bruno request file at `kebi-config/bruno/ai-service/consult-stream.bru` for manual testing of streaming mode with stream=true parameter
 
 **Checkpoint**: User Story 1 (Real-Time Streaming) is fully functional and independently testable
 
@@ -79,12 +79,12 @@ description: "Task list for SSE streaming mode on POST /v1/consult"
 
 ### Implementation for User Story 2
 
-- [X] T014 [US2] Implement ConsultService.consult() async method in `src/totoro_ai/core/consult/service.py` that:
+- [X] T014 [US2] Implement ConsultService.consult() async method in `src/kebi/core/consult/service.py` that:
   - Returns SyncConsultResponse stub with placeholder data
   - Includes primary recommendation, alternatives, and reasoning steps
   - Uses data from parameters (user_id, query, location if provided)
 
-- [X] T015 [US2] Update consult route handler in `src/totoro_ai/api/routes/consult.py` to:
+- [X] T015 [US2] Update consult route handler in `src/kebi/api/routes/consult.py` to:
   - Check if body.stream is True (or absent/False)
   - Call service.consult() when stream=false or absent
   - Return JSONResponse with service result via model_dump()
@@ -102,7 +102,7 @@ description: "Task list for SSE streaming mode on POST /v1/consult"
 
 ### Implementation for User Story 3
 
-- [X] T016 [US3] Verify ConsultService.stream() in `src/totoro_ai/core/consult/service.py` uses:
+- [X] T016 [US3] Verify ConsultService.stream() in `src/kebi/core/consult/service.py` uses:
   - `await request.is_disconnected()` to detect client disconnect during token streaming
   - `break` statement in token loop to exit immediately on disconnect
   - `try/finally` block to ensure AI stream is closed via async context manager
@@ -154,7 +154,7 @@ description: "Task list for SSE streaming mode on POST /v1/consult"
 
 - [X] T023 Update `docs/api-contract.md` to include example streaming request/response in `/v1/consult` section (if not already added)
 
-- [X] T024 Verify Bruno collection request file (`totoro-config/bruno/ai-service/consult-stream.bru`) works against localhost:8000 with real streaming
+- [X] T024 Verify Bruno collection request file (`kebi-config/bruno/ai-service/consult-stream.bru`) works against localhost:8000 with real streaming
 
 ---
 

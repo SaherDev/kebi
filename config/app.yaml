@@ -1,4 +1,4 @@
-# Totoro AI — non-secret application config
+# Kebi — non-secret application config
 # Secrets (API keys, DB/Redis URLs) live in .env (gitignored symlink)
 # ADR-015: YAML config loader for non-secret settings
 # ADR-016: logical-role-to-provider mapping
@@ -8,8 +8,8 @@
 # App metadata
 # ---------------------------------------------------------------------------
 app:
-  name: totoro-ai
-  description: AI engine for Totoro
+  name: kebi
+  description: AI engine for Kebi
   api_prefix: /v1
 
 # ---------------------------------------------------------------------------
@@ -89,6 +89,15 @@ models:
     max_tokens: 512
     temperature: 0.3
 
+  # Personal-fact extraction from a batch of recent user messages.
+  # Triggered every Nth user turn (memory.extraction.debounce_messages).
+  # Output feeds UserMemoryService.save_facts → user_memories.
+  memory_extractor:
+    provider: openai
+    model: gpt-4o-mini
+    max_tokens: 256
+    temperature: 0
+
 # ---------------------------------------------------------------------------
 # Extraction pipeline — confidence weights and decision thresholds
 # ADR-018, ADR-034: confidence scoring and two-phase confirmation
@@ -111,14 +120,35 @@ extraction:
     store_silently: 0.70
     require_confirmation: 0.30
   confidence:
-    base_scores:
-      emoji_regex: 0.95
+    # Per-producer base scores. Keys are Producer.value strings.
+    producer_scores:
+      # Name producers
       llm_ner: 0.80
-      subtitle_check: 0.75
-      whisper_audio: 0.65
-      vision_frames: 0.55
       # User-curated lists are explicit saves — treat them as ground truth.
       google_maps_list: 0.95
+      # Instagram-tagged caption / location_tag — moderate signal.
+      instagram_post: 0.65
+      vision_frames: 0.55
+      vision_images: 0.55
+      # Text producers — modest baseline; corroboration bonus when paired
+      # with a name producer is what actually lifts confidence.
+      tiktok_caption: 0.65
+      video_metadata: 0.60
+      whisper_audio: 0.65
+      subtitle_check: 0.75
+      photo_detector: 0.50
+    # Per-medium base scores. Keys are Medium.value strings.
+    medium_scores:
+      emoji_marker: 0.92
+      location_tag: 0.85
+      caption: 0.75
+      title: 0.70
+      transcript: 0.65
+      supplementary_text: 0.70
+      hashtag: 0.55
+      frame: 0.55
+      image: 0.55
+      list: 0.95
     corroboration_bonus: 0.10
     max_score: 0.97
     # ADR-057: two-band save gate.
@@ -127,7 +157,7 @@ extraction:
     #   confidence ≥ confident_threshold → written silently as "saved".
     save_threshold: 0.30
     confident_threshold: 0.70
-  circuit_breaker_threshold: 5
+  circuit_breaker_threshold: 3
   circuit_breaker_cooldown: 900
   vision:
     max_frames: 5
@@ -239,6 +269,20 @@ agent:
   max_steps: 10
   max_errors: 3
   max_history_messages: 40
+  # Older ToolMessage payloads (recall/consult/save JSON, ~2-5KB each) get
+  # replaced by a one-line breadcrumb on the way to the LLM. The most recent
+  # `tool_result_window` payloads stay full. State is untouched — this only
+  # rewrites the per-call conversation list. 0 disables compaction.
+  tool_result_window: 2
+  # Cap unbounded growth of state["messages"] in long-lived threads. When the
+  # list exceeds `state_message_cap`, the reducer trims it down toward
+  # `state_message_floor` at the next HumanMessage boundary (preserves
+  # tool_use/tool_result pairing). Floor must be >= max_history_messages and
+  # < cap. Trimmed messages are gone from the checkpointer blob — irrelevant
+  # to the LLM (already past the 40-message window) but reduces per-checkpoint
+  # blob size for chatty threads.
+  state_message_cap: 200
+  state_message_floor: 150
   checkpointer_ttl_seconds: 86400
   prompt_caching_enabled: false  # ADR-067: Anthropic-only (ephemeral cache_control). Re-enable when orchestrator returns to Anthropic.
   tool_timeouts_seconds:
@@ -279,6 +323,15 @@ memory:
   confidence:
     stated: 0.9
     inferred: 0.6
+  extraction:
+    # Run extraction once every Nth user turn. Each turn appends to a
+    # per-user Redis buffer; on the Nth append the buffer is drained and
+    # passed to the memory_extractor LLM as one batch.
+    debounce_messages: 5
+    # TTL on the per-user message buffer (seconds). Refreshed on every
+    # append, so active users never expire. Caps Redis memory leak from
+    # users who go quiet mid-batch. 7 days.
+    buffer_ttl_seconds: 604800
 
 # ---------------------------------------------------------------------------
 # PlacesService Configuration (ADR-054, feature 019)

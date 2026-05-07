@@ -1,6 +1,6 @@
 # Tool schemas — recall / save / consult (M5)
 
-Internal contract for the three `@tool`-decorated async functions under `src/totoro_ai/core/agent/tools/`. Each tool's **docstring is the LLM-facing contract** — copy verbatim from the plan doc's M5 section; field `description` text is also the LLM-facing contract.
+Internal contract for the three `@tool`-decorated async functions under `src/kebi/core/agent/tools/`. Each tool's **docstring is the LLM-facing contract** — copy verbatim from the plan doc's M5 section; field `description` text is also the LLM-facing contract.
 
 Pattern for all three tools (LangGraph 0.3 — see research.md items 2 and 10):
 
@@ -11,7 +11,7 @@ from langchain_core.messages import ToolMessage
 from langgraph.prebuilt import InjectedState
 from langgraph.types import Command
 
-from totoro_ai.core.agent.tools._emit import build_emit_closure, append_summary
+from kebi.core.agent.tools._emit import build_emit_closure, append_summary
 
 @tool("<name>", args_schema=<Input>)
 async def <tool_name>(
@@ -33,7 +33,7 @@ async def <tool_name>(
     })
 ```
 
-## Shared helpers — `src/totoro_ai/core/agent/tools/_emit.py`
+## Shared helpers — `src/kebi/core/agent/tools/_emit.py`
 
 Every wrapper uses the same fan-out pattern, factored into two helpers. This is the ONE place agent-layer field defaults (`source="tool"`, `visibility="debug"` for debug steps, `visibility="user"` for `tool.summary`), `duration_ms` computation, and stream-writer wiring live.
 
@@ -41,8 +41,8 @@ Every wrapper uses the same fan-out pattern, factored into two helpers. This is 
 from datetime import UTC, datetime
 from typing import Literal
 from langgraph.config import get_stream_writer
-from totoro_ai.core.agent.reasoning import ReasoningStep
-from totoro_ai.core.emit import EmitFn
+from kebi.core.agent.reasoning import ReasoningStep
+from kebi.core.emit import EmitFn
 
 ToolName = Literal["recall", "save", "consult"]
 
@@ -114,7 +114,7 @@ Catalog enforcement: the `ToolName` Literal means mypy flags `build_emit_closure
 
 ## 1. `recall_tool`
 
-**File**: `src/totoro_ai/core/agent/tools/recall_tool.py`
+**File**: `src/kebi/core/agent/tools/recall_tool.py`
 **Factory**: `build_recall_tool(service: RecallService) -> Tool`
 
 ### `RecallToolInput` (Pydantic)
@@ -174,7 +174,7 @@ Helper `_filter_noun(filters)` derives a noun from `filters.place_type` / `filte
 
 ## 2. `save_tool`
 
-**File**: `src/totoro_ai/core/agent/tools/save_tool.py`
+**File**: `src/kebi/core/agent/tools/save_tool.py`
 **Factory**: `build_save_tool(service: ExtractionService) -> Tool`
 
 ### `SaveToolInput` (Pydantic)
@@ -244,7 +244,7 @@ When the envelope reports multiple results (rare — current extraction pipeline
 
 ## 3. `consult_tool`
 
-**File**: `src/totoro_ai/core/agent/tools/consult_tool.py`
+**File**: `src/kebi/core/agent/tools/consult_tool.py`
 **Factory**: `build_consult_tool(service: ConsultService) -> Tool`
 
 ### `ConsultToolInput` (Pydantic)
@@ -314,7 +314,7 @@ Additional trace-level invariant (SC-009): in captured traces of the `consult_to
 
 ## `build_tools(recall, extraction, consult) -> list[Tool]`
 
-**File**: `src/totoro_ai/core/agent/tools/__init__.py`
+**File**: `src/kebi/core/agent/tools/__init__.py`
 
 ```python
 def build_tools(

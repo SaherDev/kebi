@@ -23,7 +23,7 @@ Fix 9 issues from the implementation report across four layers: (1) replace prov
 
 | Gate | Status | Notes |
 |------|--------|-------|
-| ADR-001: src layout | ✅ Pass | All new files under `src/totoro_ai/` |
+| ADR-001: src layout | ✅ Pass | All new files under `src/kebi/` |
 | ADR-002: Hybrid dirs (api/, core/, providers/, db/) | ✅ Pass | Repository goes in `db/repositories/` |
 | ADR-003: ruff + mypy strict | ✅ Pass | All new code typed; `# type: ignore` added for instructor (L2) |
 | ADR-004: pytest in tests/ mirroring src/ | ✅ Pass | `tests/db/repositories/test_place_repository.py` |
@@ -60,7 +60,7 @@ specs/003-fix-schema-repo-quality/
 ### Source Code changes
 
 ```text
-src/totoro_ai/
+src/kebi/
 ├── db/
 │   ├── models.py                          [MODIFY] replace google_place_id
 │   └── repositories/
@@ -108,7 +108,7 @@ tests/
 
 Replace `google_place_id` column with `external_provider` + `external_id` + UniqueConstraint.
 
-**File**: `src/totoro_ai/db/models.py`
+**File**: `src/kebi/db/models.py`
 
 Changes:
 - Remove: `google_place_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)`
@@ -133,7 +133,7 @@ Changes:
 
 Steps:
 1. Run `poetry run alembic init migrations` to scaffold
-2. Configure `migrations/env.py` to import `Base` from `totoro_ai.db.base` and use the asyncpg URL from `get_secrets().database.url`
+2. Configure `migrations/env.py` to import `Base` from `kebi.db.base` and use the asyncpg URL from `get_secrets().database.url`
 3. Create revision `001_provider_agnostic_place_identity` with the backfill logic (see `data-model.md` Migration Summary)
 
 **Key env.py pattern** for async SQLAlchemy:
@@ -152,14 +152,14 @@ def run_migrations_online() -> None:
 
 ### 1.3 — Create `PlaceRepository` Protocol + `SQLAlchemyPlaceRepository` (H1 + H2)
 
-**New file**: `src/totoro_ai/db/repositories/place_repository.py`
+**New file**: `src/kebi/db/repositories/place_repository.py`
 
 ```python
 from typing import Protocol
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 import logging
-from totoro_ai.db.models import Place
+from kebi.db.models import Place
 
 logger = logging.getLogger(__name__)
 
@@ -215,9 +215,9 @@ class SQLAlchemyPlaceRepository:
             ) from e
 ```
 
-**New file**: `src/totoro_ai/db/repositories/__init__.py`
+**New file**: `src/kebi/db/repositories/__init__.py`
 ```python
-from totoro_ai.db.repositories.place_repository import (
+from kebi.db.repositories.place_repository import (
     PlaceRepository,
     SQLAlchemyPlaceRepository,
 )
@@ -226,7 +226,7 @@ __all__ = ["PlaceRepository", "SQLAlchemyPlaceRepository"]
 
 ### 1.4 — Add explicit rollback to `db/session.py` (M1)
 
-**File**: `src/totoro_ai/db/session.py`
+**File**: `src/kebi/db/session.py`
 
 Change `get_session()`:
 ```python
@@ -247,7 +247,7 @@ async def get_session() -> AsyncGenerator[AsyncSession, None]:
 
 ### 2.1 — Update `PlacesMatchResult` (C1 ripple)
 
-**File**: `src/totoro_ai/core/extraction/places_client.py`
+**File**: `src/kebi/core/extraction/places_client.py`
 
 - Rename field `google_place_id: str | None` → `external_id: str | None`
 - Add field `external_provider: str = "google"`
@@ -255,7 +255,7 @@ async def get_session() -> AsyncGenerator[AsyncSession, None]:
 
 ### 2.2 — Refactor `ExtractionService` to use `PlaceRepository` (H1)
 
-**File**: `src/totoro_ai/core/extraction/service.py`
+**File**: `src/kebi/core/extraction/service.py`
 
 - Replace constructor param `db_session: AsyncSession` with `place_repo: PlaceRepository`
 - Remove `from sqlalchemy import select` and `from sqlalchemy.ext.asyncio import AsyncSession`
@@ -284,10 +284,10 @@ async def get_session() -> AsyncGenerator[AsyncSession, None]:
 
 ### 2.3 — Update `api/deps.py` (H1 + M2)
 
-**File**: `src/totoro_ai/api/deps.py`
+**File**: `src/kebi/api/deps.py`
 
-- Remove `from totoro_ai.providers.llm import get_instructor_client` (direct import)
-- Add `from totoro_ai.providers import get_instructor_client` (via public API — M2 fix)
+- Remove `from kebi.providers.llm import get_instructor_client` (direct import)
+- Add `from kebi.providers import get_instructor_client` (via public API — M2 fix)
 - Replace `db_session: AsyncSession` param with `place_repo` wired from `SQLAlchemyPlaceRepository(db_session)`
 - Updated wiring:
   ```python
@@ -309,7 +309,7 @@ async def get_session() -> AsyncGenerator[AsyncSession, None]:
 
 ### 3.1 — Fix consult route OpenAPI docs (H3)
 
-**File**: `src/totoro_ai/api/routes/consult.py`
+**File**: `src/kebi/api/routes/consult.py`
 
 Add to `@router.post`:
 ```python
@@ -325,16 +325,16 @@ Add to `@router.post`:
 )
 ```
 
-Import `SyncConsultResponse` from `totoro_ai.api.schemas.consult`.
+Import `SyncConsultResponse` from `kebi.api.schemas.consult`.
 
 > Do NOT set `response_model=SyncConsultResponse` — that would cause a runtime error when the handler returns `StreamingResponse`. The `responses` dict documents the shape in OpenAPI without enforcing serialization.
 
 ### 3.2 — Export `get_instructor_client` from providers (M2)
 
-**File**: `src/totoro_ai/providers/__init__.py`
+**File**: `src/kebi/providers/__init__.py`
 
 ```python
-from totoro_ai.providers.llm import get_llm, get_instructor_client
+from kebi.providers.llm import get_llm, get_instructor_client
 
 __all__ = ["get_llm", "get_instructor_client"]
 ```
@@ -349,7 +349,7 @@ __all__ = ["get_llm", "get_instructor_client"]
 
 ```toml
 [deploy]
-startCommand = "poetry run uvicorn totoro_ai.api.main:app --host \"::\" --port $PORT"
+startCommand = "poetry run uvicorn kebi.api.main:app --host \"::\" --port $PORT"
 healthcheckPath = "/v1/health"
 restartPolicyType = "on_failure"
 restartPolicyMaxRetries = 3
@@ -357,7 +357,7 @@ restartPolicyMaxRetries = 3
 
 ### 4.2 — Fix Pylance type warning (L2)
 
-**File**: `src/totoro_ai/providers/llm.py`
+**File**: `src/kebi/providers/llm.py`
 
 Line 7 — change:
 ```python

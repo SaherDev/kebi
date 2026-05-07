@@ -80,7 +80,7 @@ specs/015-consult-pipeline/
 ### Source Code
 
 ```text
-src/totoro_ai/
+src/kebi/
 ├── api/
 │   ├── deps.py                          ← add get_consult_service() (C7)
 │   ├── routes/
@@ -171,9 +171,9 @@ class ConsultConfig(BaseModel):
 
 ### A4 — Create `core/places/__init__.py` and move `places_client.py`
 
-- Create `src/totoro_ai/core/places/__init__.py`
-- Move `src/totoro_ai/core/extraction/places_client.py` →
-  `src/totoro_ai/core/places/places_client.py`
+- Create `src/kebi/core/places/__init__.py`
+- Move `src/kebi/core/extraction/places_client.py` →
+  `src/kebi/core/places/places_client.py`
 - Update `core/extraction/validator.py` imports
 - Update `api/deps.py` imports (two occurrences of `GooglePlacesClient`)
 - Update `GooglePlacesConfig` in config to include `nearbysearch_url: str`

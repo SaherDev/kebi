@@ -5,10 +5,10 @@ from unittest.mock import AsyncMock
 import pytest
 from fastapi.testclient import TestClient
 
-from totoro_ai.api.deps import get_chat_service
-from totoro_ai.api.main import app
-from totoro_ai.api.schemas.chat import ChatResponse
-from totoro_ai.core.chat.service import ChatService
+from kebi.api.deps import get_chat_service
+from kebi.api.main import app
+from kebi.api.schemas.chat import ChatResponse
+from kebi.core.chat.service import ChatService
 
 
 @pytest.fixture

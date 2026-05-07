@@ -27,15 +27,15 @@
 
 **⚠️ CRITICAL**: All user story phases depend on T003–T011. Complete this phase before any story work.
 
-- [x] T003 Create `src/totoro_ai/core/extraction/types.py` per plan.md §Phase 1 Task 1.1 Step 1
+- [x] T003 Create `src/kebi/core/extraction/types.py` per plan.md §Phase 1 Task 1.1 Step 1
 - [x] T004 Create `tests/core/extraction/test_types.py` per plan.md §Phase 1 Task 1.1 Step 2
-- [x] T005 [P] Create `src/totoro_ai/core/extraction/enrichers/__init__.py` (empty file)
+- [x] T005 [P] Create `src/kebi/core/extraction/enrichers/__init__.py` (empty file)
 - [x] T006 [P] Create `tests/core/extraction/enrichers/__init__.py` (empty file)
-- [x] T007 Add `Enricher` Protocol to `src/totoro_ai/core/extraction/protocols.py` per plan.md §Phase 3 Task 3.1 Step 1
+- [x] T007 Add `Enricher` Protocol to `src/kebi/core/extraction/protocols.py` per plan.md §Phase 3 Task 3.1 Step 1
 - [x] T008 Run `poetry run pytest tests/core/extraction/test_types.py -v`
-- [x] T009 Run `poetry run mypy src/totoro_ai/core/extraction/types.py src/totoro_ai/core/extraction/protocols.py --strict`
-- [x] T010 Run `poetry run ruff check src/totoro_ai/core/extraction/types.py src/totoro_ai/core/extraction/protocols.py`
-- [x] T011 Commit: `git add src/totoro_ai/core/extraction/types.py src/totoro_ai/core/extraction/protocols.py src/totoro_ai/core/extraction/enrichers/__init__.py tests/core/extraction/test_types.py tests/core/extraction/enrichers/__init__.py && git commit -m "feat(extraction): add cascade types layer and Enricher Protocol"`
+- [x] T009 Run `poetry run mypy src/kebi/core/extraction/types.py src/kebi/core/extraction/protocols.py --strict`
+- [x] T010 Run `poetry run ruff check src/kebi/core/extraction/types.py src/kebi/core/extraction/protocols.py`
+- [x] T011 Commit: `git add src/kebi/core/extraction/types.py src/kebi/core/extraction/protocols.py src/kebi/core/extraction/enrichers/__init__.py tests/core/extraction/test_types.py tests/core/extraction/enrichers/__init__.py && git commit -m "feat(extraction): add cascade types layer and Enricher Protocol"`
 
 **Checkpoint**: types.py and Enricher Protocol committed. All story phases may now proceed.
 
@@ -47,12 +47,12 @@
 
 **Independent Test**: `poetry run pytest tests/core/extraction/enrichers/test_emoji_regex.py -v`
 
-- [x] T012 [US1] Create `src/totoro_ai/core/extraction/enrichers/emoji_regex.py` per plan.md §Phase 3 Task 3.2 Step 3
+- [x] T012 [US1] Create `src/kebi/core/extraction/enrichers/emoji_regex.py` per plan.md §Phase 3 Task 3.2 Step 3
 - [x] T013 [US1] Create `tests/core/extraction/enrichers/test_emoji_regex.py` per plan.md §Phase 3 Task 3.2 Step 4
 - [x] T014 [US1] Run `poetry run pytest tests/core/extraction/enrichers/test_emoji_regex.py -v`
-- [x] T015 [US1] Run `poetry run mypy src/totoro_ai/core/extraction/enrichers/emoji_regex.py --strict`
-- [x] T016 [US1] Run `poetry run ruff check src/totoro_ai/core/extraction/enrichers/emoji_regex.py`
-- [x] T017 [US1] Commit: `git add src/totoro_ai/core/extraction/enrichers/emoji_regex.py tests/core/extraction/enrichers/test_emoji_regex.py && git commit -m "feat(extraction): add EmojiRegexEnricher — emoji/hashtag candidate extraction"`
+- [x] T015 [US1] Run `poetry run mypy src/kebi/core/extraction/enrichers/emoji_regex.py --strict`
+- [x] T016 [US1] Run `poetry run ruff check src/kebi/core/extraction/enrichers/emoji_regex.py`
+- [x] T017 [US1] Commit: `git add src/kebi/core/extraction/enrichers/emoji_regex.py tests/core/extraction/enrichers/test_emoji_regex.py && git commit -m "feat(extraction): add EmojiRegexEnricher — emoji/hashtag candidate extraction"`
 
 **Checkpoint**: US1 complete. EmojiRegexEnricher independently testable and committed.
 
@@ -64,12 +64,12 @@
 
 **Independent Test**: `poetry run pytest tests/core/extraction/enrichers/test_llm_ner.py -v`
 
-- [x] T018 [US2] Create `src/totoro_ai/core/extraction/enrichers/llm_ner.py` per plan.md §Phase 3 Task 3.3
+- [x] T018 [US2] Create `src/kebi/core/extraction/enrichers/llm_ner.py` per plan.md §Phase 3 Task 3.3
 - [x] T019 [US2] Create `tests/core/extraction/enrichers/test_llm_ner.py` per plan.md §Phase 3 Task 3.3 (mock Instructor call)
 - [x] T020 [US2] Run `poetry run pytest tests/core/extraction/enrichers/test_llm_ner.py -v`
-- [x] T021 [US2] Run `poetry run mypy src/totoro_ai/core/extraction/enrichers/llm_ner.py --strict`
-- [x] T022 [US2] Run `poetry run ruff check src/totoro_ai/core/extraction/enrichers/llm_ner.py`
-- [x] T023 [US2] Commit: `git add src/totoro_ai/core/extraction/enrichers/llm_ner.py tests/core/extraction/enrichers/test_llm_ner.py && git commit -m "feat(extraction): add LLMNEREnricher — GPT-4o-mini NER with Langfuse tracing"`
+- [x] T021 [US2] Run `poetry run mypy src/kebi/core/extraction/enrichers/llm_ner.py --strict`
+- [x] T022 [US2] Run `poetry run ruff check src/kebi/core/extraction/enrichers/llm_ner.py`
+- [x] T023 [US2] Commit: `git add src/kebi/core/extraction/enrichers/llm_ner.py tests/core/extraction/enrichers/test_llm_ner.py && git commit -m "feat(extraction): add LLMNEREnricher — GPT-4o-mini NER with Langfuse tracing"`
 
 **Checkpoint**: US2 complete. LLMNEREnricher independently testable and committed.
 
@@ -81,15 +81,15 @@
 
 **Independent Test**: `poetry run pytest tests/core/extraction/test_confidence_new.py -v`
 
-- [x] T024 [US4] Add `ConfidenceConfig(BaseModel)` to `src/totoro_ai/core/config.py` and extend `ExtractionConfig` with `confidence`, `circuit_breaker_threshold`, `circuit_breaker_cooldown` per plan.md §Phase 2 Task 2.1 Step 1
+- [x] T024 [US4] Add `ConfidenceConfig(BaseModel)` to `src/kebi/core/config.py` and extend `ExtractionConfig` with `confidence`, `circuit_breaker_threshold`, `circuit_breaker_cooldown` per plan.md §Phase 2 Task 2.1 Step 1
 - [x] T025 [US4] Add `extraction.confidence` block (with `max_score: 0.97`) and `circuit_breaker_*` fields to `config/app.yaml` per plan.md §Phase 2 Task 2.2 Step 2
-- [x] T026 [US4] Add `calculate_confidence()` to `src/totoro_ai/core/extraction/confidence.py` per plan.md §Phase 2 Task 2.3 Step 3
+- [x] T026 [US4] Add `calculate_confidence()` to `src/kebi/core/extraction/confidence.py` per plan.md §Phase 2 Task 2.3 Step 3
 - [x] T027 [US4] Create `tests/core/extraction/test_confidence_new.py` per plan.md §Phase 2 Task 2.4 Step 4
 - [x] T028 [US4] Run `poetry run pytest tests/core/extraction/test_confidence_new.py -v`
 - [x] T029 [US4] Run `poetry run pytest tests/core/extraction/test_confidence.py -v` (regression check — existing compute_confidence must still pass)
-- [x] T030 [US4] Run `poetry run mypy src/totoro_ai/core/config.py src/totoro_ai/core/extraction/confidence.py --strict`
-- [x] T031 [US4] Run `poetry run ruff check src/totoro_ai/core/config.py src/totoro_ai/core/extraction/confidence.py`
-- [x] T032 [US4] Commit: `git add src/totoro_ai/core/config.py src/totoro_ai/core/extraction/confidence.py config/app.yaml tests/core/extraction/test_confidence_new.py && git commit -m "feat(extraction): add ConfidenceConfig with max_score and calculate_confidence multiplicative formula"`
+- [x] T030 [US4] Run `poetry run mypy src/kebi/core/config.py src/kebi/core/extraction/confidence.py --strict`
+- [x] T031 [US4] Run `poetry run ruff check src/kebi/core/config.py src/kebi/core/extraction/confidence.py`
+- [x] T032 [US4] Commit: `git add src/kebi/core/config.py src/kebi/core/extraction/confidence.py config/app.yaml tests/core/extraction/test_confidence_new.py && git commit -m "feat(extraction): add ConfidenceConfig with max_score and calculate_confidence multiplicative formula"`
 
 **Checkpoint**: US4 complete. Confidence scoring independently testable and committed.
 
@@ -101,16 +101,16 @@
 
 **Independent Test**: `poetry run pytest tests/core/extraction/test_circuit_breaker.py tests/core/extraction/enrichers/test_tiktok_oembed.py -v`
 
-- [x] T033 [US3] Create `src/totoro_ai/core/extraction/circuit_breaker.py` with `CircuitState`, `CircuitBreakerEnricher`, `ParallelEnricherGroup` per plan.md §Phase 4 Task 4.1
+- [x] T033 [US3] Create `src/kebi/core/extraction/circuit_breaker.py` with `CircuitState`, `CircuitBreakerEnricher`, `ParallelEnricherGroup` per plan.md §Phase 4 Task 4.1
 - [x] T034 [US3] Create `tests/core/extraction/test_circuit_breaker.py` per plan.md §Phase 4 Task 4.1 (tests)
 - [x] T035 [US3] Run `poetry run pytest tests/core/extraction/test_circuit_breaker.py -v`
-- [x] T036 [P] [US3] Create `src/totoro_ai/core/extraction/enrichers/tiktok_oembed.py` per plan.md §Phase 4 Task 4.2 Step 2 — note: uses module-level `_TIKTOK_OEMBED_URL` and `_TIMEOUT_SECONDS` constants, no config import
+- [x] T036 [P] [US3] Create `src/kebi/core/extraction/enrichers/tiktok_oembed.py` per plan.md §Phase 4 Task 4.2 Step 2 — note: uses module-level `_TIKTOK_OEMBED_URL` and `_TIMEOUT_SECONDS` constants, no config import
 - [x] T037 [P] [US3] Create `tests/core/extraction/enrichers/test_tiktok_oembed.py` per plan.md §Phase 4 Task 4.2 (mock httpx)
 - [x] T038 [US3] Run `poetry run pytest tests/core/extraction/enrichers/test_tiktok_oembed.py -v`
-- [x] T039 [US3] Create `src/totoro_ai/core/extraction/enrichers/ytdlp_metadata.py` per plan.md §Phase 4 Task 4.3
-- [x] T040 [US3] Run `poetry run mypy src/totoro_ai/core/extraction/circuit_breaker.py src/totoro_ai/core/extraction/enrichers/tiktok_oembed.py src/totoro_ai/core/extraction/enrichers/ytdlp_metadata.py --strict`
-- [x] T041 [US3] Run `poetry run ruff check src/totoro_ai/core/extraction/circuit_breaker.py src/totoro_ai/core/extraction/enrichers/tiktok_oembed.py src/totoro_ai/core/extraction/enrichers/ytdlp_metadata.py`
-- [x] T042 [US3] Commit: `git add src/totoro_ai/core/extraction/circuit_breaker.py src/totoro_ai/core/extraction/enrichers/tiktok_oembed.py src/totoro_ai/core/extraction/enrichers/ytdlp_metadata.py tests/core/extraction/test_circuit_breaker.py tests/core/extraction/enrichers/test_tiktok_oembed.py && git commit -m "feat(extraction): add CircuitBreakerEnricher, ParallelEnricherGroup, TikTokOEmbedEnricher, YtDlpMetadataEnricher"`
+- [x] T039 [US3] Create `src/kebi/core/extraction/enrichers/ytdlp_metadata.py` per plan.md §Phase 4 Task 4.3
+- [x] T040 [US3] Run `poetry run mypy src/kebi/core/extraction/circuit_breaker.py src/kebi/core/extraction/enrichers/tiktok_oembed.py src/kebi/core/extraction/enrichers/ytdlp_metadata.py --strict`
+- [x] T041 [US3] Run `poetry run ruff check src/kebi/core/extraction/circuit_breaker.py src/kebi/core/extraction/enrichers/tiktok_oembed.py src/kebi/core/extraction/enrichers/ytdlp_metadata.py`
+- [x] T042 [US3] Commit: `git add src/kebi/core/extraction/circuit_breaker.py src/kebi/core/extraction/enrichers/tiktok_oembed.py src/kebi/core/extraction/enrichers/ytdlp_metadata.py tests/core/extraction/test_circuit_breaker.py tests/core/extraction/enrichers/test_tiktok_oembed.py && git commit -m "feat(extraction): add CircuitBreakerEnricher, ParallelEnricherGroup, TikTokOEmbedEnricher, YtDlpMetadataEnricher"`
 
 **Checkpoint**: US3 complete. All four user stories implemented and committed.
 

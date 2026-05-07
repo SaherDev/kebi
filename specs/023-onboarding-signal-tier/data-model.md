@@ -6,7 +6,7 @@ Pydantic models and ORM columns touched by feature 023. All shapes are Pydantic 
 
 ## Chip (extended)
 
-**Location**: `src/totoro_ai/core/taste/schemas.py`
+**Location**: `src/kebi/core/taste/schemas.py`
 
 ```python
 class ChipStatus(str, Enum):
@@ -49,7 +49,7 @@ class Chip(BaseModel):
 
 ## ChipConfirmMetadata / ChipConfirmChipItem
 
-**Location**: `src/totoro_ai/api/schemas/signal.py`
+**Location**: `src/kebi/api/schemas/signal.py`
 
 ```python
 class ChipConfirmChipItem(BaseModel):
@@ -75,7 +75,7 @@ class ChipConfirmMetadata(BaseModel):
 
 ## SignalRequest (discriminated union)
 
-**Location**: `src/totoro_ai/api/schemas/signal.py`
+**Location**: `src/kebi/api/schemas/signal.py`
 
 ```python
 class RecommendationSignalRequest(BaseModel):
@@ -103,7 +103,7 @@ Pydantic 2 produces a 422 for any request whose `signal_type` doesn't match one 
 
 ## SignalTier (Literal)
 
-**Location**: `src/totoro_ai/core/taste/tier.py`
+**Location**: `src/kebi/core/taste/tier.py`
 
 ```python
 SignalTier = Literal["cold", "warming", "chip_selection", "active"]
@@ -129,7 +129,7 @@ def derive_signal_tier(
 
 ## ChipConfirmed event
 
-**Location**: `src/totoro_ai/core/events/events.py`
+**Location**: `src/kebi/core/events/events.py`
 
 ```python
 class ChipConfirmed(DomainEvent):
@@ -144,7 +144,7 @@ Carrying only `user_id` (from `DomainEvent`) keeps the event small and lets the 
 
 ## Interaction (ORM + repository)
 
-**Location**: `src/totoro_ai/db/models.py`
+**Location**: `src/kebi/db/models.py`
 
 ```python
 class InteractionType(PyEnum):
@@ -175,7 +175,7 @@ Attribute name is `metadata_` because `Base.metadata` is reserved by SQLAlchemy;
 
 ## ConsultResponse — unchanged
 
-**Location**: `src/totoro_ai/api/schemas/consult.py`
+**Location**: `src/kebi/api/schemas/consult.py`
 
 Feature 023 makes **no** schema change to `ConsultResponse`. The product
 repo gates on `signal_tier` from `GET /v1/user/context` and does not call
@@ -193,7 +193,7 @@ repo and the product repo.
 
 ## UserContextResponse (extended)
 
-**Location**: `src/totoro_ai/api/schemas/user_context.py`
+**Location**: `src/kebi/api/schemas/user_context.py`
 
 ```python
 class ChipResponse(BaseModel):
@@ -218,7 +218,7 @@ class UserContextResponse(BaseModel):
 
 ## TasteModelConfig (extended)
 
-**Location**: `src/totoro_ai/core/config.py`
+**Location**: `src/kebi/core/config.py`
 
 ```python
 class ChipSelectionStagesConfig(BaseModel):

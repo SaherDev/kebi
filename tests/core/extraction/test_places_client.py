@@ -2,7 +2,7 @@
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from totoro_ai.core.places.places_client import (
+from kebi.core.places.places_client import (
     GooglePlacesClient,
     PlacesMatchQuality,
     _map_opening_hours,
@@ -29,8 +29,8 @@ def _fake_response(name: str, place_id: str = "place_123") -> MagicMock:
 def _patched_client() -> GooglePlacesClient:
     """Return a GooglePlacesClient with secrets + config mocked out."""
     with (
-        patch("totoro_ai.core.places.places_client.get_env") as mock_env,
-        patch("totoro_ai.core.places.places_client.get_config") as mock_config,
+        patch("kebi.core.places.places_client.get_env") as mock_env,
+        patch("kebi.core.places.places_client.get_config") as mock_config,
     ):
         mock_env.return_value.GOOGLE_API_KEY = "fake-key"
         cfg = MagicMock()

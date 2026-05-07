@@ -9,11 +9,11 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from fastapi.testclient import TestClient
 
-from totoro_ai.api.deps import get_agent_graph, get_chat_service
-from totoro_ai.api.main import app
-from totoro_ai.core.agent.reasoning import ReasoningStep
-from totoro_ai.core.chat.service import ChatService
-from totoro_ai.core.config import AppConfig
+from kebi.api.deps import get_agent_graph, get_chat_service
+from kebi.api.main import app
+from kebi.core.agent.reasoning import ReasoningStep
+from kebi.core.chat.service import ChatService
+from kebi.core.config import AppConfig
 
 
 def _make_mock_service() -> MagicMock:
@@ -22,6 +22,7 @@ def _make_mock_service() -> MagicMock:
     svc._config = MagicMock(spec=AppConfig)
     svc._compose_taste_summary = AsyncMock(return_value="")
     svc._compose_memory_summary = AsyncMock(return_value="")
+    svc._dispatcher = MagicMock(dispatch=AsyncMock())
     return svc
 
 
@@ -203,7 +204,7 @@ class TestChatStreamToolCallsUsed:
 
         graph.astream = _stream_with_tool_calls
 
-        from totoro_ai.api.deps import get_agent_graph, get_chat_service
+        from kebi.api.deps import get_agent_graph, get_chat_service
 
         app.dependency_overrides[get_chat_service] = lambda: svc
         app.dependency_overrides[get_agent_graph] = lambda: graph
@@ -235,13 +236,13 @@ class TestChatStreamDisabledAgent:
     def test_returns_400_when_agent_disabled(self) -> None:
         from unittest.mock import patch
 
-        from totoro_ai.core.config import EnvConfig
+        from kebi.core.config import EnvConfig
 
         disabled_env = MagicMock(spec=EnvConfig)
         disabled_env.AGENT_ENABLED = False
         app.dependency_overrides[get_chat_service] = lambda: _make_mock_service()
         app.dependency_overrides[get_agent_graph] = lambda: MagicMock()
-        with patch("totoro_ai.api.routes.chat.get_env", return_value=disabled_env):
+        with patch("kebi.api.routes.chat.get_env", return_value=disabled_env):
             try:
                 tc = TestClient(app)
                 response = tc.post(

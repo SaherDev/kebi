@@ -8,9 +8,9 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from totoro_ai.api.deps import get_user_data_deletion_service
-from totoro_ai.api.routes.user import router as user_router
-from totoro_ai.core.user.service import DataScope, UserDataDeletionService
+from kebi.api.deps import get_user_data_deletion_service
+from kebi.api.routes.user import router as user_router
+from kebi.core.user.service import DataScope, UserDataDeletionService
 
 
 def _make_app(service: UserDataDeletionService) -> TestClient:

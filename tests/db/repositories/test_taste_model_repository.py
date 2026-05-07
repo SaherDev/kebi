@@ -11,8 +11,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from totoro_ai.db.models import Interaction, InteractionType
-from totoro_ai.db.repositories.taste_model_repository import (
+from kebi.db.models import Interaction, InteractionType
+from kebi.db.repositories.taste_model_repository import (
     SQLAlchemyTasteModelRepository,
 )
 

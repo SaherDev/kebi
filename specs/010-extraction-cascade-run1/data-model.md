@@ -6,7 +6,7 @@ This run is purely additive. No database schema changes. No new tables, no migra
 
 ---
 
-## New types (all in `src/totoro_ai/core/extraction/types.py`)
+## New types (all in `src/kebi/core/extraction/types.py`)
 
 ### `ExtractionLevel` (Enum)
 
@@ -74,7 +74,7 @@ A validated, scored result from `GooglePlacesValidator`. The unit returned from 
 | `external_provider` | `str \| None` | Yes | `"google"` when validated |
 | `external_id` | `str \| None` | Yes | Google Places place_id |
 
-**Note**: This type has the same name as the existing `ExtractionResult(BaseModel)` in `result.py`. They coexist until Run 3. Import disambiguation: code using the new type imports from `totoro_ai.core.extraction.types`; code using the old type imports from `totoro_ai.core.extraction.result`. No file in this run imports the old type.
+**Note**: This type has the same name as the existing `ExtractionResult(BaseModel)` in `result.py`. They coexist until Run 3. Import disambiguation: code using the new type imports from `kebi.core.extraction.types`; code using the old type imports from `kebi.core.extraction.result`. No file in this run imports the old type.
 
 ---
 
@@ -104,7 +104,7 @@ Typed domain event dispatched when Phase 3 fires. Carries all context needed by 
 
 ---
 
-## Modified config type (in `src/totoro_ai/core/config.py`)
+## Modified config type (in `src/kebi/core/config.py`)
 
 ### `ConfidenceConfig` (new Pydantic BaseModel)
 

@@ -14,7 +14,7 @@
 | response    | JSONB                 | NOT NULL                       | Full ConsultResponse serialized via model_dump(mode="json") |
 | created_at  | DateTime(timezone=True)| NOT NULL, server_default now()| Auto-timestamp                       |
 
-**ORM Model**: `Recommendation` (renamed from `ConsultLog`) in `src/totoro_ai/db/models.py`
+**ORM Model**: `Recommendation` (renamed from `ConsultLog`) in `src/kebi/db/models.py`
 
 **Repository**: `RecommendationRepository` protocol + `SQLAlchemyRecommendationRepository` + `NullRecommendationRepository`
 

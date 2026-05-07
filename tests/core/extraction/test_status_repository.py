@@ -2,8 +2,8 @@
 
 import json
 
-from totoro_ai.core.extraction.status_repository import ExtractionStatusRepository
-from totoro_ai.providers.cache import (
+from kebi.core.extraction.status_repository import ExtractionStatusRepository
+from kebi.providers.cache import (
     CacheBackend,  # noqa: F401 (Protocol isinstance check)
 )
 

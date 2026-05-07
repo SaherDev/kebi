@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from typing import Any, cast
 
-from totoro_ai.core.agent.graph import _render_location_context
+from kebi.core.agent.graph import _render_location_context
 
 
 def _state(

@@ -4,7 +4,7 @@ import logging
 
 import pytest
 
-from totoro_ai.core.config import (
+from kebi.core.config import (
     AppConfig,
     _load_prompts,
     _resolve_orchestrator,
@@ -63,7 +63,7 @@ def test_agent_model_invalid_warns_and_falls_back_to_default(
     orch = _orch_block()
     expected = orch[orch["default"]]
 
-    with caplog.at_level(logging.WARNING, logger="totoro_ai.core.config"):
+    with caplog.at_level(logging.WARNING, logger="kebi.core.config"):
         resolved = _resolve_orchestrator(
             _raw_models_with_orch(orch), agent_model="definitely-not-a-real-option"
         )

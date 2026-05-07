@@ -69,7 +69,7 @@ components:
           $ref: "#/components/schemas/PlaceObject"
           description: |
             Non-null. The extracted place. Schema defined elsewhere
-            (`src/totoro_ai/core/places/models.py` per ADR-056).
+            (`src/kebi/core/places/models.py` per ADR-056).
         confidence:
           type: number
           format: float
@@ -86,7 +86,7 @@ components:
     PlaceObject:
       description: |
         Reference only — defined in the AI repo under
-        `src/totoro_ai/core/places/models.py`. Not redefined here to avoid
+        `src/kebi/core/places/models.py`. Not redefined here to avoid
         drift. Unified return shape across services (ADR-056, feature 019).
       type: object
 

@@ -24,7 +24,7 @@ Redesign `LLMNEREnricher` to pass a full structured `<metadata>` block (platform
 | Gate | Status | Notes |
 |------|--------|-------|
 | Repo boundary respected (no UI/auth/product logic) | PASS | Pure enricher logic |
-| ADR-001: src layout | PASS | All changes in `src/totoro_ai/` |
+| ADR-001: src layout | PASS | All changes in `src/kebi/` |
 | ADR-003: ruff + mypy strict | PASS | Verify commands in tasks |
 | ADR-004: pytest in `tests/` mirroring src | PASS | Test file at matching path |
 | ADR-016: logical role in config, not hardcode | PASS | No model names in code |
@@ -48,7 +48,7 @@ specs/014-ner-enricher-redesign/
 ### Source Code (affected files only)
 
 ```text
-src/totoro_ai/core/extraction/
+src/kebi/core/extraction/
 ├── types.py                         ← add 4 fields to ExtractionContext, 2 to CandidatePlace
 └── enrichers/
     ├── _city_filter.py              ← DELETE entirely
@@ -63,7 +63,7 @@ tests/core/extraction/enrichers/
 
 ### Task 1 — Extend `ExtractionContext` and `CandidatePlace`
 
-**File**: `src/totoro_ai/core/extraction/types.py`
+**File**: `src/kebi/core/extraction/types.py`
 
 Add to `ExtractionContext` dataclass (after `pending_levels`):
 ```python
@@ -85,11 +85,11 @@ place_type: str | None = None
 
 ### Task 2 — Delete `_city_filter.py` and clean `emoji_regex.py`
 
-**Delete**: `src/totoro_ai/core/extraction/enrichers/_city_filter.py`
+**Delete**: `src/kebi/core/extraction/enrichers/_city_filter.py`
 
-**File**: `src/totoro_ai/core/extraction/enrichers/emoji_regex.py`
+**File**: `src/kebi/core/extraction/enrichers/emoji_regex.py`
 
-- Remove `from totoro_ai.core.extraction.enrichers._city_filter import CITY_BLOCKLIST`
+- Remove `from kebi.core.extraction.enrichers._city_filter import CITY_BLOCKLIST`
 - In `_extract_city_hint()`, remove the `and tag.lower() not in CITY_BLOCKLIST` guard. The remaining length+alpha check (`3 <= len(tag) <= 20 and tag.isalpha()`) is sufficient to skip content tags — the LLM handles city correctness.
 
 **Verify**: `emoji_regex.py` still runs its existing tests (`test_emoji_regex.py`) without importing `_city_filter`.
@@ -98,11 +98,11 @@ place_type: str | None = None
 
 ### Task 3 — Rewrite `llm_ner.py`
 
-**File**: `src/totoro_ai/core/extraction/enrichers/llm_ner.py`
+**File**: `src/kebi/core/extraction/enrichers/llm_ner.py`
 
 #### Imports — remove
 ```python
-from totoro_ai.core.extraction.enrichers._city_filter import (
+from kebi.core.extraction.enrichers._city_filter import (
     sanitize_city as _sanitize_city,
 )
 ```
@@ -184,7 +184,7 @@ for place in response.places:
 #### Remove entirely
 - `TestSanitizeCity` class (tests `_sanitize_city` — deleted from `llm_ner.py`)
 - `TestCityExtractionScenarios` class (tests old post-processing behaviour)
-- Import `from totoro_ai.core.extraction.enrichers._city_filter import sanitize_city as _sanitize_city`
+- Import `from kebi.core.extraction.enrichers._city_filter import sanitize_city as _sanitize_city`
 
 #### Update `_mock_instructor` helper
 ```python
@@ -238,12 +238,12 @@ Run after all tasks complete:
 ```bash
 poetry run pytest tests/core/extraction/enrichers/test_llm_ner.py -v
 poetry run pytest tests/ -x
-poetry run ruff check src/totoro_ai/core/extraction/enrichers/llm_ner.py
-poetry run ruff check src/totoro_ai/core/extraction/enrichers/emoji_regex.py
-poetry run ruff check src/totoro_ai/core/extraction/types.py
-poetry run mypy src/totoro_ai/core/extraction/enrichers/llm_ner.py
-poetry run mypy src/totoro_ai/core/extraction/enrichers/emoji_regex.py
-poetry run mypy src/totoro_ai/core/extraction/types.py
+poetry run ruff check src/kebi/core/extraction/enrichers/llm_ner.py
+poetry run ruff check src/kebi/core/extraction/enrichers/emoji_regex.py
+poetry run ruff check src/kebi/core/extraction/types.py
+poetry run mypy src/kebi/core/extraction/enrichers/llm_ner.py
+poetry run mypy src/kebi/core/extraction/enrichers/emoji_regex.py
+poetry run mypy src/kebi/core/extraction/types.py
 ```
 
 ## Risk Notes

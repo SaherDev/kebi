@@ -15,11 +15,11 @@ import uuid
 import pytest
 from langgraph.checkpoint.base import empty_checkpoint
 
-from totoro_ai.core.agent.checkpointer import (
+from kebi.core.agent.checkpointer import (
     _normalize_postgres_url,
     build_checkpointer,
 )
-from totoro_ai.core.config import get_env
+from kebi.core.config import get_env
 
 
 def _postgres_reachable() -> bool:

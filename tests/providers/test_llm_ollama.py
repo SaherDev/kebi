@@ -2,8 +2,8 @@
 
 from unittest.mock import patch
 
-from totoro_ai.core.config import AppConfig, _load_prompts, load_yaml_config
-from totoro_ai.providers.llm import (
+from kebi.core.config import AppConfig, _load_prompts, load_yaml_config
+from kebi.providers.llm import (
     InstructorClient,
     OpenAILLMClient,
     get_instructor_client,
@@ -76,8 +76,8 @@ def test_get_llm_returns_openai_client_for_ollama_provider() -> None:
     """get_llm('intent_parser') with provider=ollama returns OpenAILLMClient."""
     cfg = _mock_config("ollama", "gemma4:e2b")
     with (
-        patch("totoro_ai.providers.llm.get_config", return_value=cfg),
-        patch("totoro_ai.providers.llm.get_env"),
+        patch("kebi.providers.llm.get_config", return_value=cfg),
+        patch("kebi.providers.llm.get_env"),
     ):
         client = get_llm("intent_parser")
     assert isinstance(client, OpenAILLMClient)
@@ -90,8 +90,8 @@ def test_get_instructor_client_returns_instructor_for_ollama_provider() -> None:
 
     cfg = _mock_config("ollama", "gemma4:e2b")
     with (
-        patch("totoro_ai.providers.llm.get_config", return_value=cfg),
-        patch("totoro_ai.providers.llm.get_env"),
+        patch("kebi.providers.llm.get_config", return_value=cfg),
+        patch("kebi.providers.llm.get_env"),
     ):
         client = get_instructor_client("intent_parser")
     assert isinstance(client, InstructorClient)

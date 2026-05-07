@@ -6,7 +6,7 @@ No new HTTP endpoints. All contracts are internal Python interfaces.
 
 ## 1. `classify_intent()` — extended return type
 
-**File**: `src/totoro_ai/core/chat/router.py`
+**File**: `src/kebi/core/chat/router.py`
 
 **Before**:
 ```python
@@ -42,7 +42,7 @@ async def classify_intent(message: str) -> IntentClassification
 
 ## 2. `UserMemoryRepository` Protocol
 
-**File**: `src/totoro_ai/core/memory/repository.py`
+**File**: `src/kebi/core/memory/repository.py`
 
 ```python
 class UserMemoryRepository(Protocol):
@@ -68,7 +68,7 @@ class UserMemoryRepository(Protocol):
 
 ## 3. `EventHandlers.on_personal_facts_extracted()`
 
-**File**: `src/totoro_ai/core/events/handlers.py`
+**File**: `src/kebi/core/events/handlers.py`
 
 ```python
 async def on_personal_facts_extracted(self, event: PersonalFactsExtracted) -> None:
@@ -90,7 +90,7 @@ async def on_personal_facts_extracted(self, event: PersonalFactsExtracted) -> No
 
 ## 4. `ConsultService.consult()` — extended signature
 
-**File**: `src/totoro_ai/core/consult/service.py`
+**File**: `src/kebi/core/consult/service.py`
 
 ```python
 async def consult(
@@ -111,7 +111,7 @@ async def consult(
 
 ## 5. `IntentParser.parse()` — extended signature
 
-**File**: `src/totoro_ai/core/intent/intent_parser.py`
+**File**: `src/kebi/core/intent/intent_parser.py`
 
 ```python
 async def parse(
@@ -138,7 +138,7 @@ async def parse(
 
 ## 6. `ChatAssistantService.run()` — extended signature
 
-**File**: `src/totoro_ai/core/chat/chat_assistant_service.py`
+**File**: `src/kebi/core/chat/chat_assistant_service.py`
 
 ```python
 async def run(
@@ -165,7 +165,7 @@ async def run(
 
 ## 7. `ChatService` — extended constructor + dispatch
 
-**File**: `src/totoro_ai/core/chat/service.py`
+**File**: `src/kebi/core/chat/service.py`
 
 ```python
 class ChatService:

@@ -61,7 +61,7 @@ Rules for chips:
   - If it matches rejected_chips → "status": "rejected".
   - Otherwise → "status": "pending".
 - Always preserve every confirmed_chips and rejected_chips entry in the output chips array with the correct status, even if its signal_count is below the normal threshold. The service layer owns selection_round — do not emit it.
-- Each chip MUST include a "query" field: a short natural-language message (max 10 words) the user could tap to send to Totoro. The query should feel like a casual ask that reflects the chip's taste dimension. Do not repeat the chip label verbatim — make it conversational. Examples: "Bar enthusiast" → "Best bars near me tonight", "Bangkok regular" → "What's good in Bangkok right now?", "Museum enthusiast" → "Best museums to visit nearby".
+- Each chip MUST include a "query" field: a short natural-language message (max 10 words) the user could tap to send to Kebi. The query should feel like a casual ask that reflects the chip's taste dimension. Do not repeat the chip label verbatim — make it conversational. Examples: "Bar enthusiast" → "Best bars near me tonight", "Bangkok regular" → "What's good in Bangkok right now?", "Museum enthusiast" → "Best museums to visit nearby".
 
 Output strict JSON. No markdown, no prose wrapper.
 

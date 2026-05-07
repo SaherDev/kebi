@@ -6,11 +6,11 @@ from unittest.mock import MagicMock, patch
 import httpx
 import pytest
 
-from totoro_ai.core.extraction.enrichers.google_maps_list import (
+from kebi.core.extraction.enrichers.google_maps_list import (
     GoogleMapsListEnricher,
 )
-from totoro_ai.core.extraction.types import ExtractionContext
-from totoro_ai.core.places import PlaceSource
+from kebi.core.extraction.types import ExtractionContext
+from kebi.core.places import PlaceSource
 
 
 def _ctx(url: str = "https://maps.app.goo.gl/9KPNCHsoi5s69xE59") -> ExtractionContext:
@@ -55,10 +55,8 @@ class TestTokenResolution:
 
 class TestApifyResponse:
     async def test_appends_each_name_to_known_places(self) -> None:
-        """Pure text producer — names land in known_places; no
-        CandidatePlace is created here. The NER finalizer downstream
-        is responsible for turning each name into a structured
-        candidate with inferred attributes."""
+        """Name producer — names land in known_places. The pipeline's
+        searcher consumes them as queries, the picker chooses + classifies."""
         enricher = GoogleMapsListEnricher(token="apify-token")
         items = [
             {"name": "Joe's Pizza", "placeId": "0xabc:0x123"},
@@ -73,8 +71,15 @@ class TestApifyResponse:
             client_cls.return_value.__aenter__.return_value.post = _post
             await enricher.enrich(ctx)
 
-        assert ctx.known_places == ["Joe's Pizza", "Eleven Madison Park"]
-        assert ctx.candidates == []
+        assert [k.name for k in ctx.known_places] == [
+            "Joe's Pizza",
+            "Eleven Madison Park",
+        ]
+        assert all(
+            k.producer.value == "google_maps_list" for k in ctx.known_places
+        )
+        assert all(k.medium.value == "list" for k in ctx.known_places)
+        assert ctx.search_matches == []
 
     async def test_skips_items_without_a_name(self) -> None:
         enricher = GoogleMapsListEnricher(token="apify-token")
@@ -91,7 +96,7 @@ class TestApifyResponse:
             client_cls.return_value.__aenter__.return_value.post = _post
             await enricher.enrich(ctx)
 
-        assert ctx.known_places == ["Joe's Pizza"]
+        assert [k.name for k in ctx.known_places] == ["Joe's Pizza"]
 
     async def test_request_body_disables_apify_residential_proxy(self) -> None:
         """Apify residential proxy is a paid-tier feature; the enricher

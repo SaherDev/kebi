@@ -1,4 +1,4 @@
-# Workflows — Totoro & Totoro-AI
+# Workflows — Kebi
 
 ## 5-Step Token-Efficient Workflow
 

@@ -7,16 +7,16 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from totoro_ai.api.schemas.extract_place import (
+from kebi.api.schemas.extract_place import (
     ExtractPlaceItem,
     ExtractPlaceResponse,
 )
-from totoro_ai.core.agent.tools.save_tool import (
+from kebi.core.agent.tools.save_tool import (
     SaveToolInput,
     _save_summary,
     build_save_tool,
 )
-from totoro_ai.core.places.models import PlaceObject, PlaceType
+from kebi.core.places.models import PlaceObject, PlaceType
 
 
 def _place_object() -> PlaceObject:
@@ -33,7 +33,13 @@ def test_llm_visible_schema_is_single_raw_input_field() -> None:
 
 
 def test_save_summary_failed() -> None:
-    resp = ExtractPlaceResponse(status="failed", results=[], raw_input="x")
+    resp = ExtractPlaceResponse(
+        status="failed",
+        results=[],
+        raw_input="x",
+        failure_reason="no_candidates",
+        failure_message="nothing extractable",
+    )
     assert _save_summary(resp) == "Couldn't extract a place from that"
 
 

@@ -50,8 +50,8 @@ import redis.asyncio as aioredis
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
-from totoro_ai.core.config import get_config
-from totoro_ai.core.places.models import GeoData
+from kebi.core.config import get_config
+from kebi.core.places.models import GeoData
 
 LOG_FILE = "scripts/seed_migration.log"
 
@@ -439,7 +439,7 @@ async def main(accept_defaults: bool) -> int:
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
 
-    from totoro_ai.core.config import get_secrets
+    from kebi.core.config import get_secrets
 
     secrets = get_secrets()
     db_url = secrets.DATABASE_URL

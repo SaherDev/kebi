@@ -1,7 +1,7 @@
 # Internal contract: `ChatService._dispatch_extraction`
 
 **Scope**: M1 refactor. Internal-only; no product-repo coordination.
-**Location**: `src/totoro_ai/core/chat/service.py`
+**Location**: `src/kebi/core/chat/service.py`
 
 ## Invariants
 

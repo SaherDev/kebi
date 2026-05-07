@@ -8,7 +8,7 @@ This document is the authoritative source of truth for: every Pydantic model the
 
 ---
 
-## 1. Pydantic models (`src/totoro_ai/core/places/models.py`)
+## 1. Pydantic models (`src/kebi/core/places/models.py`)
 
 All models are Pydantic v2 `BaseModel` unless noted. `mypy --strict` must pass.
 
@@ -303,7 +303,7 @@ CREATE INDEX places_fts_idx ON places
 
 The legacy `uq_places_provider_external` composite unique constraint is dropped in this same revision, immediately after the partial unique on `provider_id` is created and validated.
 
-### 2.5 SQLAlchemy model deltas (`src/totoro_ai/db/models.py`)
+### 2.5 SQLAlchemy model deltas (`src/kebi/db/models.py`)
 
 The `Place` ORM class is reshaped to its final form in this revision:
 
@@ -339,7 +339,7 @@ class Place(Base):
 
 ## 3. Redis — Tier 2 and Tier 3 cache shapes
 
-Both tiers live in a single `PlacesCache` class (`src/totoro_ai/core/places/cache.py`) that holds the Redis client reference and exposes four methods: `get_geo_batch`, `set_geo_batch`, `get_enrichment_batch`, `set_enrichment_batch`. Both tiers share the same TTL (`config.places.cache_ttl_days * 86400` seconds, default 30 days).
+Both tiers live in a single `PlacesCache` class (`src/kebi/core/places/cache.py`) that holds the Redis client reference and exposes four methods: `get_geo_batch`, `set_geo_batch`, `get_enrichment_batch`, `set_enrichment_batch`. Both tiers share the same TTL (`config.places.cache_ttl_days * 86400` seconds, default 30 days).
 
 ### 3.1 Tier 2: geo cache
 

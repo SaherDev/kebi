@@ -6,7 +6,7 @@ from typing import Any
 
 from langgraph.checkpoint.memory import InMemorySaver
 
-from totoro_ai.core.agent.graph import (
+from kebi.core.agent.graph import (
     NODE_AGENT,
     NODE_FALLBACK,
     NODE_TOOLS,

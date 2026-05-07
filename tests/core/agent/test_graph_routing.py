@@ -4,12 +4,12 @@ from __future__ import annotations
 
 from langchain_core.messages import AIMessage, HumanMessage
 
-from totoro_ai.core.agent.graph import (
+from kebi.core.agent.graph import (
     NODE_FALLBACK,
     NODE_TOOLS,
     should_continue,
 )
-from totoro_ai.core.config import get_config
+from kebi.core.config import get_config
 
 
 def _base_state(**overrides: object) -> dict:

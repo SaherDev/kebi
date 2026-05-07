@@ -6,7 +6,7 @@
 ## Prerequisites
 
 - Checked out on branch `027-agent-foundation`.
-- `.env` symlink present (points at `totoro-config/secrets/ai.env.local`). `DATABASE_URL` populated.
+- `.env` symlink present (points at `kebi-config/secrets/ai.env.local`). `DATABASE_URL` populated.
 - `poetry install` has been run (should pull `langgraph-checkpoint-postgres`).
 - Docker running.
 
@@ -42,7 +42,7 @@ Expected: all green. Key assertions exercised:
 
 ```bash
 poetry run python -c "\
-from totoro_ai.core.config import get_config; \
+from kebi.core.config import get_config; \
 c = get_config(); \
 print('enabled:', c.agent.enabled); \
 print('max_steps:', c.agent.max_steps); \
@@ -67,7 +67,7 @@ Any missing key or malformed prompt file aborts with a clear `ValueError` / `Fil
 
 ```bash
 poetry run python -c "\
-from totoro_ai.core.config import get_config; \
+from kebi.core.config import get_config; \
 content = get_config().prompts['agent'].content; \
 assert '{taste_profile_summary}' in content, 'missing taste slot'; \
 assert '{memory_summary}' in content, 'missing memory slot'; \
@@ -101,7 +101,7 @@ Expected: green. Assertions:
 Verify tables exist:
 
 ```bash
-docker compose exec postgres psql -U totoro -d totoro -c "\dt checkpoint*"
+docker compose exec postgres psql -U postgres -d kebi -c "\dt checkpoint*"
 ```
 
 Expected output: three tables present.
@@ -126,13 +126,13 @@ agent:
 Restart the service:
 
 ```bash
-poetry run uvicorn totoro_ai.api.main:app --reload
+poetry run uvicorn kebi.api.main:app --reload
 ```
 
 In another shell:
 
 ```bash
-poetry run python -c "from totoro_ai.core.config import get_config; print(get_config().agent.enabled)"
+poetry run python -c "from kebi.core.config import get_config; print(get_config().agent.enabled)"
 ```
 
 Expected: `True` (SC-005). Reverting the YAML and re-reading prints `False`. No code changed.

@@ -28,7 +28,7 @@ No new Alembic migration required. This feature reads from existing `places` and
 | vector | Vector(1024) | No | Cosine similarity via `<=>` operator |
 | model_name | String | No | Filter by `voyage-4-lite` if needed |
 
-## Pydantic Schemas (new: `src/totoro_ai/api/schemas/recall.py`)
+## Pydantic Schemas (new: `src/kebi/api/schemas/recall.py`)
 
 ### `RecallRequest`
 
@@ -76,7 +76,7 @@ recall:
   candidate_multiplier: 2  # pre-fetch N × max_results candidates before RRF merge
 ```
 
-## AppConfig Extension (`src/totoro_ai/core/config.py`)
+## AppConfig Extension (`src/kebi/core/config.py`)
 
 New `RecallConfig` Pydantic model:
 ```

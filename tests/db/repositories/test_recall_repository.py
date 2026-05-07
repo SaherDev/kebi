@@ -8,8 +8,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from totoro_ai.core.recall.types import RecallFilters
-from totoro_ai.db.repositories.recall_repository import SQLAlchemyRecallRepository
+from kebi.core.recall.types import RecallFilters
+from kebi.db.repositories.recall_repository import SQLAlchemyRecallRepository
 
 
 def _row(
@@ -108,7 +108,7 @@ async def test_filter_mode_builds_where_clauses_for_every_field() -> None:
     session = _mock_session_with_rows([], count=0)
     repo = SQLAlchemyRecallRepository(session)
 
-    from totoro_ai.core.places.models import LocationContext, PlaceAttributes
+    from kebi.core.places.models import LocationContext, PlaceAttributes
 
     filters = RecallFilters(
         place_type="food_and_drink",
@@ -260,7 +260,7 @@ async def test_hybrid_mode_applies_filter_where_clauses() -> None:
     session = _mock_session_with_rows([], count=0)
     repo = SQLAlchemyRecallRepository(session)
 
-    from totoro_ai.core.places.models import PlaceAttributes
+    from kebi.core.places.models import PlaceAttributes
 
     filters = RecallFilters(
         place_type="food_and_drink",

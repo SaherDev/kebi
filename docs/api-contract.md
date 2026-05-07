@@ -1,10 +1,10 @@
-# API Contract — totoro ↔ totoro-ai
+# API Contract — product repo ↔ kebi
 
-Source of truth: totoro/docs/api-contract.md. Copy to totoro-ai/docs/ after any changes.
+Source of truth: the product repo's `docs/api-contract.md`. Copy to `kebi/docs/` after any changes.
 
-This document defines the HTTP contract between the product repo (services/api) and the AI service (totoro-ai). The product repo is the client. The AI repo is the server.
+This document defines the HTTP contract between the product repo (services/api) and the AI service (kebi). The product repo is the client. The AI repo is the server.
 
-All requests come from NestJS after auth verification. totoro-ai never receives requests directly from the frontend.
+All requests come from NestJS after auth verification. kebi never receives requests directly from the frontend.
 
 ## Connection
 
@@ -656,7 +656,7 @@ Health check endpoint. Returns service status and database connectivity.
 ```json
 {
   "status": "ok",
-  "name": "totoro-ai",
+  "name": "kebi",
   "version": "0.1.0",
   "db": "connected"
 }
@@ -675,7 +675,7 @@ Always HTTP 200 — DB outages surface via `db: "disconnected"`, not a non-2xx s
 
 ## API Contract Summary
 
-| Endpoint                          | Purpose                                 | NestJS Sends                                                                                                                                                    | totoro-ai Returns                                                                        |
+| Endpoint                          | Purpose                                 | NestJS Sends                                                                                                                                                    | kebi Returns                                                                        |
 | --------------------------------- | --------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
 | POST /v1/chat                     | Unified conversational entry point      | user_id, message, optional location, optional signal_tier                                                                                                       | type, message, data, tool_calls_used                                                     |
 | POST /v1/chat/stream              | SSE streaming chat                      | Same as POST /v1/chat                                                                                                                                           | reasoning_step frames, message frame, done frame (tool_calls_used)                       |
@@ -721,7 +721,7 @@ These values must stay in sync between both repos. A mismatch breaks the system.
 - user_memories (personal facts extracted from chat messages)
 - interaction_log (append-only behavioral signal log)
 
-Alembic in totoro-ai owns migrations for these tables. NestJS never touches them. If the schema changes, run the migration from totoro-ai only.
+Alembic in kebi owns migrations for these tables. NestJS never touches them. If the schema changes, run the migration from kebi only.
 
 ---
 

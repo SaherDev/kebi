@@ -9,9 +9,9 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from redis.exceptions import RedisError
 
-from totoro_ai.core.config import get_config
-from totoro_ai.core.places.cache import PlacesCache
-from totoro_ai.core.places.models import GeoData, PlaceEnrichment
+from kebi.core.config import get_config
+from kebi.core.places.cache import PlacesCache
+from kebi.core.places.models import GeoData, PlaceEnrichment
 
 # ---------------------------------------------------------------------------
 # helpers

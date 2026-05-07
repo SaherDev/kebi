@@ -61,7 +61,7 @@ specs/021-taste-profile-memory/
 ### Source Code (repository root)
 
 ```text
-src/totoro_ai/
+src/kebi/
 ├── api/
 │   ├── main.py                          # Wire debouncer cancel_all into lifespan shutdown
 │   └── deps.py                          # Remove RankingService + taste_service from consult wiring
@@ -108,4 +108,4 @@ tests/core/
     └── test_handlers.py                 # Update: handlers call handle_signal
 ```
 
-**Structure Decision**: Existing `src/totoro_ai/core/taste/` module expanded with new files. No new top-level modules. Follows ADR-002 (hybrid directory: `core/` for domain modules).
+**Structure Decision**: Existing `src/kebi/core/taste/` module expanded with new files. No new top-level modules. Follows ADR-002 (hybrid directory: `core/` for domain modules).

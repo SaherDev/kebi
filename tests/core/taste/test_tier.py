@@ -9,8 +9,8 @@ from __future__ import annotations
 
 import pytest
 
-from totoro_ai.core.taste.schemas import Chip, ChipStatus
-from totoro_ai.core.taste.tier import derive_signal_tier, selection_round_name
+from kebi.core.taste.schemas import Chip, ChipStatus
+from kebi.core.taste.tier import derive_signal_tier, selection_round_name
 
 STAGES_2 = {"round_1": 5, "round_2": 50}
 STAGES_3 = {"round_1": 5, "round_2": 20, "round_3": 50}

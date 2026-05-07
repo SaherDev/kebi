@@ -1,17 +1,17 @@
-"""Tests for totoro_ai.core.taste.regen prompt builder functions."""
+"""Tests for kebi.core.taste.regen prompt builder functions."""
 
 from __future__ import annotations
 
 import json
 
-import totoro_ai.core.taste.regen as regen_mod
-from totoro_ai.core.taste.aggregation import SignalCounts, TotalCounts
-from totoro_ai.core.taste.regen import (
+import kebi.core.taste.regen as regen_mod
+from kebi.core.taste.aggregation import SignalCounts, TotalCounts
+from kebi.core.taste.regen import (
     build_regen_messages,
     format_summary_for_agent,
     load_regen_prompt_template,
 )
-from totoro_ai.core.taste.schemas import SummaryLine
+from kebi.core.taste.schemas import SummaryLine
 
 
 def _make_signal_counts() -> SignalCounts:

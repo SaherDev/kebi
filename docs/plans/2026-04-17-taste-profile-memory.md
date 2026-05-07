@@ -177,7 +177,7 @@ OUTPUT:
 {"summary": [{"text": "Favors boutique subcategory under shopping.", "signal_count": 18, "source_field": "subcategory.shopping", "source_value": "boutique"}, {"text": "Favors market subcategory under shopping.", "signal_count": 14, "source_field": "subcategory.shopping", "source_value": "market"}, {"text": "Primary save source is TikTok.", "signal_count": 30, "source_field": "source", "source_value": "tiktok"}, {"text": "Prefers low price_hint over mid.", "signal_count": 25, "source_field": "attributes.price_hint", "source_value": "low"}, {"text": "Saves cluster in Shimokitazawa neighborhood.", "signal_count": 15, "source_field": "attributes.location_context.neighborhood", "source_value": "Shimokitazawa"}], "chips": [{"label": "Boutique shopper", "source_field": "subcategory.shopping", "source_value": "boutique", "signal_count": 18}, {"label": "Market lover", "source_field": "subcategory.shopping", "source_value": "market", "signal_count": 14}, {"label": "Budget-friendly", "source_field": "attributes.price_hint", "source_value": "low", "signal_count": 25}, {"label": "Shimokitazawa regular", "source_field": "attributes.location_context.neighborhood", "source_value": "Shimokitazawa", "signal_count": 15}, {"label": "Finds places on TikTok", "source_field": "source", "source_value": "tiktok", "signal_count": 30}]}
 ```
 
-### `src/totoro_ai/core/config.py`
+### `src/kebi/core/config.py`
 
 Delete: `TasteModelEmaConfig`, `TasteModelSignalsConfig`, `TasteModelObservationsConfig`, `RankingWeightsConfig`, `RankingConfig`.
 
@@ -199,7 +199,7 @@ Remove `ranking: RankingConfig` from `AppConfig`. Change `taste_model` to have a
 
 ## Step 3: Database models
 
-### `src/totoro_ai/db/models.py`
+### `src/kebi/db/models.py`
 
 Replace `SignalType` enum:
 
@@ -269,7 +269,7 @@ Single migration, two phases:
 
 ## Step 5: Repository layer
 
-### `src/totoro_ai/db/repositories/taste_model_repository.py` — rewrite
+### `src/kebi/db/repositories/taste_model_repository.py` — rewrite
 
 Protocol — returns Pydantic `InteractionRow`, not SQLAlchemy `Row`:
 
@@ -293,7 +293,7 @@ Implementation handles `Row -> InteractionRow` conversion internally:
 
 ## Step 6: Signal counts aggregation + schemas
 
-### `src/totoro_ai/core/taste/schemas.py` — new
+### `src/kebi/core/taste/schemas.py` — new
 
 Aligned with `PlaceObject` and `PlaceAttributes` from `core/places/models.py`:
 
@@ -334,7 +334,7 @@ class TasteProfile(BaseModel):
 
 The `attributes` field reuses `PlaceAttributes` from `core/places/models.py` — no parallel definition. The repository hydrates it from the JSONB column via `PlaceAttributes(**row.attributes)` when not None.
 
-### `src/totoro_ai/core/taste/aggregation.py` — new
+### `src/kebi/core/taste/aggregation.py` — new
 
 Pydantic models for signal_counts shape + pure `aggregate_signal_counts()` function.
 
@@ -384,7 +384,7 @@ def aggregate_signal_counts(rows: list[InteractionRow]) -> SignalCounts:
 
 ## Step 7: Debounce mechanism
 
-### `src/totoro_ai/core/taste/debounce.py` — new
+### `src/kebi/core/taste/debounce.py` — new
 
 ```python
 class RegenDebouncer:
@@ -407,7 +407,7 @@ Module-level singleton. Wire `cancel_all()` into the FastAPI lifespan shutdown h
 
 ## Step 8: Taste service rewrite
 
-### `src/totoro_ai/core/taste/service.py` — rewrite
+### `src/kebi/core/taste/service.py` — rewrite
 
 Delete all EMA logic: `TASTE_DIMENSIONS`, `DEFAULT_VECTOR`, `_apply_taste_update`, `_place_to_metadata`, `_get_observation_value`, `_blend_vectors`.
 
@@ -446,7 +446,7 @@ class TasteModelService:
 - `generated_from_log_count` persisted on every regen for stale-summary detection
 - Dropped chips logged in Langfuse metadata
 
-### `src/totoro_ai/core/taste/regen.py` — new
+### `src/kebi/core/taste/regen.py` — new
 
 Prompt builder — loads template from `config/prompts/taste_regen.txt` (not hardcoded):
 
@@ -475,7 +475,7 @@ def format_summary_for_agent(lines: list[SummaryLine]) -> str:
 
 ## Step 9: Event handlers update
 
-### `src/totoro_ai/core/events/handlers.py` — simplify
+### `src/kebi/core/events/handlers.py` — simplify
 
 All taste handlers become thin wrappers calling `handle_signal`:
 
@@ -490,11 +490,11 @@ Domain events (`events.py`) unchanged.
 
 ## Step 10: Delete RankingService + update ConsultService
 
-### `src/totoro_ai/core/ranking/service.py` — DELETE entire file
+### `src/kebi/core/ranking/service.py` — DELETE entire file
 
-### `src/totoro_ai/core/ranking/__init__.py` — clean up exports
+### `src/kebi/core/ranking/__init__.py` — clean up exports
 
-### `src/totoro_ai/core/consult/service.py`
+### `src/kebi/core/consult/service.py`
 
 - Remove `RankingService` import and constructor param
 - Remove `TasteModelService` import and constructor param
@@ -502,12 +502,12 @@ Domain events (`events.py`) unchanged.
 - Remove `ranked = self._ranking_service.rank(...)` call and related scoring logic
 - Return enriched candidates unranked (sorted by source: saved first, then discovered). No ranking until the agent is built — acceptable for now.
 
-### `src/totoro_ai/core/consult/types.py`
+### `src/kebi/core/consult/types.py`
 
 - Remove `ScoredPlace` if it only existed for ranking output
 - Keep `ConsultResult` but remove `confidence` score field (or repurpose)
 
-### `src/totoro_ai/api/deps.py`
+### `src/kebi/api/deps.py`
 
 - Remove `RankingService()` from `get_consult_service` wiring
 - Remove `taste_service` from `get_consult_service` wiring
@@ -554,19 +554,19 @@ Domain events (`events.py`) unchanged.
 | `docs/taste-model-architecture.md`                        | Rewrite for new system                                                                                              |
 | `config/app.yaml`                                         | Delete EMA block, delete ranking block, add taste_regen role, add regen config                                      |
 | `config/prompts/taste_regen.txt`                          | New — system prompt template for summary + chips generation                                                         |
-| `src/totoro_ai/core/config.py`                            | Delete 3 EMA config classes + RankingWeightsConfig + RankingConfig, add TasteRegenConfig, simplify TasteModelConfig |
-| `src/totoro_ai/db/models.py`                              | Replace SignalType->InteractionType, InteractionLog->Interaction, reshape TasteModel (add chips column)             |
+| `src/kebi/core/config.py`                            | Delete 3 EMA config classes + RankingWeightsConfig + RankingConfig, add TasteRegenConfig, simplify TasteModelConfig |
+| `src/kebi/db/models.py`                              | Replace SignalType->InteractionType, InteractionLog->Interaction, reshape TasteModel (add chips column)             |
 | `alembic/versions/XXXX_*.py`                              | New migration                                                                                                       |
-| `src/totoro_ai/db/repositories/taste_model_repository.py` | Rewrite — returns `list[InteractionRow]` not `list[Row]`, upsert takes chips param                                  |
-| `src/totoro_ai/core/taste/service.py`                     | Rewrite — delete EMA, add handle_signal + regen with artifacts + chip validation                                    |
-| `src/totoro_ai/core/taste/aggregation.py`                 | New — SignalCounts model + aggregate function                                                                       |
-| `src/totoro_ai/core/taste/schemas.py`                     | New — InteractionRow, Chip, TasteArtifacts, TasteProfile                                                            |
-| `src/totoro_ai/core/taste/regen.py`                       | New — prompt builder + validate_chips, loads template from config/prompts/                                          |
-| `src/totoro_ai/core/taste/debounce.py`                    | New — RegenDebouncer with cancel_all shutdown hook                                                                  |
-| `src/totoro_ai/api/main.py`                               | Wire debouncer cancel_all into FastAPI lifespan shutdown                                                            |
-| `src/totoro_ai/core/events/handlers.py`                   | Simplify — all handlers call handle_signal                                                                          |
-| `src/totoro_ai/core/ranking/service.py`                   | DELETE entire file                                                                                                  |
-| `src/totoro_ai/core/consult/service.py`                   | Remove RankingService + TasteModelService, return candidates unranked                                               |
-| `src/totoro_ai/core/consult/types.py`                     | Remove ScoredPlace                                                                                                  |
-| `src/totoro_ai/api/deps.py`                               | Remove RankingService + taste_service from consult wiring                                                           |
+| `src/kebi/db/repositories/taste_model_repository.py` | Rewrite — returns `list[InteractionRow]` not `list[Row]`, upsert takes chips param                                  |
+| `src/kebi/core/taste/service.py`                     | Rewrite — delete EMA, add handle_signal + regen with artifacts + chip validation                                    |
+| `src/kebi/core/taste/aggregation.py`                 | New — SignalCounts model + aggregate function                                                                       |
+| `src/kebi/core/taste/schemas.py`                     | New — InteractionRow, Chip, TasteArtifacts, TasteProfile                                                            |
+| `src/kebi/core/taste/regen.py`                       | New — prompt builder + validate_chips, loads template from config/prompts/                                          |
+| `src/kebi/core/taste/debounce.py`                    | New — RegenDebouncer with cancel_all shutdown hook                                                                  |
+| `src/kebi/api/main.py`                               | Wire debouncer cancel_all into FastAPI lifespan shutdown                                                            |
+| `src/kebi/core/events/handlers.py`                   | Simplify — all handlers call handle_signal                                                                          |
+| `src/kebi/core/ranking/service.py`                   | DELETE entire file                                                                                                  |
+| `src/kebi/core/consult/service.py`                   | Remove RankingService + TasteModelService, return candidates unranked                                               |
+| `src/kebi/core/consult/types.py`                     | Remove ScoredPlace                                                                                                  |
+| `src/kebi/api/deps.py`                               | Remove RankingService + taste_service from consult wiring                                                           |
 | Tests (7 files)                                           | Rewrite/update/delete                                                                                               |

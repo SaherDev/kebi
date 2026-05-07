@@ -1,6 +1,6 @@
 """Tests for input parser."""
 
-from totoro_ai.core.extraction.input_parser import parse_input
+from kebi.core.extraction.input_parser import parse_input
 
 
 def test_url_with_text_before_and_after() -> None:

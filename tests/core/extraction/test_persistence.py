@@ -12,17 +12,21 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from totoro_ai.core.events.events import PlaceSaved
-from totoro_ai.core.extraction.persistence import (
+from kebi.core.events.events import PlaceSaved
+from kebi.core.extraction.persistence import (
     ExtractionPersistenceService,
     PlaceSaveOutcome,
 )
-from totoro_ai.core.extraction.types import ExtractionLevel, ValidatedCandidate
-from totoro_ai.core.places import (
+from kebi.core.extraction.types import (
+    Evidence,
+    Medium,
+    Producer,
+    ValidatedCandidate,
+)
+from kebi.core.places import (
     DuplicatePlaceError,
     DuplicateProviderId,
     PlaceAttributes,
-    PlaceCreate,
     PlaceObject,
     PlaceProvider,
     PlaceType,
@@ -33,47 +37,27 @@ from totoro_ai.core.places import (
 # ---------------------------------------------------------------------------
 
 
-def _make_place_create(
-    place_name: str = "Fuji Ramen",
-    external_id: str | None = "place_123",
-    provider: PlaceProvider | None = PlaceProvider.google,
-    cuisine: str | None = "ramen",
-    user_id: str = "user-1",
-) -> PlaceCreate:
-    return PlaceCreate(
-        user_id=user_id,
-        place_name=place_name,
-        place_type=PlaceType.food_and_drink,
-        subcategory="restaurant",
-        attributes=PlaceAttributes(cuisine=cuisine),
-        provider=provider,
-        external_id=external_id,
-    )
-
-
 def _make_validated(
     place_name: str = "Fuji Ramen",
     confidence: float = 0.87,
-    resolved_by: ExtractionLevel = ExtractionLevel.LLM_NER,
-    external_id: str | None = "place_123",
-    provider: PlaceProvider | None = PlaceProvider.google,
+    external_id: str = "place_123",
+    provider: PlaceProvider = PlaceProvider.google,
     cuisine: str | None = "ramen",
-    user_id: str = "user-1",
+    subcategory: str | None = "restaurant",
     match_lat: float | None = None,
     match_lng: float | None = None,
     match_address: str | None = None,
+    evidence: list[Evidence] | None = None,
 ) -> ValidatedCandidate:
     return ValidatedCandidate(
-        place=_make_place_create(
-            place_name=place_name,
-            external_id=external_id,
-            provider=provider,
-            cuisine=cuisine,
-            user_id=user_id,
-        ),
+        place_name=place_name,
+        place_type=PlaceType.food_and_drink,
+        provider=provider,
+        external_id=external_id,
         confidence=confidence,
-        resolved_by=resolved_by,
-        corroborated=False,
+        evidence=evidence or [Evidence(Producer.LLM_NER, Medium.CAPTION)],
+        subcategory=subcategory,
+        attributes=PlaceAttributes(cuisine=cuisine),
         match_lat=match_lat,
         match_lng=match_lng,
         match_address=match_address,
@@ -259,23 +243,6 @@ async def test_partial_duplicate_retries_one_by_one(
     assert statuses == ["saved", "duplicate"]
     assert outcomes[0].place_id == "new-a"
     assert outcomes[1].place_id == "existing-b"
-
-
-async def test_external_id_none_passes_through_create_batch(
-    service: ExtractionPersistenceService,
-    places_service: AsyncMock,
-) -> None:
-    """When external_id is None, no namespace collision is possible; the
-    row is just saved with provider_id=NULL."""
-    places_service.create_batch.return_value = [
-        _make_saved_object("place-1", provider_id=None)
-    ]
-
-    vc = _make_validated(external_id=None, provider=None)
-    outcomes = await service.save_and_emit([vc], user_id="user-1")
-
-    places_service.create_batch.assert_awaited_once()
-    assert outcomes[0].status == "saved"
 
 
 # ---------------------------------------------------------------------------
@@ -637,7 +604,7 @@ async def test_source_url_and_source_stamped_on_place_create(
 ) -> None:
     """source_url and source passed in to save_and_emit are stamped onto
     every PlaceCreate handed to places_service.create_batch."""
-    from totoro_ai.core.places import PlaceSource
+    from kebi.core.places import PlaceSource
 
     places_service.create_batch.return_value = [_make_saved_object("p1")]
     vc = _make_validated()
@@ -683,3 +650,63 @@ async def test_mixed_saved_and_below_threshold_only_saved_in_event(
     event: PlaceSaved = event_dispatcher.dispatch.call_args[0][0]
     assert len(event.place_ids) == 1
     assert event.place_ids[0] == saved[0].place_id
+
+
+# ---------------------------------------------------------------------------
+# Per-item PlaceCreate validation isolation — bad subcategory falls back
+# ---------------------------------------------------------------------------
+
+
+async def test_invalid_subcategory_strips_and_saves(
+    service: ExtractionPersistenceService,
+    places_service: AsyncMock,
+) -> None:
+    """An LLM-emitted subcategory outside the allowed vocabulary used to
+    crash the whole batch. Now the persistence layer retries with
+    subcategory stripped so the place still saves."""
+    places_service.create_batch.return_value = [_make_saved_object("place-1")]
+    # subcategory='bogus_subcat' is not in PlaceType.food_and_drink's allowed set.
+    vc = _make_validated(subcategory="bogus_subcat")
+
+    outcomes = await service.save_and_emit([vc], user_id="user-1")
+
+    assert len(outcomes) == 1
+    assert outcomes[0].status == "saved"
+    # The PlaceCreate handed to create_batch had subcategory=None after
+    # the safe fallback.
+    places_service.create_batch.assert_awaited_once()
+    items = places_service.create_batch.call_args[0][0]
+    assert items[0].subcategory is None
+
+
+async def test_one_bad_subcategory_does_not_kill_other_candidates(
+    service: ExtractionPersistenceService,
+    places_service: AsyncMock,
+    embedder: AsyncMock,
+) -> None:
+    """A bad row gets saved-with-stripped-subcategory; valid rows save
+    with their subcategory intact. No row in the batch is dropped just
+    because another row had a vocabulary mismatch."""
+    places_service.create_batch.return_value = [
+        _make_saved_object("p-good", "Good Place"),
+        _make_saved_object(
+            "p-bad", "Bad Subcat", provider_id="google:ext_b"
+        ),
+    ]
+    embedder.embed = AsyncMock(return_value=[[0.1] * 1024, [0.2] * 1024])
+
+    outcomes = await service.save_and_emit(
+        [
+            _make_validated("Good Place", external_id="ext_a"),
+            _make_validated(
+                "Bad Subcat", external_id="ext_b", subcategory="bogus_subcat"
+            ),
+        ],
+        user_id="user-1",
+    )
+
+    assert len(outcomes) == 2
+    assert all(o.status == "saved" for o in outcomes)
+    items = places_service.create_batch.call_args[0][0]
+    assert items[0].subcategory == "restaurant"
+    assert items[1].subcategory is None

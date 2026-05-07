@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from totoro_ai.core.places.models import LocationContext, PlaceAttributes
-from totoro_ai.core.taste.aggregation import aggregate_signal_counts
-from totoro_ai.core.taste.schemas import InteractionRow
+from kebi.core.places.models import LocationContext, PlaceAttributes
+from kebi.core.taste.aggregation import aggregate_signal_counts
+from kebi.core.taste.schemas import InteractionRow
 
 # ---------------------------------------------------------------------------
 # Helper

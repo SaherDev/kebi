@@ -1,6 +1,6 @@
 # Quickstart — Feature 023: Onboarding Signal Tier
 
-Dev walkthrough to exercise every tier end-to-end after implementation lands. Assumes local `docker compose up -d` (PostgreSQL + Redis) and a valid `.env` symlink to `totoro-config/secrets/ai.env.local`.
+Dev walkthrough to exercise every tier end-to-end after implementation lands. Assumes local `docker compose up -d` (PostgreSQL + Redis) and a valid `.env` symlink to `kebi-config/secrets/ai.env.local`.
 
 ---
 
@@ -10,7 +10,7 @@ Dev walkthrough to exercise every tier end-to-end after implementation lands. As
 docker compose up -d                                   # PostgreSQL + Redis
 poetry install                                         # sync deps
 poetry run alembic upgrade head                        # applies chip_confirm + metadata migration
-poetry run uvicorn totoro_ai.api.main:app --reload
+poetry run uvicorn kebi.api.main:app --reload
 ```
 
 Verify migration landed:
@@ -147,7 +147,7 @@ psql $DATABASE_URL -c "SELECT jsonb_pretty(chips) FROM taste_model WHERE user_id
 
 ## 9. Bruno
 
-Added: `totoro-config/bruno/signal-chip-confirm.bru`. Open in Bruno, point at `localhost:8000`, run with a seeded chip_selection user to verify the happy path without leaving the IDE.
+Added: `kebi-config/bruno/signal-chip-confirm.bru`. Open in Bruno, point at `localhost:8000`, run with a seeded chip_selection user to verify the happy path without leaving the IDE.
 
 ---
 

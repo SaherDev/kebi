@@ -25,10 +25,10 @@ Add SSE streaming mode to `POST /v1/consult`. When the request includes `"stream
 
 | ADR | Check | Status |
 |-----|-------|--------|
-| ADR-001 | Code lives under `src/totoro_ai/` | ✅ Pass |
+| ADR-001 | Code lives under `src/kebi/` | ✅ Pass |
 | ADR-002 | Route in `api/routes/`, service in `core/consult/` | ✅ Pass |
 | ADR-003 | Ruff + mypy --strict required before merge | ✅ Pass (enforced in Done criteria) |
-| ADR-004 | Tests in `tests/` mirroring `src/totoro_ai/` | ✅ Pass |
+| ADR-004 | Tests in `tests/` mirroring `src/kebi/` | ✅ Pass |
 | ADR-014 | `/v1` prefix via APIRouter loaded from app.yaml | ✅ Pass |
 | ADR-017 | Pydantic models for all request/response schemas | ✅ Pass |
 | ADR-018 | Separate router module: `routes/consult.py` | ✅ Pass |
@@ -62,7 +62,7 @@ specs/001-consult-streaming/
 ### Source Code (repository root)
 
 ```text
-src/totoro_ai/
+src/kebi/
 ├── api/
 │   ├── main.py                    ← MODIFY: include consult router
 │   ├── schemas/                   ← NEW
@@ -85,7 +85,7 @@ tests/
         ├── __init__.py
         └── test_service.py        ← Unit tests for ConsultService
 
-totoro-config/bruno/ai-service/
+kebi-config/bruno/ai-service/
 └── consult-stream.bru             ← NEW: Bruno request file for streaming mode
 ```
 
@@ -138,7 +138,7 @@ See [contracts/consult-stream.md](contracts/consult-stream.md).
 
 ### Implementation Notes
 
-**`src/totoro_ai/api/schemas/consult.py`**
+**`src/kebi/api/schemas/consult.py`**
 ```python
 from pydantic import BaseModel
 
@@ -168,7 +168,7 @@ class SyncConsultResponse(BaseModel):
     reasoning_steps: list[ReasoningStep]
 ```
 
-**`src/totoro_ai/core/consult/service.py`**
+**`src/kebi/core/consult/service.py`**
 ```python
 import json
 from collections.abc import AsyncGenerator
@@ -199,7 +199,7 @@ class ConsultService:
             pass  # AI stream closed via async context manager
 ```
 
-**`src/totoro_ai/api/routes/consult.py`**
+**`src/kebi/api/routes/consult.py`**
 ```python
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse

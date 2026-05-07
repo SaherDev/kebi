@@ -8,9 +8,9 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from totoro_ai.api.deps import get_signal_service
-from totoro_ai.api.routes.signal import router as signal_router
-from totoro_ai.core.signal.service import SignalService
+from kebi.api.deps import get_signal_service
+from kebi.api.routes.signal import router as signal_router
+from kebi.core.signal.service import SignalService
 
 
 def _make_app(service: SignalService) -> TestClient:

@@ -2,7 +2,7 @@
 
 **Version**: 1.1 — adds optional `stream` parameter
 **Caller**: NestJS product service
-**Server**: totoro-ai FastAPI
+**Server**: kebi FastAPI
 
 ---
 
@@ -112,4 +112,4 @@ Clients omitting `stream` get the existing synchronous JSON response. **No break
 
 ## Bruno Test File
 
-`totoro-config/bruno/ai-service/consult-stream.bru`
+`kebi-config/bruno/ai-service/consult-stream.bru`

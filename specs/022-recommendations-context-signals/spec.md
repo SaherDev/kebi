@@ -20,7 +20,7 @@
 
 ### User Story 1 - Consult Persists Recommendation with Trackable ID (Priority: P1)
 
-A user asks Totoro for a dining recommendation. The system classifies intent as consult, runs the pipeline, and returns results. Before returning, the system persists the recommendation to the `recommendations` table (renamed from `consult_logs`) and includes the database-generated `recommendation_id` in the response. The product repo uses this ID to track whether the user acts on the recommendation.
+A user asks Kebi for a dining recommendation. The system classifies intent as consult, runs the pipeline, and returns results. Before returning, the system persists the recommendation to the `recommendations` table (renamed from `consult_logs`) and includes the database-generated `recommendation_id` in the response. The product repo uses this ID to track whether the user acts on the recommendation.
 
 **Why this priority**: Without a persisted recommendation record, there is no way to link a signal (accepted/rejected) back to the specific consult response that produced it. This is the foundation Task 2 (context) reads from and Task 3 (signals) validates against.
 

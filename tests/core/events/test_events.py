@@ -1,4 +1,4 @@
-from totoro_ai.core.events.events import PlaceSaved
+from kebi.core.events.events import PlaceSaved
 
 
 def test_place_saved_constructs_with_place_ids_list() -> None:

@@ -7,14 +7,14 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from totoro_ai.api.schemas.consult import ConsultResponse, ConsultResult
-from totoro_ai.core.agent.tools.consult_tool import (
+from kebi.api.schemas.consult import ConsultResponse, ConsultResult
+from kebi.core.agent.tools.consult_tool import (
     ConsultToolInput,
     _consult_summary,
     build_consult_tool,
 )
-from totoro_ai.core.places.filters import ConsultFilters
-from totoro_ai.core.places.models import PlaceObject, PlaceType
+from kebi.core.places.filters import ConsultFilters
+from kebi.core.places.models import PlaceObject, PlaceType
 
 
 def _place(pid: str) -> PlaceObject:

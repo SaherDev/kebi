@@ -21,7 +21,7 @@
 
 - [x] T001 Add ADR-058 (delete RankingService, agent-driven ranking) to docs/decisions.md
 - [x] T002 [P] Delete EMA taste_model block and ranking block in config/app.yaml, add taste_regen model role and new taste_model regen config
-- [x] T003 [P] Delete TasteModelEmaConfig, TasteModelSignalsConfig, TasteModelObservationsConfig, RankingWeightsConfig, RankingConfig from src/totoro_ai/core/config.py — add TasteRegenConfig and simplify TasteModelConfig, remove ranking from AppConfig
+- [x] T003 [P] Delete TasteModelEmaConfig, TasteModelSignalsConfig, TasteModelObservationsConfig, RankingWeightsConfig, RankingConfig from src/kebi/core/config.py — add TasteRegenConfig and simplify TasteModelConfig, remove ranking from AppConfig
 
 ---
 
@@ -31,10 +31,10 @@
 
 **CRITICAL**: No user story work can begin until this phase is complete
 
-- [x] T004 Replace SignalType enum with InteractionType, replace InteractionLog model with Interaction, reshape TasteModel (add taste_profile_summary JSONB, signal_counts JSONB, chips JSONB, generated_at, generated_from_log_count; remove EMA columns) in src/totoro_ai/db/models.py
+- [x] T004 Replace SignalType enum with InteractionType, replace InteractionLog model with Interaction, reshape TasteModel (add taste_profile_summary JSONB, signal_counts JSONB, chips JSONB, generated_at, generated_from_log_count; remove EMA columns) in src/kebi/db/models.py
 - [x] T005 Create Alembic migration with Phase A (interactions reshape: map onboarding_explicit→confirm/dismiss via context column, delete null place_id rows, drop gain+context, rename table+column, replace enum, alter place_id NOT NULL, drop UUID PK add BIGSERIAL PK, add indexes) and Phase B (taste_model reshape: drop old columns, change PK to user_id, add new JSONB columns) in alembic/versions/
-- [x] T006 [P] Create Pydantic schemas: InteractionRow, SummaryLine, Chip, TasteArtifacts, TasteProfile in src/totoro_ai/core/taste/schemas.py — InteractionRow.attributes reuses PlaceAttributes from core/places/models.py
-- [x] T007 [P] Create SignalCounts Pydantic models (TotalCounts, LocationContextCounts, AttributeCounts, RejectedCounts, SignalCounts) and pure aggregate_signal_counts() function in src/totoro_ai/core/taste/aggregation.py — positive types (save, accepted, onboarding_confirm) feed main tree, negative types (rejected, onboarding_dismiss) feed rejected branch, source is save-only
+- [x] T006 [P] Create Pydantic schemas: InteractionRow, SummaryLine, Chip, TasteArtifacts, TasteProfile in src/kebi/core/taste/schemas.py — InteractionRow.attributes reuses PlaceAttributes from core/places/models.py
+- [x] T007 [P] Create SignalCounts Pydantic models (TotalCounts, LocationContextCounts, AttributeCounts, RejectedCounts, SignalCounts) and pure aggregate_signal_counts() function in src/kebi/core/taste/aggregation.py — positive types (save, accepted, onboarding_confirm) feed main tree, negative types (rejected, onboarding_dismiss) feed rejected branch, source is save-only
 - [x] T008 [P] Create prompt template file config/prompts/taste_regen.txt with two-artifact system prompt (summary as structured JSON array + chips), including all 4 examples (food/nightlife, museum traveler, sparse, shopping) per docs/plans/2026-04-17-taste-profile-memory.md Step 2
 
 **Checkpoint**: Foundation ready — database, schemas, aggregation, and prompt template in place
@@ -49,10 +49,10 @@
 
 ### Implementation for User Story 1
 
-- [x] T009 [P] [US1] Create regen module with build_regen_messages(), load_regen_prompt_template(), validate_grounded() (single function for both SummaryLine and Chip — drop items with invalid source_field path or missing source_value), and format_summary_for_agent() in src/totoro_ai/core/taste/regen.py
-- [x] T010 [P] [US1] Rewrite TasteModelRepository Protocol and SQLAlchemy implementation: log_interaction (INSERT into interactions), upsert_regen (ON CONFLICT user_id DO UPDATE signal_counts + taste_profile_summary + chips + generated_at + generated_from_log_count), get_interactions_with_places (SELECT+JOIN, Row→InteractionRow with PlaceAttributes hydration), get_by_user_id, count_interactions in src/totoro_ai/db/repositories/taste_model_repository.py
-- [x] T011 [US1] Rewrite TasteModelService: delete all EMA logic (TASTE_DIMENSIONS, DEFAULT_VECTOR, _apply_taste_update, _place_to_metadata, _get_observation_value, _blend_vectors). Implement handle_signal (INSERT interaction + schedule debounced regen), get_taste_profile (read-only, no LLM), _run_regen (aggregate → min-signals guard → stale guard → LLM call with JSON mode → parse TasteArtifacts → retry once on parse failure → validate_grounded → Langfuse trace → upsert) in src/totoro_ai/core/taste/service.py
-- [x] T012 [US1] Simplify event handlers: on_place_saved calls handle_signal(SAVE, place_id) per place, on_recommendation_accepted calls handle_signal(ACCEPTED, place_id), on_recommendation_rejected calls handle_signal(REJECTED, place_id), on_onboarding_signal maps confirmed bool→ONBOARDING_CONFIRM/ONBOARDING_DISMISS in src/totoro_ai/core/events/handlers.py
+- [x] T009 [P] [US1] Create regen module with build_regen_messages(), load_regen_prompt_template(), validate_grounded() (single function for both SummaryLine and Chip — drop items with invalid source_field path or missing source_value), and format_summary_for_agent() in src/kebi/core/taste/regen.py
+- [x] T010 [P] [US1] Rewrite TasteModelRepository Protocol and SQLAlchemy implementation: log_interaction (INSERT into interactions), upsert_regen (ON CONFLICT user_id DO UPDATE signal_counts + taste_profile_summary + chips + generated_at + generated_from_log_count), get_interactions_with_places (SELECT+JOIN, Row→InteractionRow with PlaceAttributes hydration), get_by_user_id, count_interactions in src/kebi/db/repositories/taste_model_repository.py
+- [x] T011 [US1] Rewrite TasteModelService: delete all EMA logic (TASTE_DIMENSIONS, DEFAULT_VECTOR, _apply_taste_update, _place_to_metadata, _get_observation_value, _blend_vectors). Implement handle_signal (INSERT interaction + schedule debounced regen), get_taste_profile (read-only, no LLM), _run_regen (aggregate → min-signals guard → stale guard → LLM call with JSON mode → parse TasteArtifacts → retry once on parse failure → validate_grounded → Langfuse trace → upsert) in src/kebi/core/taste/service.py
+- [x] T012 [US1] Simplify event handlers: on_place_saved calls handle_signal(SAVE, place_id) per place, on_recommendation_accepted calls handle_signal(ACCEPTED, place_id), on_recommendation_rejected calls handle_signal(REJECTED, place_id), on_onboarding_signal maps confirmed bool→ONBOARDING_CONFIRM/ONBOARDING_DISMISS in src/kebi/core/events/handlers.py
 
 ### Tests for User Story 1
 
@@ -74,8 +74,8 @@
 
 ### Implementation for User Story 2
 
-- [x] T018 [US2] Create RegenDebouncer class with schedule() (cancel existing task for user_id, schedule new delayed task) and cancel_all() (cancel all in-flight, await gather) as module-level singleton in src/totoro_ai/core/taste/debounce.py
-- [x] T019 [US2] Wire RegenDebouncer.cancel_all() into FastAPI lifespan shutdown hook in src/totoro_ai/api/main.py
+- [x] T018 [US2] Create RegenDebouncer class with schedule() (cancel existing task for user_id, schedule new delayed task) and cancel_all() (cancel all in-flight, await gather) as module-level singleton in src/kebi/core/taste/debounce.py
+- [x] T019 [US2] Wire RegenDebouncer.cancel_all() into FastAPI lifespan shutdown hook in src/kebi/api/main.py
 
 ### Tests for User Story 2
 
@@ -109,10 +109,10 @@
 
 ### Implementation for User Story 4
 
-- [x] T022 [P] [US4] Delete src/totoro_ai/core/ranking/service.py and clean up exports in src/totoro_ai/core/ranking/__init__.py
-- [x] T023 [P] [US4] Remove ScoredPlace from src/totoro_ai/core/consult/types.py (keep ConsultResult, remove confidence score field)
-- [x] T024 [US4] Remove RankingService and TasteModelService imports/params from ConsultService in src/totoro_ai/core/consult/service.py — remove taste_vector fetch and ranking call, return enriched candidates sorted by source (saved first, discovered second)
-- [x] T025 [US4] Remove RankingService and taste_service from get_consult_service wiring in src/totoro_ai/api/deps.py
+- [x] T022 [P] [US4] Delete src/kebi/core/ranking/service.py and clean up exports in src/kebi/core/ranking/__init__.py
+- [x] T023 [P] [US4] Remove ScoredPlace from src/kebi/core/consult/types.py (keep ConsultResult, remove confidence score field)
+- [x] T024 [US4] Remove RankingService and TasteModelService imports/params from ConsultService in src/kebi/core/consult/service.py — remove taste_vector fetch and ranking call, return enriched candidates sorted by source (saved first, discovered second)
+- [x] T025 [US4] Remove RankingService and taste_service from get_consult_service wiring in src/kebi/api/deps.py
 - [x] T026 [US4] Delete tests/core/ranking/ directory (already absent)
 
 **Checkpoint**: User Story 4 complete — consult pipeline works without RankingService, no regressions
@@ -125,7 +125,7 @@
 
 - [x] T027 [P] Rewrite docs/taste-model-architecture.md for the new system (signal_counts + summary + chips, no EMA)
 - [x] T028 [P] Update CLAUDE.md Recent Changes with 021-taste-profile-memory summary
-- [x] T029 Update src/totoro_ai/core/taste/__init__.py exports for new modules (schemas, aggregation, regen, debounce)
+- [x] T029 Update src/kebi/core/taste/__init__.py exports for new modules (schemas, aggregation, regen, debounce)
 - [x] T030 Run full verification: `poetry run ruff check src/ tests/` passed on all modified files
 
 ---
@@ -173,14 +173,14 @@
 ; After Foundational phase:
 
 ; Launch regen module + repository in parallel (different files):
-Task T009: "Create regen module in src/totoro_ai/core/taste/regen.py"
-Task T010: "Rewrite repository in src/totoro_ai/db/repositories/taste_model_repository.py"
+Task T009: "Create regen module in src/kebi/core/taste/regen.py"
+Task T010: "Rewrite repository in src/kebi/db/repositories/taste_model_repository.py"
 
 ; Then service (depends on T009 + T010):
-Task T011: "Rewrite TasteModelService in src/totoro_ai/core/taste/service.py"
+Task T011: "Rewrite TasteModelService in src/kebi/core/taste/service.py"
 
 ; Then event handlers (depends on T011):
-Task T012: "Simplify event handlers in src/totoro_ai/core/events/handlers.py"
+Task T012: "Simplify event handlers in src/kebi/core/events/handlers.py"
 
 ; Launch all test files in parallel (after implementation):
 Task T013: "test_aggregation.py"

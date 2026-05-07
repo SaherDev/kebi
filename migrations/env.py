@@ -6,8 +6,8 @@ from sqlalchemy import pool
 from alembic import context
 
 # Import Base and secrets for async operations
-from totoro_ai.db.base import Base
-from totoro_ai.core.config import get_secrets
+from kebi.db.base import Base
+from kebi.core.config import get_secrets
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.

@@ -19,15 +19,15 @@ Replaces the spec's `recommendations` table name (renamed to avoid conflict with
 | `selected_place_id` | `String` | Yes | FK to `places.id` if user selected a specific place |
 | `created_at` | `DateTime(tz=True)` | No | Server default `now()` |
 
-**SQLAlchemy model** → `src/totoro_ai/db/models.py` class `ConsultLog`  
+**SQLAlchemy model** → `src/kebi/db/models.py` class `ConsultLog`  
 **Alembic migration** → `alembic/versions/<hash>_add_consult_logs_table.py`  
-**Repository** → `src/totoro_ai/db/repositories/consult_log_repository.py`
+**Repository** → `src/kebi/db/repositories/consult_log_repository.py`
 
 ---
 
 ## New: Pydantic Schemas
 
-### `src/totoro_ai/api/schemas/chat.py`
+### `src/kebi/api/schemas/chat.py`
 
 ```
 ChatRequest
@@ -41,7 +41,7 @@ ChatResponse
 └── data: dict | None
 ```
 
-### `src/totoro_ai/core/chat/router.py`
+### `src/kebi/core/chat/router.py`
 
 ```
 IntentClassification  (internal — never crosses API boundary)

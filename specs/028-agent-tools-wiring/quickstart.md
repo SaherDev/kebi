@@ -7,7 +7,7 @@ Local verification walkthrough for feature 028. Assumes feature 027 is merged on
 - Python 3.11 (matches `pyproject.toml` target).
 - Poetry installed.
 - Docker + `docker compose`.
-- `.env` present in repo root (symlink → `totoro-config/secrets/ai.env.local`) with:
+- `.env` present in repo root (symlink → `kebi-config/secrets/ai.env.local`) with:
   - `DATABASE_URL`
   - `REDIS_URL`
   - `OPENAI_API_KEY` (for embeddings used by recall)
@@ -34,7 +34,7 @@ docker compose up -d
 Confirms the checkpointer tables from feature 027 are still present:
 
 ```bash
-docker compose exec postgres psql -U postgres -d totoro -c "\dt"
+docker compose exec postgres psql -U postgres -d kebi -c "\dt"
 # expect: checkpoints, checkpoint_blobs, checkpoint_writes listed
 ```
 
@@ -60,7 +60,7 @@ poetry run pytest -x \
 Also confirm the `mypy --strict` signature constraint:
 
 ```bash
-poetry run mypy src/totoro_ai/core/consult/service.py
+poetry run mypy src/kebi/core/consult/service.py
 # expect: 0 errors
 ```
 
@@ -119,7 +119,7 @@ poetry run pytest -x \
 Default `config/app.yaml` has `agent.enabled: false`. Start the server:
 
 ```bash
-poetry run uvicorn totoro_ai.api.main:app --reload
+poetry run uvicorn kebi.api.main:app --reload
 ```
 
 Issue requests (in another shell):
@@ -244,7 +244,7 @@ Feature 028 ships with `agent.enabled: false`. Flipping the default is explicitl
 
 ## Step 12 — Bruno collection spot-check
 
-Open the Bruno collection at `totoro-config/bruno/`. Confirm:
+Open the Bruno collection at `kebi-config/bruno/`. Confirm:
 - Existing `.bru` files for flag-off response types still match.
 - New `chat_agent_example.bru` request + example response for the agent-path shape is present.
 

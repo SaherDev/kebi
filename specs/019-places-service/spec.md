@@ -219,7 +219,7 @@ The system already has place records in the permanent store from earlier work, i
 
 - Wiring the data layer into the save, recall, or consult tools. Those tools are not modified in this feature.
 - Modifying ExtractionService, RecallService, ConsultService, or any existing route or agent code.
-- Any work in the product repo (NestJS / `totoro`).
+- Any work in the product repo (NestJS / `kebi-app`).
 - Ranking, taste-model integration, or recommendation scoring.
 - A background job, cron, or manual sweeper to evict cache entries — TTL handles all expiry.
 - Re-fetching live details on a fixed schedule outside of consult requests.

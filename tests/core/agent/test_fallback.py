@@ -6,9 +6,9 @@ from unittest.mock import MagicMock, patch
 
 from langchain_core.messages import AIMessage
 
-from totoro_ai.core.agent.graph import fallback_node
-from totoro_ai.core.agent.reasoning import ReasoningStep
-from totoro_ai.core.config import get_config
+from kebi.core.agent.graph import fallback_node
+from kebi.core.agent.reasoning import ReasoningStep
+from kebi.core.config import get_config
 
 
 def _base_state(**overrides: object) -> dict:
@@ -98,7 +98,7 @@ def test_fallback_emits_langfuse_span_with_error_type_max_errors() -> None:
     mock_tracer.generation.return_value = mock_span
 
     with patch(
-        "totoro_ai.core.agent.graph.get_tracing_client",
+        "kebi.core.agent.graph.get_tracing_client",
         return_value=mock_tracer,
     ):
         fallback_node(_base_state(error_count=cfg.max_errors))
@@ -120,7 +120,7 @@ def test_fallback_emits_langfuse_span_with_error_type_max_steps() -> None:
     mock_tracer.generation.return_value = mock_span
 
     with patch(
-        "totoro_ai.core.agent.graph.get_tracing_client",
+        "kebi.core.agent.graph.get_tracing_client",
         return_value=mock_tracer,
     ):
         fallback_node(_base_state(steps_taken=cfg.max_steps))

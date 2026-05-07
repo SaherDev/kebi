@@ -1,9 +1,9 @@
 [tool.poetry]
-name = "totoro-ai"
+name = "kebi"
 version = "0.1.0"
-description = "AI engine for Totoro — intent parsing, place extraction, ranking, taste modeling"
+description = "AI engine for Kebi — intent parsing, place extraction, ranking, taste modeling"
 authors = ["Saher"]
-packages = [{include = "totoro_ai", from = "src"}]
+packages = [{include = "kebi", from = "src"}]
 
 [tool.poetry.dependencies]
 python = ">=3.11,<3.14"
@@ -61,16 +61,16 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 [tool.ruff.lint.per-file-ignores]
 # LLM prompt strings, long SQL, and long error messages are inherently wide —
 # line length is not enforced in files where the signal is worse than the fix.
-"src/totoro_ai/core/intent/intent_parser.py" = ["E501"]
-"src/totoro_ai/core/chat/router.py" = ["E501"]
-"src/totoro_ai/core/chat/service.py" = ["E501"]
-"src/totoro_ai/core/consult/service.py" = ["E501"]
-"src/totoro_ai/core/extraction/enrichers/vision_frames.py" = ["E501"]
-"src/totoro_ai/core/places/places_client.py" = ["E501"]
-"src/totoro_ai/db/repositories/recall_repository.py" = ["E501"]
-"src/totoro_ai/providers/llm.py" = ["E501"]
+"src/kebi/core/intent/intent_parser.py" = ["E501"]
+"src/kebi/core/chat/router.py" = ["E501"]
+"src/kebi/core/chat/service.py" = ["E501"]
+"src/kebi/core/consult/service.py" = ["E501"]
+"src/kebi/core/extraction/enrichers/vision_frames.py" = ["E501"]
+"src/kebi/core/places/places_client.py" = ["E501"]
+"src/kebi/db/repositories/recall_repository.py" = ["E501"]
+"src/kebi/providers/llm.py" = ["E501"]
 "tests/providers/test_llm_ollama.py" = ["E501"]
-"src/totoro_ai/core/extraction/circuit_breaker.py" = ["E402"]
+"src/kebi/core/extraction/circuit_breaker.py" = ["E402"]
 
 [tool.mypy]
 python_version = "3.11"

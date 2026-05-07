@@ -1,6 +1,6 @@
 # Contract: POST /v1/recall
 
-**Service**: totoro-ai FastAPI
+**Service**: kebi FastAPI
 **Caller**: NestJS backend (after auth verification)
 **Branch**: `006-recall-hybrid-search`
 

@@ -10,7 +10,7 @@ This document describes the **code-layer** entity changes (Pydantic models, data
 
 ## 1. PlaceSaved (domain event) — MODIFIED
 
-**File**: `src/totoro_ai/core/events/events.py`
+**File**: `src/kebi/core/events/events.py`
 
 ```
 Before:
@@ -39,7 +39,7 @@ After:
 
 ## 2. ExtractionPersistenceService (new service) — CREATED
 
-**File**: `src/totoro_ai/core/extraction/persistence.py`
+**File**: `src/kebi/core/extraction/persistence.py`
 
 ```
 ExtractionPersistenceService
@@ -68,7 +68,7 @@ ExtractionPersistenceService
 
 ## 3. ExtractionService — REWRITTEN
 
-**File**: `src/totoro_ai/core/extraction/service.py`
+**File**: `src/kebi/core/extraction/service.py`
 
 ```
 Before (7 deps):
@@ -103,7 +103,7 @@ After (2 deps):
 
 ## 4. ExtractPlaceResponse (API schema) — BREAKING CHANGE
 
-**File**: `src/totoro_ai/api/schemas/extract_place.py`
+**File**: `src/kebi/api/schemas/extract_place.py`
 
 ```
 Before:
@@ -140,7 +140,7 @@ After:
 
 ## 5. ExtractionPendingHandler — WIRED
 
-**File**: `src/totoro_ai/core/extraction/handlers/extraction_pending.py`
+**File**: `src/kebi/core/extraction/handlers/extraction_pending.py`
 
 ```
 Before:
@@ -154,7 +154,7 @@ After:
 
 ## 6. TasteModelService.handle_place_saved — SIGNATURE CHANGE
 
-**File**: `src/totoro_ai/core/taste/service.py`
+**File**: `src/kebi/core/taste/service.py`
 
 ```
 Before:
@@ -174,10 +174,10 @@ After:
 
 | File | Why deleted |
 |------|-------------|
-| `src/totoro_ai/core/extraction/dispatcher.py` | Old routing logic, replaced by ExtractionPipeline |
-| `src/totoro_ai/core/extraction/extractors/tiktok.py` | Old TikTok extractor, replaced by enrichers |
-| `src/totoro_ai/core/extraction/extractors/plain_text.py` | Old plain text extractor, replaced by enrichers |
-| `src/totoro_ai/core/extraction/result.py` | Legacy ExtractionResult(BaseModel), superseded by types.py |
+| `src/kebi/core/extraction/dispatcher.py` | Old routing logic, replaced by ExtractionPipeline |
+| `src/kebi/core/extraction/extractors/tiktok.py` | Old TikTok extractor, replaced by enrichers |
+| `src/kebi/core/extraction/extractors/plain_text.py` | Old plain text extractor, replaced by enrichers |
+| `src/kebi/core/extraction/result.py` | Legacy ExtractionResult(BaseModel), superseded by types.py |
 
 ## 8. Symbols Deleted from Existing Files (Phase 13)
 
@@ -190,7 +190,7 @@ After:
 
 ## 9. EmbeddingRepository — MODIFIED
 
-**File**: `src/totoro_ai/db/repositories/embedding_repository.py`
+**File**: `src/kebi/db/repositories/embedding_repository.py`
 
 ```
 EmbeddingRepository (Protocol) — add:

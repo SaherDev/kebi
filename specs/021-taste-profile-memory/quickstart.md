@@ -28,7 +28,7 @@ poetry run pytest tests/core/events/ -x
 ```bash
 poetry run ruff check src/ tests/
 poetry run mypy src/
-poetry run uvicorn totoro_ai.api.main:app --reload
+poetry run uvicorn kebi.api.main:app --reload
 ```
 
 ## Manual test
@@ -43,6 +43,6 @@ poetry run uvicorn totoro_ai.api.main:app --reload
 
 1. `specs/021-taste-profile-memory/spec.md` — what and why
 2. `docs/plans/2026-04-17-taste-profile-memory.md` — how (step by step)
-3. `src/totoro_ai/core/taste/schemas.py` — all Pydantic models
-4. `src/totoro_ai/core/taste/aggregation.py` — pure aggregation logic
-5. `src/totoro_ai/core/taste/service.py` — handle_signal + _run_regen
+3. `src/kebi/core/taste/schemas.py` — all Pydantic models
+4. `src/kebi/core/taste/aggregation.py` — pure aggregation logic
+5. `src/kebi/core/taste/service.py` — handle_signal + _run_regen

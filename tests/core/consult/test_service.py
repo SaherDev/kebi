@@ -7,17 +7,17 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from totoro_ai.api.schemas.consult import Location
-from totoro_ai.core.consult.service import ConsultService
-from totoro_ai.core.consult.types import NoMatchesError
-from totoro_ai.core.places.filters import ConsultFilters
-from totoro_ai.core.places.models import (
+from kebi.api.schemas.consult import Location
+from kebi.core.consult.service import ConsultService
+from kebi.core.consult.types import NoMatchesError
+from kebi.core.places.filters import ConsultFilters
+from kebi.core.places.models import (
     LocationContext,
     PlaceAttributes,
     PlaceObject,
     PlaceType,
 )
-from totoro_ai.core.taste.schemas import Chip, ChipStatus, TasteProfile
+from kebi.core.taste.schemas import Chip, ChipStatus, TasteProfile
 
 
 def _place(place_id: str, provider_id: str | None = None) -> PlaceObject:
@@ -91,7 +91,7 @@ def _build_service(
 
 def _map_google_to_place_object(monkeypatch: pytest.MonkeyPatch) -> None:
     """Stub map_google_place_to_place_object to return a simple PlaceObject."""
-    from totoro_ai.core.consult import service as svc_module
+    from kebi.core.consult import service as svc_module
 
     def _stub(raw: dict[str, Any]) -> PlaceObject:
         return PlaceObject(

@@ -4,11 +4,11 @@
 
 ## Project Context
 
-Totoro-ai is the AI engine behind Totoro — an AI-native place decision engine. Users share places over time, the system builds a taste model, and returns one confident recommendation from natural language intent. This repo is pure Python: place extraction, embeddings, ranking, taste modeling, agent orchestration, and evaluations. The product repo (`totoro`) calls this repo over HTTP only. Stack: Python 3.11, Poetry, FastAPI, LangGraph, LangChain, Pydantic, Instructor, pgvector, Redis, Langfuse. Models: claude-sonnet-4-6/Anthropic (orchestration), GPT-4o-mini/OpenAI (taste regen, vision), voyage-4-lite/Voyage AI (embeddings), whisper-large-v3-turbo/Groq (transcription). SDKs: OpenAI SDK, Anthropic SDK, Groq SDK, Voyage AI SDK. Deployed on Railway.
+Kebi is the AI engine for the Kebi product — an AI-native place decision engine. Users share places over time, the system builds a taste model, and returns one confident recommendation from natural language intent. This repo is pure Python: place extraction, embeddings, ranking, taste modeling, agent orchestration, and evaluations. The product repo calls this repo over HTTP only. Stack: Python 3.11, Poetry, FastAPI, LangGraph, LangChain, Pydantic, Instructor, pgvector, Redis, Langfuse. Models: claude-sonnet-4-6/Anthropic (orchestration), GPT-4o-mini/OpenAI (taste regen, vision), voyage-4-lite/Voyage AI (embeddings), whisper-large-v3-turbo/Groq (transcription). SDKs: OpenAI SDK, Anthropic SDK, Groq SDK, Voyage AI SDK. Deployed on Railway.
 
 ## Key Directories
 
-- `src/totoro_ai/` — main package (src layout)
+- `src/kebi/` — main package (src layout)
   - `api/` — FastAPI routes and request/response schemas
   - `core/` — domain modules: extraction/, memory/, ranking/, taste/, agent/ (place extraction, memory and retrieval, ranking, taste modeling, agent orchestration)
   - `providers/` — LLM/embedding provider abstraction (config-driven via YAML)
@@ -24,7 +24,7 @@ See @.claude/rules/architecture.md for repo boundaries and coding constraints.
 
 ```bash
 poetry install                        # install dependencies
-poetry run uvicorn totoro_ai.api.main:app --reload      # dev server
+poetry run uvicorn kebi.api.main:app --reload      # dev server
 poetry run pytest                     # run all tests
 poetry run pytest tests/path/test_file.py::test_name    # single test
 poetry run pytest -x                  # stop on first failure
@@ -41,7 +41,7 @@ docker compose down -v                # stop services and remove volumes
 
 - **Naming**: snake_case everywhere. Pydantic models are PascalCase. Files match module name.
 - **Types**: All function signatures typed. Pydantic models for all LLM input/output schemas. `mypy --strict` is the target.
-- **Secrets management** (ADR-051): `.env` in the project root (gitignored symlink → `totoro-config/secrets/ai.env.local`). Copy `.env.example`, fill in your secrets — never committed. CI/CD injects secrets as environment variables at deploy time.
+- **Secrets management** (ADR-051): `.env` in the project root (gitignored symlink → `kebi-config/secrets/ai.env.local`). Copy `.env.example`, fill in your secrets — never committed. CI/CD injects secrets as environment variables at deploy time.
 - **Provider abstraction**: `config/app.yaml` under `models:` maps logical roles (orchestrator, extractor, embedder, taste_regen, vision_frames, transcriber) to provider + model + params. Code never hardcodes model names — always reads from config.
 - **API versioning**: All FastAPI routes live under `/v1/` prefix to match the product repo convention.
 - **Repo boundary**: This repo owns all AI/ML logic. No UI, no auth, no CRUD. The product repo calls this repo via `POST /v1/chat` (unified conversational entry — ADR-052) and `GET /v1/health` (see `docs/api-contract.md`). Never import from or depend on the product repo.
@@ -75,11 +75,11 @@ See @.claude/rules/git.md for branch naming, commit format, and merge flow.
 
 - **Task-driven workflow.** Each task arrives scoped — execute it. No phase gates.
 - **Git comment char is `;`** not `#`. Configured in this repo's git config. Commit messages and interactive rebase use `;` for comments.
-- **Secrets in `.env`**: Root `.env` (gitignored symlink). Non-secret config (app metadata, models, extraction weights) lives in `config/app.yaml` (committed). If a command fails with missing API key, check `totoro-config/secrets/ai.env.local`.
+- **Secrets in `.env`**: Root `.env` (gitignored symlink). Non-secret config (app metadata, models, extraction weights) lives in `config/app.yaml` (committed). If a command fails with missing API key, check `kebi-config/secrets/ai.env.local`.
 - **Database write split**: Shared PostgreSQL instance on Railway. This repo writes AI data (places, embeddings, taste_model, recommendations, user_memories, interaction_log) and owns their migrations via Alembic. NestJS writes product data (users, user_settings) via TypeORM with `synchronize: true`. Never cross ownership boundaries.
 - **Redis caching**: LLM responses are cached in Redis. When changing prompt templates or model config, consider cache invalidation.
 - **Langfuse tracing**: All LLM calls should be traced via Langfuse. Missing traces usually means the Langfuse callback handler wasn't attached.
-- **API testing**: Bruno collection at `totoro-config/bruno/`. New endpoints should have a corresponding `.bru` request file added there.
+- **API testing**: Bruno collection at `kebi-config/bruno/`. New endpoints should have a corresponding `.bru` request file added there.
 
 ## Recent Changes
 - extraction-cascade-refactor (2026-04-24): extract-place pipeline restructured around `EnrichmentLevel` (text/signal producers) + a single pipeline-owned NER finalizer (`LLMNEREnricher`). Replaces the prior `EnrichmentPipeline` + `background_enrichers` shape — both phases were doing the same enrich → dedup → validate dance with duplicated bookkeeping. Subtitle/Whisper become pure transcript producers (NER stripped out); Vision unchanged. New per-request `limit` parameter on `ExtractionService.run` (default `DEFAULT_MAX_CANDIDATES = 25` in `service.py`, no config knob — pipeline takes a concrete `limit: int`) hard-drops requests over the cap pre-validation via `TooManyCandidatesError`, protecting Google/DB/Voyage quota from noisy inputs. `ExtractionContext.source` auto-derived from URL via `core/extraction/url_source.py`; new `SourceFilteredEnricher` base class lets enrichers declare `allowed_sources` and short-circuit unsupported URLs (TikTok oEmbed → tiktok only; yt-dlp → tiktok/instagram/youtube).

@@ -14,7 +14,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from sqlalchemy.exc import IntegrityError
 
-from totoro_ai.core.places.models import (
+from kebi.core.places.models import (
     DuplicatePlaceError,
     PlaceAttributes,
     PlaceCreate,
@@ -22,7 +22,7 @@ from totoro_ai.core.places.models import (
     PlaceSource,
     PlaceType,
 )
-from totoro_ai.core.places.repository import PlacesRepository
+from kebi.core.places.repository import PlacesRepository
 
 # ---------------------------------------------------------------------------
 # helpers

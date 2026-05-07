@@ -21,8 +21,8 @@
 
 - [ ] T001 Add ADR-045 to `docs/decisions.md` — Hybrid search via pgvector + FTS + RRF
 - [ ] T002 [P] Add `recall` config section to `config/app.yaml` with `max_results: 10`, `rrf_k: 60`, `candidate_multiplier: 2`
-- [ ] T003 Add `RecallConfig(BaseModel)` to `src/totoro_ai/core/config.py` and extend `AppConfig`
-- [ ] T004 [P] Create `src/totoro_ai/api/schemas/recall.py` with `RecallRequest`, `RecallResult`, `RecallResponse` Pydantic models
+- [ ] T003 Add `RecallConfig(BaseModel)` to `src/kebi/core/config.py` and extend `AppConfig`
+- [ ] T004 [P] Create `src/kebi/api/schemas/recall.py` with `RecallRequest`, `RecallResult`, `RecallResponse` Pydantic models
 
 **Checkpoint**: Configuration locked, request/response contracts defined
 
@@ -32,13 +32,13 @@
 
 **Purpose**: Implement the hybrid SQL search query behind a Protocol abstraction
 
-- [ ] T005 Create `src/totoro_ai/db/repositories/recall_repository.py` with `RecallRepository` Protocol and `SQLAlchemyRecallRepository` implementation
+- [ ] T005 Create `src/kebi/db/repositories/recall_repository.py` with `RecallRepository` Protocol and `SQLAlchemyRecallRepository` implementation
   - Protocol: `hybrid_search()`, `count_saved_places()`
   - CTE query: vector branch + text branch + RRF merge + match_reason derivation
   - Fallback: text-only query when `query_vector is None`
   - Handle embedding failure gracefully (return results, not error)
 
-- [ ] T006 [P] Export `RecallRepository`, `SQLAlchemyRecallRepository` from `src/totoro_ai/db/repositories/__init__.py`
+- [ ] T006 [P] Export `RecallRepository`, `SQLAlchemyRecallRepository` from `src/kebi/db/repositories/__init__.py`
 
 **Checkpoint**: Repository implements hybrid search; text-only fallback in place
 
@@ -48,7 +48,7 @@
 
 **Purpose**: Orchestrate embedding + search + response construction
 
-- [ ] T007 Create `src/totoro_ai/core/recall/service.py` with `RecallService` class
+- [ ] T007 Create `src/kebi/core/recall/service.py` with `RecallService` class
   - `run(query: str, user_id: str) -> RecallResponse`
   - Cold start check: return `empty_state: true` if user has zero saves
   - Embedding step: `try/except RuntimeError`, set `embedding = None` on failure
@@ -64,21 +64,21 @@
 
 **Purpose**: Expose recall endpoint and wire all dependencies
 
-- [ ] T008 Create `src/totoro_ai/api/routes/recall.py` with route handler
+- [ ] T008 Create `src/kebi/api/routes/recall.py` with route handler
   - `POST /recall` handler (uses existing `/v1` prefix via router)
   - Validate `RecallRequest` (FastAPI + Pydantic)
   - Return `RecallResponse`
   - Return 400 if query is empty (handled by Pydantic min_length=1)
 
-- [ ] T009 [P] Add `get_recall_service()` to `src/totoro_ai/api/deps.py`
+- [ ] T009 [P] Add `get_recall_service()` to `src/kebi/api/deps.py`
   - Dependency injection: `AsyncSession`, `AppConfig`
   - Wire: `get_embedder()`, `SQLAlchemyRecallRepository`, `RecallService`
 
-- [ ] T010 Update `src/totoro_ai/api/main.py`
+- [ ] T010 Update `src/kebi/api/main.py`
   - Import `recall_router` from `api.routes.recall`
   - Include router: `router.include_router(recall_router, prefix="")`
 
-- [ ] T011 Create `totoro-config/bruno/ai-service/recall.bru` request file (already created)
+- [ ] T011 Create `kebi-config/bruno/ai-service/recall.bru` request file (already created)
 
 **Checkpoint**: Recall endpoint fully wired and accessible at `/v1/recall`
 

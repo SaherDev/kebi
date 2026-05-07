@@ -102,7 +102,7 @@ Every embedding call that the system makes is traceable. Operators can see embed
 
 - The embeddings table already exists in the database (created by prior migrations). Only the vector column dimension needs correction if it is not already 1024.
 - The `voyage-4-lite` model produces 1024-dimensional vectors by default — no dimension truncation or padding is required.
-- The Langfuse tracing infrastructure (`get_langfuse_client()` in `src/totoro_ai/providers/tracing.py`) already exists and will be used directly via the low-level `generation()` API (voyageai has no LangChain callback support).
+- The Langfuse tracing infrastructure (`get_langfuse_client()` in `src/kebi/providers/tracing.py`) already exists and will be used directly via the low-level `generation()` API (voyageai has no LangChain callback support).
 - The voyageai Python SDK (`voyageai ^0.3`) is already in `pyproject.toml` — no new dependency needed.
 - The place description field (or equivalent text) is the primary input for generating embeddings. If description is absent, a combination of name, category, and address is used.
 - No production embedding data exists yet, so the dimension migration is safe to run destructively if needed.

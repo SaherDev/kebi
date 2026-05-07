@@ -15,11 +15,11 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from totoro_ai.api.schemas.extract_place import (
+from kebi.api.schemas.extract_place import (
     ExtractPlaceItem,
     ExtractPlaceResponse,
 )
-from totoro_ai.core.places import PlaceObject, PlaceType
+from kebi.core.places import PlaceObject, PlaceType
 
 
 def _make_place(name: str = "Nara Eatery", place_id: str = "pl_01HZ001") -> PlaceObject:
@@ -82,9 +82,25 @@ class TestExtractPlaceResponse:
             results=[],
             raw_input="plain text with no url",
             request_id="req_02",
+            failure_reason="no_candidates",
+            failure_message="No venue could be extracted.",
         )
         assert resp.status == "failed"
         assert resp.results == []
+        assert resp.failure_reason == "no_candidates"
+
+    def test_failed_requires_failure_reason(self) -> None:
+        with pytest.raises(ValidationError):
+            ExtractPlaceResponse(status="failed", results=[])
+
+    def test_completed_forbids_failure_reason(self) -> None:
+        item = ExtractPlaceItem(place=_make_place(), confidence=0.9, status="saved")
+        with pytest.raises(ValidationError):
+            ExtractPlaceResponse(
+                status="completed",
+                results=[item],
+                failure_reason="no_candidates",
+            )
 
     def test_completed_with_results_ok(self) -> None:
         item = ExtractPlaceItem(place=_make_place(), confidence=0.87, status="saved")
@@ -127,7 +143,12 @@ class TestExtractPlaceResponse:
     def test_failed_forbids_non_empty_results(self) -> None:
         item = ExtractPlaceItem(place=_make_place(), confidence=0.8, status="saved")
         with pytest.raises(ValidationError):
-            ExtractPlaceResponse(status="failed", results=[item], raw_input="...")
+            ExtractPlaceResponse(
+                status="failed",
+                results=[item],
+                raw_input="...",
+                failure_reason="no_candidates",
+            )
 
     def test_raw_input_is_verbatim(self) -> None:
         """raw_input is a pure echo — no trimming, no URL canonicalization."""
@@ -138,7 +159,11 @@ class TestExtractPlaceResponse:
         assert resp.raw_input == gnarly
 
     def test_raw_input_optional(self) -> None:
-        resp = ExtractPlaceResponse(status="failed", results=[])
+        resp = ExtractPlaceResponse(
+            status="failed",
+            results=[],
+            failure_reason="no_candidates",
+        )
         assert resp.raw_input is None
 
     def test_no_source_url_field(self) -> None:

@@ -1,7 +1,7 @@
 # API Contract Change: POST /v1/extract-place (Run 3)
 
 **Status**: BREAKING CHANGE — NestJS must update before production deploy
-**Affects**: `docs/api-contract.md` (this repo) + `totoro-config/bruno/extract-place.bru`
+**Affects**: `docs/api-contract.md` (this repo) + `kebi-config/bruno/extract-place.bru`
 **Coordination required**: Update NestJS client before deploying Phase 12
 
 ---
@@ -103,7 +103,7 @@ Note: `422 unsupported_input` is removed — the cascade architecture handles al
 
 ## Bruno File Update Required
 
-Update `totoro-config/bruno/extract-place.bru` to:
+Update `kebi-config/bruno/extract-place.bru` to:
 1. Remove assertions on `place_id`, `place`, `confidence`, `requires_confirmation`
 2. Add assertions on `provisional`, `places`, `extraction_status`, `pending_levels`
 3. Add a second request scenario: TikTok URL → assert `places` length > 0

@@ -8,11 +8,11 @@ import pytest
 from fastapi.testclient import TestClient
 from langgraph.errors import GraphInterrupt
 
-from totoro_ai.api.deps import get_chat_service
-from totoro_ai.api.main import app
-from totoro_ai.api.schemas.chat import ChatRequest
-from totoro_ai.core.chat.service import ChatService
-from totoro_ai.core.config import AgentConfig, AppConfig
+from kebi.api.deps import get_chat_service
+from kebi.api.main import app
+from kebi.api.schemas.chat import ChatRequest
+from kebi.core.chat.service import ChatService
+from kebi.core.config import AgentConfig, AppConfig
 
 
 def _make_mock_config(enabled: bool = True) -> MagicMock:
@@ -66,7 +66,7 @@ class TestChatInterruptMapping:
             extraction_service=MagicMock(),
             consult_service=MagicMock(),
             recall_service=MagicMock(),
-            event_dispatcher=MagicMock(),
+            event_dispatcher=MagicMock(dispatch=AsyncMock()),
             memory_service=MagicMock(),
             taste_service=MagicMock(),
             places_service=places_mock,
@@ -104,7 +104,7 @@ class TestChatInterruptMapping:
             extraction_service=MagicMock(),
             consult_service=MagicMock(),
             recall_service=MagicMock(),
-            event_dispatcher=MagicMock(),
+            event_dispatcher=MagicMock(dispatch=AsyncMock()),
             memory_service=MagicMock(),
             taste_service=MagicMock(),
             places_service=places_mock,

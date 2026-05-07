@@ -25,7 +25,7 @@ Confirms `embeddings.vector` is `VECTOR(1024)`. No new migration is needed — i
 ## Start Dev Server
 
 ```bash
-poetry run uvicorn totoro_ai.api.main:app --reload
+poetry run uvicorn kebi.api.main:app --reload
 ```
 
 ---

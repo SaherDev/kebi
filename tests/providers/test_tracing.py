@@ -4,8 +4,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-import totoro_ai.providers.tracing as tracing_module
-from totoro_ai.providers.tracing import (
+import kebi.providers.tracing as tracing_module
+from kebi.providers.tracing import (
     TracingClient,
     TracingSpan,
     get_tracing_client,

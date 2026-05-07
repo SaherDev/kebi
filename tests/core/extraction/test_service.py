@@ -4,16 +4,17 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from totoro_ai.api.schemas.extract_place import ExtractPlaceResponse
-from totoro_ai.core.extraction.persistence import PlaceSaveOutcome
-from totoro_ai.core.extraction.service import ExtractionService
-from totoro_ai.core.extraction.types import (
-    ExtractionLevel,
+from kebi.api.schemas.extract_place import ExtractPlaceResponse
+from kebi.core.extraction.persistence import PlaceSaveOutcome
+from kebi.core.extraction.service import ExtractionService
+from kebi.core.extraction.types import (
+    Evidence,
+    Medium,
+    Producer,
     ValidatedCandidate,
 )
-from totoro_ai.core.places import (
+from kebi.core.places import (
     PlaceAttributes,
-    PlaceCreate,
     PlaceObject,
     PlaceProvider,
     PlaceType,
@@ -24,32 +25,20 @@ from totoro_ai.core.places import (
 # ---------------------------------------------------------------------------
 
 
-def _make_place_create(
-    place_name: str = "Fuji Ramen",
-    external_id: str = "place_123",
-) -> PlaceCreate:
-    return PlaceCreate(
-        user_id="user-1",
-        place_name=place_name,
-        place_type=PlaceType.food_and_drink,
-        subcategory="restaurant",
-        attributes=PlaceAttributes(cuisine="ramen"),
-        provider=PlaceProvider.google,
-        external_id=external_id,
-    )
-
-
 def _make_validated(
     place_name: str = "Fuji Ramen",
     external_id: str = "place_123",
     confidence: float = 0.87,
-    resolved_by: ExtractionLevel = ExtractionLevel.LLM_NER,
 ) -> ValidatedCandidate:
     return ValidatedCandidate(
-        place=_make_place_create(place_name=place_name, external_id=external_id),
+        place_name=place_name,
+        place_type=PlaceType.food_and_drink,
+        provider=PlaceProvider.google,
+        external_id=external_id,
         confidence=confidence,
-        resolved_by=resolved_by,
-        corroborated=False,
+        evidence=[Evidence(Producer.LLM_NER, Medium.CAPTION)],
+        subcategory="restaurant",
+        attributes=PlaceAttributes(cuisine="ramen"),
     )
 
 
@@ -73,7 +62,7 @@ def _saved_outcome(
     vc = validated or _make_validated()
     return PlaceSaveOutcome(
         metadata=vc,
-        place=_make_place_object(place_id=place_id, place_name=vc.place.place_name),
+        place=_make_place_object(place_id=place_id, place_name=vc.place_name),
         place_id=place_id,
         status="saved",
     )
@@ -295,7 +284,7 @@ async def test_tiktok_url_stamps_source(
     pipeline: MagicMock,
     persistence: MagicMock,
 ) -> None:
-    from totoro_ai.core.places import PlaceSource
+    from kebi.core.places import PlaceSource
 
     results = [_make_validated()]
     pipeline.run = AsyncMock(return_value=results)

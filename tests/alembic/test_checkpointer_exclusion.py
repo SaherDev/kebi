@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from totoro_ai.db.alembic_exclusion import (
+from kebi.db.alembic_exclusion import (
     LIBRARY_MANAGED_TABLES,
     include_object,
 )

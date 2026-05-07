@@ -24,10 +24,10 @@
 
 ⚠️ **CRITICAL**: Blocks all user story phases.
 
-- [x] T002 [P] Create `src/totoro_ai/api/schemas/chat.py` with `ChatRequest` (user_id: str, message: str, location: `Location | None` — import `Location` from `totoro_ai.api.schemas.consult`) and `ChatResponse` (type: str, message: str, data: `dict[str, Any] | None`)
-- [x] T003 [P] Create `IntentClassification` Pydantic model in `src/totoro_ai/core/chat/router.py` (fields: intent: str, confidence: float, clarification_needed: bool, clarification_question: `str | None`)
-- [x] T004 Implement `classify_intent(message: str) -> IntentClassification` in `src/totoro_ai/core/chat/router.py`: call `get_llm("intent_router")`, use the system prompt from spec verbatim, attach Langfuse callback via `get_langfuse_client()`, parse response with `model_validate_json()`, on `ValidationError` strip markdown fences (` ```json ``` `) and retry once before re-raising (depends on T003)
-- [x] T005 [P] Create `ConsultLogRepository` Protocol and `NullConsultLogRepository` stub (no-op `save()`) in `src/totoro_ai/db/repositories/consult_log_repository.py` — real SQLAlchemy impl added in US4
+- [x] T002 [P] Create `src/kebi/api/schemas/chat.py` with `ChatRequest` (user_id: str, message: str, location: `Location | None` — import `Location` from `kebi.api.schemas.consult`) and `ChatResponse` (type: str, message: str, data: `dict[str, Any] | None`)
+- [x] T003 [P] Create `IntentClassification` Pydantic model in `src/kebi/core/chat/router.py` (fields: intent: str, confidence: float, clarification_needed: bool, clarification_question: `str | None`)
+- [x] T004 Implement `classify_intent(message: str) -> IntentClassification` in `src/kebi/core/chat/router.py`: call `get_llm("intent_router")`, use the system prompt from spec verbatim, attach Langfuse callback via `get_langfuse_client()`, parse response with `model_validate_json()`, on `ValidationError` strip markdown fences (` ```json ``` `) and retry once before re-raising (depends on T003)
+- [x] T005 [P] Create `ConsultLogRepository` Protocol and `NullConsultLogRepository` stub (no-op `save()`) in `src/kebi/db/repositories/consult_log_repository.py` — real SQLAlchemy impl added in US4
 
 **Checkpoint**: Config, schemas, intent router, and repository Protocol exist — user stories can now begin.
 
@@ -39,10 +39,10 @@
 
 **Independent Test**: Send each of the four canonical messages and verify the `type` field matches the expected intent. Server must return 200 for all.
 
-- [x] T006 [P] [US1] Implement `ChatService` in `src/totoro_ai/core/chat/service.py`: constructor takes `ExtractionService`, `ConsultService`, `RecallService`, `ChatAssistantService` only (no repo — logging is ConsultService's responsibility); `run(request: ChatRequest) -> ChatResponse` dispatches by intent, wraps each service result in `ChatResponse` (note: `ChatAssistantService.run()` returns `str` — wrap as `message=result, data=None`); catch all exceptions and return `type="error"`
-- [x] T007 [P] [US1] Create `src/totoro_ai/api/routes/chat.py` with `router = APIRouter()` and `@router.post("/chat", status_code=200) async def chat(body: ChatRequest, service: ChatService = Depends(get_chat_service)) -> ChatResponse`
-- [x] T008 [P] [US1] Add `async def get_chat_service(...)` to `src/totoro_ai/api/deps.py` — inject all four existing service deps (no repo — logging is inside ConsultService); reuse `get_consult_service`, `get_recall_service`, `get_extraction_service`, `get_chat_assistant_service`
-- [x] T009 [US1] Register `chat_router` in `src/totoro_ai/api/main.py`: add `from totoro_ai.api.routes.chat import router as chat_router` and `router.include_router(chat_router, prefix="")` (keep old routers for now — they are removed in US3)
+- [x] T006 [P] [US1] Implement `ChatService` in `src/kebi/core/chat/service.py`: constructor takes `ExtractionService`, `ConsultService`, `RecallService`, `ChatAssistantService` only (no repo — logging is ConsultService's responsibility); `run(request: ChatRequest) -> ChatResponse` dispatches by intent, wraps each service result in `ChatResponse` (note: `ChatAssistantService.run()` returns `str` — wrap as `message=result, data=None`); catch all exceptions and return `type="error"`
+- [x] T007 [P] [US1] Create `src/kebi/api/routes/chat.py` with `router = APIRouter()` and `@router.post("/chat", status_code=200) async def chat(body: ChatRequest, service: ChatService = Depends(get_chat_service)) -> ChatResponse`
+- [x] T008 [P] [US1] Add `async def get_chat_service(...)` to `src/kebi/api/deps.py` — inject all four existing service deps (no repo — logging is inside ConsultService); reuse `get_consult_service`, `get_recall_service`, `get_extraction_service`, `get_chat_assistant_service`
+- [x] T009 [US1] Register `chat_router` in `src/kebi/api/main.py`: add `from kebi.api.routes.chat import router as chat_router` and `router.include_router(chat_router, prefix="")` (keep old routers for now — they are removed in US3)
 - [x] T010 [P] [US1] Write unit tests for `classify_intent` in `tests/core/chat/test_router.py`: mock LLM return, verify each of the four intents parses correctly, verify markdown-fence stripping on malformed response
 - [x] T011 [P] [US1] Write unit tests for `ChatService.run()` dispatch paths in `tests/core/chat/test_service.py`: mock all four services and repo, assert correct `type` and `message` for each intent, assert `type="error"` on downstream exception
 - [x] T012 [P] [US1] Write route tests for `POST /v1/chat` in `tests/api/routes/test_chat.py`: mock `ChatService`, assert 200 response shape for each intent type
@@ -75,11 +75,11 @@
 
 ⚠️ Complete US1 (Phase 3) before this phase — verify `POST /v1/chat` is working before removing old routes.
 
-- [x] T016 [P] [US3] Delete `src/totoro_ai/api/routes/extract_place.py`
-- [x] T017 [P] [US3] Delete `src/totoro_ai/api/routes/consult.py`
-- [x] T018 [P] [US3] Delete `src/totoro_ai/api/routes/recall.py`
-- [x] T019 [P] [US3] Delete `src/totoro_ai/api/routes/chat_assistant.py`
-- [x] T020 [US3] Remove all deleted router imports and `router.include_router(...)` calls from `src/totoro_ai/api/main.py` for `chat_assistant_router`, `consult_router`, `extract_place_router`, `recall_router` (keep `feedback_router`)
+- [x] T016 [P] [US3] Delete `src/kebi/api/routes/extract_place.py`
+- [x] T017 [P] [US3] Delete `src/kebi/api/routes/consult.py`
+- [x] T018 [P] [US3] Delete `src/kebi/api/routes/recall.py`
+- [x] T019 [P] [US3] Delete `src/kebi/api/routes/chat_assistant.py`
+- [x] T020 [US3] Remove all deleted router imports and `router.include_router(...)` calls from `src/kebi/api/main.py` for `chat_assistant_router`, `consult_router`, `extract_place_router`, `recall_router` (keep `feedback_router`)
 
 **Checkpoint**: Only `/v1/chat`, `/v1/feedback/*`, and `/v1/health` are registered. Old endpoints return 404.
 
@@ -91,12 +91,12 @@
 
 **Independent Test**: Send a consult message via `/v1/chat`, query `SELECT * FROM consult_logs` — one row exists with matching `user_id`, `query`, `intent="consult"`.
 
-- [x] T021 [P] [US4] Add `ConsultLog` SQLAlchemy model to `src/totoro_ai/db/models.py` — table `"consult_logs"`, fields: `id` (PGUUID PK, default uuid4), `user_id` (String, indexed), `query` (Text), `response` (JSONB), `intent` (String), `accepted` (Boolean nullable), `selected_place_id` (String nullable, no FK constraint), `created_at` (DateTime tz, server_default now())
-- [x] T022 [P] [US4] Implement `SQLAlchemyConsultLogRepository` in `src/totoro_ai/db/repositories/consult_log_repository.py` — `save(log: ConsultLog) -> None` using `session.add(log); await session.commit()`; export both Protocol and impl from the file
+- [x] T021 [P] [US4] Add `ConsultLog` SQLAlchemy model to `src/kebi/db/models.py` — table `"consult_logs"`, fields: `id` (PGUUID PK, default uuid4), `user_id` (String, indexed), `query` (Text), `response` (JSONB), `intent` (String), `accepted` (Boolean nullable), `selected_place_id` (String nullable, no FK constraint), `created_at` (DateTime tz, server_default now())
+- [x] T022 [P] [US4] Implement `SQLAlchemyConsultLogRepository` in `src/kebi/db/repositories/consult_log_repository.py` — `save(log: ConsultLog) -> None` using `session.add(log); await session.commit()`; export both Protocol and impl from the file
 - [x] T023 [US4] Run `poetry run alembic revision --autogenerate -m "add_consult_logs_table"` — review the generated file in `alembic/versions/` and confirm only `consult_logs` table is created
 - [x] T024 [US4] Run `poetry run alembic upgrade head` — confirm migration applies cleanly against running postgres (depends on T023)
-- [x] T025 [US4] Add `get_consult_log_repo()` to `src/totoro_ai/api/deps.py`: inject `AsyncSession` via `Depends(get_session)`, return `SQLAlchemyConsultLogRepository(session)`; update `get_consult_service()` to also accept this dep and pass it into `ConsultService.__init__` (depends on T022, T024)
-- [x] T026 [US4] Add `ConsultLogRepository` as a constructor dep to `ConsultService` in `src/totoro_ai/core/consult/service.py`; at the end of the `consult()` method, after building the response, call `await self._consult_log_repo.save(log)` inside a `try/except` that logs the failure and returns the response regardless (depends on T021, T025)
+- [x] T025 [US4] Add `get_consult_log_repo()` to `src/kebi/api/deps.py`: inject `AsyncSession` via `Depends(get_session)`, return `SQLAlchemyConsultLogRepository(session)`; update `get_consult_service()` to also accept this dep and pass it into `ConsultService.__init__` (depends on T022, T024)
+- [x] T026 [US4] Add `ConsultLogRepository` as a constructor dep to `ConsultService` in `src/kebi/core/consult/service.py`; at the end of the `consult()` method, after building the response, call `await self._consult_log_repo.save(log)` inside a `try/except` that logs the failure and returns the response regardless (depends on T021, T025)
 
 **Checkpoint**: Every consult response produces exactly one `consult_logs` row. DB write failures do not fail the response.
 
@@ -109,8 +109,8 @@
 - [x] T027 [P] Add ADR-052 entry at the top of `docs/decisions.md`: "Consolidate routes into routes/chat.py — supersedes ADR-018. Context: Feature 017 unified /v1/chat replaces four individual route modules. Routes/extract_place.py, consult.py, recall.py, chat_assistant.py are deleted. Decision: routes/chat.py is the single route module for conversational API traffic."
 - [x] T028 [P] Add ADR-053 entry at the top of `docs/decisions.md`: "This repo owns consult_logs table for AI recommendation history — distinct from NestJS recommendations table (Constitution Section VI). Context: Feature 017 needs to persist consult results for feedback loops. Decision: Table named consult_logs (not recommendations) to avoid write-ownership conflict with NestJS."
 - [x] T029 [P] Update `docs/api-contract.md` to reflect the /v1/chat contract: replace the extract-place and consult sections with the contract from `specs/017-unified-chat-router/contracts/chat.md`; note status polling endpoint (GET /v1/extract-place/status/{id}) is deferred
-- [ ] T030 [P] Delete stale Bruno files from `totoro-config/bruno/ai-service/`: `chat-assistant.bru`, `consult.bru`, `extract-place.bru`, `extract-place-status.bru`, `recall.bru` — BLOCKED: totoro-config directory has read-only permissions in sandbox; must be done manually
-- [ ] T031 [P] Create `totoro-config/bruno/ai-service/chat.bru` with 5 request bodies: (1) `"cheap dinner nearby"` with location, (2) TikTok URL, (3) `"that ramen place I saved"`, (4) `"is tipping expected in Japan?"`, (5) `"fuji"` (no location) — BLOCKED: totoro-config directory has read-only permissions in sandbox; must be done manually
+- [ ] T030 [P] Delete stale Bruno files from `kebi-config/bruno/ai-service/`: `chat-assistant.bru`, `consult.bru`, `extract-place.bru`, `extract-place-status.bru`, `recall.bru` — BLOCKED: kebi-config directory has read-only permissions in sandbox; must be done manually
+- [ ] T031 [P] Create `kebi-config/bruno/ai-service/chat.bru` with 5 request bodies: (1) `"cheap dinner nearby"` with location, (2) TikTok URL, (3) `"that ramen place I saved"`, (4) `"is tipping expected in Japan?"`, (5) `"fuji"` (no location) — BLOCKED: kebi-config directory has read-only permissions in sandbox; must be done manually
 - [x] T032 Run full verification suite: `poetry run pytest` (all pass), `poetry run ruff check src/ tests/` (zero errors in new files; 14 pre-existing errors remain), `poetry run mypy src/` (6 pre-existing errors remain; zero new errors introduced)
 
 ---

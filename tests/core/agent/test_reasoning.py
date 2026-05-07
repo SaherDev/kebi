@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 import pytest
 from pydantic import ValidationError
 
-from totoro_ai.core.agent.reasoning import ReasoningStep
+from kebi.core.agent.reasoning import ReasoningStep
 
 
 class TestReasoningStepDefaults:
@@ -67,7 +67,7 @@ class TestReasoningStepSourceToolNameConsistency:
 class TestConsultReasoningStepReexport:
     def test_consult_schema_reexports_same_class(self) -> None:
         """FR-024: api/schemas/consult.py re-exports the richer shape."""
-        from totoro_ai.api.schemas.consult import ReasoningStep as ConsultReasoningStep
-        from totoro_ai.core.agent.reasoning import ReasoningStep as AgentReasoningStep
+        from kebi.api.schemas.consult import ReasoningStep as ConsultReasoningStep
+        from kebi.core.agent.reasoning import ReasoningStep as AgentReasoningStep
 
         assert ConsultReasoningStep is AgentReasoningStep

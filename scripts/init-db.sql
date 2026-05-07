@@ -1,2 +1,2 @@
--- Enable pgvector on the default AI database (totoro)
+-- Enable pgvector on the default AI database (kebi)
 CREATE EXTENSION IF NOT EXISTS vector;

@@ -12,13 +12,13 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from totoro_ai.core.places.models import (
+from kebi.core.places.models import (
     PlaceCreate,
     PlaceObject,
     PlaceProvider,
     PlaceType,
 )
-from totoro_ai.core.places.service import PlacesService
+from kebi.core.places.service import PlacesService
 
 
 def _make_place_create(
@@ -194,7 +194,7 @@ def _make_enrichable_place(
 def _make_geo_data(lat: float = 13.7, lng: float = 100.5, address: str = "Siam") -> Any:
     from datetime import datetime
 
-    from totoro_ai.core.places.models import GeoData
+    from kebi.core.places.models import GeoData
 
     return GeoData(
         lat=lat,
@@ -321,7 +321,7 @@ async def test_enrich_batch_geo_only_redis_error_treated_as_all_miss() -> None:
 def _make_enrichment(rating: float = 4.3) -> Any:
     from datetime import datetime
 
-    from totoro_ai.core.places.models import PlaceEnrichment
+    from kebi.core.places.models import PlaceEnrichment
 
     return PlaceEnrichment(
         hours={"monday": "09:00-18:00", "timezone": "Asia/Bangkok"},
@@ -428,7 +428,7 @@ async def test_enrich_batch_full_uses_asyncio_gather() -> None:
     original_gather = _asyncio.gather
     spy = MagicMock(side_effect=original_gather)
     with pytest.MonkeyPatch.context() as mp:
-        mp.setattr("totoro_ai.core.places.service.asyncio.gather", spy)
+        mp.setattr("kebi.core.places.service.asyncio.gather", spy)
         await service.enrich_batch([p1, p2], geo_only=False)
 
     assert spy.called
@@ -477,7 +477,7 @@ async def test_enrich_batch_full_dedupes_same_provider_id() -> None:
 
 
 async def test_enrich_batch_full_caps_misses_and_logs() -> None:
-    from totoro_ai.core.config import get_config
+    from kebi.core.config import get_config
 
     # Force cap to 2 for this test.
     cfg = get_config()
@@ -520,7 +520,7 @@ async def test_enrich_batch_full_priority_provider_ids_survive_cap() -> None:
     (`google:zzz`) so the plain-sort path would drop it; with priority
     it must be kept and one non-priority id is dropped instead.
     """
-    from totoro_ai.core.config import get_config
+    from kebi.core.config import get_config
 
     cfg = get_config()
     original_cap = cfg.places.max_enrichment_batch
@@ -572,7 +572,7 @@ async def test_enrich_batch_full_priority_default_none_preserves_old_behavior() 
     """With no priority_provider_ids, truncation falls back to plain
     alphabetical ordering — the pre-ADR-057-followup behavior. Keeps
     backward compatibility for callers that don't pass the new param."""
-    from totoro_ai.core.config import get_config
+    from kebi.core.config import get_config
 
     cfg = get_config()
     original_cap = cfg.places.max_enrichment_batch

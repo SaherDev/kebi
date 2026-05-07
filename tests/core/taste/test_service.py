@@ -8,20 +8,20 @@ from __future__ import annotations
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from totoro_ai.core.taste.schemas import (
+from kebi.core.taste.schemas import (
     Chip,
     InteractionRow,
     SummaryLine,
     TasteArtifacts,
 )
-from totoro_ai.db.models import InteractionType
+from kebi.db.models import InteractionType
 
 
 def _make_service(
     repo_mock: AsyncMock | None = None,
 ) -> object:
     """Create a TasteModelService with mocked dependencies."""
-    from totoro_ai.core.taste.service import TasteModelService
+    from kebi.core.taste.service import TasteModelService
 
     session_factory = MagicMock()
     service = TasteModelService(session_factory)
@@ -41,7 +41,7 @@ def _make_repo_mock() -> AsyncMock:
 
 
 def _sample_row(type_: str = "save") -> InteractionRow:
-    from totoro_ai.core.places.models import PlaceAttributes
+    from kebi.core.places.models import PlaceAttributes
 
     return InteractionRow(
         type=type_,
@@ -139,7 +139,7 @@ class TestHandleSignal:
         repo = _make_repo_mock()
         service = _make_service(repo)
 
-        with patch("totoro_ai.core.taste.debounce.regen_debouncer") as debouncer:
+        with patch("kebi.core.taste.debounce.regen_debouncer") as debouncer:
             debouncer.schedule = MagicMock()
             await service.handle_signal("user1", InteractionType.SAVE, "place1")
 
@@ -151,7 +151,7 @@ class TestHandleSignal:
         repo = _make_repo_mock()
         service = _make_service(repo)
 
-        with patch("totoro_ai.core.taste.debounce.regen_debouncer") as debouncer:
+        with patch("kebi.core.taste.debounce.regen_debouncer") as debouncer:
             debouncer.schedule = MagicMock()
             await service.handle_signal("user1", InteractionType.SAVE, "place1")
             debouncer.schedule.assert_called_once()
@@ -181,7 +181,7 @@ class TestRunRegen:
         await service._run_regen("user1")
         repo.upsert_regen.assert_not_awaited()
 
-    @patch("totoro_ai.core.taste.service.get_llm")
+    @patch("kebi.core.taste.service.get_llm")
     async def test_happy_path(self, mock_get_llm: MagicMock) -> None:
         rows = [_sample_row() for _ in range(5)]
         repo = _make_repo_mock()
@@ -203,7 +203,7 @@ class TestRunRegen:
         assert len(call_kwargs["summary"]) > 0
         assert len(call_kwargs["chips"]) > 0
 
-    @patch("totoro_ai.core.taste.service.get_llm")
+    @patch("kebi.core.taste.service.get_llm")
     async def test_parse_failure_skips_regen(self, mock_get_llm: MagicMock) -> None:
         rows = [_sample_row() for _ in range(5)]
         repo = _make_repo_mock()
@@ -220,7 +220,7 @@ class TestRunRegen:
         repo.upsert_regen.assert_not_awaited()
         assert mock_llm.complete.await_count == 2  # retried once
 
-    @patch("totoro_ai.core.taste.service.get_llm")
+    @patch("kebi.core.taste.service.get_llm")
     async def test_regen_preserves_confirmed_chips_and_resurfaces_rejected(
         self, mock_get_llm: MagicMock
     ) -> None:
@@ -309,7 +309,7 @@ class TestRunRegen:
         assert ("attributes.cuisine", "japanese") in by_key
         assert by_key[("attributes.cuisine", "japanese")]["status"] == "pending"
 
-    @patch("totoro_ai.core.taste.service.get_llm")
+    @patch("kebi.core.taste.service.get_llm")
     async def test_run_regen_now_bypasses_stale_guard(
         self, mock_get_llm: MagicMock
     ) -> None:

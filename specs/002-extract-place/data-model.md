@@ -11,7 +11,7 @@ The `Place` SQLAlchemy model and the `places` PostgreSQL table need three new nu
 ### Updated `Place` model (additions only)
 
 ```python
-# Additions to src/totoro_ai/db/models.py — Place class
+# Additions to src/kebi/db/models.py — Place class
 
 google_place_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
 confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
@@ -51,7 +51,7 @@ def downgrade() -> None:
 ### `ExtractionSource`
 
 ```python
-# src/totoro_ai/core/extraction/confidence.py
+# src/kebi/core/extraction/confidence.py
 
 from enum import Enum
 
@@ -65,7 +65,7 @@ class ExtractionSource(str, Enum):
 ### `PlacesMatchQuality`
 
 ```python
-# src/totoro_ai/core/extraction/places_client.py
+# src/kebi/core/extraction/places_client.py
 
 from enum import Enum
 
@@ -83,7 +83,7 @@ class PlacesMatchQuality(str, Enum):
 ### `PlaceExtraction` — LLM output schema
 
 ```python
-# src/totoro_ai/api/schemas/extract_place.py
+# src/kebi/api/schemas/extract_place.py
 
 class PlaceExtraction(BaseModel):
     """Structured output from LLM extraction step. Not persisted directly."""
@@ -121,11 +121,11 @@ class ExtractPlaceResponse(BaseModel):
 ### `ExtractionResult`
 
 ```python
-# src/totoro_ai/core/extraction/result.py
+# src/kebi/core/extraction/result.py
 
 from pydantic import BaseModel
-from totoro_ai.api.schemas.extract_place import PlaceExtraction
-from totoro_ai.core.extraction.confidence import ExtractionSource
+from kebi.api.schemas.extract_place import PlaceExtraction
+from kebi.core.extraction.confidence import ExtractionSource
 
 class ExtractionResult(BaseModel):
     extraction: PlaceExtraction
@@ -138,7 +138,7 @@ Each extractor constructs and returns this object. The `source` field is the ext
 ### `PlacesMatchResult`
 
 ```python
-# src/totoro_ai/core/extraction/places_client.py
+# src/kebi/core/extraction/places_client.py
 
 class PlacesMatchResult(BaseModel):
     match_quality: PlacesMatchQuality
@@ -153,11 +153,11 @@ class PlacesMatchResult(BaseModel):
 ## 5. Error types
 
 ```python
-# src/totoro_ai/core/extraction/dispatcher.py
+# src/kebi/core/extraction/dispatcher.py
 class UnsupportedInputError(Exception):
     """Raised when no extractor supports the given input."""
 
-# src/totoro_ai/core/extraction/service.py (or confidence.py)
+# src/kebi/core/extraction/service.py (or confidence.py)
 class ExtractionFailedNoMatchError(Exception):
     """Raised when confidence ≤ 0.30 (no Places match). Maps to 422."""
 ```

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from langchain_core.messages import HumanMessage
 
-from totoro_ai.core.agent.invocation import build_turn_payload
+from kebi.core.agent.invocation import build_turn_payload
 
 
 class TestBuildTurnPayload:

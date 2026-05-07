@@ -1,56 +1,33 @@
-"""Tests for EnrichmentLevel — the (enrich → dedup → summarize) unit."""
+"""Tests for EnrichmentLevel — the producer-runner unit."""
 
 from unittest.mock import AsyncMock, MagicMock
 
-from totoro_ai.core.extraction.enrichment_level import EnrichmentLevel
-from totoro_ai.core.extraction.types import (
-    CandidatePlace,
-    ExtractionContext,
-    ExtractionLevel,
-)
-from totoro_ai.core.places import (
-    PlaceAttributes,
-    PlaceCreate,
-    PlaceType,
-)
+from kebi.core.extraction.enrichment_level import EnrichmentLevel
+from kebi.core.extraction.types import ExtractionContext
 
 
-def _candidate(name: str = "Place") -> CandidatePlace:
-    return CandidatePlace(
-        place=PlaceCreate(
-            user_id="u1",
-            place_name=name,
-            place_type=PlaceType.food_and_drink,
-            attributes=PlaceAttributes(),
-        ),
-        source=ExtractionLevel.LLM_NER,
-    )
+def _summary(_ctx: ExtractionContext, _fired: list[str], _picks: int) -> str:
+    return ""
 
 
-def _summary_with_count(ctx: ExtractionContext, _fired: list[str]) -> str:
-    return f"found {len(ctx.candidates)}"
-
-
-async def test_run_executes_each_enricher_and_dedups() -> None:
-    """All enrichers run; same-name candidates are deduped after."""
+async def test_run_executes_each_enricher() -> None:
+    """All enrichers in the level run in order against the shared context."""
     e1 = MagicMock()
-    e1.enrich = AsyncMock(side_effect=lambda c: c.candidates.append(_candidate("X")))
+    e1.enrich = AsyncMock()
     e2 = MagicMock()
-    e2.enrich = AsyncMock(side_effect=lambda c: c.candidates.append(_candidate("X")))
+    e2.enrich = AsyncMock()
 
     level = EnrichmentLevel(
-        name="enrich", enrichers=[e1, e2], summary_fn=_summary_with_count
+        name="enrich", enrichers=[e1, e2], summary_fn=_summary
     )
     ctx = ExtractionContext(url=None, user_id="u1", supplementary_text="...")
 
-    executed, summary = await level.run(ctx)
+    executed, fired = await level.run(ctx)
 
     assert executed is True
     e1.enrich.assert_awaited_once_with(ctx)
     e2.enrich.assert_awaited_once_with(ctx)
-    # Both appended "X" — dedup collapses to one.
-    assert len(ctx.candidates) == 1
-    assert summary == "found 1"
+    assert fired == [type(e1).__name__, type(e2).__name__]
 
 
 async def test_requires_url_skips_when_url_none() -> None:
@@ -61,15 +38,15 @@ async def test_requires_url_skips_when_url_none() -> None:
     level = EnrichmentLevel(
         name="deep",
         enrichers=[e1],
-        summary_fn=_summary_with_count,
+        summary_fn=_summary,
         requires_url=True,
     )
     ctx = ExtractionContext(url=None, user_id="u1")
 
-    executed, summary = await level.run(ctx)
+    executed, fired = await level.run(ctx)
 
     assert executed is False
-    assert summary == ""
+    assert fired == []
     e1.enrich.assert_not_called()
 
 
@@ -80,7 +57,7 @@ async def test_requires_url_runs_when_url_present() -> None:
     level = EnrichmentLevel(
         name="deep",
         enrichers=[e1],
-        summary_fn=_summary_with_count,
+        summary_fn=_summary,
         requires_url=True,
     )
     ctx = ExtractionContext(url="https://tiktok.com/x", user_id="u1")
@@ -91,13 +68,8 @@ async def test_requires_url_runs_when_url_present() -> None:
     e1.enrich.assert_awaited_once_with(ctx)
 
 
-async def test_summary_fn_receives_fired_enricher_class_names() -> None:
-    """The summary callback gets the list of enricher class names that ran."""
-    captured: list[list[str]] = []
-
-    def capture_summary(_ctx: ExtractionContext, fired: list[str]) -> str:
-        captured.append(list(fired))
-        return ""
+async def test_run_returns_fired_enricher_class_names() -> None:
+    """level.run returns the list of enricher class names that ran."""
 
     class FooEnricher:
         async def enrich(self, _ctx: ExtractionContext) -> None: ...
@@ -108,8 +80,8 @@ async def test_summary_fn_receives_fired_enricher_class_names() -> None:
     level = EnrichmentLevel(
         name="x",
         enrichers=[FooEnricher(), BarEnricher()],
-        summary_fn=capture_summary,
+        summary_fn=_summary,
     )
-    await level.run(ExtractionContext(url=None, user_id="u1"))
+    _, fired = await level.run(ExtractionContext(url=None, user_id="u1"))
 
-    assert captured == [["FooEnricher", "BarEnricher"]]
+    assert fired == ["FooEnricher", "BarEnricher"]

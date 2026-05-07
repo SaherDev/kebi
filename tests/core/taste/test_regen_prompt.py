@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import json
 
-from totoro_ai.core.taste.aggregation import SignalCounts
-from totoro_ai.core.taste.regen import build_regen_messages
-from totoro_ai.core.taste.schemas import Chip, ChipStatus
+from kebi.core.taste.aggregation import SignalCounts
+from kebi.core.taste.regen import build_regen_messages
+from kebi.core.taste.schemas import Chip, ChipStatus
 
 
 def _chip(

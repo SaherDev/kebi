@@ -9,9 +9,9 @@ from unittest.mock import AsyncMock, MagicMock
 
 from sqlalchemy.sql import Delete
 
-from totoro_ai.core.taste.debounce import RegenDebouncer
-from totoro_ai.core.user.service import DataScope, UserDataDeletionService
-from totoro_ai.db.models import (
+from kebi.core.taste.debounce import RegenDebouncer
+from kebi.core.user.service import DataScope, UserDataDeletionService
+from kebi.db.models import (
     Interaction,
     Place,
     Recommendation,
@@ -211,7 +211,7 @@ async def test_adelete_thread_transient_failure_recovers_within_retry_budget(
 ) -> None:
     """Two flaky attempts then success — service must absorb the transient
     failures so NestJS doesn't have to retry the whole endpoint."""
-    from totoro_ai.core.user import service as service_mod
+    from kebi.core.user import service as service_mod
 
     monkeypatch.setattr(service_mod, "_CHECKPOINT_DELETE_BACKOFF_BASE_SECONDS", 0.0)  # type: ignore[attr-defined]
 
@@ -236,7 +236,7 @@ async def test_adelete_thread_transient_failure_recovers_within_retry_budget(
 async def test_adelete_thread_exhausted_retries_raises(monkeypatch: object) -> None:
     """If all retries fail, raise so NestJS sees a 500 and can drive
     recovery (idempotent re-call is safe)."""
-    from totoro_ai.core.user import service as service_mod
+    from kebi.core.user import service as service_mod
 
     monkeypatch.setattr(service_mod, "_CHECKPOINT_DELETE_BACKOFF_BASE_SECONDS", 0.0)  # type: ignore[attr-defined]
 

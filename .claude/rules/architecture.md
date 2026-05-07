@@ -2,8 +2,8 @@
 
 ## Two-Repo Separation
 
-- **totoro** (product repo): Nx monorepo, Next.js, NestJS, TypeORM, PostgreSQL + pgvector. Handles UI, auth (Clerk), CRUD, and product data writes.
-- **totoro-ai** (this repo): Pure Python. All AI/ML logic. Writes AI-generated data (places, embeddings, taste_model) to PostgreSQL.
+- **product repo** (sibling, NestJS + Next.js): Nx monorepo, Next.js, NestJS, TypeORM, PostgreSQL + pgvector. Handles UI, auth (Clerk), CRUD, and product data writes.
+- **kebi** (this repo): Pure Python. All AI/ML logic. Writes AI-generated data (places, embeddings, taste_model) to PostgreSQL.
 - Communication: HTTP only. The product repo calls this repo's FastAPI endpoints (`POST /v1/chat`, `GET /v1/health`). ADR-052 consolidated all conversational traffic into `/v1/chat`.
 - This repo never imports from, depends on, or assumes anything about the product repo's internals.
 

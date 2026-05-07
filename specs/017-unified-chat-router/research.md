@@ -5,23 +5,23 @@
 ## Existing Service Interfaces (verified from source)
 
 ### ConsultService
-- File: `src/totoro_ai/core/consult/service.py`
+- File: `src/kebi/core/consult/service.py`
 - Method: `async def consult(user_id: str, query: str, location: Location | None) -> ConsultResponse`
 - **Already non-streaming.** The existing `/v1/consult` route calls `service.consult()` and returns `JSONResponse(result.model_dump())`. No streaming adapter is needed — clarification Q1 (Option B) is already satisfied by the current code.
 - Dep injection: `get_consult_service()` in `api/deps.py` (line 266)
 
 ### ExtractionService
-- File: `src/totoro_ai/core/extraction/service.py`
+- File: `src/kebi/core/extraction/service.py`
 - Method: `async def run(raw_input: str, user_id: str) -> ExtractPlaceResponse`
 - Returns a Pydantic model.
 
 ### RecallService
-- File: `src/totoro_ai/core/recall/service.py`
+- File: `src/kebi/core/recall/service.py`
 - Method: `async def run(query: str, user_id: str) -> RecallResponse`
 - Returns a Pydantic model.
 
 ### ChatAssistantService
-- File: `src/totoro_ai/core/chat/chat_assistant_service.py`
+- File: `src/kebi/core/chat/chat_assistant_service.py`
 - Method: `async def run(message: str, user_id: str) -> str`
 - Returns a **plain string**, not a Pydantic model. ChatService must wrap it: `ChatResponse(type="assistant", message=result, data=None)`.
 
@@ -29,8 +29,8 @@
 
 ## Schema Package Layout
 
-Schemas live in `src/totoro_ai/api/schemas/` (a package, not a single file). The spec says "add to `api/schemas.py`" — this is incorrect. New chat schemas belong in:
-- `src/totoro_ai/api/schemas/chat.py` — new file for `ChatRequest` and `ChatResponse`
+Schemas live in `src/kebi/api/schemas/` (a package, not a single file). The spec says "add to `api/schemas.py`" — this is incorrect. New chat schemas belong in:
+- `src/kebi/api/schemas/chat.py` — new file for `ChatRequest` and `ChatResponse`
 
 The existing `Location` Pydantic model lives in `api/schemas/consult.py`. `ChatRequest.location` should reuse this type (`Location | None`) rather than using `dict | None` as the spec suggests — `dict` at a Pydantic boundary violates Constitution Section IV.
 
@@ -54,7 +54,7 @@ The existing `Location` Pydantic model lives in `api/schemas/consult.py`. `ChatR
 
 ## Bruno Collection Location
 
-- Actual path: `totoro-config/bruno/ai-service/` (not `totoro-config/bruno/`)
+- Actual path: `kebi-config/bruno/ai-service/` (not `kebi-config/bruno/`)
 - Files to delete: `chat-assistant.bru`, `consult.bru`, `extract-place.bru`, `extract-place-status.bru`, `recall.bru`
 - File to add: `chat.bru` with 5 request bodies (one per intent + one "fuji" clarification)
 - Files to keep: `feedback-accepted.bru`, `feedback-rejected.bru`, `health.bru`
