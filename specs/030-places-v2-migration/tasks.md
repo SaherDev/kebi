@@ -132,11 +132,11 @@ description: "Tasks for extraction → places_v2 cutover (030-places-v2-migratio
 
 **Purpose**: Full quality gates and quickstart validation.
 
-- [ ] T043 [P] Run `poetry run pytest tests/core/extraction/ -v` and confirm all extraction tests pass
-- [ ] T044 [P] Run `poetry run ruff check src/kebi/core/extraction src/kebi/api/schemas/extract_place.py src/kebi/api/routes/extraction.py src/kebi/api/deps.py src/kebi/core/agent/tools/save_tool.py tests/core/extraction/` and confirm no new lint errors
-- [ ] T045 [P] Run `poetry run mypy src/kebi/core/extraction src/kebi/api/schemas/extract_place.py src/kebi/api/routes/extraction.py src/kebi/api/deps.py src/kebi/core/agent/tools/save_tool.py` and confirm zero new errors
+- [X] T043 [P] Run `poetry run pytest tests/core/extraction/ -v` and confirm all extraction tests pass
+- [X] T044 [P] Run `poetry run ruff check src/kebi/core/extraction src/kebi/api/schemas/extract_place.py src/kebi/api/routes/extraction.py src/kebi/api/deps.py src/kebi/core/agent/tools/save_tool.py tests/core/extraction/` and confirm no new lint errors
+- [X] T045 [P] Run `poetry run mypy src/kebi/core/extraction src/kebi/api/schemas/extract_place.py src/kebi/api/routes/extraction.py src/kebi/api/deps.py src/kebi/core/agent/tools/save_tool.py` and confirm zero new errors
 - [ ] T046 Walk through `specs/030-places-v2-migration/quickstart.md` end to end against a running local instance: confirm steps 2 (no legacy imports), 3 (searcher gone), 4 (extraction tests pass), 5 (live extraction), 6 (DB + Redis state), 7 (response shape), 8 (lint + mypy), 9 (places_v2 untouched), 10 (agent save path) all pass
-- [ ] T047 Confirm `git diff dev -- src/kebi/core/places_v2/` is empty (FR-010a invariant — no edits to the frozen v2 module). If any file was accidentally modified, revert it.
+- [X] T047 Confirm `git diff dev -- src/kebi/core/places_v2/` is empty (FR-010a invariant — no edits to the frozen v2 module). If any file was accidentally modified, revert it.
 
 ---
 

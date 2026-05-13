@@ -52,7 +52,6 @@ class TestPollingRouteCompleted:
                 {
                     "place": _sample_place(),
                     "confidence": 0.87,
-                    "status": "saved",
                 }
             ],
             "raw_input": "https://tiktok.com/@x/video/123",
@@ -63,7 +62,6 @@ class TestPollingRouteCompleted:
         body = resp.json()
         assert body["status"] == "completed"
         assert len(body["results"]) == 1
-        assert body["results"][0]["status"] == "saved"
         assert body["results"][0]["place"]["id"] == "pl_test_01"
         assert body["results"][0]["confidence"] == 0.87
         assert body["raw_input"] == "https://tiktok.com/@x/video/123"
@@ -113,7 +111,6 @@ class TestExtractRoute:
                 {
                     "place": _sample_place(),
                     "confidence": 0.87,
-                    "status": "saved",
                     "evidence": [
                         {
                             "producer": "llm_ner",

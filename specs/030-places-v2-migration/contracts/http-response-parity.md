@@ -72,10 +72,11 @@ The JSON shape of an `ExtractPlaceItem.place` value before and after the cutover
    - New: `"tags": [ {"type": "dietary", "value": "vegan", "source": "llm"}, {"type": "feature", "value": "outdoor_seating", "source": "llm"}, {"type": "price", "value": "$$", "source": "llm"} ]`
    - Action: same release coordination.
 
-3. **`ExtractPlaceItem.status` no longer emits `"needs_review"`** (per ADR-071, supersedes ADR-057)
-   - Old emitted set: `"saved" | "needs_review" | "duplicate"`
-   - New emitted set: `"saved" | "duplicate"`
-   - Literal type unchanged — `"needs_review"` stays in the schema for backward compatibility, but extraction no longer produces it. Product-repo UI code that rendered a "needs review" state can be left as defensive no-op or removed in a coordinated update; it is not load-bearing after this feature.
+3. **`ExtractPlaceItem.status` removed entirely** (spec 030 Phase 6, builds on ADR-071)
+   - Old: each item carried `status: "saved" | "needs_review" | "duplicate"`.
+   - New: items have only `place`, `confidence`, `evidence`. Whether a given place was newly linked or already in the user's saved list is an internal optimization (UserPlacesService catches the conflict; PlaceSaved fires only for new links), but is no longer surfaced per-item in the response.
+   - Rationale: under ADR-071 the extraction flow saves every picker output unconditionally. The saved/duplicate distinction was a leaky internal detail; the response is now a flat list of "places now associated with this user."
+   - Action: product repo TypeScript must drop the `status` field on `ExtractPlaceItem` and any UI that branched on `item.status` (e.g. "you already saved this" badges). The agent's user-visible summary collapses to `"Saved {name} to your places"` for a single result and `"Saved N places: …"` for multiple.
 
 These three changes are documented here so they are surfaced explicitly, **not silent**. Per spec FR-012, "any divergence MUST be explicit and documented in the diff, not incidental." This document is that explicit record.
 

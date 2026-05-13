@@ -173,7 +173,7 @@ async def test_pipeline_exception_returns_pipeline_error() -> None:
 
 
 @pytest.mark.asyncio
-async def test_successful_save_emits_completed_with_saved_status() -> None:
+async def test_successful_save_emits_completed_envelope() -> None:
     candidate = _candidate()
     persisted = _persisted_core()
     service, c = _build_service(
@@ -183,7 +183,6 @@ async def test_successful_save_emits_completed_with_saved_status() -> None:
     resp = await service.run(raw_input="Fuji Ramen", user_id="u1")
     assert resp.status == "completed"
     assert len(resp.results) == 1
-    assert resp.results[0].status == "saved"
     assert resp.results[0].place.place_name == "Fuji Ramen"
     c.upsert.upsert_and_embed.assert_awaited_once()
     c.user_places.save_places.assert_awaited_once()
@@ -194,10 +193,11 @@ async def test_successful_save_emits_completed_with_saved_status() -> None:
 
 
 @pytest.mark.asyncio
-async def test_duplicate_user_place_emits_duplicate_status() -> None:
+async def test_duplicate_user_place_skips_event_dispatch() -> None:
     """save_places raises DuplicateUserPlaceError; the only candidate
-    is in the conflicts list → it surfaces as `status="duplicate"` and
-    no retry is needed."""
+    is in the conflicts list → it still appears in the response (every
+    picker output is in the user's list), but PlaceSaved does not fire
+    because no NEW user_places row was created."""
     candidate = _candidate()
     persisted = _persisted_core()
     service, c = _build_service(
@@ -207,16 +207,17 @@ async def test_duplicate_user_place_emits_duplicate_status() -> None:
     )
     resp = await service.run(raw_input="Fuji Ramen", user_id="u1")
     assert resp.status == "completed"
-    assert resp.results[0].status == "duplicate"
-    # First call raises with conflicts; no retry call because every
-    # candidate was a conflict.
+    assert len(resp.results) == 1
+    assert resp.results[0].place.place_name == "Fuji Ramen"
+    # First call raises with conflicts; no retry because every candidate
+    # was a conflict.
     assert c.user_places.save_places.await_count == 1
-    # No PlaceSaved dispatch for a duplicate.
+    # No PlaceSaved dispatch for a place that was already linked.
     c.event_dispatcher.dispatch.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_mixed_saved_and_duplicate() -> None:
+async def test_mixed_save_and_duplicate_dispatches_event_for_new_link_only() -> None:
     c1 = _candidate(place_name="Fuji", provider_id="google:fuji")
     c2 = _candidate(place_name="Joe Pizza", provider_id="google:joe")
     p1 = _persisted_core(place_id="p1", provider_id="google:fuji", place_name="Fuji")
@@ -230,12 +231,17 @@ async def test_mixed_saved_and_duplicate() -> None:
     )
     resp = await service.run(raw_input="some text", user_id="u1")
     assert resp.status == "completed"
-    statuses = [r.status for r in resp.results]
-    assert statuses == ["saved", "duplicate"]
-    # Two calls: first raises, second retries with only p1.
+    # Both places appear in the response; status is no longer a per-item field.
+    place_ids = [r.place.id for r in resp.results]
+    assert place_ids == ["p1", "p2"]
+    # Two save calls: first raises, second retries with only p1.
     assert c.user_places.save_places.await_count == 2
     retry_args = c.user_places.save_places.await_args.kwargs
     assert [p.id for p in retry_args["places"]] == ["p1"]
+    # PlaceSaved fires for the newly linked p1 only.
+    c.event_dispatcher.dispatch.assert_awaited_once()
+    event = c.event_dispatcher.dispatch.await_args.args[0]
+    assert event.place_ids == ["p1"]
 
 
 @pytest.mark.asyncio

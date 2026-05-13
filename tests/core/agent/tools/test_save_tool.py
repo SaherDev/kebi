@@ -1,4 +1,9 @@
-"""Tests for the save_tool @tool wrapper (feature 028 M5)."""
+"""Tests for the save_tool @tool wrapper.
+
+Spec 030 Phase 6: ExtractPlaceItem.status is gone, so the save tool
+no longer branches on per-item status. The summary is just "Saved
+{name}" for a single result or "Saved N places: …" for multiple.
+"""
 
 from __future__ import annotations
 
@@ -19,11 +24,11 @@ from kebi.core.agent.tools.save_tool import (
 from kebi.core.places_v2 import PlaceCategory, PlaceObject
 
 
-def _place_object() -> PlaceObject:
+def _place_object(name: str = "Fuji Ramen", place_id: str = "p1") -> PlaceObject:
     return PlaceObject(
-        id="p1",
-        provider_id="google:p1",
-        place_name="Fuji Ramen",
+        id=place_id,
+        provider_id=f"google:{place_id}",
+        place_name=name,
         categories=[PlaceCategory.restaurant],
     )
 
@@ -44,39 +49,28 @@ def test_save_summary_failed() -> None:
     assert _save_summary(resp) == "Couldn't extract a place from that"
 
 
-def test_save_summary_completed_saved() -> None:
+def test_save_summary_single_result() -> None:
     resp = ExtractPlaceResponse(
         status="completed",
-        results=[
-            ExtractPlaceItem(place=_place_object(), confidence=0.9, status="saved")
-        ],
+        results=[ExtractPlaceItem(place=_place_object(), confidence=0.9)],
         raw_input="x",
     )
     assert _save_summary(resp) == "Saved Fuji Ramen to your places"
 
 
-def test_save_summary_duplicate() -> None:
+def test_save_summary_multiple_results() -> None:
     resp = ExtractPlaceResponse(
         status="completed",
         results=[
-            ExtractPlaceItem(place=_place_object(), confidence=0.9, status="duplicate")
+            ExtractPlaceItem(place=_place_object("Fuji", "p1"), confidence=0.9),
+            ExtractPlaceItem(place=_place_object("Joe", "p2"), confidence=0.9),
         ],
         raw_input="x",
     )
-    assert _save_summary(resp) == "You already had Fuji Ramen saved"
-
-
-def test_save_summary_needs_review() -> None:
-    resp = ExtractPlaceResponse(
-        status="completed",
-        results=[
-            ExtractPlaceItem(
-                place=_place_object(), confidence=0.4, status="needs_review"
-            )
-        ],
-        raw_input="x",
-    )
-    assert "confidence is low" in _save_summary(resp)
+    summary = _save_summary(resp)
+    assert "Saved 2 places" in summary
+    assert "Fuji" in summary
+    assert "Joe" in summary
 
 
 @pytest.mark.asyncio
@@ -85,9 +79,7 @@ async def test_save_tool_does_not_write_last_recall_results() -> None:
     service.run = AsyncMock(
         return_value=ExtractPlaceResponse(
             status="completed",
-            results=[
-                ExtractPlaceItem(place=_place_object(), confidence=0.9, status="saved")
-            ],
+            results=[ExtractPlaceItem(place=_place_object(), confidence=0.9)],
             raw_input="x",
         )
     )

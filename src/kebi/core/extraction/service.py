@@ -86,13 +86,16 @@ def _build_parse_summary(source: PlaceSource | None, has_text: bool) -> str:
 def _candidate_to_item_dict(
     candidate: ValidatedCandidate,
     place: PlaceObject,
-    status: str,
 ) -> dict[str, Any]:
-    """Map a (candidate, persisted-place) pair to an ExtractPlaceItem dict."""
+    """Map a (candidate, persisted-place) pair to an ExtractPlaceItem dict.
+
+    No `status` field — under ADR-071 the response is a flat list of
+    places now associated with the user (whether newly linked or
+    already saved is internal).
+    """
     return {
         "place": place.model_dump(mode="json"),
         "confidence": candidate.confidence,
-        "status": status,
         "evidence": [
             {
                 "producer": e.producer.value,
@@ -276,16 +279,21 @@ class ExtractionService:
     ) -> list[ExtractPlaceItem]:
         """Inline v2 persistence flow (ADR-070, ADR-071).
 
-        1. Upsert + embed all candidates in one call.
-        2. Call UserPlacesService.save_places. On DuplicateUserPlaceError,
-           drop the conflicting place_ids and retry once.
-        3. Dispatch PlaceSaved per newly linked place.
-        4. Return ExtractPlaceItems — `status="saved"` for new links,
-           `status="duplicate"` for the conflicts.
+        1. Upsert + embed every picker output (one v2 call).
+        2. Link to user_places via UserPlacesService.save_places. The
+           service raises DuplicateUserPlaceError and rolls back the
+           whole batch on any conflict — catch it, filter out the
+           conflicting place_ids, retry once with the rest.
+        3. Dispatch PlaceSaved per *newly* linked place (skipping
+           conflicts so taste-model regen doesn't re-fire for places
+           the user already saved).
+        4. Return ExtractPlaceItems: a flat list of places now
+           associated with the user. No per-item status field — the
+           saved/duplicate distinction is an internal optimization,
+           not part of the response contract (ADR-071).
 
-        v2 services are the single seam — extraction never reaches the
-        UserPlacesRepo directly. `DuplicateUserPlaceError.conflicts`
-        gives us the list of already-linked place_ids in one round trip.
+        v2 services are the single seam: extraction never reaches the
+        UserPlacesRepo directly.
         """
         cores = [candidate_to_core(c) for c in candidates]
         persisted: list[PlaceCore] = await self._upsert.upsert_and_embed(cores)
@@ -300,9 +308,29 @@ class ExtractionService:
             and persisted_by_pid[c.provider_id].id is not None
         ]
 
-        duplicate_place_ids = await self._save_or_collect_duplicates(
-            eligible_cores, user_id, source, source_url
-        )
+        duplicate_place_ids: set[str] = set()
+        if eligible_cores:
+            save_source = source or PlaceSource.manual
+            try:
+                await self._user_places.save_places(
+                    user_id=user_id,
+                    places=eligible_cores,
+                    source=save_source,
+                    source_url=source_url,
+                )
+            except DuplicateUserPlaceError as exc:
+                duplicate_place_ids = set(exc.conflicts)
+                non_duplicates = [
+                    c for c in eligible_cores
+                    if c.id and c.id not in duplicate_place_ids
+                ]
+                if non_duplicates:
+                    await self._user_places.save_places(
+                        user_id=user_id,
+                        places=non_duplicates,
+                        source=save_source,
+                        source_url=source_url,
+                    )
 
         items: list[ExtractPlaceItem] = []
         linked_place_ids: list[str] = []
@@ -315,17 +343,12 @@ class ExtractionService:
                 )
                 continue
 
-            status = (
-                "duplicate" if persisted_core.id in duplicate_place_ids else "saved"
-            )
             items.append(
                 ExtractPlaceItem(
-                    **_candidate_to_item_dict(
-                        c, _core_to_object(persisted_core), status=status
-                    )
+                    **_candidate_to_item_dict(c, _core_to_object(persisted_core))
                 )
             )
-            if status == "saved":
+            if persisted_core.id not in duplicate_place_ids:
                 linked_place_ids.append(persisted_core.id)
 
         if linked_place_ids:
@@ -338,48 +361,6 @@ class ExtractionService:
             await self._event_dispatcher.dispatch(event)
 
         return items
-
-    async def _save_or_collect_duplicates(
-        self,
-        eligible_cores: list[PlaceCore],
-        user_id: str,
-        source: PlaceSource | None,
-        source_url: str | None,
-    ) -> set[str]:
-        """Save eligible cores via UserPlacesService.save_places.
-
-        Returns the set of place_ids that were rejected as duplicates
-        (already linked to this user). Empty input → empty set.
-
-        UserPlacesService.save_places raises DuplicateUserPlaceError
-        and rolls back the whole batch on any conflict. Catch, filter
-        out the conflicts, and retry once with the rest.
-        """
-        if not eligible_cores:
-            return set()
-
-        save_source = source or PlaceSource.manual
-        try:
-            await self._user_places.save_places(
-                user_id=user_id,
-                places=eligible_cores,
-                source=save_source,
-                source_url=source_url,
-            )
-            return set()
-        except DuplicateUserPlaceError as exc:
-            duplicates = set(exc.conflicts)
-            non_duplicates = [
-                c for c in eligible_cores if c.id and c.id not in duplicates
-            ]
-            if non_duplicates:
-                await self._user_places.save_places(
-                    user_id=user_id,
-                    places=non_duplicates,
-                    source=save_source,
-                    source_url=source_url,
-                )
-            return duplicates
 
 
 def _core_to_object(core: PlaceCore) -> PlaceObject:
