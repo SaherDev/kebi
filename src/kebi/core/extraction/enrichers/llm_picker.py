@@ -63,51 +63,126 @@ You have THREE sources of information for each pick:
 2. The candidate's `categories` array from Google
    (e.g. `[museum, art_gallery, landmark]`).
 3. Common knowledge about the venue itself (the Van Gogh Museum is a
-   museum, Vondelpark is a park, the Louvre houses art).
+   museum, Vondelpark is a park, the Louvre houses art, Restaurant
+   POTONG is Bangkok Thai-Chinese fine dining, Côte by Mauro Colagreco
+   is Mediterranean/French).
 
 ## `categories` — pick 1–3 PlaceCategory values, MOST-SPECIFIC FIRST
 
 Use the candidate's existing `categories` array as your starting
 point — copy it onto your pick if it already describes the venue
 well. Override or refine ONLY when the venue's identity makes the
-fit obvious (e.g. a place Google labelled `establishment` that the
-caption clearly identifies as a `restaurant`).
-
-Empty `categories` on the search candidate means Google couldn't
-classify the place. Use your knowledge of the venue to fill 1–3
-values yourself — do not leave empty.
+fit obvious. Empty `categories` on the candidate means Google
+couldn't classify — fill 1–3 values yourself.
 
 ## `tags` — typed, source-tracked attributes
 
 Each tag has a `type` (one of: cuisine, dietary, feature, atmosphere,
-service, price, accessibility, time, season) and a `value` (free
-text — the picker can emit canonical values like "Thai" / "vegan" /
-"outdoor_seating" or freeform strings).
+service, price, accessibility, time, season) and a `value` (use
+canonical lowercase enum values like `Thai`, `upscale`, `dinner`,
+`outdoor_seating`, `moderate`).
 
-STRUCTURAL tags — fill confidently from the venue's identity even when
-the post says nothing descriptive:
-- atmosphere — pick the broad vibe(s) the venue's category implies
-  (a museum is `quiet`, a club is `lively`, a viewpoint is `scenic`).
-- service — when Google's data and the venue's identity make it
-  obvious (a restaurant has `dine_in`; a place named "X Delivery" has
-  `delivery`).
-- time / season — when the venue's hours / category clearly imply it
-  (a brunch spot is `brunch`; a club is `late_night`).
+**MINIMUM OUTPUT BAR** — for any venue you recognize from its name +
+categories, you MUST emit at least:
+- 1+ atmosphere tag (the venue's defining vibe)
+- 1+ time tag appropriate to its category (dinner for fine-dining,
+  morning/afternoon for cafes, late_night for bars/clubs)
+- service tags that the venue's identity implies (`dine_in` for any
+  restaurant, `reservable` for fine-dining, `takeout` if the venue
+  type supports it)
 
-CLAIM-LIKE tags — fill ONLY if the POST explicitly states or strongly
+STRUCTURAL tags — emit confidently from venue identity even when the
+post text is thin (hashtags-only counts as thin):
+- atmosphere — `cozy`, `romantic`, `trendy`, `quiet`, `lively`,
+  `intimate`, `upscale`, `casual`, `modern`, `traditional`, `scenic_view`,
+  `hidden_gem`, `instagram_worthy`.
+- service — `dine_in`, `takeout`, `delivery`, `reservable`,
+  `serves_breakfast`/`brunch`/`lunch`/`dinner`,
+  `serves_beer`/`wine`/`cocktails`.
+- time — `morning`, `brunch`, `lunch`, `afternoon`, `evening`, `night`,
+  `late_night`, `all_day`.
+- season — when the venue's identity makes it seasonal
+  (`summer` for beach bars, `winter` for hot-spring resorts).
+
+PARTIALLY STRUCTURAL — emit when the venue's identity strongly implies
+it; leave off for generic / unknown venues:
+- cuisine — emit when the venue is famously known for a specific
+  cuisine (chef-driven restaurants, Michelin-starred, brand-recognized).
+  Pure unknowns or generic eateries: leave off. Cuisine inference
+  follows the venue's identity, not the country
+  ("Pho" in Paris → cuisine=Vietnamese, not French).
+- price — emit when the venue's identity makes price tier obvious
+  (a Michelin-starred restaurant is `very_expensive`; a hawker stall
+  is `budget`).
+
+CLAIM-LIKE — fill ONLY when the POST explicitly states or strongly
 implies them:
-- cuisine — only if a dish name appears in caption/transcript/title.
-  Cuisine is inferred from the dish, not the country.
-  "Hainanese Chicken Rice" in Bangkok → cuisine=Chinese (NOT Thai).
-  "Pho" in Paris → cuisine=Vietnamese (NOT French).
-  If the post mentions no dish, leave cuisine off.
 - dietary — only if the post mentions vegetarian / vegan / halal /
   gluten-free options.
-- price — only if the post indicates expensive / cheap / splurge /
-  budget / shows price tags / mentions Michelin.
 - feature — physical attributes only if the post explicitly mentions
   them (outdoor seating, rooftop, dog-friendly, etc.).
 - accessibility — only if explicitly mentioned in the post.
+
+# Examples
+
+## Example 1 — thin caption (hashtags only), recognized fine-dining
+
+Input:
+  text:
+    caption: "#eatbangkok #toprestaurants #bangkok"
+    transcript: ""
+    hashtags: ["eatbangkok", "toprestaurants", "bangkok"]
+  search_candidates:
+    - provider_id: "google:ChIJabc123"
+      name: "Restaurant POTONG"
+      location: "Khet Samphanthawong, Thailand"
+      categories: restaurant
+
+Expected output:
+{
+  "picks": [
+    {
+      "provider_id": "google:ChIJabc123",
+      "categories": ["restaurant"],
+      "tags": [
+        {"type": "cuisine",    "value": "Thai"},
+        {"type": "atmosphere", "value": "upscale"},
+        {"type": "atmosphere", "value": "modern"},
+        {"type": "time",       "value": "dinner"},
+        {"type": "service",    "value": "dine_in"},
+        {"type": "service",    "value": "reservable"},
+        {"type": "price",      "value": "very_expensive"}
+      ],
+      "evidence_fields": ["hashtag", "caption"]
+    }
+  ]
+}
+
+## Example 2 — unrecognized generic venue, thin caption
+
+Input:
+  text:
+    caption: "Found this place 😋"
+    hashtags: []
+  search_candidates:
+    - provider_id: "google:ChIJxyz789"
+      name: "Lily's Corner Mart"
+      location: "Bangkok, Thailand"
+      categories: convenience_store
+
+Expected output:
+{
+  "picks": [
+    {
+      "provider_id": "google:ChIJxyz789",
+      "categories": ["convenience_store"],
+      "tags": [
+        {"type": "time", "value": "all_day"}
+      ],
+      "evidence_fields": ["caption"]
+    }
+  ]
+}
 
 # Special cases
 
