@@ -1,0 +1,8 @@
+{
+  "failure_message": "No venue could be extracted from the post \u2014 the caption, transcript, and visible text didn't contain a recognizable place name.",
+  "failure_reason": "no_candidates",
+  "raw_input": "https://maps.app.goo.gl/bgQMH5vpoWZNsRX18",
+  "request_id": "bc01f77bd9444b5697286ed6b60de4d5",
+  "results": [],
+  "status": "failed"
+}
