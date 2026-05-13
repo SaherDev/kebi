@@ -188,7 +188,7 @@ class _FakeUpsertService:
     def __init__(self, repo: _FakeRepo) -> None:
         self._repo = repo
 
-    async def upsert_many(
+    async def upsert_and_embed(
         self, candidates: list[PlaceCore]
     ) -> list[PlaceCore]:
         return await self._repo.upsert_places(candidates)

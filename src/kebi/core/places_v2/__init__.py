@@ -59,7 +59,7 @@ from .tags import (
 )
 from .upsert_service import PlaceUpsertService
 from .user_places_repo import UserPlacesRepo
-from .user_places_service import UserPlacesService
+from .user_places_service import DuplicateUserPlaceError, UserPlacesService
 
 __all__ = [
     # tag vocabulary
@@ -118,6 +118,8 @@ __all__ = [
     "PlaceUpsertService",
     "PlaceWipeService",
     "UserPlacesService",
+    # errors
+    "DuplicateUserPlaceError",
     # constants
     "EMBEDDING_DIMENSIONS",
 ]

@@ -37,7 +37,7 @@ def _make_service(
         get_by_ids=AsyncMock(return_value=[]),
     )
     upsert_service = upsert_service or MagicMock(
-        upsert_many=AsyncMock(return_value=[]),
+        upsert_and_embed=AsyncMock(return_value=[]),
     )
     return PlacesSearchService(
         repo=repo,
@@ -112,7 +112,7 @@ class TestColdPath:
             search=AsyncMock(return_value=[google_result]),
             get_by_ids=AsyncMock(return_value=[]),
         )
-        upsert = MagicMock(upsert_many=AsyncMock(return_value=[_core("g1")]))
+        upsert = MagicMock(upsert_and_embed=AsyncMock(return_value=[_core("g1")]))
 
         svc = _make_service(
             repo=repo, cache=cache, client=client, upsert_service=upsert
@@ -122,7 +122,7 @@ class TestColdPath:
         )
 
         client.search.assert_awaited_once()
-        upsert.upsert_many.assert_awaited_once()
+        upsert.upsert_and_embed.assert_awaited_once()
         cache.mset.assert_awaited_once()
         assert results == [google_result]
 
@@ -160,13 +160,13 @@ class TestColdPath:
         repo = MagicMock(find=AsyncMock(return_value=[]))
         cache = MagicMock(mget=AsyncMock(return_value={}), mset=AsyncMock())
         client = MagicMock(search=AsyncMock(return_value=[]))
-        upsert = MagicMock(upsert_many=AsyncMock(return_value=[]))
+        upsert = MagicMock(upsert_and_embed=AsyncMock(return_value=[]))
         svc = _make_service(
             repo=repo, cache=cache, client=client, upsert_service=upsert
         )
         await svc.find(PlaceQuery(place_name="ghost town"))
 
-        upsert.upsert_many.assert_not_awaited()
+        upsert.upsert_and_embed.assert_not_awaited()
         cache.mset.assert_not_awaited()
 
     async def test_cold_path_persists_then_returns_results(self) -> None:
@@ -175,15 +175,15 @@ class TestColdPath:
         repo = MagicMock(find=AsyncMock(return_value=[]))
         cache = MagicMock(mget=AsyncMock(return_value={}), mset=AsyncMock())
         client = MagicMock(search=AsyncMock(return_value=results_in))
-        upsert = MagicMock(upsert_many=AsyncMock(return_value=[]))
+        upsert = MagicMock(upsert_and_embed=AsyncMock(return_value=[]))
         svc = _make_service(
             repo=repo, cache=cache, client=client, upsert_service=upsert
         )
         results = await svc.find(PlaceQuery(place_name="busy"))
 
-        upsert.upsert_many.assert_awaited_once()
+        upsert.upsert_and_embed.assert_awaited_once()
         cache.mset.assert_awaited_once_with(results_in)
-        upsert_arg = upsert.upsert_many.call_args.args[0]
+        upsert_arg = upsert.upsert_and_embed.call_args.args[0]
         assert len(upsert_arg) == 3
         assert results == results_in
 
@@ -235,14 +235,14 @@ class TestFindEnrichment:
             search=AsyncMock(return_value=[]),
             get_by_ids=AsyncMock(return_value=[_object("stale")]),
         )
-        upsert = MagicMock(upsert_many=AsyncMock(return_value=[]))
+        upsert = MagicMock(upsert_and_embed=AsyncMock(return_value=[]))
         svc = _make_service(
             repo=repo, cache=cache, client=client, upsert_service=upsert
         )
         await svc.find(PlaceQuery(), limit=20)
 
         client.get_by_ids.assert_awaited_once_with(["google:stale"])
-        upsert.upsert_many.assert_awaited_once()
+        upsert.upsert_and_embed.assert_awaited_once()
         cache.mset.assert_awaited_once()
 
     async def test_partial_cache_hit_fetches_only_missing(self) -> None:
@@ -261,7 +261,7 @@ class TestFindEnrichment:
                 return_value=[_object("b"), _object("c")]
             ),
         )
-        upsert = MagicMock(upsert_many=AsyncMock(return_value=[]))
+        upsert = MagicMock(upsert_and_embed=AsyncMock(return_value=[]))
         svc = _make_service(
             repo=repo, cache=cache, client=client, upsert_service=upsert
         )
@@ -374,14 +374,14 @@ class TestFindEnrichment:
             search=AsyncMock(return_value=[]),
             get_by_ids=AsyncMock(return_value=[]),
         )
-        upsert = MagicMock(upsert_many=AsyncMock(return_value=[]))
+        upsert = MagicMock(upsert_and_embed=AsyncMock(return_value=[]))
         svc = _make_service(
             repo=repo, cache=cache, client=client, upsert_service=upsert
         )
         results = await svc.find(PlaceQuery(), limit=5)
 
         client.get_by_ids.assert_awaited_once_with(["google:ghost"])
-        upsert.upsert_many.assert_not_awaited()
+        upsert.upsert_and_embed.assert_not_awaited()
         cache.mset.assert_not_awaited()
         assert len(results) == 1
         assert results[0].location is None
@@ -411,14 +411,14 @@ class TestPostTTLRecovery:
             search=AsyncMock(return_value=[]),
             get_by_ids=AsyncMock(return_value=[fresh]),
         )
-        upsert = MagicMock(upsert_many=AsyncMock(return_value=[]))
+        upsert = MagicMock(upsert_and_embed=AsyncMock(return_value=[]))
         svc = _make_service(
             repo=repo, cache=cache, client=client, upsert_service=upsert
         )
         results = await svc.find(PlaceQuery(), limit=5)
 
         client.get_by_ids.assert_awaited_once_with(["google:p1"])
-        upsert.upsert_many.assert_awaited_once()
+        upsert.upsert_and_embed.assert_awaited_once()
         cache.mset.assert_awaited_once_with([fresh])
         assert results[0].location is not None
         assert results[0].location.lat == 13.7
@@ -439,7 +439,7 @@ class TestPostTTLRecovery:
             search=AsyncMock(return_value=[]),
             get_by_ids=AsyncMock(return_value=[_object("p2")]),
         )
-        upsert = MagicMock(upsert_many=AsyncMock(return_value=[]))
+        upsert = MagicMock(upsert_and_embed=AsyncMock(return_value=[]))
         svc = _make_service(
             repo=repo, cache=cache, client=client, upsert_service=upsert
         )
@@ -671,7 +671,7 @@ class TestFindContract:
             search=AsyncMock(return_value=[]),
             get_by_ids=AsyncMock(return_value=[_object("s"), _object("f")]),
         )
-        upsert = MagicMock(upsert_many=AsyncMock(return_value=[]))
+        upsert = MagicMock(upsert_and_embed=AsyncMock(return_value=[]))
         svc = _make_service(
             repo=repo, cache=cache, client=client, upsert_service=upsert
         )
@@ -679,7 +679,7 @@ class TestFindContract:
 
         passed = client.get_by_ids.call_args.args[0]
         assert set(passed) == {"google:s", "google:f"}
-        upsert.upsert_many.assert_awaited_once()
+        upsert.upsert_and_embed.assert_awaited_once()
         cache.mset.assert_awaited_once()
         assert len(results) == 2
         assert {r.provider_id for r in results} == {"google:s", "google:f"}
@@ -695,7 +695,7 @@ class TestFindContract:
             search=AsyncMock(return_value=[]),
             get_by_ids=AsyncMock(return_value=[]),
         )
-        upsert = MagicMock(upsert_many=AsyncMock(return_value=[]))
+        upsert = MagicMock(upsert_and_embed=AsyncMock(return_value=[]))
         svc = _make_service(
             repo=repo, cache=cache, client=client, upsert_service=upsert
         )
@@ -703,7 +703,7 @@ class TestFindContract:
 
         client.search.assert_not_awaited()
         client.get_by_ids.assert_not_awaited()
-        upsert.upsert_many.assert_not_awaited()
+        upsert.upsert_and_embed.assert_not_awaited()
         cache.mset.assert_not_awaited()
 
 
@@ -737,13 +737,13 @@ class TestGetByIds:
             search=AsyncMock(return_value=[]),
             get_by_ids=AsyncMock(return_value=[fetched]),
         )
-        upsert = MagicMock(upsert_many=AsyncMock(return_value=[]))
+        upsert = MagicMock(upsert_and_embed=AsyncMock(return_value=[]))
         svc = _make_service(cache=cache, client=client, upsert_service=upsert)
 
         result = await svc.get_by_ids(["google:a", "google:b"])
 
         client.get_by_ids.assert_awaited_once_with(["google:b"])
-        upsert.upsert_many.assert_awaited_once()
+        upsert.upsert_and_embed.assert_awaited_once()
         cache.mset.assert_awaited_once_with([fetched])
         assert result["google:a"].provider_id == "google:a"
         assert result["google:b"] is fetched
@@ -755,13 +755,13 @@ class TestGetByIds:
             search=AsyncMock(return_value=[]),
             get_by_ids=AsyncMock(return_value=[]),
         )
-        upsert = MagicMock(upsert_many=AsyncMock(return_value=[]))
+        upsert = MagicMock(upsert_and_embed=AsyncMock(return_value=[]))
         svc = _make_service(cache=cache, client=client, upsert_service=upsert)
 
         result = await svc.get_by_ids(["google:ghost"])
 
         client.get_by_ids.assert_awaited_once_with(["google:ghost"])
-        upsert.upsert_many.assert_not_awaited()
+        upsert.upsert_and_embed.assert_not_awaited()
         cache.mset.assert_not_awaited()
         assert result == {}
 
@@ -787,13 +787,13 @@ class TestGetByIds:
     async def test_single_id_cache_miss_fetches_one(self) -> None:
         cache = MagicMock(mget=AsyncMock(return_value={}), mset=AsyncMock())
         client = MagicMock(get_by_ids=AsyncMock(return_value=[_object("s")]))
-        upsert = MagicMock(upsert_many=AsyncMock(return_value=[]))
+        upsert = MagicMock(upsert_and_embed=AsyncMock(return_value=[]))
         svc = _make_service(cache=cache, client=client, upsert_service=upsert)
 
         result = await svc.get_by_ids(["google:s"])
 
         client.get_by_ids.assert_awaited_once_with(["google:s"])
-        upsert.upsert_many.assert_awaited_once()
+        upsert.upsert_and_embed.assert_awaited_once()
         cache.mset.assert_awaited_once()
         assert "google:s" in result
 
@@ -802,7 +802,7 @@ class TestGetByIds:
         cached = {"google:b": _object("b"), "google:d": _object("d")}
         cache = MagicMock(mget=AsyncMock(return_value=cached), mset=AsyncMock())
         client = MagicMock(get_by_ids=AsyncMock(return_value=[]))
-        upsert = MagicMock(upsert_many=AsyncMock(return_value=[]))
+        upsert = MagicMock(upsert_and_embed=AsyncMock(return_value=[]))
         svc = _make_service(cache=cache, client=client, upsert_service=upsert)
 
         await svc.get_by_ids(["google:a", "google:b", "google:c", "google:d"])
@@ -816,7 +816,7 @@ class TestGetByIds:
         client = MagicMock(
             get_by_ids=AsyncMock(return_value=[_object("a"), _object("c")])
         )
-        upsert = MagicMock(upsert_many=AsyncMock(return_value=[]))
+        upsert = MagicMock(upsert_and_embed=AsyncMock(return_value=[]))
         svc = _make_service(cache=cache, client=client, upsert_service=upsert)
 
         result = await svc.get_by_ids(["google:a", "google:b", "google:c"])
@@ -827,17 +827,17 @@ class TestGetByIds:
         assert {p.provider_id for p in msetted} == {"google:a", "google:c"}
 
     async def test_persist_writes_in_single_batch(self) -> None:
-        """All fetched results upserted in one upsert_many + one mset."""
+        """All fetched results upserted in one upsert_and_embed + one mset."""
         fetched = [_object(p) for p in ("a", "b", "c")]
         cache = MagicMock(mget=AsyncMock(return_value={}), mset=AsyncMock())
         client = MagicMock(get_by_ids=AsyncMock(return_value=fetched))
-        upsert = MagicMock(upsert_many=AsyncMock(return_value=[]))
+        upsert = MagicMock(upsert_and_embed=AsyncMock(return_value=[]))
         svc = _make_service(cache=cache, client=client, upsert_service=upsert)
 
         await svc.get_by_ids(["google:a", "google:b", "google:c"])
 
-        upsert.upsert_many.assert_awaited_once()
-        upsert_arg = upsert.upsert_many.call_args.args[0]
+        upsert.upsert_and_embed.assert_awaited_once()
+        upsert_arg = upsert.upsert_and_embed.call_args.args[0]
         assert len(upsert_arg) == 3
         cache.mset.assert_awaited_once_with(fetched)
 

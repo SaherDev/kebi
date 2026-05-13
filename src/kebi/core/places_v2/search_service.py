@@ -100,5 +100,5 @@ class PlacesSearchService:
         """
         if not places:
             return
-        await self._upsert.upsert_many([p.to_core() for p in places])
+        await self._upsert.upsert_and_embed([p.to_core() for p in places])
         await self._cache.mset(places)

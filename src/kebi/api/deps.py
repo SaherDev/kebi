@@ -559,11 +559,39 @@ def get_google_places_client_v2() -> GooglePlacesClientV2:
     return GooglePlacesClientV2(api_key=get_env().GOOGLE_API_KEY or "")
 
 
+def get_embeddings_repo_v2(
+    db_session: AsyncSession = Depends(get_session),  # noqa: B008
+) -> EmbeddingsRepo:
+    """FastAPI dependency providing EmbeddingsRepo (place_embeddings_v2)."""
+    return EmbeddingsRepo(db_session)
+
+
+def get_embedding_service_v2(
+    repo: EmbeddingsRepo = Depends(get_embeddings_repo_v2),  # noqa: B008
+    embedder: EmbedderProtocol = Depends(get_embedder_dep),  # noqa: B008
+    config: AppConfig = Depends(get_config),  # noqa: B008
+) -> EmbeddingServiceV2:
+    """FastAPI dependency providing EmbeddingService (places_v2 documents).
+
+    Doc embeds run at save time and rarely repeat — no cache wrapper here;
+    the diff-then-embed text_hash check on the repo already short-circuits
+    no-op re-saves.
+    """
+    return EmbeddingServiceV2(
+        repo=repo,
+        embedder=embedder,
+        model_name=config.models["embedder"].model,
+    )
+
+
 def get_place_upsert_service(
     repo: PlacesRepo = Depends(get_places_v2_repo),  # noqa: B008
+    embedding_service: EmbeddingServiceV2 = Depends(  # noqa: B008
+        get_embedding_service_v2
+    ),
 ) -> PlaceUpsertService:
     """FastAPI dependency providing PlaceUpsertService (places_v2)."""
-    return PlaceUpsertService(repo=repo)
+    return PlaceUpsertService(repo=repo, embedding_service=embedding_service)
 
 
 def get_places_search_service(
@@ -595,33 +623,8 @@ def get_user_places_service(
 
 
 # ---------------------------------------------------------------------------
-# places_v2 — embeddings + hybrid search
+# places_v2 — hybrid search
 # ---------------------------------------------------------------------------
-
-
-def get_embeddings_repo_v2(
-    db_session: AsyncSession = Depends(get_session),  # noqa: B008
-) -> EmbeddingsRepo:
-    """FastAPI dependency providing EmbeddingsRepo (place_embeddings_v2)."""
-    return EmbeddingsRepo(db_session)
-
-
-def get_embedding_service_v2(
-    repo: EmbeddingsRepo = Depends(get_embeddings_repo_v2),  # noqa: B008
-    embedder: EmbedderProtocol = Depends(get_embedder_dep),  # noqa: B008
-    config: AppConfig = Depends(get_config),  # noqa: B008
-) -> EmbeddingServiceV2:
-    """FastAPI dependency providing EmbeddingService (places_v2 documents).
-
-    Doc embeds run at save time and rarely repeat — no cache wrapper here;
-    the diff-then-embed text_hash check on the repo already short-circuits
-    no-op re-saves.
-    """
-    return EmbeddingServiceV2(
-        repo=repo,
-        embedder=embedder,
-        model_name=config.models["embedder"].model,
-    )
 
 
 def get_query_embedder_v2() -> EmbedderProtocol:

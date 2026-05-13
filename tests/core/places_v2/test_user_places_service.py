@@ -14,7 +14,10 @@ from kebi.core.places_v2.models import (
     SavedPlaceView,
     UserPlace,
 )
-from kebi.core.places_v2.user_places_service import UserPlacesService
+from kebi.core.places_v2.user_places_service import (
+    DuplicateUserPlaceError,
+    UserPlacesService,
+)
 
 
 def _now() -> datetime:
@@ -114,3 +117,97 @@ class TestUpdateStatus:
         )
         with pytest.raises(ValueError, match="user_place_id not found"):
             await svc.update_status("missing-id", visited=True)
+
+
+class TestSavePlaces:
+    async def test_empty_returns_empty(self) -> None:
+        places_repo = MagicMock()
+        user_places_repo = MagicMock(
+            get_existing_place_ids=AsyncMock(return_value=set()),
+            save_user_places=AsyncMock(return_value=[]),
+        )
+        svc = UserPlacesService(
+            places_repo=places_repo, user_places_repo=user_places_repo
+        )
+        result = await svc.save_places(
+            user_id="u1",
+            places=[],
+            source=PlaceSource.tiktok,
+            source_url="https://tiktok.com/x",
+        )
+        assert result == []
+        user_places_repo.get_existing_place_ids.assert_not_called()
+        user_places_repo.save_user_places.assert_not_called()
+
+    async def test_builds_rows_with_approved_false_and_persists(self) -> None:
+        cores = [_core("p1"), _core("p2")]
+        places_repo = MagicMock()
+        user_places_repo = MagicMock(
+            get_existing_place_ids=AsyncMock(return_value=set()),
+            save_user_places=AsyncMock(side_effect=lambda rows: rows),
+        )
+        svc = UserPlacesService(
+            places_repo=places_repo, user_places_repo=user_places_repo
+        )
+
+        result = await svc.save_places(
+            user_id="u1",
+            places=cores,
+            source=PlaceSource.tiktok,
+            source_url="https://tiktok.com/x",
+        )
+
+        user_places_repo.get_existing_place_ids.assert_awaited_once_with(
+            "u1", ["p1", "p2"]
+        )
+        assert len(result) == 2
+        assert {r.place_id for r in result} == {"p1", "p2"}
+        assert all(r.user_id == "u1" for r in result)
+        assert all(r.approved is False for r in result)
+        assert all(r.visited is False for r in result)
+        assert all(r.liked is None for r in result)
+        assert all(r.note is None for r in result)
+        assert all(r.source == PlaceSource.tiktok for r in result)
+        assert all(r.source_url == "https://tiktok.com/x" for r in result)
+        # user_place_id is fresh per row
+        assert len({r.user_place_id for r in result}) == 2
+
+    async def test_rejects_core_without_id(self) -> None:
+        bad = PlaceCore(place_name="No-id", provider_id="google:none")
+        places_repo = MagicMock()
+        user_places_repo = MagicMock(
+            get_existing_place_ids=AsyncMock(return_value=set()),
+            save_user_places=AsyncMock(return_value=[]),
+        )
+        svc = UserPlacesService(
+            places_repo=places_repo, user_places_repo=user_places_repo
+        )
+        with pytest.raises(ValueError, match="no id"):
+            await svc.save_places(
+                user_id="u1",
+                places=[bad],
+                source=PlaceSource.manual,
+                source_url=None,
+            )
+        user_places_repo.save_user_places.assert_not_called()
+
+    async def test_duplicate_aborts_whole_batch(self) -> None:
+        places_repo = MagicMock()
+        user_places_repo = MagicMock(
+            get_existing_place_ids=AsyncMock(return_value={"p1"}),
+            save_user_places=AsyncMock(return_value=[]),
+        )
+        svc = UserPlacesService(
+            places_repo=places_repo, user_places_repo=user_places_repo
+        )
+
+        with pytest.raises(DuplicateUserPlaceError) as exc_info:
+            await svc.save_places(
+                user_id="u1",
+                places=[_core("p1"), _core("p2")],
+                source=PlaceSource.tiktok,
+                source_url="https://tiktok.com/x",
+            )
+
+        assert exc_info.value.conflicts == ["p1"]
+        user_places_repo.save_user_places.assert_not_called()
