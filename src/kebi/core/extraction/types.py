@@ -27,9 +27,14 @@ from kebi.core.places import (
     PlaceObject,
     PlaceProvider,
     PlacesMatchQuality,
-    PlaceSource,
     PlaceType,
 )
+
+# PlaceSource is v2-sourced now (spec 030 Phase 2 atomic migration).
+# Every other place-shape import on this line stays legacy for the
+# remainder of Phase 2; they migrate atomically in Phase 3 alongside
+# the picker / dedup / persistence rewrite.
+from kebi.core.places_v2 import PlaceSource
 
 __all__ = [
     "Producer",

@@ -10,7 +10,7 @@ from kebi.core.extraction.enrichers.google_maps_list import (
     GoogleMapsListEnricher,
 )
 from kebi.core.extraction.types import ExtractionContext
-from kebi.core.places import PlaceSource
+from kebi.core.places_v2 import PlaceSource
 
 
 def _ctx(url: str = "https://maps.app.goo.gl/9KPNCHsoi5s69xE59") -> ExtractionContext:
@@ -134,4 +134,4 @@ class TestApifyResponse:
 class TestSourceGateMembership:
     def test_allowed_sources_is_google_maps_only(self) -> None:
         enricher = GoogleMapsListEnricher(token="t")
-        assert enricher.allowed_sources == frozenset({PlaceSource.google_maps})
+        assert enricher.allowed_sources == frozenset({PlaceSource.google_maps_list})

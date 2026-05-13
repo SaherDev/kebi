@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 
-from kebi.core.places import PlaceSource
+from kebi.core.places_v2 import PlaceSource
 
 _TIKTOK_PHOTO_PATH_RE = re.compile(r"(/@[^/]+)/photo/", re.IGNORECASE)
 
@@ -57,5 +57,5 @@ def source_from_url(url: str | None) -> PlaceSource | None:
         or "google.com/maps" in lowered
         or "maps.google.com" in lowered
     ):
-        return PlaceSource.google_maps
+        return PlaceSource.google_maps_list
     return None

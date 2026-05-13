@@ -39,7 +39,7 @@ from kebi.core.extraction.types import (
     Medium,
     Producer,
 )
-from kebi.core.places import PlaceSource
+from kebi.core.places_v2 import PlaceSource
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +54,7 @@ _DEFAULT_MAX_PLACES = 100
 class GoogleMapsListEnricher(SourceFilteredEnricher):
     """Pulls a Google Maps shared list via the Apify scraper actor.
 
-    Gated to `PlaceSource.google_maps`. Skips silently when the Apify
+    Gated to `PlaceSource.google_maps_list`. Skips silently when the Apify
     token isn't configured (no candidates appended; the rest of the
     cascade keeps running). Exceptions propagate to the surrounding
     `CircuitBreakerEnricher` so a degraded Apify doesn't keep retrying
@@ -66,7 +66,7 @@ class GoogleMapsListEnricher(SourceFilteredEnricher):
         token: str | None = None,
         timeout_seconds: float = _DEFAULT_TIMEOUT_SECONDS,
     ) -> None:
-        super().__init__(allowed_sources={PlaceSource.google_maps})
+        super().__init__(allowed_sources={PlaceSource.google_maps_list})
         # Lazy-resolve the token so tests can construct the enricher
         # without touching the env, but production callers can pass it
         # explicitly if they want.

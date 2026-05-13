@@ -9,7 +9,7 @@ from kebi.core.extraction.types import (
     Medium,
     Producer,
 )
-from kebi.core.places import PlaceSource
+from kebi.core.places_v2 import PlaceSource
 
 _OEMBED_URL = "https://www.tiktok.com/oembed"
 _TIMEOUT_SECONDS = 10.0  # TODO: move to config if oEmbed URL needs per-env override

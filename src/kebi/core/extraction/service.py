@@ -20,9 +20,32 @@ from kebi.core.extraction.persistence import (
 )
 from kebi.core.extraction.status_repository import ExtractionStatusRepository
 from kebi.core.extraction.url_source import normalize_url, source_from_url
-from kebi.core.places import PlaceSource
+from kebi.core.places import PlaceSource as LegacyPlaceSource
+from kebi.core.places_v2 import PlaceSource
 
 logger = logging.getLogger(__name__)
+
+
+# TEMP — spec 030 Phase 2 boundary.
+# `ExtractionPersistenceService` still expects the legacy PlaceSource enum
+# because persistence.py is migrating to v2 in Phase 3. This shim converts
+# the v2 source we now derive from URLs back to the legacy enum at the
+# single call boundary so Phase 2 ships type-clean. Delete in Phase 3 when
+# persistence.py is removed.
+_V2_TO_LEGACY_SOURCE: dict[PlaceSource, LegacyPlaceSource] = {
+    PlaceSource.tiktok: LegacyPlaceSource.tiktok,
+    PlaceSource.instagram: LegacyPlaceSource.instagram,
+    PlaceSource.youtube: LegacyPlaceSource.youtube,
+    PlaceSource.google_maps_list: LegacyPlaceSource.google_maps,
+    PlaceSource.manual: LegacyPlaceSource.manual,
+    # PlaceSource.kebi has no legacy equivalent; falls through to None.
+}
+
+
+def _to_legacy_source(source: PlaceSource | None) -> LegacyPlaceSource | None:
+    if source is None:
+        return None
+    return _V2_TO_LEGACY_SOURCE.get(source)
 
 # Default per-request candidate cap. Hard cap on what the pipeline will
 # hand to Google Places validation (and therefore the most places a
@@ -35,7 +58,7 @@ _SOURCE_LABELS: dict[PlaceSource, str] = {
     PlaceSource.tiktok: "the TikTok video",
     PlaceSource.instagram: "the Instagram post",
     PlaceSource.youtube: "the YouTube video",
-    PlaceSource.google_maps: "the Google Maps list",
+    PlaceSource.google_maps_list: "the Google Maps list",
     PlaceSource.manual: "what you added or wrote",
 }
 
@@ -209,7 +232,10 @@ class ExtractionService:
                 )
             else:
                 outcomes = await self._persistence.save_and_emit(
-                    result, user_id, source_url=parsed.url, source=source
+                    result,
+                    user_id,
+                    source_url=parsed.url,
+                    source=_to_legacy_source(source),
                 )
                 items = [
                     ExtractPlaceItem(**_outcome_to_item_dict(o))
