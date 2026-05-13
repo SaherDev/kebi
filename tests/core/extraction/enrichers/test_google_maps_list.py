@@ -79,7 +79,6 @@ class TestApifyResponse:
             k.producer.value == "google_maps_list" for k in ctx.known_places
         )
         assert all(k.medium.value == "list" for k in ctx.known_places)
-        assert ctx.search_matches == []
 
     async def test_skips_items_without_a_name(self) -> None:
         enricher = GoogleMapsListEnricher(token="apify-token")

@@ -1,4 +1,4 @@
-"""Tests for extraction-cascade types."""
+"""Tests for extraction-cascade types (v2 vocabulary)."""
 
 from kebi.core.extraction.types import (
     Evidence,
@@ -7,16 +7,9 @@ from kebi.core.extraction.types import (
     KnownPlace,
     Medium,
     Producer,
-    SearchMatch,
     ValidatedCandidate,
 )
-from kebi.core.places import (
-    LocationContext,
-    PlaceAttributes,
-    PlaceProvider,
-    PlacesMatchQuality,
-    PlaceType,
-)
+from kebi.core.places_v2 import LocationContext, PlaceCategory, PlaceTag, TagType
 
 
 def _evidence(
@@ -84,10 +77,8 @@ class TestEvidence:
     def test_frozen_and_hashable(self) -> None:
         a = _evidence()
         b = _evidence()
-        # Same content → equal and hash-equal (frozen dataclass).
         assert a == b
         assert hash(a) == hash(b)
-        # Set semantics work for dedup.
         assert len({a, b}) == 1
 
     def test_different_medium_distinct(self) -> None:
@@ -105,56 +96,19 @@ class TestEvidence:
         assert dict(e.metadata)["image_count"] == 5
 
 
-class TestSearchMatch:
-    def test_holds_google_metadata(self) -> None:
-        m = SearchMatch(
-            query="Fuji Ramen",
-            query_producer=Producer.GOOGLE_MAPS_LIST,
-            query_medium=Medium.LIST,
-            validated_name="Fuji Ramen Bangkok",
-            provider=PlaceProvider.google,
-            external_id="ChIJ123",
-            match_quality=PlacesMatchQuality.EXACT,
-            lat=13.7,
-            lng=100.5,
-            address="Sukhumvit, Bangkok",
-            place_types=("restaurant", "food"),
-        )
-        assert m.external_id == "ChIJ123"
-        assert m.match_quality == PlacesMatchQuality.EXACT
-        assert m.place_types == ("restaurant", "food")
-
-    def test_frozen_and_hashable(self) -> None:
-        a = SearchMatch(
-            query="Joe",
-            query_producer=Producer.GOOGLE_MAPS_LIST,
-            query_medium=Medium.LIST,
-            validated_name="Joe's Pizza",
-            provider=PlaceProvider.google,
-            external_id="ChIJ_joe",
-            match_quality=PlacesMatchQuality.EXACT,
-        )
-        b = SearchMatch(
-            query="Joe",
-            query_producer=Producer.GOOGLE_MAPS_LIST,
-            query_medium=Medium.LIST,
-            validated_name="Joe's Pizza",
-            provider=PlaceProvider.google,
-            external_id="ChIJ_joe",
-            match_quality=PlacesMatchQuality.EXACT,
-        )
-        assert a == b
-        assert hash(a) == hash(b)
-
-
 class TestExtractionContext:
     def test_instantiation_url(self) -> None:
         ctx = ExtractionContext(url="https://tiktok.com/v/123", user_id="u1")
         assert ctx.url == "https://tiktok.com/v/123"
         assert ctx.user_id == "u1"
-        assert ctx.search_matches == []
         assert ctx.known_places == []
         assert ctx.text_evidence == []
+
+    def test_source_derived_from_url(self) -> None:
+        from kebi.core.places_v2 import PlaceSource
+
+        ctx = ExtractionContext(url="https://www.instagram.com/p/x/", user_id="u1")
+        assert ctx.source == PlaceSource.instagram
 
     def test_independent_per_instance(self) -> None:
         ctx1 = ExtractionContext(url=None, user_id="u1")
@@ -165,7 +119,6 @@ class TestExtractionContext:
                 name="X", producer=Producer.GOOGLE_MAPS_LIST, medium=Medium.LIST
             )
         )
-        assert ctx2.search_matches == []
         assert ctx2.text_evidence == []
         assert ctx2.known_places == []
 
@@ -184,24 +137,22 @@ class TestKnownPlace:
 
 
 class TestValidatedCandidate:
-    def test_instantiation(self) -> None:
+    def test_instantiation_v2_vocab(self) -> None:
         vc = ValidatedCandidate(
             place_name="Fuji Ramen",
-            place_type=PlaceType.food_and_drink,
-            provider=PlaceProvider.google,
-            external_id="ChIJ123",
+            provider_id="google:ChIJ123",
+            categories=[PlaceCategory.restaurant],
+            tags=[PlaceTag(type=TagType.cuisine, value="Japanese", source="llm")],
             confidence=0.95,
             evidence=[_evidence()],
-            subcategory="restaurant",
-            attributes=PlaceAttributes(
-                cuisine="ramen",
-                location_context=LocationContext(city="Bangkok"),
-            ),
+            subcategory="ramen",
+            location=LocationContext(city="Bangkok"),
         )
         assert vc.confidence == 0.95
-        assert vc.provider == PlaceProvider.google
-        assert vc.external_id == "ChIJ123"
-        assert vc.attributes.cuisine == "ramen"
-        assert vc.attributes.location_context is not None
-        assert vc.attributes.location_context.city == "Bangkok"
+        assert vc.provider_id == "google:ChIJ123"
+        assert vc.categories == [PlaceCategory.restaurant]
+        assert len(vc.tags) == 1
+        assert vc.tags[0].value == "Japanese"
+        assert vc.location is not None
+        assert vc.location.city == "Bangkok"
         assert len(vc.evidence) == 1

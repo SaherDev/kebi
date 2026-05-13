@@ -16,7 +16,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-from kebi.core.places import PlaceObject
+from kebi.core.places_v2 import PlaceObject
 
 
 class EvidenceDTO(BaseModel):

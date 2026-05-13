@@ -19,15 +19,15 @@ from kebi.api.schemas.extract_place import (
     ExtractPlaceItem,
     ExtractPlaceResponse,
 )
-from kebi.core.places import PlaceObject, PlaceType
+from kebi.core.places_v2 import PlaceCategory, PlaceObject
 
 
 def _make_place(name: str = "Nara Eatery", place_id: str = "pl_01HZ001") -> PlaceObject:
     return PlaceObject(
-        place_id=place_id,
+        id=place_id,
+        provider_id="google:" + place_id,
         place_name=name,
-        place_type=PlaceType.food_and_drink,
-        subcategory="restaurant",
+        categories=[PlaceCategory.restaurant],
     )
 
 

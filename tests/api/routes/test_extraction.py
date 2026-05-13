@@ -28,33 +28,17 @@ def client(mock_status_repo: AsyncMock) -> TestClient:
 
 def _sample_place() -> dict:
     return {
-        "place_id": "pl_test_01",
-        "place_name": "Nara Eatery",
-        "place_type": "food_and_drink",
-        "subcategory": "restaurant",
-        "tags": ["ramen"],
-        "attributes": {
-            "cuisine": "japanese",
-            "price_hint": None,
-            "ambiance": None,
-            "dietary": [],
-            "good_for": [],
-            "location_context": None,
-        },
-        "source_url": "https://tiktok.com/@x/video/123",
-        "source": "tiktok",
+        "id": "pl_test_01",
         "provider_id": "google:ChIJTest",
+        "place_name": "Nara Eatery",
+        "place_name_aliases": [],
+        "categories": ["restaurant"],
+        "tags": [
+            {"type": "cuisine", "value": "Japanese", "source": "llm"},
+        ],
+        "location": None,
         "created_at": "2026-04-21T10:00:00+00:00",
-        "lat": None,
-        "lng": None,
-        "address": None,
-        "geo_fresh": False,
-        "hours": None,
-        "rating": None,
-        "phone": None,
-        "photo_url": None,
-        "popularity": None,
-        "enriched": False,
+        "refreshed_at": None,
     }
 
 
@@ -80,7 +64,7 @@ class TestPollingRouteCompleted:
         assert body["status"] == "completed"
         assert len(body["results"]) == 1
         assert body["results"][0]["status"] == "saved"
-        assert body["results"][0]["place"]["place_id"] == "pl_test_01"
+        assert body["results"][0]["place"]["id"] == "pl_test_01"
         assert body["results"][0]["confidence"] == 0.87
         assert body["raw_input"] == "https://tiktok.com/@x/video/123"
 

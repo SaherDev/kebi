@@ -1,4 +1,19 @@
-"""Extraction service orchestrating the cascade pipeline."""
+"""Extraction service orchestrating the cascade pipeline (v2).
+
+Spec 030 Phase 3 (ADR-070, ADR-071):
+- `ExtractionPersistenceService` is gone. Persistence is inlined here:
+  `PlaceUpsertService.upsert_and_embed` writes the place row and
+  embedding in one call; `UserPlacesRepo.get_existing_place_ids`
+  pre-filters duplicates; `UserPlacesService.save_places` creates
+  the `user_places` link with `approved=False`.
+- Confidence-band partitioning is dropped. Every picker output saves
+  (ADR-071 supersedes ADR-057). `ExtractPlaceItem.status` no longer
+  emits `"needs_review"` — only `"saved"` or `"duplicate"`.
+- All place vocabulary is v2-native; no legacy `_to_legacy_source`
+  shim.
+"""
+
+from __future__ import annotations
 
 import logging
 from typing import Any
@@ -9,48 +24,32 @@ from kebi.api.schemas.extract_place import (
     ExtractPlaceResponse,
 )
 from kebi.core.emit import EmitFn
+from kebi.core.events.dispatcher import EventDispatcherProtocol
+from kebi.core.events.events import PlaceSaved
+from kebi.core.extraction.candidate_mapper import candidate_to_core
 from kebi.core.extraction.extraction_pipeline import (
     ExtractionPipeline,
     TooManyCandidatesError,
 )
 from kebi.core.extraction.input_parser import parse_input
-from kebi.core.extraction.persistence import (
-    ExtractionPersistenceService,
-    PlaceSaveOutcome,
-)
 from kebi.core.extraction.status_repository import ExtractionStatusRepository
+from kebi.core.extraction.types import ValidatedCandidate
 from kebi.core.extraction.url_source import normalize_url, source_from_url
-from kebi.core.places import PlaceSource as LegacyPlaceSource
-from kebi.core.places_v2 import PlaceSource
+from kebi.core.places_v2 import (
+    DuplicateUserPlaceError,
+    PlaceCore,
+    PlaceObject,
+    PlaceSource,
+    PlaceUpsertServiceProtocol,
+    UserPlacesServiceProtocol,
+)
 
 logger = logging.getLogger(__name__)
 
-
-# TEMP — spec 030 Phase 2 boundary.
-# `ExtractionPersistenceService` still expects the legacy PlaceSource enum
-# because persistence.py is migrating to v2 in Phase 3. This shim converts
-# the v2 source we now derive from URLs back to the legacy enum at the
-# single call boundary so Phase 2 ships type-clean. Delete in Phase 3 when
-# persistence.py is removed.
-_V2_TO_LEGACY_SOURCE: dict[PlaceSource, LegacyPlaceSource] = {
-    PlaceSource.tiktok: LegacyPlaceSource.tiktok,
-    PlaceSource.instagram: LegacyPlaceSource.instagram,
-    PlaceSource.youtube: LegacyPlaceSource.youtube,
-    PlaceSource.google_maps_list: LegacyPlaceSource.google_maps,
-    PlaceSource.manual: LegacyPlaceSource.manual,
-    # PlaceSource.kebi has no legacy equivalent; falls through to None.
-}
-
-
-def _to_legacy_source(source: PlaceSource | None) -> LegacyPlaceSource | None:
-    if source is None:
-        return None
-    return _V2_TO_LEGACY_SOURCE.get(source)
-
 # Default per-request candidate cap. Hard cap on what the pipeline will
-# hand to Google Places validation (and therefore the most places a
-# single extract request can save). Callers can tighten or loosen this
-# by passing `limit=N` to `ExtractionService.run`.
+# hand to the search service (and therefore the most places a single
+# extract request can save). Callers can tighten or loosen this by
+# passing `limit=N` to `ExtractionService.run`.
 DEFAULT_MAX_CANDIDATES = 25
 
 
@@ -64,8 +63,6 @@ _SOURCE_LABELS: dict[PlaceSource, str] = {
 
 
 def _source_label(source: PlaceSource) -> str:
-    # Unsupported-URL requests are rejected before we'd ever need to
-    # label `None` — see `_unsupported_url_message`.
     return _SOURCE_LABELS.get(source, "what you shared")
 
 
@@ -79,9 +76,6 @@ def _unsupported_url_message(url: str) -> str:
 
 
 def _build_parse_summary(source: PlaceSource | None, has_text: bool) -> str:
-    # The text branch covers both free-form notes and bare lists of places
-    # (e.g. "Fuji Ramen, Pizza Place"). "What you shared" stays neutral
-    # across both since we don't classify the text at parse time.
     if source is not None and has_text:
         return f"Reading {_source_label(source)} and what you shared"
     if source is not None:
@@ -89,25 +83,16 @@ def _build_parse_summary(source: PlaceSource | None, has_text: bool) -> str:
     return "Reading what you shared"
 
 
-def _is_real(outcome: PlaceSaveOutcome) -> bool:
-    """Filter below-threshold outcomes — they never appear in `results` (FR-005).
-
-    Below-threshold outcomes contribute only to the envelope-level `failed`
-    determination (ADR-063).
-    """
-    return (
-        outcome.status in ("saved", "needs_review", "duplicate")
-        and outcome.place is not None
-    )
-
-
-def _outcome_to_item_dict(outcome: PlaceSaveOutcome) -> dict[str, Any]:
-    """Map a real outcome to an ExtractPlaceItem dict. Caller must `_is_real` first."""
-    assert outcome.place is not None  # enforced by _is_real
+def _candidate_to_item_dict(
+    candidate: ValidatedCandidate,
+    place: PlaceObject,
+    status: str,
+) -> dict[str, Any]:
+    """Map a (candidate, persisted-place) pair to an ExtractPlaceItem dict."""
     return {
-        "place": outcome.place.model_dump(mode="json"),
-        "confidence": outcome.metadata.confidence,
-        "status": outcome.status,
+        "place": place.model_dump(mode="json"),
+        "confidence": candidate.confidence,
+        "status": status,
         "evidence": [
             {
                 "producer": e.producer.value,
@@ -115,30 +100,33 @@ def _outcome_to_item_dict(outcome: PlaceSaveOutcome) -> dict[str, Any]:
                 "snippet": e.snippet,
                 "metadata": dict(e.metadata),
             }
-            for e in outcome.metadata.evidence
+            for e in candidate.evidence
         ],
     }
 
 
 class ExtractionService:
-    """Orchestrate place extraction cascade pipeline (ADR-008, ADR-034, ADR-063).
+    """Orchestrate the extraction cascade (ADR-008, ADR-070, ADR-071).
 
-    M1 (feature 027): `run()` awaits the pipeline inline and returns a
-    terminal envelope (`completed` or `failed`) synchronously. The Save
-    tool (M5) consumes this inline outcome. HTTP callers that want the
-    fire-and-return `pending` behavior wrap `run()` in `asyncio.create_task`
-    at the route layer (see `ChatService._dispatch` extract-place branch).
+    Persistence is inlined here: `upsert_and_embed` writes the place
+    row and embedding; `save_places` links to `user_places` with
+    `approved=False` after pre-filtering duplicates. No separate
+    persistence service.
     """
 
     def __init__(
         self,
         pipeline: ExtractionPipeline,
-        persistence: ExtractionPersistenceService,
+        upsert_service: PlaceUpsertServiceProtocol,
+        user_places_service: UserPlacesServiceProtocol,
         status_repo: ExtractionStatusRepository,
+        event_dispatcher: EventDispatcherProtocol,
     ) -> None:
         self._pipeline = pipeline
-        self._persistence = persistence
+        self._upsert = upsert_service
+        self._user_places = user_places_service
         self._status_repo = status_repo
+        self._event_dispatcher = event_dispatcher
 
     async def run(
         self,
@@ -153,21 +141,6 @@ class ExtractionService:
         Returns `status ∈ {completed, failed}` — never `pending`. Writes
         the final envelope to the Redis status store under
         `extraction:v2:{request_id}`.
-
-        The `raw_input` is echoed verbatim on the envelope (ADR-063). The
-        optional `request_id` argument lets the caller inject an id
-        generated at the route layer so both the envelope and the Redis
-        write share one id; when omitted, one is generated here.
-
-        When `emit` is supplied, this service emits `save.parse_input`
-        after input parsing and `save.persist` after persistence; the
-        pipeline emits `save.enrich` / `save.deep_enrichment` /
-        `save.validate` at its own phase boundaries.
-
-        `limit`, when supplied, overrides `DEFAULT_MAX_CANDIDATES` for
-        this single request — callers (e.g. the agent's save tool)
-        can tighten or loosen the cap explicitly. `None` falls back to
-        the default.
         """
         _emit: EmitFn = emit or (lambda step, summary, duration_ms=None: None)
 
@@ -175,15 +148,10 @@ class ExtractionService:
             raise ValueError("raw_input cannot be empty")
 
         parsed = parse_input(raw_input)
-        # Canonicalize platform-specific URL forms (e.g. TikTok /photo/ →
-        # /video/) so downstream yt-dlp calls don't hit "Unsupported URL".
         parsed.url = normalize_url(parsed.url)
         source = source_from_url(parsed.url)
         rid = request_id or uuid4().hex
 
-        # Unsupported URL: caller passed a real URL but its host isn't a
-        # source we can extract from. Reject up-front with a clear message
-        # rather than running the cascade and timing out on it.
         if parsed.url is not None and source is None:
             unsupported_msg = _unsupported_url_message(parsed.url)
             _emit("save.unsupported_url", unsupported_msg)
@@ -210,14 +178,14 @@ class ExtractionService:
             effective_limit = (
                 limit if limit is not None else DEFAULT_MAX_CANDIDATES
             )
-            result = await self._pipeline.run(
+            candidates = await self._pipeline.run(
                 url=parsed.url,
                 user_id=user_id,
                 supplementary_text=parsed.supplementary_text,
                 emit=emit,
                 limit=effective_limit,
             )
-            if not result:
+            if not candidates:
                 response = ExtractPlaceResponse(
                     status="failed",
                     results=[],
@@ -225,23 +193,15 @@ class ExtractionService:
                     request_id=rid,
                     failure_reason="no_candidates",
                     failure_message=(
-                        "No venue could be extracted from the post — "
-                        "the caption, transcript, and visible text "
-                        "didn't contain a recognizable place name."
+                        "No venue could be extracted from the post — the "
+                        "caption, transcript, and visible text didn't "
+                        "contain a recognizable place name."
                     ),
                 )
             else:
-                outcomes = await self._persistence.save_and_emit(
-                    result,
-                    user_id,
-                    source_url=parsed.url,
-                    source=_to_legacy_source(source),
+                items = await self._persist_and_build_items(
+                    candidates, user_id, rid, source, parsed.url
                 )
-                items = [
-                    ExtractPlaceItem(**_outcome_to_item_dict(o))
-                    for o in outcomes
-                    if _is_real(o)
-                ]
                 if items:
                     response = ExtractPlaceResponse(
                         status="completed",
@@ -250,30 +210,19 @@ class ExtractionService:
                         request_id=rid,
                     )
                 else:
-                    # Outcomes existed but every one was filtered: all
-                    # below confidence threshold (Google rejected as
-                    # locality / weak match / no match).
-                    attempted_names = [
-                        o.metadata.place_name for o in outcomes
-                    ]
                     response = ExtractPlaceResponse(
                         status="failed",
                         results=[],
                         raw_input=raw_input,
                         request_id=rid,
-                        failure_reason="all_below_threshold",
+                        failure_reason="no_candidates",
                         failure_message=(
-                            f"Found {len(attempted_names)} candidate(s) "
-                            f"({', '.join(attempted_names[:5])}) but "
-                            f"confidence was below the save threshold — "
-                            f"likely cities/regions or weak Google Places "
-                            f"matches, not specific venues."
+                            "Picker emitted candidates but none survived "
+                            "persistence (every provider_id was already "
+                            "linked to the user)."
                         ),
                     )
         except TooManyCandidatesError as exc:
-            # Expected outcome — not an error. Pipeline already emitted
-            # the user-facing reason via `save.cap_exceeded`; flag the
-            # final persist summary so it doesn't look like a normal failure.
             cap_exceeded = True
             logger.info(
                 "Extraction request %s dropped: %d candidates exceeded "
@@ -316,3 +265,129 @@ class ExtractionService:
         _emit("save.persist", persist_summary)
         await self._status_repo.write(rid, response.model_dump(mode="json"))
         return response
+
+    async def _persist_and_build_items(
+        self,
+        candidates: list[ValidatedCandidate],
+        user_id: str,
+        request_id: str,
+        source: PlaceSource | None,
+        source_url: str | None,
+    ) -> list[ExtractPlaceItem]:
+        """Inline v2 persistence flow (ADR-070, ADR-071).
+
+        1. Upsert + embed all candidates in one call.
+        2. Call UserPlacesService.save_places. On DuplicateUserPlaceError,
+           drop the conflicting place_ids and retry once.
+        3. Dispatch PlaceSaved per newly linked place.
+        4. Return ExtractPlaceItems — `status="saved"` for new links,
+           `status="duplicate"` for the conflicts.
+
+        v2 services are the single seam — extraction never reaches the
+        UserPlacesRepo directly. `DuplicateUserPlaceError.conflicts`
+        gives us the list of already-linked place_ids in one round trip.
+        """
+        cores = [candidate_to_core(c) for c in candidates]
+        persisted: list[PlaceCore] = await self._upsert.upsert_and_embed(cores)
+
+        persisted_by_pid: dict[str, PlaceCore] = {
+            p.provider_id: p for p in persisted if p.provider_id
+        }
+        eligible_cores: list[PlaceCore] = [
+            persisted_by_pid[c.provider_id]
+            for c in candidates
+            if c.provider_id in persisted_by_pid
+            and persisted_by_pid[c.provider_id].id is not None
+        ]
+
+        duplicate_place_ids = await self._save_or_collect_duplicates(
+            eligible_cores, user_id, source, source_url
+        )
+
+        items: list[ExtractPlaceItem] = []
+        linked_place_ids: list[str] = []
+        for c in candidates:
+            persisted_core = persisted_by_pid.get(c.provider_id)
+            if persisted_core is None or persisted_core.id is None:
+                logger.warning(
+                    "candidate_not_persisted",
+                    extra={"provider_id": c.provider_id},
+                )
+                continue
+
+            status = (
+                "duplicate" if persisted_core.id in duplicate_place_ids else "saved"
+            )
+            items.append(
+                ExtractPlaceItem(
+                    **_candidate_to_item_dict(
+                        c, _core_to_object(persisted_core), status=status
+                    )
+                )
+            )
+            if status == "saved":
+                linked_place_ids.append(persisted_core.id)
+
+        if linked_place_ids:
+            event = PlaceSaved(
+                user_id=user_id,
+                place_ids=linked_place_ids,
+                place_metadata={},
+                request_id=request_id,
+            )
+            await self._event_dispatcher.dispatch(event)
+
+        return items
+
+    async def _save_or_collect_duplicates(
+        self,
+        eligible_cores: list[PlaceCore],
+        user_id: str,
+        source: PlaceSource | None,
+        source_url: str | None,
+    ) -> set[str]:
+        """Save eligible cores via UserPlacesService.save_places.
+
+        Returns the set of place_ids that were rejected as duplicates
+        (already linked to this user). Empty input → empty set.
+
+        UserPlacesService.save_places raises DuplicateUserPlaceError
+        and rolls back the whole batch on any conflict. Catch, filter
+        out the conflicts, and retry once with the rest.
+        """
+        if not eligible_cores:
+            return set()
+
+        save_source = source or PlaceSource.manual
+        try:
+            await self._user_places.save_places(
+                user_id=user_id,
+                places=eligible_cores,
+                source=save_source,
+                source_url=source_url,
+            )
+            return set()
+        except DuplicateUserPlaceError as exc:
+            duplicates = set(exc.conflicts)
+            non_duplicates = [
+                c for c in eligible_cores if c.id and c.id not in duplicates
+            ]
+            if non_duplicates:
+                await self._user_places.save_places(
+                    user_id=user_id,
+                    places=non_duplicates,
+                    source=save_source,
+                    source_url=source_url,
+                )
+            return duplicates
+
+
+def _core_to_object(core: PlaceCore) -> PlaceObject:
+    """Lift a PlaceCore into a PlaceObject for the response envelope.
+
+    The upsert path returns PlaceCore (no live fields populated). The
+    response schema expects PlaceObject. Live fields stay None until a
+    subsequent read goes through PlacesSearchService and fills them
+    from the cache.
+    """
+    return PlaceObject.model_validate(core.model_dump())

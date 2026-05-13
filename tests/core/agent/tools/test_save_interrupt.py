@@ -13,14 +13,15 @@ from kebi.api.schemas.extract_place import (
     ExtractPlaceResponse,
 )
 from kebi.core.agent.tools.save_tool import build_save_tool
-from kebi.core.places.models import PlaceObject, PlaceType
+from kebi.core.places_v2 import PlaceCategory, PlaceObject
 
 
 def _place_object(name: str = "Fuji Ramen") -> PlaceObject:
     return PlaceObject(
-        place_id="p1",
+        id="p1",
+        provider_id="google:p1",
         place_name=name,
-        place_type=PlaceType.food_and_drink,
+        categories=[PlaceCategory.restaurant],
     )
 
 
