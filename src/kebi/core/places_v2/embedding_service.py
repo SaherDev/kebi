@@ -20,10 +20,13 @@ every row so the consumer can detect model drift.
 from __future__ import annotations
 
 import hashlib
+import logging
 from enum import Enum
 
 from .models import PlaceCore
 from .protocols import EmbedderProtocol, EmbeddingsRepoProtocol
+
+logger = logging.getLogger(__name__)
 
 
 class EmbeddingService:
@@ -42,6 +45,16 @@ class EmbeddingService:
 
         Cores without an `id` are skipped — there's nothing to key the
         stored vector against. Empty input is a no-op.
+
+        Non-fatal on failure: any exception during signature lookup,
+        embedder call, or upsert is logged and swallowed. The place
+        rows themselves are already in the DB by the time this method
+        runs (PlaceUpsertService persists before calling here), so a
+        transient embedding failure — Voyage rate-limit, network blip,
+        provider outage — must not block the user-visible save. The
+        affected rows simply don't get embeddings this run; a later
+        re-save or a backfill job picks them up via the
+        diff-then-embed path.
         """
         if not cores:
             return
@@ -50,34 +63,48 @@ class EmbeddingService:
         if not usable:
             return
 
-        texts = [self._build_text(c) for c in usable]
-        hashes = [self._hash(t) for t in texts]
+        try:
+            texts = [self._build_text(c) for c in usable]
+            hashes = [self._hash(t) for t in texts]
 
-        existing = await self._repo.get_signatures_by_place_ids(
-            [c.id for c in usable if c.id is not None]
-        )
+            existing = await self._repo.get_signatures_by_place_ids(
+                [c.id for c in usable if c.id is not None]
+            )
 
-        # Keep only rows whose (hash, model) doesn't already match the DB.
-        pending: list[tuple[str, str, str]] = []  # (place_id, text, hash)
-        for core, text, h in zip(usable, texts, hashes, strict=True):
-            assert core.id is not None  # filtered above
-            sig = existing.get(core.id)
-            if sig is not None and sig == (h, self._model_name):
-                continue
-            pending.append((core.id, text, h))
+            # Keep only rows whose (hash, model) doesn't already match the DB.
+            pending: list[tuple[str, str, str]] = []  # (place_id, text, hash)
+            for core, text, h in zip(usable, texts, hashes, strict=True):
+                assert core.id is not None  # filtered above
+                sig = existing.get(core.id)
+                if sig is not None and sig == (h, self._model_name):
+                    continue
+                pending.append((core.id, text, h))
 
-        if not pending:
-            return
+            if not pending:
+                return
 
-        vectors = await self._embedder.embed(
-            [text for _, text, _ in pending], input_type="document"
-        )
+            vectors = await self._embedder.embed(
+                [text for _, text, _ in pending], input_type="document"
+            )
 
-        records = [
-            (pid, vec, self._model_name, h)
-            for (pid, _, h), vec in zip(pending, vectors, strict=True)
-        ]
-        await self._repo.upsert_embeddings(records)
+            records = [
+                (pid, vec, self._model_name, h)
+                for (pid, _, h), vec in zip(pending, vectors, strict=True)
+            ]
+            await self._repo.upsert_embeddings(records)
+        except Exception as exc:
+            logger.warning(
+                "embed_and_store failed (non-fatal): %s. "
+                "Place rows are persisted; embeddings will be filled in on a "
+                "later re-save or backfill run.",
+                exc,
+                exc_info=True,
+                extra={
+                    "place_count": len(usable),
+                    "place_ids": [c.id for c in usable[:5] if c.id is not None],
+                    "model_name": self._model_name,
+                },
+            )
 
     @staticmethod
     def _build_text(core: PlaceCore) -> str:
