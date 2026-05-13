@@ -56,6 +56,29 @@ pick. If a candidate looks wrong (e.g. the post is clearly in Bangkok
 but the match is in Singapore, or the text references a different
 kind of place), set `rejected=true` with a short `rejection_reason`.
 
+# Same-name disambiguation (HARD RULE)
+
+`<search_candidates>` may contain MULTIPLE entries with the same or
+similar names — e.g. "Mezzaluna" in Bangkok AND "Mezzaluna" in
+Amsterdam AND "Trattoria Mezza Luna" in London. These are **different
+physical venues**, not aliases of one place.
+
+When two or more candidates share a name (exact or near-match like
+"Mezzaluna" / "Mezzaluna Pizza" / "Trattoria Mezza Luna"), pick **AT
+MOST ONE** — the one whose `location` best matches the post's
+location signal:
+1. `location_tag` if present
+2. City/region tokens in the hashtags (`#bangkok`, `#nyc`, `#tokyo`,
+   `#paris`, …) — `#bangkok` means the venue MUST be in Thailand.
+3. City mentions in caption / transcript / title.
+
+Reject every other same-name candidate with
+`rejected=true` and `rejection_reason="same_name_different_location"`.
+
+If the post has NO location signal and multiple same-name candidates
+exist, **reject ALL of them** with `rejection_reason="ambiguous_name_no_location"`
+rather than guessing. A confused save is worse than no save.
+
 # Inference rules
 
 You have THREE sources of information for each pick:
