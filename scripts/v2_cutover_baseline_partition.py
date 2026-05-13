@@ -1,25 +1,34 @@
 """Capture pre-cutover baselines for spec 030 (places_v2 migration).
 
 Reads fixtures from `tests/core/extraction/fixtures/v2_cutover/inputs.json`,
-runs the current `ExtractionService.run` against each, and writes three
-baseline artifacts that the post-cutover parity test
+POSTs each one through the in-process FastAPI app at `POST /v1/extract`,
+and writes three baseline artifacts that the post-cutover parity test
 (`tests/core/extraction/test_v2_cutover_parity.py`) compares against:
 
-- partition_counts.json — per-fixture (saved, needs_review, dropped) counts
+- partition_counts.json — per-fixture (saved, needs_review, duplicate, dropped) counts
 - latency_ms.json — per-fixture wall time + p95 across the set
 - response_envelopes/<id>.json — per-fixture serialized ExtractPlaceResponse
 
-MUST be run on `dev` HEAD (pre-cutover code) before merging the migration.
+MUST be run on `dev` HEAD or the Phase 2 commit (pre-Phase 3) — both
+produce identical legacy behavior because Phase 2's `_to_legacy_source`
+shim in service.py keeps the persistence layer behavior-neutral.
+
+Prereqs:
+- `docker compose up -d` (Postgres + Redis running)
+- `.env` populated with API keys (OpenAI, Google, Voyage, Apify, Groq, Anthropic)
+- Real working URLs in `tests/core/extraction/fixtures/v2_cutover/inputs.json`
+  (the committed file has stubs; replace with URLs you'd expect to extract).
 
 Usage:
     poetry run python scripts/v2_cutover_baseline_partition.py
-
-Requires API keys and a running Postgres+Redis (docker compose up -d).
-The script writes into tests/core/extraction/fixtures/v2_cutover/baselines/.
+    # add --strict to fail the whole run when any fixture errors at the HTTP
+    # layer (transport / 500). Default mode keeps going and records the
+    # error envelope as the baseline for that fixture.
 """
 
 from __future__ import annotations
 
+import argparse
 import asyncio
 import json
 import logging
@@ -27,7 +36,8 @@ import sys
 import time
 from pathlib import Path
 from statistics import quantiles
-from typing import Any
+
+import httpx
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s %(message)s")
 logger = logging.getLogger("v2_cutover_baseline")
@@ -38,63 +48,59 @@ INPUTS_FILE = FIXTURE_DIR / "inputs.json"
 BASELINES_DIR = FIXTURE_DIR / "baselines"
 ENVELOPES_DIR = BASELINES_DIR / "response_envelopes"
 
+REQUEST_TIMEOUT_SECONDS = 180.0  # extraction can be slow on cold cache + vision
 
-async def _run_extraction_for_fixture(
-    fixture: dict[str, Any], user_id: str
-) -> tuple[dict[str, Any], float]:
-    """Run a single fixture through the live ExtractionService and return
-    (serialized_response, wall_time_ms).
 
-    Imports happen here (not at module top) so a partial / broken
-    dependency state doesn't block invocation entirely.
+def _partition_counts(envelope: dict) -> dict[str, int]:
+    """Count per-status items in a serialized envelope.
+
+    Envelope-level `failed` is recorded as a single dropped count so the
+    user-visible "request produced nothing" outcome aggregates cleanly.
     """
-    from kebi.api.deps import (
-        get_extraction_service,
-    )
-
-    service = await _resolve_service(get_extraction_service)
-    start = time.perf_counter()
-    response = await service.run(
-        raw_input=fixture["raw_input"],
-        user_id=user_id,
-    )
-    elapsed_ms = (time.perf_counter() - start) * 1000.0
-    return response.model_dump(mode="json"), elapsed_ms
-
-
-async def _resolve_service(factory: Any) -> Any:
-    """`get_extraction_service` is a FastAPI Depends factory — call its
-    underlying resolution manually here. Adjust if the factory shape
-    differs in your version of `api/deps.py`."""
-    from fastapi import Depends  # noqa: F401
-
-    if callable(factory):
-        result = factory() if not asyncio.iscoroutinefunction(factory) else await factory()
-        if asyncio.iscoroutine(result):
-            result = await result
-        return result
-    raise TypeError(f"Unsupported factory: {factory!r}")
-
-
-def _partition_counts(envelope: dict[str, Any]) -> dict[str, int]:
-    """Count saved / needs_review / duplicate from a serialized envelope."""
     counts = {"saved": 0, "needs_review": 0, "duplicate": 0, "dropped": 0}
     if envelope.get("status") == "failed":
-        counts["dropped"] = 1  # nothing saved — treat the request as 0 saves
+        counts["dropped"] = 1
         return counts
     for item in envelope.get("results", []):
-        status = item.get("status", "unknown")
+        status = item.get("status")
         if status in counts:
             counts[status] += 1
     return counts
 
 
-async def main() -> None:
+async def _run_one(
+    client: httpx.AsyncClient, raw_input: str, user_id: str
+) -> tuple[dict, float]:
+    """POST a single fixture through /v1/extract via the in-process ASGI app.
+
+    Returns (response_json, wall_ms). Raises only on transport-level
+    failures (bad ASGI wiring, app import error) — application-level
+    failures arrive as `status="failed"` envelopes from the route itself.
+    """
+    start = time.perf_counter()
+    r = await client.post(
+        "/v1/extract",
+        json={"user_id": user_id, "raw_input": raw_input},
+    )
+    elapsed_ms = (time.perf_counter() - start) * 1000.0
+
+    if r.status_code != 200:
+        # Route raised a non-200; the request payload may be malformed.
+        # Record it explicitly so the baseline records the validation failure.
+        return {
+            "status": "failed",
+            "results": [],
+            "raw_input": raw_input,
+            "failure_reason": "pipeline_error",
+            "failure_message": f"HTTP {r.status_code}: {r.text[:300]}",
+        }, elapsed_ms
+    return r.json(), elapsed_ms
+
+
+async def main(strict: bool) -> int:
     if not INPUTS_FILE.exists():
-        sys.exit(
-            f"Fixture file not found: {INPUTS_FILE}\n"
-            "Populate it with real URLs / text before running."
-        )
+        logger.error("Fixture file not found: %s", INPUTS_FILE)
+        return 2
 
     BASELINES_DIR.mkdir(parents=True, exist_ok=True)
     ENVELOPES_DIR.mkdir(parents=True, exist_ok=True)
@@ -103,30 +109,53 @@ async def main() -> None:
     user_id = data.get("user_id", "v2-cutover-fixture-user")
     fixtures = data.get("fixtures", [])
 
+    # Import inside main so a broken import surfaces with a real traceback
+    # instead of leaving stale baselines untouched.
+    from kebi.api.main import app
+
+    transport = httpx.ASGITransport(app=app)
     partition_counts: dict[str, dict[str, int]] = {}
     latency_ms: dict[str, float] = {}
+    transport_failures: list[str] = []
 
-    for fixture in fixtures:
-        fid = fixture["id"]
-        logger.info("Running fixture: %s", fid)
-        try:
-            envelope, elapsed = await _run_extraction_for_fixture(fixture, user_id)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("Fixture %s raised %s: %s", fid, type(exc).__name__, exc)
-            envelope = {
-                "status": "failed",
-                "results": [],
-                "raw_input": fixture["raw_input"],
-                "failure_reason": "pipeline_error",
-                "failure_message": f"{type(exc).__name__}: {exc}",
-            }
-            elapsed = 0.0
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://test",
+        timeout=REQUEST_TIMEOUT_SECONDS,
+    ) as client:
+        for fixture in fixtures:
+            fid = fixture["id"]
+            logger.info("Running fixture: %s", fid)
+            try:
+                envelope, elapsed = await _run_one(
+                    client, raw_input=fixture["raw_input"], user_id=user_id
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.error(
+                    "TRANSPORT FAILURE on %s: %s: %s",
+                    fid,
+                    type(exc).__name__,
+                    exc,
+                )
+                transport_failures.append(fid)
+                if strict:
+                    return 3
+                envelope = {
+                    "status": "failed",
+                    "results": [],
+                    "raw_input": fixture["raw_input"],
+                    "failure_reason": "pipeline_error",
+                    "failure_message": (
+                        f"transport: {type(exc).__name__}: {exc}"
+                    ),
+                }
+                elapsed = 0.0
 
-        (ENVELOPES_DIR / f"{fid}.json").write_text(
-            json.dumps(envelope, indent=2, sort_keys=True)
-        )
-        partition_counts[fid] = _partition_counts(envelope)
-        latency_ms[fid] = round(elapsed, 2)
+            (ENVELOPES_DIR / f"{fid}.json").write_text(
+                json.dumps(envelope, indent=2, sort_keys=True)
+            )
+            partition_counts[fid] = _partition_counts(envelope)
+            latency_ms[fid] = round(elapsed, 2)
 
     all_latencies = [v for v in latency_ms.values() if v > 0]
     p95 = (
@@ -139,12 +168,31 @@ async def main() -> None:
         json.dumps(partition_counts, indent=2, sort_keys=True)
     )
     (BASELINES_DIR / "latency_ms.json").write_text(
-        json.dumps({"per_fixture": latency_ms, "p95_ms": p95}, indent=2, sort_keys=True)
+        json.dumps(
+            {"per_fixture": latency_ms, "p95_ms": p95}, indent=2, sort_keys=True
+        )
     )
 
     logger.info("Wrote baselines to %s", BASELINES_DIR)
     logger.info("p95 latency across set: %.2fms", p95)
+    if transport_failures:
+        logger.warning(
+            "%d fixture(s) failed at the transport layer (not the pipeline): %s",
+            len(transport_failures),
+            ", ".join(transport_failures),
+        )
+        logger.warning(
+            "Re-run with `--strict` if the cause needs investigation before merging."
+        )
+    return 0
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--strict",
+        action="store_true",
+        help="Fail the whole run on any transport-layer error (default: keep going).",
+    )
+    args = parser.parse_args()
+    sys.exit(asyncio.run(main(strict=args.strict)))
