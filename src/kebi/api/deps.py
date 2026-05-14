@@ -163,11 +163,6 @@ def get_extraction_config(
     return config.extraction
 
 
-def get_embedder_dep() -> EmbedderProtocol:
-    """FastAPI dependency providing EmbedderProtocol."""
-    return get_embedder()
-
-
 async def get_event_dispatcher(
     background_tasks: BackgroundTasks,
     db_session: AsyncSession = Depends(get_session),  # noqa: B008
@@ -465,16 +460,39 @@ def get_embeddings_repo_v2(
     return EmbeddingsRepo(db_session)
 
 
+def get_embedder_v2() -> EmbedderProtocol:
+    """Single embedder used by both the document path (PlaceUpsertService
+    → EmbeddingService) and the query path (HybridSearchService).
+
+    CachedEmbedder wraps the configured embedder with Redis (90-day TTL,
+    SHA-256 key over `model_name | input_type | normalized_text`). The
+    `input_type` segment keeps document and query vectors in separate
+    cache slots so Voyage's asymmetric embedding is preserved.
+
+    `model_name` lives in the key, so a model swap automatically
+    invalidates without manual cleanup.
+    """
+    return CachedEmbedder.from_url(
+        embedder=get_embedder(),
+        url=get_env().REDIS_URL,
+        model_name=get_config().models["embedder"].model,
+    )
+
+
 def get_embedding_service_v2(
     repo: EmbeddingsRepo = Depends(get_embeddings_repo_v2),  # noqa: B008
-    embedder: EmbedderProtocol = Depends(get_embedder_dep),  # noqa: B008
+    embedder: EmbedderProtocol = Depends(get_embedder_v2),  # noqa: B008
     config: AppConfig = Depends(get_config),  # noqa: B008
 ) -> EmbeddingServiceV2:
     """FastAPI dependency providing EmbeddingService (places_v2 documents).
 
-    Doc embeds run at save time and rarely repeat — no cache wrapper here;
-    the diff-then-embed text_hash check on the repo already short-circuits
-    no-op re-saves.
+    Uses the same `get_embedder_v2` (Redis-backed CachedEmbedder) that
+    the query path uses. The cache key includes `input_type`, so
+    document and query vectors don't collide. `EmbeddingService`
+    runs its diff-then-embed `(text_hash, model_name)` check first,
+    so the cache only sees texts that actually need embedding —
+    cheap Redis round-trip, with a real hit when re-extracting the
+    same venue from different posts.
     """
     return EmbeddingServiceV2(
         repo=repo,
@@ -526,20 +544,6 @@ def get_user_places_service(
 # ---------------------------------------------------------------------------
 
 
-def get_query_embedder_v2() -> EmbedderProtocol:
-    """Cached query embedder backed by Redis (90-day TTL).
-
-    Wraps the configured embedder so HybridSearchService skips Voyage
-    on repeated queries. ``model_name`` is part of the cache key so
-    swapping embedders later never serves a vector from the wrong space.
-    """
-    return CachedEmbedder.from_url(
-        embedder=get_embedder(),
-        url=get_env().REDIS_URL,
-        model_name=get_config().models["embedder"].model,
-    )
-
-
 def get_hybrid_search_repo(
     db_session: AsyncSession = Depends(get_session),  # noqa: B008
 ) -> HybridSearchRepo:
@@ -549,12 +553,14 @@ def get_hybrid_search_repo(
 
 def get_hybrid_search_service(
     repo: HybridSearchRepo = Depends(get_hybrid_search_repo),  # noqa: B008
-    embedder: EmbedderProtocol = Depends(get_query_embedder_v2),  # noqa: B008
+    embedder: EmbedderProtocol = Depends(get_embedder_v2),  # noqa: B008
 ) -> HybridSearchService:
     """FastAPI dependency providing HybridSearchService (places_v2).
 
-    Uses the cached query embedder so repeated agent queries skip
-    Voyage on the hot path.
+    Shares `get_embedder_v2` with the document-side EmbeddingService.
+    CachedEmbedder keys by `input_type`, so query vectors don't
+    collide with document vectors even though both paths hit the same
+    cache.
     """
     return HybridSearchService(repo=repo, embedder=embedder)
 
