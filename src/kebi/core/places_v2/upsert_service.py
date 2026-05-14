@@ -9,21 +9,30 @@ from __future__ import annotations
 
 from ._place_merge import merge_place
 from .models import PlaceCore
-from .protocols import PlacesRepoProtocol
+from .protocols import EmbeddingServiceProtocol, PlacesRepoProtocol
 
 
 class PlaceUpsertService:
-    def __init__(self, repo: PlacesRepoProtocol) -> None:
+    def __init__(
+        self,
+        repo: PlacesRepoProtocol,
+        embedding_service: EmbeddingServiceProtocol,
+    ) -> None:
         self._repo = repo
+        self._embedding_service = embedding_service
 
-    async def upsert_many(
+    async def upsert_and_embed(
         self, candidates: list[PlaceCore]
     ) -> list[PlaceCore]:
-        """Read existing → merge per candidate → bulk write.
+        """Read existing → merge per candidate → bulk write → embed.
 
         Requires every candidate to carry a provider_id (identity must be
         resolved upstream before reaching this layer). The repo enforces
         this and will raise on violation.
+
+        EmbeddingService skips rows whose (text_hash, model_name) already
+        matches the DB, so callers can pass the full batch without
+        pre-filtering changed rows.
         """
         if not candidates:
             return []
@@ -40,4 +49,7 @@ class PlaceUpsertService:
             for c in candidates
         ]
 
-        return await self._repo.upsert_places(merged)
+        persisted = await self._repo.upsert_places(merged)
+        if persisted:
+            await self._embedding_service.embed_and_store(persisted)
+        return persisted

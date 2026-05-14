@@ -1,0 +1,8 @@
+{
+  "failure_message": "No venue could be extracted from the post \u2014 the caption, transcript, and visible text didn't contain a recognizable place name.",
+  "failure_reason": "no_candidates",
+  "raw_input": "Komugi Bakery",
+  "request_id": "76fda0ad0e984defb4c9e52cbe1da344",
+  "results": [],
+  "status": "failed"
+}

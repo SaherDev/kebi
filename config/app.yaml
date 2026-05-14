@@ -246,6 +246,15 @@ embeddings:
     - neighborhood
     - city
     - country
+  # Voyage rate-limit circuit breaker (providers/embeddings.VoyageEmbedder).
+  # The Voyage SDK's internal tenacity retry chain costs ~15s per call
+  # on rate-limit. `hard_timeout_seconds` aborts individual calls before
+  # the retry loop exhausts; `rate_limit_cooldown_seconds` skips
+  # subsequent calls entirely while the breaker is tripped. Saves are
+  # non-fatal on embedding failure (places persist; embeddings refill
+  # on a later save or backfill).
+  hard_timeout_seconds: 3.0
+  rate_limit_cooldown_seconds: 60.0
 
 # ---------------------------------------------------------------------------
 # Prompt Templates (ADR-059)

@@ -16,7 +16,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-from kebi.core.places import PlaceObject
+from kebi.core.places_v2 import PlaceObject
 
 
 class EvidenceDTO(BaseModel):
@@ -39,27 +39,22 @@ class EvidenceDTO(BaseModel):
 class ExtractPlaceItem(BaseModel):
     """One row in the extract response.
 
-    Per-place outcome values:
-    - "saved"        — newly written to the permanent store; confidence
-                       ≥ `confident_threshold` (ADR-057).
-    - "needs_review" — newly written, but confidence falls in the tentative
-                       band (between `save_threshold` and
-                       `confident_threshold`); UI should prompt the user to
-                       confirm or delete (ADR-057).
-    - "duplicate"    — already existed; `place` is the existing row.
+    Per ADR-071, the extraction flow saves every candidate the picker
+    emits — there is no per-item branching at save time. The response
+    is a flat list of places now associated with the user; whether a
+    given place was newly linked or already saved is an internal
+    detail (UserPlacesService rejects duplicate links and the service
+    catches the conflict to avoid creating a second row).
 
     Pipeline-level states (`pending`, `failed`) live on the response
     envelope, never on items (ADR-063).
 
     `evidence` is the audit trail — every producer/medium pair that
-    contributed to this candidate, in extraction order. Empty list for
-    legacy callers; non-empty for any candidate produced by the
-    Evidence-aware pipeline.
+    contributed to this candidate, in extraction order.
     """
 
     place: PlaceObject
     confidence: float
-    status: Literal["saved", "needs_review", "duplicate"]
     evidence: list[EvidenceDTO] = Field(default_factory=list)
 
     @field_validator("confidence")

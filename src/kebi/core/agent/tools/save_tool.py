@@ -1,4 +1,11 @@
-"""save_tool — @tool wrapper around ExtractionService (feature 028 M5/M8/M9)."""
+"""save_tool — @tool wrapper around ExtractionService (feature 028 M5/M9).
+
+Spec 030 Phase 6 cleanup: the legacy `needs_review` NodeInterrupt
+flow is gone. Under ADR-071 the extraction flow saves every picker
+output unconditionally, so there's nothing to interrupt on. Each
+item in `response.results` is just a saved place; the per-item
+`status` field has been removed from the schema entirely.
+"""
 
 from __future__ import annotations
 
@@ -6,7 +13,6 @@ from typing import Annotated, Any
 
 from langchain_core.messages import ToolMessage
 from langchain_core.tools import BaseTool, InjectedToolCallId, tool
-from langgraph.errors import NodeInterrupt
 from langgraph.prebuilt import InjectedState
 from langgraph.types import Command
 from pydantic import BaseModel, Field
@@ -35,14 +41,11 @@ def _save_summary(response: ExtractPlaceResponse) -> str:
         return "Couldn't extract a place from that"
     if response.status == "pending":
         return "Extraction in progress — I'll update you shortly"
-    # status == "completed"; at least one result.
-    item = response.results[0]
-    name = item.place.place_name
-    return {
-        "saved": f"Saved {name} to your places",
-        "duplicate": f"You already had {name} saved",
-        "needs_review": f"Saved {name} — confidence is low, can you confirm?",
-    }[item.status]
+    # status == "completed" with at least one result.
+    names = [r.place.place_name for r in response.results]
+    if len(names) == 1:
+        return f"Saved {names[0]} to your places"
+    return f"Saved {len(names)} places: {', '.join(names)}"
 
 
 def build_save_tool(service: ExtractionService) -> BaseTool:
@@ -81,17 +84,6 @@ def build_save_tool(service: ExtractionService) -> BaseTool:
         async def _do_save() -> Command[Any]:
             collected, emit = build_emit_closure("save")
             response = await service.run(raw_input, state["user_id"], emit=emit)
-
-            needs_review = [r for r in response.results if r.status == "needs_review"]
-            if needs_review:
-                raise NodeInterrupt(
-                    {
-                        "type": "save_needs_review",
-                        "request_id": response.request_id,
-                        "candidates": [r.model_dump() for r in needs_review],
-                    }
-                )
-
             append_summary(collected, "save", _save_summary(response))
             return Command(
                 update={

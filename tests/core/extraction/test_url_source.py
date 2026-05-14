@@ -3,7 +3,7 @@
 import pytest
 
 from kebi.core.extraction.url_source import normalize_url, source_from_url
-from kebi.core.places import PlaceSource
+from kebi.core.places_v2 import PlaceSource
 
 
 class TestSourceFromUrl:
@@ -14,7 +14,7 @@ class TestSourceFromUrl:
             ("https://www.instagram.com/p/abc/", PlaceSource.instagram),
             ("https://www.youtube.com/watch?v=abc", PlaceSource.youtube),
             ("https://youtu.be/abc", PlaceSource.youtube),
-            ("https://maps.app.goo.gl/abc", PlaceSource.google_maps),
+            ("https://maps.app.goo.gl/abc", PlaceSource.google_maps_list),
             ("https://example.com/blog/post", None),
             (None, None),
         ],

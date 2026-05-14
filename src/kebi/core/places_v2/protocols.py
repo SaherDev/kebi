@@ -11,6 +11,7 @@ from .models import (
     PlaceCore,
     PlaceObject,
     PlaceQuery,
+    PlaceSource,
     SavedPlaceView,
     UserPlace,
 )
@@ -41,6 +42,10 @@ class UserPlacesRepoProtocol(Protocol):
     async def get_by_user(self, user_id: str) -> list[UserPlace]: ...
 
     async def get_by_user_place_id(self, user_place_id: str) -> UserPlace | None: ...
+
+    async def get_existing_place_ids(
+        self, user_id: str, place_ids: list[str]
+    ) -> set[str]: ...
 
     async def save_user_places(
         self, user_places: list[UserPlace]
@@ -80,7 +85,7 @@ class PlacesSearchServiceProtocol(Protocol):
 
 
 class PlaceUpsertServiceProtocol(Protocol):
-    async def upsert_many(
+    async def upsert_and_embed(
         self, candidates: list[PlaceCore]
     ) -> list[PlaceCore]: ...
 
@@ -90,6 +95,14 @@ class PlaceWipeServiceProtocol(Protocol):
 
 
 class UserPlacesServiceProtocol(Protocol):
+    async def save_places(
+        self,
+        user_id: str,
+        places: list[PlaceCore],
+        source: PlaceSource,
+        source_url: str | None,
+    ) -> list[UserPlace]: ...
+
     async def get_user_places(self, user_id: str) -> list[SavedPlaceView]: ...
 
     async def update_status(

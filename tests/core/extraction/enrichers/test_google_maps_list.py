@@ -10,7 +10,7 @@ from kebi.core.extraction.enrichers.google_maps_list import (
     GoogleMapsListEnricher,
 )
 from kebi.core.extraction.types import ExtractionContext
-from kebi.core.places import PlaceSource
+from kebi.core.places_v2 import PlaceSource
 
 
 def _ctx(url: str = "https://maps.app.goo.gl/9KPNCHsoi5s69xE59") -> ExtractionContext:
@@ -79,7 +79,6 @@ class TestApifyResponse:
             k.producer.value == "google_maps_list" for k in ctx.known_places
         )
         assert all(k.medium.value == "list" for k in ctx.known_places)
-        assert ctx.search_matches == []
 
     async def test_skips_items_without_a_name(self) -> None:
         enricher = GoogleMapsListEnricher(token="apify-token")
@@ -134,4 +133,4 @@ class TestApifyResponse:
 class TestSourceGateMembership:
     def test_allowed_sources_is_google_maps_only(self) -> None:
         enricher = GoogleMapsListEnricher(token="t")
-        assert enricher.allowed_sources == frozenset({PlaceSource.google_maps})
+        assert enricher.allowed_sources == frozenset({PlaceSource.google_maps_list})

@@ -9,11 +9,12 @@ lived. Together they form `Evidence(producer, medium, snippet, metadata)`.
 
 Pipeline-context fields (`user_id`, `source_url`, `source`) and
 persistence concerns are NOT on these types — they live on
-`ExtractionContext` and are stamped onto a `PlaceCreate` only at the
-persistence boundary.
+`ExtractionContext` and are stamped onto a v2 `PlaceCore` at the
+persistence boundary in `ExtractionService.run` (per ADR-070, ADR-071).
 
-`PlaceCreate` and `PlaceObject` are re-exported so callers that imported
-them from this module continue to resolve during the migration.
+Spec 030 Phase 3: legacy place re-exports were removed. Place identity
+(`provider_id`), the place vocabulary (`PlaceCategory`, `PlaceTag`), and
+the source enum all come from `kebi.core.places_v2`.
 """
 
 from __future__ import annotations
@@ -21,14 +22,11 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum
 
-from kebi.core.places import (
-    PlaceAttributes,
-    PlaceCreate,
-    PlaceObject,
-    PlaceProvider,
-    PlacesMatchQuality,
+from kebi.core.places_v2 import (
+    LocationContext,
+    PlaceCategory,
     PlaceSource,
-    PlaceType,
+    PlaceTag,
 )
 
 __all__ = [
@@ -37,12 +35,8 @@ __all__ = [
     "EvidenceField",
     "Evidence",
     "KnownPlace",
-    "SearchMatch",
     "ExtractionContext",
     "ValidatedCandidate",
-    # Re-exported from core.places for legacy import paths.
-    "PlaceCreate",
-    "PlaceObject",
 ]
 
 
@@ -122,8 +116,8 @@ class Evidence:
 class KnownPlace:
     """A confirmed venue name produced by a name producer.
 
-    Carries the `producer` + `medium` + `snippet` so the NER finalizer
-    can stamp matching candidates with full Evidence — without this,
+    Carries the `producer` + `medium` + `snippet` so the picker can
+    stamp matching candidates with full Evidence — without this,
     every candidate built from `known_places` would look like it came
     only from `LLM_NER`.
     """
@@ -134,42 +128,14 @@ class KnownPlace:
     snippet: str | None = None
 
 
-@dataclass(frozen=True)
-class SearchMatch:
-    """A vetted Google Places hit that the picker LLM may choose from.
-
-    Produced by `PlacesSearcher` from the names that producers
-    contributed (`KnownPlace`s + `location_tag`). Drops NONE /
-    CATEGORY_ONLY quality and geographic-feature place_types at the
-    searcher boundary — the picker only ever sees real venues.
-
-    Frozen so the searcher's per-query dedup can use set semantics on
-    `external_id`. The picker references entries by `external_id` only;
-    the rest of the fields are echoed back to the caller as authoritative
-    Google data.
-    """
-
-    query: str
-    query_producer: Producer
-    query_medium: Medium
-    validated_name: str
-    provider: PlaceProvider
-    external_id: str
-    match_quality: PlacesMatchQuality
-    lat: float | None = None
-    lng: float | None = None
-    address: str | None = None
-    place_types: tuple[str, ...] = ()
-
-
 @dataclass
 class ExtractionContext:
     """Shared mutable state threaded through all enrichers and the picker.
 
     `source` is auto-derived from `url` in `__post_init__` so every
     consumer (enrichers, persistence, the service) reads the same
-    canonical `PlaceSource` without re-parsing the URL. Callers may pass
-    `source` explicitly to override (e.g. tests).
+    canonical v2 `PlaceSource` without re-parsing the URL. Callers
+    may pass `source` explicitly to override (e.g. tests).
 
     `known_places` is a list of `KnownPlace` entries — confirmed venue
     names from name producers (Google Maps shared list, vision frames,
@@ -178,13 +144,7 @@ class ExtractionContext:
 
     `text_evidence` is a list of `Evidence` entries appended by text
     producers when they actually wrote pipeline state (caption,
-    transcript, title, etc.). Used by `assemble_evidence` to attach
-    upstream producer attribution (e.g. "this caption came from yt-dlp
-    metadata") to whichever places the picker chose.
-
-    `search_matches` is the picker's closed candidate set — Google
-    Places hits returned by `PlacesSearcher`. The picker may only emit
-    places whose `external_id` matches an entry here.
+    transcript, title, etc.).
     """
 
     url: str | None
@@ -201,7 +161,6 @@ class ExtractionContext:
     text_evidence: list[Evidence] = field(default_factory=list)
     is_photo_post: bool = False
     image_urls: list[str] = field(default_factory=list)
-    search_matches: list[SearchMatch] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if self.source is None:
@@ -212,27 +171,25 @@ class ExtractionContext:
 
 @dataclass
 class ValidatedCandidate:
-    """Post-validation extraction candidate.
+    """Post-validation extraction candidate (v2 vocabulary).
 
-    The validator stamps `provider` + `external_id` (resolved from
-    Google Places) onto the candidate fields and adds `confidence` plus
-    the same `evidence` list the candidate carried in. `match_lat` /
-    `match_lng` / `match_address` carry the Tier 2 geo data Google
-    Places returned so the persistence layer can write it to
-    `PlacesCache` after the Tier 1 row is created. All three geo fields
-    are optional — `None` when Google returned NONE-quality or the
-    validator was bypassed.
+    The picker emits this shape (via `reconcile_picks`) for every
+    chosen `PlaceObject` from `PlacesSearchService`. The persistence
+    boundary in `ExtractionService.run` converts each into a v2
+    `PlaceCore` via `candidate_to_core` before calling
+    `PlaceUpsertService.upsert_and_embed`.
+
+    `confidence` is computed from the evidence trail but is no longer
+    a save gate (ADR-071 supersedes ADR-057 — all picker outputs save
+    as `user_places` rows with `approved=False`). It's preserved on
+    the candidate so the response envelope can still surface it for UI.
     """
 
     place_name: str
-    place_type: PlaceType
-    provider: PlaceProvider
-    external_id: str
+    provider_id: str  # namespaced, e.g. "google:ChIJ..."
+    categories: list[PlaceCategory]
+    tags: list[PlaceTag]
     confidence: float
     evidence: list[Evidence]
     subcategory: str | None = None
-    tags: list[str] = field(default_factory=list)
-    attributes: PlaceAttributes = field(default_factory=PlaceAttributes)
-    match_lat: float | None = None
-    match_lng: float | None = None
-    match_address: str | None = None
+    location: LocationContext | None = None

@@ -18,7 +18,6 @@ from kebi.core.extraction.extraction_pipeline import (
     deep_summary,
     inline_summary,
 )
-from kebi.core.extraction.persistence import ExtractionPersistenceService
 from kebi.core.extraction.service import ExtractionService
 from kebi.core.extraction.status_repository import ExtractionStatusRepository
 from kebi.core.memory.buffer import MessageBuffer
@@ -164,20 +163,11 @@ def get_extraction_config(
     return config.extraction
 
 
-def get_embedder_dep() -> EmbedderProtocol:
-    """FastAPI dependency providing EmbedderProtocol."""
-    return get_embedder()
-
-
 async def get_event_dispatcher(
     background_tasks: BackgroundTasks,
     db_session: AsyncSession = Depends(get_session),  # noqa: B008
 ) -> EventDispatcher:
     """FastAPI dependency providing a fully wired EventDispatcher (ADR-043).
-
-    ExtractionPersistenceService is constructed inline here (not via
-    Depends(get_extraction_persistence)) to avoid a circular dependency:
-    get_event_dispatcher <- get_extraction_persistence <- get_event_dispatcher.
 
     Taste and memory services use session_factory — each repo method opens
     its own session, so background tasks don't depend on request session.
@@ -226,23 +216,6 @@ def get_places_cache_dep() -> PlacesCache:
     write path.
     """
     return _build_places_cache()
-
-
-def get_extraction_persistence(
-    places_service: PlacesService = Depends(get_places_service),  # noqa: B008
-    places_cache: PlacesCache = Depends(get_places_cache_dep),  # noqa: B008
-    embedding_repo: EmbeddingRepository = Depends(get_embedding_repo),  # noqa: B008
-    embedder: EmbedderProtocol = Depends(get_embedder_dep),  # noqa: B008
-    event_dispatcher: EventDispatcher = Depends(get_event_dispatcher),  # noqa: B008
-) -> ExtractionPersistenceService:
-    """FastAPI dependency providing ExtractionPersistenceService."""
-    return ExtractionPersistenceService(
-        places_service=places_service,
-        places_cache=places_cache,
-        embedding_repo=embedding_repo,
-        embedder=embedder,
-        event_dispatcher=event_dispatcher,
-    )
 
 
 def _make_inline_level() -> EnrichmentLevel:
@@ -342,41 +315,11 @@ def _get_deep_level() -> EnrichmentLevel:
     return _deep_level
 
 
-def get_extraction_pipeline(
-    extraction_config: ExtractionConfig = Depends(get_extraction_config),  # noqa: B008
-) -> ExtractionPipeline:
-    """FastAPI dependency providing ExtractionPipeline with all levels wired.
-
-    Wires the search-first sequence: producers (per level) → Google
-    Places search (`PlacesSearcher`) → LLM pick + classify
-    (`LLMPlacePicker`) → schema validation in persistence → upsert.
-    """
-    from kebi.core.extraction.enrichers.llm_picker import LLMPlacePicker
-    from kebi.core.extraction.searcher import PlacesSearcher
-    from kebi.core.places import GooglePlacesClient
-
-    return ExtractionPipeline(
-        levels=[_get_inline_level(), _get_deep_level()],
-        searcher=PlacesSearcher(places_client=GooglePlacesClient()),
-        picker=LLMPlacePicker(
-            instructor_client=get_instructor_client("extractor"),
-            confidence_config=extraction_config.confidence,
-        ),
-        extraction_config=extraction_config,
-    )
-
-
-def get_extraction_service(
-    pipeline: ExtractionPipeline = Depends(get_extraction_pipeline),  # noqa: B008
-    persistence: ExtractionPersistenceService = Depends(  # noqa: B008
-        get_extraction_persistence
-    ),
-    status_repo: ExtractionStatusRepository = Depends(get_status_repo),  # noqa: B008
-) -> ExtractionService:
-    """FastAPI dependency providing ExtractionService."""
-    return ExtractionService(
-        pipeline=pipeline, persistence=persistence, status_repo=status_repo
-    )
+# get_extraction_pipeline and get_extraction_service are defined below
+# the places_v2 deps section so their PlacesSearchService /
+# PlaceUpsertService / UserPlacesService / UserPlacesRepo factories
+# (defined there) are already in scope when FastAPI resolves the
+# default-value Depends() at module load time.
 
 
 async def get_recall_service(
@@ -470,58 +413,9 @@ def get_user_data_deletion_service(
     )
 
 
-def get_agent_graph(
-    recall_service: RecallService = Depends(get_recall_service),  # noqa: B008
-    extraction_service: ExtractionService = Depends(get_extraction_service),  # noqa: B008
-    consult_service: ConsultService = Depends(get_consult_service),  # noqa: B008
-    checkpointer: Any = Depends(get_agent_checkpointer),  # noqa: B008
-) -> Any:
-    """Build the agent StateGraph per-request.
-
-    Compiling per-request keeps tool-bound services request-scoped (fresh
-    SQLAlchemy sessions, real EventDispatcher) while reusing the
-    process-scoped checkpointer that owns its own psycopg pool.
-    Compilation is cheap compared to the LLM call it shepherds, so the
-    latency cost is negligible.
-    """
-    if checkpointer is None:
-        return None
-    from kebi.core.agent.graph import build_graph
-    from kebi.core.agent.tools import build_tools
-    from kebi.providers.llm import get_langchain_chat_model
-
-    tools = build_tools(recall_service, extraction_service, consult_service)
-    llm = get_langchain_chat_model("orchestrator")
-    return build_graph(llm, tools, checkpointer)
-
-
-async def get_chat_service(
-    extraction_service: ExtractionService = Depends(get_extraction_service),  # noqa: B008
-    consult_service: ConsultService = Depends(get_consult_service),  # noqa: B008
-    recall_service: RecallService = Depends(get_recall_service),  # noqa: B008
-    event_dispatcher: EventDispatcher = Depends(get_event_dispatcher),  # noqa: B008
-    memory_service: UserMemoryService = Depends(get_user_memory_service),  # noqa: B008
-    taste_service: TasteModelService = Depends(get_taste_service),  # noqa: B008
-    places_service: PlacesService = Depends(get_places_service),  # noqa: B008
-    config: AppConfig = Depends(get_config),  # noqa: B008
-    agent_graph: Any = Depends(get_agent_graph),  # noqa: B008
-) -> ChatService:
-    """FastAPI dependency providing a fully wired ChatService (ADR-019, ADR-052).
-
-    Feature 028 M11 (ADR-065): legacy intent_parser and assistant_service
-    removed — all traffic routed to the agent pipeline.
-    """
-    return ChatService(
-        extraction_service=extraction_service,
-        consult_service=consult_service,
-        recall_service=recall_service,
-        event_dispatcher=event_dispatcher,
-        memory_service=memory_service,
-        taste_service=taste_service,
-        places_service=places_service,
-        config=config,
-        agent_graph=agent_graph,
-    )
+# get_agent_graph and get_chat_service are defined at the bottom of this
+# file because they consume `get_extraction_service`, which in turn
+# consumes the places_v2 factories declared further down.
 
 
 # ---------------------------------------------------------------------------
@@ -559,11 +453,62 @@ def get_google_places_client_v2() -> GooglePlacesClientV2:
     return GooglePlacesClientV2(api_key=get_env().GOOGLE_API_KEY or "")
 
 
+def get_embeddings_repo_v2(
+    db_session: AsyncSession = Depends(get_session),  # noqa: B008
+) -> EmbeddingsRepo:
+    """FastAPI dependency providing EmbeddingsRepo (place_embeddings_v2)."""
+    return EmbeddingsRepo(db_session)
+
+
+def get_embedder_v2() -> EmbedderProtocol:
+    """Single embedder used by both the document path (PlaceUpsertService
+    → EmbeddingService) and the query path (HybridSearchService).
+
+    CachedEmbedder wraps the configured embedder with Redis (90-day TTL,
+    SHA-256 key over `model_name | input_type | normalized_text`). The
+    `input_type` segment keeps document and query vectors in separate
+    cache slots so Voyage's asymmetric embedding is preserved.
+
+    `model_name` lives in the key, so a model swap automatically
+    invalidates without manual cleanup.
+    """
+    return CachedEmbedder.from_url(
+        embedder=get_embedder(),
+        url=get_env().REDIS_URL,
+        model_name=get_config().models["embedder"].model,
+    )
+
+
+def get_embedding_service_v2(
+    repo: EmbeddingsRepo = Depends(get_embeddings_repo_v2),  # noqa: B008
+    embedder: EmbedderProtocol = Depends(get_embedder_v2),  # noqa: B008
+    config: AppConfig = Depends(get_config),  # noqa: B008
+) -> EmbeddingServiceV2:
+    """FastAPI dependency providing EmbeddingService (places_v2 documents).
+
+    Uses the same `get_embedder_v2` (Redis-backed CachedEmbedder) that
+    the query path uses. The cache key includes `input_type`, so
+    document and query vectors don't collide. `EmbeddingService`
+    runs its diff-then-embed `(text_hash, model_name)` check first,
+    so the cache only sees texts that actually need embedding —
+    cheap Redis round-trip, with a real hit when re-extracting the
+    same venue from different posts.
+    """
+    return EmbeddingServiceV2(
+        repo=repo,
+        embedder=embedder,
+        model_name=config.models["embedder"].model,
+    )
+
+
 def get_place_upsert_service(
     repo: PlacesRepo = Depends(get_places_v2_repo),  # noqa: B008
+    embedding_service: EmbeddingServiceV2 = Depends(  # noqa: B008
+        get_embedding_service_v2
+    ),
 ) -> PlaceUpsertService:
     """FastAPI dependency providing PlaceUpsertService (places_v2)."""
-    return PlaceUpsertService(repo=repo)
+    return PlaceUpsertService(repo=repo, embedding_service=embedding_service)
 
 
 def get_places_search_service(
@@ -595,47 +540,8 @@ def get_user_places_service(
 
 
 # ---------------------------------------------------------------------------
-# places_v2 — embeddings + hybrid search
+# places_v2 — hybrid search
 # ---------------------------------------------------------------------------
-
-
-def get_embeddings_repo_v2(
-    db_session: AsyncSession = Depends(get_session),  # noqa: B008
-) -> EmbeddingsRepo:
-    """FastAPI dependency providing EmbeddingsRepo (place_embeddings_v2)."""
-    return EmbeddingsRepo(db_session)
-
-
-def get_embedding_service_v2(
-    repo: EmbeddingsRepo = Depends(get_embeddings_repo_v2),  # noqa: B008
-    embedder: EmbedderProtocol = Depends(get_embedder_dep),  # noqa: B008
-    config: AppConfig = Depends(get_config),  # noqa: B008
-) -> EmbeddingServiceV2:
-    """FastAPI dependency providing EmbeddingService (places_v2 documents).
-
-    Doc embeds run at save time and rarely repeat — no cache wrapper here;
-    the diff-then-embed text_hash check on the repo already short-circuits
-    no-op re-saves.
-    """
-    return EmbeddingServiceV2(
-        repo=repo,
-        embedder=embedder,
-        model_name=config.models["embedder"].model,
-    )
-
-
-def get_query_embedder_v2() -> EmbedderProtocol:
-    """Cached query embedder backed by Redis (90-day TTL).
-
-    Wraps the configured embedder so HybridSearchService skips Voyage
-    on repeated queries. ``model_name`` is part of the cache key so
-    swapping embedders later never serves a vector from the wrong space.
-    """
-    return CachedEmbedder.from_url(
-        embedder=get_embedder(),
-        url=get_env().REDIS_URL,
-        model_name=get_config().models["embedder"].model,
-    )
 
 
 def get_hybrid_search_repo(
@@ -647,11 +553,129 @@ def get_hybrid_search_repo(
 
 def get_hybrid_search_service(
     repo: HybridSearchRepo = Depends(get_hybrid_search_repo),  # noqa: B008
-    embedder: EmbedderProtocol = Depends(get_query_embedder_v2),  # noqa: B008
+    embedder: EmbedderProtocol = Depends(get_embedder_v2),  # noqa: B008
 ) -> HybridSearchService:
     """FastAPI dependency providing HybridSearchService (places_v2).
 
-    Uses the cached query embedder so repeated agent queries skip
-    Voyage on the hot path.
+    Shares `get_embedder_v2` with the document-side EmbeddingService.
+    CachedEmbedder keys by `input_type`, so query vectors don't
+    collide with document vectors even though both paths hit the same
+    cache.
     """
     return HybridSearchService(repo=repo, embedder=embedder)
+
+
+# ---------------------------------------------------------------------------
+# Extraction pipeline + service (lives after places_v2 deps because it
+# depends on PlacesSearchService / PlaceUpsertService / UserPlacesService /
+# UserPlacesRepo factories defined above).
+# ---------------------------------------------------------------------------
+
+
+def get_extraction_pipeline(
+    extraction_config: ExtractionConfig = Depends(get_extraction_config),  # noqa: B008
+    search_service: PlacesSearchService = Depends(  # noqa: B008
+        get_places_search_service
+    ),
+) -> ExtractionPipeline:
+    """FastAPI dependency providing ExtractionPipeline with all levels wired.
+
+    Per ADR-070, the search step delegates to
+    `places_v2.PlacesSearchService` (DB-first lookup with cache
+    overlay, provider fallback, upsert). Extraction never calls Google
+    directly anymore.
+    """
+    from kebi.core.extraction.enrichers.llm_picker import LLMPlacePicker
+
+    return ExtractionPipeline(
+        levels=[_get_inline_level(), _get_deep_level()],
+        search_service=search_service,
+        picker=LLMPlacePicker(
+            instructor_client=get_instructor_client("extractor"),
+            confidence_config=extraction_config.confidence,
+        ),
+        extraction_config=extraction_config,
+    )
+
+
+def get_extraction_service(
+    pipeline: ExtractionPipeline = Depends(get_extraction_pipeline),  # noqa: B008
+    upsert_service: PlaceUpsertService = Depends(  # noqa: B008
+        get_place_upsert_service
+    ),
+    user_places_service: UserPlacesService = Depends(  # noqa: B008
+        get_user_places_service
+    ),
+    status_repo: ExtractionStatusRepository = Depends(get_status_repo),  # noqa: B008
+    event_dispatcher: EventDispatcher = Depends(get_event_dispatcher),  # noqa: B008
+) -> ExtractionService:
+    """FastAPI dependency providing ExtractionService (ADR-070, ADR-071).
+
+    Persistence is inlined inside the service: `upsert_and_embed` writes
+    place + embedding, `save_places` links to user_places with
+    `approved=False` (catching DuplicateUserPlaceError to filter
+    conflicts), `event_dispatcher` fires PlaceSaved per newly linked
+    place. v2 services are the single seam — extraction never reaches
+    the UserPlacesRepo directly.
+    """
+    return ExtractionService(
+        pipeline=pipeline,
+        upsert_service=upsert_service,
+        user_places_service=user_places_service,
+        status_repo=status_repo,
+        event_dispatcher=event_dispatcher,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Agent graph + ChatService — consume get_extraction_service so they live
+# below it.
+# ---------------------------------------------------------------------------
+
+
+def get_agent_graph(
+    recall_service: RecallService = Depends(get_recall_service),  # noqa: B008
+    extraction_service: ExtractionService = Depends(get_extraction_service),  # noqa: B008
+    consult_service: ConsultService = Depends(get_consult_service),  # noqa: B008
+    checkpointer: Any = Depends(get_agent_checkpointer),  # noqa: B008
+) -> Any:
+    """Build the agent StateGraph per-request.
+
+    Compiling per-request keeps tool-bound services request-scoped (fresh
+    SQLAlchemy sessions, real EventDispatcher) while reusing the
+    process-scoped checkpointer that owns its own psycopg pool.
+    """
+    if checkpointer is None:
+        return None
+    from kebi.core.agent.graph import build_graph
+    from kebi.core.agent.tools import build_tools
+    from kebi.providers.llm import get_langchain_chat_model
+
+    tools = build_tools(recall_service, extraction_service, consult_service)
+    llm = get_langchain_chat_model("orchestrator")
+    return build_graph(llm, tools, checkpointer)
+
+
+async def get_chat_service(
+    extraction_service: ExtractionService = Depends(get_extraction_service),  # noqa: B008
+    consult_service: ConsultService = Depends(get_consult_service),  # noqa: B008
+    recall_service: RecallService = Depends(get_recall_service),  # noqa: B008
+    event_dispatcher: EventDispatcher = Depends(get_event_dispatcher),  # noqa: B008
+    memory_service: UserMemoryService = Depends(get_user_memory_service),  # noqa: B008
+    taste_service: TasteModelService = Depends(get_taste_service),  # noqa: B008
+    places_service: PlacesService = Depends(get_places_service),  # noqa: B008
+    config: AppConfig = Depends(get_config),  # noqa: B008
+    agent_graph: Any = Depends(get_agent_graph),  # noqa: B008
+) -> ChatService:
+    """FastAPI dependency providing a fully wired ChatService (ADR-019, ADR-052)."""
+    return ChatService(
+        extraction_service=extraction_service,
+        consult_service=consult_service,
+        recall_service=recall_service,
+        event_dispatcher=event_dispatcher,
+        memory_service=memory_service,
+        taste_service=taste_service,
+        places_service=places_service,
+        config=config,
+        agent_graph=agent_graph,
+    )

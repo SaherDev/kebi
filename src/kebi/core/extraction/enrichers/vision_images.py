@@ -14,7 +14,7 @@ from kebi.core.extraction.types import (
     Medium,
     Producer,
 )
-from kebi.core.places import PlaceSource
+from kebi.core.places_v2 import PlaceSource
 from kebi.providers.llm import VisionExtractorProtocol
 
 logger = logging.getLogger(__name__)

@@ -53,6 +53,22 @@ class UserPlacesRepo:
         row = result.mappings().first()
         return _row_to_user_place(row) if row else None
 
+    async def get_existing_place_ids(
+        self, user_id: str, place_ids: list[str]
+    ) -> set[str]:
+        """Return the subset of `place_ids` already saved by `user_id`.
+
+        Targeted overlap query — avoids pulling the user's entire saved
+        list just to check duplicates on a small incoming batch.
+        """
+        if not place_ids:
+            return set()
+        stmt = select(_u.place_id).where(
+            _u.user_id == user_id, _u.place_id.in_(place_ids)
+        )
+        result = await self._session.execute(stmt)
+        return {row[0] for row in result}
+
     async def save_user_places(
         self, user_places: list[UserPlace]
     ) -> list[UserPlace]:

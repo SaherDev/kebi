@@ -15,6 +15,26 @@ Format:
 
 ---
 
+## ADR-071: Extraction saves every picker output to user_places; confidence partition at save time deprecated
+
+**Date:** 2026-05-13\
+**Status:** accepted\
+**Context:** ADR-057 introduced a three-band partition at save time: drop below `save_threshold`, store as `needs_review` between `save_threshold` and `confident_threshold`, store as `saved` at or above `confident_threshold`. The intent was to be selective on behalf of the user. In practice the threshold is a tuning knob that nobody re-tunes, the `needs_review` band adds a state the UI has to render specially, and a candidate the picker has already chosen (after enricher producers, search filtering, LLM picking, and dedup) is rarely junk — it's just lower-signal. Meanwhile `places_v2.UserPlacesService.save_places` already defaults `UserPlace.approved=False`, so the v2 data model has a built-in "tentative until user approves" notion baked into the persisted row itself.\
+**Decision:** Extraction saves every candidate the picker emits as a `user_places` row with `approved=False`. The save / needs_review / dropped partition is removed from the extraction flow. The user is the curator — they approve or delete after the fact. `ExtractionPersistenceService` is deleted; extraction calls `PlaceUpsertService.upsert_and_embed(cores)` followed by `UserPlacesService.save_places(user_id, cores, source, source_url)` directly. Duplicate handling: extraction pre-filters via `UserPlacesRepo.get_existing_place_ids` so `save_places` never sees a conflicting batch — the duplicate ids are surfaced in the response as `status="duplicate"`. `ExtractPlaceItem.status` keeps its `Literal["saved", "needs_review", "duplicate"]` type for backward compatibility, but extraction never emits `"needs_review"` after this ADR — only `saved` or `duplicate`. Confidence is still computed by `core/extraction/confidence.py` (it informs the picker's own selection and is preserved in evidence/logging) but it is no longer a write gate.\
+**Consequences:** Supersedes ADR-057 (status: superseded). `config/app.yaml extraction.thresholds` keys become unused by the save path; they remain readable for any future re-introduction but are no longer load-bearing. The "needs_review" branch in product-repo UI becomes dead code — the product repo can remove its rendering of that state in a coordinated update or leave it as a defensive no-op. Per-place behavior shifts from system-decides-what-to-keep to user-decides-what-to-keep; the `approved` flag on `UserPlace` is the curation signal going forward. `PlaceSaved` events still fire on every save so taste-model regeneration and memory extraction continue to operate. Spec 030 FR-002 / FR-004 / SC-007 are updated to drop partition references; the parity test described in research R-09 keeps latency and response-shape gates but drops partition-count parity. The cleaner v2 persistence shape (two calls) makes extraction's persistence layer small enough to live inline in `ExtractionService.run` — no dedicated service.
+
+---
+
+## ADR-070: PlacesSearchService is the single source of truth for place lookups
+
+**Date:** 2026-05-13\
+**Status:** accepted\
+**Context:** Two parallel place-lookup paths exist today. Extraction owns its own `PlacesSearcher` that talks to Google directly and shapes results as `SearchMatch`; `places_v2.PlacesSearchService` does the same job with cache + DB awareness and shapes results as `PlaceObject`. Two paths means two cache stories, two ways a place enters the system, and two vocabularies for anyone consuming search results.\
+**Decision:** `places_v2.PlacesSearchService` is the only service that stands between any caller and place lookups. Anything that needs to find or fetch a place goes through it — no other path is permitted. For this feature: delete `core/extraction/searcher.py` (`PlacesSearcher`, `SearchMatch`). `core/extraction/types.py` drops every legacy place re-export and the extraction-internal `ValidatedCandidate` is reshaped against the v2 vocabulary (`PlaceCategory`/`PlaceTag`, v2 `PlaceSource`, namespaced `provider_id`). Any extraction-specific filtering (e.g. dropping geographic-feature matches) is a thin filter applied to the service's result, not a fork of the lookup path. Extraction-internal pipeline-state types (`Producer`, `Medium`, `Evidence`, `KnownPlace`, `ExtractionContext`) stay — they describe pipeline state, not place identity.\
+**Consequences:** One service to evolve when search behavior changes. One place where cache, upsert, and provider fallback live. A place fetched once is visible to every caller. Extraction owns no place-fetching plumbing — it asks, filters the answer, and moves on. Builds on ADR-049 (PlacesClient already moved out of extraction).
+
+---
+
 ## ADR-069: Bounding agent state and conversation history for cost
 
 **Date:** 2026-05-05\
@@ -152,7 +172,7 @@ Conversation history trimmed to the last 40 messages before each LLM call. Older
 ## ADR-057: Save tentative extractions above 0.30, surface low-confidence band to the user
 
 **Date:** 2026-04-15\
-**Status:** accepted\
+**Status:** superseded by ADR-071\
 **Context:** The prior save gate was `confidence ≥ 0.70` (ADR-029 multiplicative formula). In practice most real TikTok captions generate confidences in the 0.60–0.68 band, because the LLM typically resolves via `caption` signal (base 0.75) and Google Places returns `FUZZY` (0.9) or `CATEGORY_ONLY` (0.8) matches rather than `EXACT` — `0.75 × 0.9 = 0.675`, `0.75 × 0.8 = 0.60`. These are correct places the user intended to save; we were silently dropping them at the save gate and surfacing them as `failed`. The user has more signal than we do about whether the match is right (they saw the video), so dropping the row is strictly worse than saving it with a "needs review" flag.\
 **Decision:** Lower the save gate to `confidence ≥ 0.30` (below that we still drop). Introduce a second threshold `confident_threshold = 0.70` that splits saved rows into two bands:
 - `confidence ≥ 0.70` → `PlaceSaveOutcome.status = "saved"` — written silently, shown as "Saved: X" in the chat message.

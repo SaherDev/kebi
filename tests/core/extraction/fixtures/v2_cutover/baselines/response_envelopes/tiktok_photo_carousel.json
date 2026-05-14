@@ -1,0 +1,176 @@
+{
+  "failure_message": null,
+  "failure_reason": null,
+  "raw_input": "https://www.tiktok.com/@yoshandtils/photo/7573740901307010326?is_from_webapp=1&sender_device=pc&web_id=7595386767118779924",
+  "request_id": "7421719a161a490780da20ee992d165e",
+  "results": [
+    {
+      "confidence": 0.9,
+      "evidence": [
+        {
+          "medium": "caption",
+          "metadata": {},
+          "producer": "llm_ner",
+          "snippet": null
+        },
+        {
+          "medium": "title",
+          "metadata": {},
+          "producer": "llm_ner",
+          "snippet": null
+        },
+        {
+          "medium": "image",
+          "metadata": {},
+          "producer": "vision_images",
+          "snippet": "Wat Arun"
+        },
+        {
+          "medium": "caption",
+          "metadata": {},
+          "producer": "tiktok_caption",
+          "snippet": "The most incredible city #bangkok #thailand #thingstodo #visit #fyp "
+        },
+        {
+          "medium": "title",
+          "metadata": {},
+          "producer": "video_metadata",
+          "snippet": "The most incredible city #bangkok #thailand #thingstodo #visit #fyp "
+        }
+      ],
+      "place": {
+        "address": null,
+        "attributes": {
+          "aesthetic": [],
+          "ambiance": null,
+          "atmosphere": [
+            "quiet"
+          ],
+          "crowd": [],
+          "cuisine": null,
+          "dietary": [],
+          "dress_code": null,
+          "good_for": [
+            "families",
+            "tourists"
+          ],
+          "known_for": [
+            "Buddhist temple",
+            "stunning architecture",
+            "Rama II period"
+          ],
+          "location_context": null,
+          "music": null,
+          "noise_level": null,
+          "price_hint": null,
+          "season": [],
+          "signature_items": [],
+          "time_of_day": []
+        },
+        "created_at": "2026-05-13T22:02:15.904590Z",
+        "enriched": false,
+        "geo_fresh": false,
+        "hours": null,
+        "lat": null,
+        "lng": null,
+        "phone": null,
+        "photo_url": null,
+        "place_id": "e7115076-c93e-4201-add1-095802439328",
+        "place_name": "Wat Arun",
+        "place_type": "things_to_do",
+        "popularity": null,
+        "provider_id": "google:ChIJaSv_6gaZ4jARnbiUVn6Z_YY",
+        "rating": null,
+        "source": "tiktok",
+        "source_url": "https://www.tiktok.com/@yoshandtils/video/7573740901307010326?is_from_webapp=1&sender_device=pc&web_id=7595386767118779924",
+        "subcategory": "cultural_site",
+        "tags": []
+      },
+      "status": "saved"
+    },
+    {
+      "confidence": 0.9,
+      "evidence": [
+        {
+          "medium": "caption",
+          "metadata": {},
+          "producer": "llm_ner",
+          "snippet": null
+        },
+        {
+          "medium": "title",
+          "metadata": {},
+          "producer": "llm_ner",
+          "snippet": null
+        },
+        {
+          "medium": "image",
+          "metadata": {},
+          "producer": "vision_images",
+          "snippet": "Lumphini Park"
+        },
+        {
+          "medium": "caption",
+          "metadata": {},
+          "producer": "tiktok_caption",
+          "snippet": "The most incredible city #bangkok #thailand #thingstodo #visit #fyp "
+        },
+        {
+          "medium": "title",
+          "metadata": {},
+          "producer": "video_metadata",
+          "snippet": "The most incredible city #bangkok #thailand #thingstodo #visit #fyp "
+        }
+      ],
+      "place": {
+        "address": null,
+        "attributes": {
+          "aesthetic": [],
+          "ambiance": null,
+          "atmosphere": [
+            "scenic"
+          ],
+          "crowd": [],
+          "cuisine": null,
+          "dietary": [],
+          "dress_code": null,
+          "good_for": [
+            "families",
+            "solo"
+          ],
+          "known_for": [
+            "large urban park",
+            "outdoor recreation"
+          ],
+          "location_context": null,
+          "music": null,
+          "noise_level": null,
+          "price_hint": null,
+          "season": [],
+          "signature_items": [],
+          "time_of_day": []
+        },
+        "created_at": "2026-05-13T22:02:15.904590Z",
+        "enriched": false,
+        "geo_fresh": false,
+        "hours": null,
+        "lat": null,
+        "lng": null,
+        "phone": null,
+        "photo_url": null,
+        "place_id": "eda4cacc-9121-4447-8320-c379512e9eda",
+        "place_name": "Lumphini Park",
+        "place_type": "things_to_do",
+        "popularity": null,
+        "provider_id": "google:ChIJG7BL7Saf4jARNmn5AQiyAaw",
+        "rating": null,
+        "source": "tiktok",
+        "source_url": "https://www.tiktok.com/@yoshandtils/video/7573740901307010326?is_from_webapp=1&sender_device=pc&web_id=7595386767118779924",
+        "subcategory": "nature",
+        "tags": []
+      },
+      "status": "saved"
+    }
+  ],
+  "status": "completed"
+}
