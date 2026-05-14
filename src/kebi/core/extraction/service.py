@@ -11,6 +11,16 @@ Spec 030 Phase 3 (ADR-070, ADR-071):
   emits `"needs_review"` — only `"saved"` or `"duplicate"`.
 - All place vocabulary is v2-native; no legacy `_to_legacy_source`
   shim.
+
+ADR-073 dropped the agent's save tool — `ExtractionService.run` is now
+called only by the `POST /v1/extract` route, which doesn't consume
+reasoning-step emissions. The former `emit` parameter has been removed
+along with all `save.*` step calls.
+
+ADR-074 added a Redis result cache keyed by canonical URL: a hit lets
+the second-and-later users sharing the same URL skip the entire
+pipeline + upsert and just link the cached `PlaceCore`s to their own
+`user_places`.
 """
 
 from __future__ import annotations
@@ -22,8 +32,8 @@ from uuid import uuid4
 from kebi.api.schemas.extract_place import (
     ExtractPlaceItem,
     ExtractPlaceResponse,
+    FailureReason,
 )
-from kebi.core.emit import EmitFn
 from kebi.core.events.dispatcher import EventDispatcherProtocol
 from kebi.core.events.events import PlaceSaved
 from kebi.core.extraction.candidate_mapper import candidate_to_core
@@ -31,14 +41,14 @@ from kebi.core.extraction.extraction_pipeline import (
     ExtractionPipeline,
     TooManyCandidatesError,
 )
-from kebi.core.extraction.input_parser import parse_input
+from kebi.core.extraction.input_parser import ParsedInput, parse_input
+from kebi.core.extraction.result_cache import ExtractionResultCache
 from kebi.core.extraction.status_repository import ExtractionStatusRepository
 from kebi.core.extraction.types import ValidatedCandidate
-from kebi.core.extraction.url_source import normalize_url, source_from_url
+from kebi.core.extraction.url_source import source_from_url
 from kebi.core.places_v2 import (
     DuplicateUserPlaceError,
     PlaceCore,
-    PlaceObject,
     PlaceSource,
     PlaceUpsertServiceProtocol,
     UserPlacesServiceProtocol,
@@ -53,19 +63,6 @@ logger = logging.getLogger(__name__)
 DEFAULT_MAX_CANDIDATES = 25
 
 
-_SOURCE_LABELS: dict[PlaceSource, str] = {
-    PlaceSource.tiktok: "the TikTok video",
-    PlaceSource.instagram: "the Instagram post",
-    PlaceSource.youtube: "the YouTube video",
-    PlaceSource.google_maps_list: "the Google Maps list",
-    PlaceSource.manual: "what you added or wrote",
-}
-
-
-def _source_label(source: PlaceSource) -> str:
-    return _SOURCE_LABELS.get(source, "what you shared")
-
-
 def _unsupported_url_message(url: str) -> str:
     return (
         f"Sorry — I can't read links from this site yet. "
@@ -75,23 +72,35 @@ def _unsupported_url_message(url: str) -> str:
     )
 
 
-def _build_parse_summary(source: PlaceSource | None, has_text: bool) -> str:
-    if source is not None and has_text:
-        return f"Reading {_source_label(source)} and what you shared"
-    if source is not None:
-        return f"Reading {_source_label(source)}"
-    return "Reading what you shared"
+def _failed_response(
+    raw_input: str,
+    request_id: str,
+    reason: FailureReason,
+    message: str,
+) -> ExtractPlaceResponse:
+    """Build a terminal `failed` envelope. Centralized so every failure
+    site reads the same way."""
+    return ExtractPlaceResponse(
+        status="failed",
+        results=[],
+        raw_input=raw_input,
+        request_id=request_id,
+        failure_reason=reason,
+        failure_message=message,
+    )
 
 
 def _candidate_to_item_dict(
     candidate: ValidatedCandidate,
-    place: PlaceObject,
+    place: PlaceCore,
 ) -> dict[str, Any]:
     """Map a (candidate, persisted-place) pair to an ExtractPlaceItem dict.
 
     No `status` field — under ADR-071 the response is a flat list of
     places now associated with the user (whether newly linked or
-    already saved is internal).
+    already saved is internal). `place` is a `PlaceCore`: identity +
+    static fields only, no live signals (those come from
+    `PlacesService.enrich_batch` at recall/consult time).
     """
     return {
         "place": place.model_dump(mode="json"),
@@ -109,12 +118,13 @@ def _candidate_to_item_dict(
 
 
 class ExtractionService:
-    """Orchestrate the extraction cascade (ADR-008, ADR-070, ADR-071).
+    """Orchestrate the extraction cascade (ADR-008, ADR-070, ADR-071, ADR-074).
 
     Persistence is inlined here: `upsert_and_embed` writes the place
     row and embedding; `save_places` links to `user_places` with
-    `approved=False` after pre-filtering duplicates. No separate
-    persistence service.
+    `approved=False` after pre-filtering duplicates. ADR-074 adds a
+    Redis result cache so the second-and-later users sharing the same
+    URL skip pipeline + upsert entirely.
     """
 
     def __init__(
@@ -124,19 +134,20 @@ class ExtractionService:
         user_places_service: UserPlacesServiceProtocol,
         status_repo: ExtractionStatusRepository,
         event_dispatcher: EventDispatcherProtocol,
+        result_cache: ExtractionResultCache,
     ) -> None:
         self._pipeline = pipeline
         self._upsert = upsert_service
         self._user_places = user_places_service
         self._status_repo = status_repo
         self._event_dispatcher = event_dispatcher
+        self._result_cache = result_cache
 
     async def run(
         self,
         raw_input: str,
         user_id: str,
         request_id: str | None = None,
-        emit: EmitFn | None = None,
         limit: int | None = None,
     ) -> ExtractPlaceResponse:
         """Run the extraction pipeline inline and return a terminal envelope.
@@ -144,103 +155,132 @@ class ExtractionService:
         Returns `status ∈ {completed, failed}` — never `pending`. Writes
         the final envelope to the Redis status store under
         `extraction:v2:{request_id}`.
-        """
-        _emit: EmitFn = emit or (lambda step, summary, duration_ms=None: None)
 
+        ADR-074: before running the pipeline, look up a Redis cache
+        keyed by canonical URL (the same form `parse_input` produces).
+        On hit, skip pipeline + upsert and just link the cached
+        `PlaceCore`s to this user. On miss, run the pipeline and
+        write the result to the cache before returning.
+        """
         if not raw_input or not raw_input.strip():
             raise ValueError("raw_input cannot be empty")
 
         parsed = parse_input(raw_input)
-        parsed.url = normalize_url(parsed.url)
         source = source_from_url(parsed.url)
         rid = request_id or uuid4().hex
 
         if parsed.url is not None and source is None:
-            unsupported_msg = _unsupported_url_message(parsed.url)
-            _emit("save.unsupported_url", unsupported_msg)
-            response = ExtractPlaceResponse(
-                status="failed",
-                results=[],
-                raw_input=raw_input,
-                request_id=rid,
-                failure_reason="unsupported_url",
-                failure_message=unsupported_msg,
-            )
-            _emit(
-                "save.persist",
-                "Skipped — this kind of link isn't supported yet",
+            response = _failed_response(
+                raw_input,
+                rid,
+                reason="unsupported_url",
+                message=_unsupported_url_message(parsed.url),
             )
             await self._status_repo.write(rid, response.model_dump(mode="json"))
             return response
 
-        parse_summary = _build_parse_summary(source, bool(parsed.supplementary_text))
-        _emit("save.parse_input", parse_summary)
-
-        cap_exceeded = False
-        try:
-            effective_limit = (
-                limit if limit is not None else DEFAULT_MAX_CANDIDATES
+        # ADR-074 cache lookup — short-circuits pipeline + upsert.
+        if parsed.url is not None:
+            cached = await self._try_cache_hit(
+                canonical_url=parsed.url,
+                raw_input=raw_input,
+                user_id=user_id,
+                request_id=rid,
+                source=source,
             )
+            if cached is not None:
+                await self._status_repo.write(rid, cached.model_dump(mode="json"))
+                return cached
+
+        response = await self._run_pipeline_and_persist(
+            raw_input=raw_input,
+            user_id=user_id,
+            rid=rid,
+            source=source,
+            parsed=parsed,
+            limit=limit,
+        )
+
+        # ADR-074 cache write — only completed responses with at least
+        # one place; failed/empty outcomes aren't worth re-serving.
+        if (
+            parsed.url is not None
+            and response.status == "completed"
+            and response.results
+        ):
+            await self._result_cache.set(parsed.url, response.results)
+
+        await self._status_repo.write(rid, response.model_dump(mode="json"))
+        return response
+
+    async def _try_cache_hit(
+        self,
+        canonical_url: str,
+        raw_input: str,
+        user_id: str,
+        request_id: str,
+        source: PlaceSource | None,
+    ) -> ExtractPlaceResponse | None:
+        """Look up the result cache; on hit, link the cached cores to this
+        user and return the response. On miss or unrecoverable error
+        (FK violation against a deleted `places_v2` row), evict and
+        return None so the caller falls back to a full pipeline run."""
+        cached_items = await self._result_cache.get(canonical_url)
+        if cached_items is None:
+            return None
+        try:
+            return await self._save_from_cache(
+                cached_items=cached_items,
+                raw_input=raw_input,
+                user_id=user_id,
+                request_id=request_id,
+                source=source,
+                canonical_url=canonical_url,
+            )
+        except Exception:
+            logger.warning(
+                "extraction_cache_hit_invalid",
+                extra={"canonical_url": canonical_url},
+                exc_info=True,
+            )
+            await self._result_cache.delete(canonical_url)
+            return None
+
+    async def _run_pipeline_and_persist(
+        self,
+        raw_input: str,
+        user_id: str,
+        rid: str,
+        source: PlaceSource | None,
+        parsed: ParsedInput,
+        limit: int | None,
+    ) -> ExtractPlaceResponse:
+        """Run the pipeline → upsert → save_places → build response.
+
+        All terminal-failure branches (cap exceeded, pipeline error,
+        empty candidates, all-duplicates) build their envelope via
+        `_failed_response` so the failure shape stays consistent.
+        """
+        try:
+            effective_limit = limit if limit is not None else DEFAULT_MAX_CANDIDATES
             candidates = await self._pipeline.run(
                 url=parsed.url,
                 user_id=user_id,
                 supplementary_text=parsed.supplementary_text,
-                emit=emit,
                 limit=effective_limit,
             )
-            if not candidates:
-                response = ExtractPlaceResponse(
-                    status="failed",
-                    results=[],
-                    raw_input=raw_input,
-                    request_id=rid,
-                    failure_reason="no_candidates",
-                    failure_message=(
-                        "No venue could be extracted from the post — the "
-                        "caption, transcript, and visible text didn't "
-                        "contain a recognizable place name."
-                    ),
-                )
-            else:
-                items = await self._persist_and_build_items(
-                    candidates, user_id, rid, source, parsed.url
-                )
-                if items:
-                    response = ExtractPlaceResponse(
-                        status="completed",
-                        results=items,
-                        raw_input=raw_input,
-                        request_id=rid,
-                    )
-                else:
-                    response = ExtractPlaceResponse(
-                        status="failed",
-                        results=[],
-                        raw_input=raw_input,
-                        request_id=rid,
-                        failure_reason="no_candidates",
-                        failure_message=(
-                            "Picker emitted candidates but none survived "
-                            "persistence (every provider_id was already "
-                            "linked to the user)."
-                        ),
-                    )
         except TooManyCandidatesError as exc:
-            cap_exceeded = True
             logger.info(
-                "Extraction request %s dropped: %d candidates exceeded "
-                "limit of %d",
+                "Extraction request %s dropped: %d candidates exceeded limit of %d",
                 rid,
                 exc.found,
                 exc.limit,
             )
-            response = ExtractPlaceResponse(
-                status="failed",
-                results=[],
-                raw_input=raw_input,
-                request_id=rid,
-                failure_reason="candidate_limit_exceeded",
-                failure_message=(
+            return _failed_response(
+                raw_input,
+                rid,
+                reason="candidate_limit_exceeded",
+                message=(
                     f"Found {exc.found} candidates, more than the limit "
                     f"of {exc.limit} — request dropped to protect "
                     f"validation quota."
@@ -248,26 +288,106 @@ class ExtractionService:
             )
         except Exception as exc:
             logger.exception("Extraction pipeline failed for request %s", rid)
-            response = ExtractPlaceResponse(
-                status="failed",
-                results=[],
-                raw_input=raw_input,
-                request_id=rid,
-                failure_reason="pipeline_error",
-                failure_message=f"Pipeline error: {type(exc).__name__}: {exc}",
+            return _failed_response(
+                raw_input,
+                rid,
+                reason="pipeline_error",
+                message=f"Pipeline error: {type(exc).__name__}: {exc}",
             )
 
-        if response.results:
-            persist_summary = f"Saved {len(response.results)} place(s)"
-        elif response.status == "completed":
-            persist_summary = "Done — nothing new to save"
-        elif cap_exceeded:
-            persist_summary = "Skipped — too many places in one request"
-        else:
-            persist_summary = "Could not save — no valid places found"
-        _emit("save.persist", persist_summary)
-        await self._status_repo.write(rid, response.model_dump(mode="json"))
-        return response
+        if not candidates:
+            return _failed_response(
+                raw_input,
+                rid,
+                reason="no_candidates",
+                message=(
+                    "No venue could be extracted from the post — the "
+                    "caption, transcript, and visible text didn't "
+                    "contain a recognizable place name."
+                ),
+            )
+
+        items = await self._persist_and_build_items(
+            candidates, user_id, rid, source, parsed.url
+        )
+        if not items:
+            return _failed_response(
+                raw_input,
+                rid,
+                reason="no_candidates",
+                message=(
+                    "Picker emitted candidates but none survived "
+                    "persistence (every provider_id was already "
+                    "linked to the user)."
+                ),
+            )
+        return ExtractPlaceResponse(
+            status="completed",
+            results=items,
+            raw_input=raw_input,
+            request_id=rid,
+        )
+
+    async def _link_to_user(
+        self,
+        user_id: str,
+        request_id: str,
+        cores: list[PlaceCore],
+        source: PlaceSource | None,
+        source_url: str | None,
+    ) -> set[str]:
+        """Link `cores` to `user_places` and fire `PlaceSaved` for the
+        newly-linked subset. Returns the set of `place_id`s that
+        `save_places` rejected as already-linked-for-this-user (i.e.
+        duplicates) — callers use this to omit them from the
+        `PlaceSaved` event.
+
+        Eligible cores are expected to have `.id` set; callers filter
+        beforehand. Handles the `DuplicateUserPlaceError` retry
+        pattern: `save_places` rolls back the whole batch on conflict,
+        so we filter the conflicting ids and retry once with the rest.
+
+        Shared by `_persist_and_build_items` (cache-miss / pipeline
+        path) and `_save_from_cache` (ADR-074 cache-hit path).
+        """
+        if not cores:
+            return set()
+
+        save_source = source or PlaceSource.manual
+        duplicate_place_ids: set[str] = set()
+        try:
+            await self._user_places.save_places(
+                user_id=user_id,
+                places=cores,
+                source=save_source,
+                source_url=source_url,
+            )
+        except DuplicateUserPlaceError as exc:
+            duplicate_place_ids = set(exc.conflicts)
+            non_duplicates = [
+                c for c in cores if c.id and c.id not in duplicate_place_ids
+            ]
+            if non_duplicates:
+                await self._user_places.save_places(
+                    user_id=user_id,
+                    places=non_duplicates,
+                    source=save_source,
+                    source_url=source_url,
+                )
+
+        linked_place_ids = [
+            c.id for c in cores if c.id and c.id not in duplicate_place_ids
+        ]
+        if linked_place_ids:
+            await self._event_dispatcher.dispatch(
+                PlaceSaved(
+                    user_id=user_id,
+                    place_ids=linked_place_ids,
+                    place_metadata={},
+                    request_id=request_id,
+                )
+            )
+        return duplicate_place_ids
 
     async def _persist_and_build_items(
         self,
@@ -279,21 +399,11 @@ class ExtractionService:
     ) -> list[ExtractPlaceItem]:
         """Inline v2 persistence flow (ADR-070, ADR-071).
 
-        1. Upsert + embed every picker output (one v2 call).
-        2. Link to user_places via UserPlacesService.save_places. The
-           service raises DuplicateUserPlaceError and rolls back the
-           whole batch on any conflict — catch it, filter out the
-           conflicting place_ids, retry once with the rest.
-        3. Dispatch PlaceSaved per *newly* linked place (skipping
-           conflicts so taste-model regen doesn't re-fire for places
-           the user already saved).
-        4. Return ExtractPlaceItems: a flat list of places now
-           associated with the user. No per-item status field — the
-           saved/duplicate distinction is an internal optimization,
-           not part of the response contract (ADR-071).
-
-        v2 services are the single seam: extraction never reaches the
-        UserPlacesRepo directly.
+        Upserts every picker output, links them to `user_places` via
+        `_link_to_user`, returns a flat list of `ExtractPlaceItem`s —
+        one per persisted place, regardless of newly-linked vs
+        already-linked. The saved/duplicate distinction is an internal
+        optimization, not part of the response contract (ADR-071).
         """
         cores = [candidate_to_core(c) for c in candidates]
         persisted: list[PlaceCore] = await self._upsert.upsert_and_embed(cores)
@@ -308,32 +418,15 @@ class ExtractionService:
             and persisted_by_pid[c.provider_id].id is not None
         ]
 
-        duplicate_place_ids: set[str] = set()
-        if eligible_cores:
-            save_source = source or PlaceSource.manual
-            try:
-                await self._user_places.save_places(
-                    user_id=user_id,
-                    places=eligible_cores,
-                    source=save_source,
-                    source_url=source_url,
-                )
-            except DuplicateUserPlaceError as exc:
-                duplicate_place_ids = set(exc.conflicts)
-                non_duplicates = [
-                    c for c in eligible_cores
-                    if c.id and c.id not in duplicate_place_ids
-                ]
-                if non_duplicates:
-                    await self._user_places.save_places(
-                        user_id=user_id,
-                        places=non_duplicates,
-                        source=save_source,
-                        source_url=source_url,
-                    )
+        await self._link_to_user(
+            user_id=user_id,
+            request_id=request_id,
+            cores=eligible_cores,
+            source=source,
+            source_url=source_url,
+        )
 
         items: list[ExtractPlaceItem] = []
-        linked_place_ids: list[str] = []
         for c in candidates:
             persisted_core = persisted_by_pid.get(c.provider_id)
             if persisted_core is None or persisted_core.id is None:
@@ -342,33 +435,41 @@ class ExtractionService:
                     extra={"provider_id": c.provider_id},
                 )
                 continue
-
-            items.append(
-                ExtractPlaceItem(
-                    **_candidate_to_item_dict(c, _core_to_object(persisted_core))
-                )
-            )
-            if persisted_core.id not in duplicate_place_ids:
-                linked_place_ids.append(persisted_core.id)
-
-        if linked_place_ids:
-            event = PlaceSaved(
-                user_id=user_id,
-                place_ids=linked_place_ids,
-                place_metadata={},
-                request_id=request_id,
-            )
-            await self._event_dispatcher.dispatch(event)
-
+            items.append(ExtractPlaceItem(**_candidate_to_item_dict(c, persisted_core)))
         return items
 
+    async def _save_from_cache(
+        self,
+        cached_items: list[ExtractPlaceItem],
+        raw_input: str,
+        user_id: str,
+        request_id: str,
+        source: PlaceSource | None,
+        canonical_url: str,
+    ) -> ExtractPlaceResponse:
+        """ADR-074 cache-hit save path. Skips pipeline + upsert.
 
-def _core_to_object(core: PlaceCore) -> PlaceObject:
-    """Lift a PlaceCore into a PlaceObject for the response envelope.
-
-    The upsert path returns PlaceCore (no live fields populated). The
-    response schema expects PlaceObject. Live fields stay None until a
-    subsequent read goes through PlacesSearchService and fills them
-    from the cache.
-    """
-    return PlaceObject.model_validate(core.model_dump())
+        The cached `PlaceCore`s already reference persisted `places_v2`
+        rows — re-linking is the only DB write. Raises whatever
+        `save_places` raises on an unhandled error; the caller in
+        `_try_cache_hit` catches and falls back to a full pipeline run
+        after evicting the stale cache entry.
+        """
+        eligible_cores: list[PlaceCore] = [
+            PlaceCore.model_validate(item.place.model_dump())
+            for item in cached_items
+            if item.place.id is not None
+        ]
+        await self._link_to_user(
+            user_id=user_id,
+            request_id=request_id,
+            cores=eligible_cores,
+            source=source,
+            source_url=canonical_url,
+        )
+        return ExtractPlaceResponse(
+            status="completed",
+            results=cached_items,
+            raw_input=raw_input,
+            request_id=request_id,
+        )

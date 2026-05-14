@@ -42,9 +42,7 @@ def _contains_name(haystack: str | None, name_norm: str) -> bool:
     return name_norm in normalize_name(haystack)
 
 
-def _transcript_window(
-    transcript: str, name: str, width: int = 200
-) -> str:
+def _transcript_window(transcript: str, name: str, width: int = 200) -> str:
     """Best-effort: a snippet centered on the first occurrence of `name`."""
     name_norm = normalize_name(name)
     text_norm = normalize_name(transcript)
@@ -119,9 +117,7 @@ def collect_evidence_for(
             Evidence(
                 producer=Producer.LLM_NER,
                 medium=Medium.LOCATION_TAG,
-                snippet=context.location_tag[:200]
-                if context.location_tag
-                else None,
+                snippet=context.location_tag[:200] if context.location_tag else None,
             )
         )
     if context.caption and _EMOJI_MARKER_RE.search(context.caption):
@@ -144,14 +140,15 @@ def collect_evidence_for(
 
     # 2) Inherit text_evidence whose source field contains the name.
     for te in context.text_evidence:
-        if te.medium == Medium.CAPTION and _contains_name(
-            context.caption, name_norm
-        ) or te.medium == Medium.TRANSCRIPT and _contains_name(
-            context.transcript, name_norm
-        ) or te.medium == Medium.TITLE and _contains_name(
-            context.title, name_norm
-        ) or te.medium == Medium.LOCATION_TAG and _contains_name(
-            context.location_tag, name_norm
+        if (
+            te.medium == Medium.CAPTION
+            and _contains_name(context.caption, name_norm)
+            or te.medium == Medium.TRANSCRIPT
+            and _contains_name(context.transcript, name_norm)
+            or te.medium == Medium.TITLE
+            and _contains_name(context.title, name_norm)
+            or te.medium == Medium.LOCATION_TAG
+            and _contains_name(context.location_tag, name_norm)
         ):
             evidence.append(te)
         elif te.medium == Medium.HASHTAG and te.snippet is not None:
@@ -161,8 +158,7 @@ def collect_evidence_for(
         # photo path produced. Attach when known_places carries
         # vision_images evidence for this same candidate.
         elif te.medium == Medium.IMAGE and any(
-            normalize_name(k.name) == name_norm
-            and k.producer == Producer.VISION_IMAGES
+            normalize_name(k.name) == name_norm and k.producer == Producer.VISION_IMAGES
             for k in context.known_places
         ):
             evidence.append(te)

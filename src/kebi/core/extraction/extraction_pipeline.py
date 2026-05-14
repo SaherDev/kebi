@@ -210,9 +210,7 @@ class ExtractionPipeline:
 
             _enforce_candidate_limit(context, limit, _emit)
 
-            await self._extend_search_set(
-                context, search_set, searched_queries
-            )
+            await self._extend_search_set(context, search_set, searched_queries)
 
             results = await self._picker.pick(context, search_set)
 

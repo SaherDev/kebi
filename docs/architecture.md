@@ -81,6 +81,14 @@ Raw input (URL, plain text, or mixed)
     ▼
 POST /v1/extract  (synchronous — blocks until pipeline completes)
     │  ExtractionService.run(raw_input, user_id, limit?)
+    │  parsed = parse_input(raw_input)  ← URL canonicalized here:
+    │                                     normalize + strip query/frag
+    │
+    ├── ADR-074 cache lookup: result_cache.get(parsed.url)
+    │   ├── HIT  →  skip pipeline + upsert
+    │   │           save_places(user_id, cached_cores, …)
+    │   │           fire PlaceSaved for newly-linked  →  return (~50ms)
+    │   └── MISS →  fall through to pipeline (below)
     │
     └── ExtractionPipeline.run()
         │  context = ExtractionContext(url, user_id, supplementary_text)
@@ -105,6 +113,8 @@ POST /v1/extract  (synchronous — blocks until pipeline completes)
         │
         └── ExtractionService persists each surviving outcome (per ADR-071,
             every picker candidate lands in user_places with approved=False)
+            → ADR-074 cache write: result_cache.set(parsed.url, response.results)
+              (only for status="completed" + non-empty)
             → returns ExtractPlaceResponse synchronously to the caller
 
 GET /v1/extraction/{request_id}

@@ -87,8 +87,7 @@ class WhisperAudioEnricher:
             # bytes to Groq Whisper returns 400 "file is empty".
             if not audio_bytes:
                 logger.debug(
-                    "Whisper Tier 2 skipped — yt-dlp returned 0 audio bytes "
-                    "for url=%s",
+                    "Whisper Tier 2 skipped — yt-dlp returned 0 audio bytes for url=%s",
                     url,
                 )
                 return None

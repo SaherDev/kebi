@@ -49,9 +49,7 @@ def dedup_by_provider_id(
 
         winner = group[0]
         rest = group[1:]
-        winner.evidence = _merge_evidence(
-            winner.evidence, *(r.evidence for r in rest)
-        )
+        winner.evidence = _merge_evidence(winner.evidence, *(r.evidence for r in rest))
         winner.categories = _merge_categories(
             winner.categories, *(r.categories for r in rest)
         )

@@ -262,9 +262,7 @@ class _PickedPlace(BaseModel):
 
     provider_id: str = Field(
         min_length=1,
-        description=(
-            "Must match one of the provider_id values in search_candidates."
-        ),
+        description=("Must match one of the provider_id values in search_candidates."),
     )
     categories: list[PlaceCategory] = Field(
         default_factory=list,
@@ -403,9 +401,7 @@ class LLMPlacePicker:
         ]
         # Safety net: calculate_confidence requires non-empty evidence.
         if not evidence:
-            evidence.append(
-                Evidence(producer=Producer.LLM_NER, medium=Medium.CAPTION)
-            )
+            evidence.append(Evidence(producer=Producer.LLM_NER, medium=Medium.CAPTION))
 
         # Convert flat LLM tags → PlaceTag with source="llm". Type
         # values outside TagType fall through as plain strings (the
@@ -488,8 +484,7 @@ class LLMPlacePicker:
             + "Pick which of the search_candidates above the post actually "
             "references. Emit one structured object per pick (or an empty "
             "list if none match). Use `rejected=true` for candidates that "
-            "look wrong rather than dropping silently.\n\n"
-            + _VOCAB_INSTRUCTION
+            "look wrong rather than dropping silently.\n\n" + _VOCAB_INSTRUCTION
         )
 
 

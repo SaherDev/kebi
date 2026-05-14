@@ -103,6 +103,10 @@ models:
 # ADR-018, ADR-034: confidence scoring and two-phase confirmation
 # ---------------------------------------------------------------------------
 extraction:
+  # ADR-074: TTL for the URL-keyed result cache. 30 days — long
+  # enough to capture viral spread of a shared post; short enough
+  # that edited or deleted content washes out within a month.
+  result_cache_ttl_seconds: 2592000  # 30 * 24 * 60 * 60
   confidence_weights:
     base_scores:
       CAPTION: 0.70

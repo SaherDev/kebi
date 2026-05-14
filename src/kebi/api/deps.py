@@ -18,6 +18,7 @@ from kebi.core.extraction.extraction_pipeline import (
     deep_summary,
     inline_summary,
 )
+from kebi.core.extraction.result_cache import ExtractionResultCache
 from kebi.core.extraction.service import ExtractionService
 from kebi.core.extraction.status_repository import ExtractionStatusRepository
 from kebi.core.memory.buffer import MessageBuffer
@@ -593,6 +594,24 @@ def get_extraction_pipeline(
     )
 
 
+def get_extraction_result_cache(
+    config: AppConfig = Depends(get_config),  # noqa: B008
+) -> ExtractionResultCache:
+    """FastAPI dependency providing ExtractionResultCache (ADR-074).
+
+    Backed by the process-wide Redis client from `providers/redis_cache`.
+    TTL is sourced from `config.extraction.result_cache_ttl_seconds`
+    (30-day default per `app.yaml`). Per ADR-072 (SSP), the factory
+    call is contained to this wiring layer; `ExtractionService`
+    receives the constructed cache via constructor injection and never
+    imports the factory itself.
+    """
+    return ExtractionResultCache(
+        redis=get_redis_client(get_env().REDIS_URL),
+        ttl_seconds=config.extraction.result_cache_ttl_seconds,
+    )
+
+
 def get_extraction_service(
     pipeline: ExtractionPipeline = Depends(get_extraction_pipeline),  # noqa: B008
     upsert_service: PlaceUpsertService = Depends(  # noqa: B008
@@ -603,15 +622,19 @@ def get_extraction_service(
     ),
     status_repo: ExtractionStatusRepository = Depends(get_status_repo),  # noqa: B008
     event_dispatcher: EventDispatcher = Depends(get_event_dispatcher),  # noqa: B008
+    result_cache: ExtractionResultCache = Depends(  # noqa: B008
+        get_extraction_result_cache
+    ),
 ) -> ExtractionService:
-    """FastAPI dependency providing ExtractionService (ADR-070, ADR-071).
+    """FastAPI dependency providing ExtractionService (ADR-070, ADR-071, ADR-074).
 
     Persistence is inlined inside the service: `upsert_and_embed` writes
     place + embedding, `save_places` links to user_places with
     `approved=False` (catching DuplicateUserPlaceError to filter
     conflicts), `event_dispatcher` fires PlaceSaved per newly linked
     place. v2 services are the single seam — extraction never reaches
-    the UserPlacesRepo directly.
+    the UserPlacesRepo directly. `result_cache` (ADR-074) lets the
+    second-and-later users who share the same URL skip the pipeline.
     """
     return ExtractionService(
         pipeline=pipeline,
@@ -619,6 +642,7 @@ def get_extraction_service(
         user_places_service=user_places_service,
         status_repo=status_repo,
         event_dispatcher=event_dispatcher,
+        result_cache=result_cache,
     )
 
 

@@ -243,6 +243,11 @@ class ExtractionConfig(BaseModel):
     confidence: ConfidenceConfig = ConfidenceConfig()
     circuit_breaker_threshold: int = 3
     circuit_breaker_cooldown: float = 900.0
+    # ADR-074: TTL for the URL-keyed extraction result cache. 30 days
+    # — long enough to capture viral spread of a TikTok / Instagram /
+    # YouTube share; short enough that edited or deleted content
+    # washes out within a month.
+    result_cache_ttl_seconds: int = 30 * 24 * 60 * 60
     vision: ExtractionVisionConfig = ExtractionVisionConfig()
     whisper: ExtractionWhisperConfig = ExtractionWhisperConfig()
     subtitle: ExtractionSubtitleConfig = ExtractionSubtitleConfig()

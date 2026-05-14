@@ -16,7 +16,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-from kebi.core.places_v2 import PlaceObject
+from kebi.core.places_v2 import PlaceCore
 
 
 class EvidenceDTO(BaseModel):
@@ -51,9 +51,16 @@ class ExtractPlaceItem(BaseModel):
 
     `evidence` is the audit trail — every producer/medium pair that
     contributed to this candidate, in extraction order.
+
+    `place` is a `PlaceCore` (identity + static fields), not a
+    `PlaceObject`. Extraction does not populate live fields (rating,
+    hours, popularity, business_status) — those are filled in at
+    recall/consult time via `PlacesService.enrich_batch`. Returning
+    `PlaceCore` here is the honest shape; pretending to be `PlaceObject`
+    just padded the response with always-null fields.
     """
 
-    place: PlaceObject
+    place: PlaceCore
     confidence: float
     evidence: list[EvidenceDTO] = Field(default_factory=list)
 
