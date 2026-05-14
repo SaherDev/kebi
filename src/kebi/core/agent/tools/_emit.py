@@ -24,7 +24,7 @@ from kebi.core.emit import EmitFn
 
 logger = logging.getLogger(__name__)
 
-ToolName = Literal["recall", "save", "consult"]
+ToolName = Literal["recall", "consult"]
 
 
 def _get_writer_safe() -> Any:

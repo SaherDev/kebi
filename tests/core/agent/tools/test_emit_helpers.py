@@ -32,8 +32,8 @@ def test_emit_appends_debug_step_with_auto_duration() -> None:
 
 
 def test_emit_uses_explicit_duration_verbatim() -> None:
-    collected, emit = build_emit_closure("save")
-    emit("save.enrich", "2 candidates", duration_ms=42.0)
+    collected, emit = build_emit_closure("recall")
+    emit("recall.enrich", "2 candidates", duration_ms=42.0)
 
     assert collected[0].duration_ms == 42.0
 
@@ -91,9 +91,9 @@ def test_stream_writer_fan_out_fires_when_attached() -> None:
 
 def test_stream_writer_none_is_silent_noop() -> None:
     # Default behavior outside a runnable context: _get_writer_safe returns None.
-    collected, emit = build_emit_closure("save")
-    emit("save.parse_input", "no url")
-    append_summary(collected, "save", "done")
+    collected, emit = build_emit_closure("consult")
+    emit("consult.parse_input", "no input")
+    append_summary(collected, "consult", "done")
 
     # Just verify nothing crashes and the collected list is still complete.
     assert len(collected) == 2

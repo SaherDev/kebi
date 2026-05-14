@@ -56,7 +56,7 @@ models:
     model: voyage-4-lite
     dimensions: 1024
 
-  # LangGraph agent brain — drives the recall/consult/save tool loop behind
+  # LangGraph agent brain — drives the recall/consult tool loop behind
   # POST /v1/chat and /v1/chat/stream (ADR-062/065). Higher temperature for
   # conversational variety.
   #
@@ -278,7 +278,7 @@ agent:
   max_steps: 10
   max_errors: 3
   max_history_messages: 40
-  # Older ToolMessage payloads (recall/consult/save JSON, ~2-5KB each) get
+  # Older ToolMessage payloads (recall/consult JSON, ~2-5KB each) get
   # replaced by a one-line breadcrumb on the way to the LLM. The most recent
   # `tool_result_window` payloads stay full. State is untouched — this only
   # rewrites the per-call conversation list. 0 disables compaction.
@@ -297,12 +297,6 @@ agent:
   tool_timeouts_seconds:
     recall: 5
     consult: 10
-    # Save handles three flavors of input with very different latency:
-    # text-only / TikTok / IG (~3-5s), YouTube videos with deep enrichment
-    # (~15-20s), and Google Maps shared lists where Apify takes ~14s
-    # alone before NER and validation. 60s gives the slowest happy-path
-    # (~30s today) ~2x headroom.
-    save: 60
 
 # ---------------------------------------------------------------------------
 # Taste Model Configuration

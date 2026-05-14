@@ -57,13 +57,13 @@ async def test_with_timeout_surfaces_user_visible_timeout_step() -> None:
     from unittest.mock import MagicMock, patch
 
     mock_config = MagicMock()
-    mock_config.agent.tool_timeouts_seconds.save = 0
+    mock_config.agent.tool_timeouts_seconds.recall = 0
 
     with patch(  # noqa: SIM117
         "kebi.core.agent.tools._timeout.get_config",
         return_value=mock_config,
     ):
-        result = await with_timeout("save", "tc-3", state, _slow_body(999.0))
+        result = await with_timeout("recall", "tc-3", state, _slow_body(999.0))
 
     steps = result.update.get("reasoning_steps", [])
     assert any(s.visibility == "user" and "timed out" in s.summary for s in steps)

@@ -13,14 +13,12 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
-from langgraph.errors import GraphInterrupt
 
 from kebi.api.schemas.chat import ChatRequest, ChatResponse
 from kebi.core.agent.invocation import build_turn_payload
 from kebi.core.agent.messages import extract_text_content
 from kebi.core.consult.service import ConsultService
 from kebi.core.events.events import TurnCompleted
-from kebi.core.extraction.service import ExtractionService
 from kebi.core.recall.service import RecallService
 from kebi.core.taste.regen import format_summary_for_agent
 from kebi.core.taste.schemas import SummaryLine
@@ -40,7 +38,6 @@ class ChatService:
 
     def __init__(
         self,
-        extraction_service: ExtractionService,
         consult_service: ConsultService,
         recall_service: RecallService,
         event_dispatcher: EventDispatcherProtocol,
@@ -50,7 +47,6 @@ class ChatService:
         config: AppConfig,
         agent_graph: Any,
     ) -> None:
-        self._extraction = extraction_service
         self._consult = consult_service
         self._recall = recall_service
         self._dispatcher = event_dispatcher
@@ -76,7 +72,7 @@ class ChatService:
         """Invoke the compiled agent graph and map its final state to ChatResponse.
 
         Dispatches a TurnCompleted event in `finally` so the memory layer
-        captures every turn — success, clarification, or error.
+        captures every turn — success or error.
         """
         try:
             # Pre-agent prep runs in parallel so the cold-path geocode hides
@@ -100,36 +96,11 @@ class ChatService:
                 "configurable": {"thread_id": request.user_id},
                 "metadata": {"user_id": request.user_id},
             }
-            try:
-                final_state = await self._agent_graph.ainvoke(
-                    payload, config=graph_config
-                )
-            except GraphInterrupt as interrupt:
-                # LangGraph wraps NodeInterrupt payload as:
-                #   interrupt.args[0] == [Interrupt(value=<payload>, ...)]
-                # Direct GraphInterrupt construction passes args[0] as a plain dict.
-                raw = interrupt.args[0] if interrupt.args else {}
-                if isinstance(raw, list) and raw and hasattr(raw[0], "value"):
-                    interrupt_val: dict[str, Any] = raw[0].value
-                elif isinstance(raw, dict):
-                    interrupt_val = raw
-                else:
-                    interrupt_val = {}
-                candidates = (
-                    interrupt_val.get("candidates", [])
-                    if isinstance(interrupt_val, dict)
-                    else []
-                )
-                name = (
-                    candidates[0].get("place", {}).get("place_name", "this place")
-                    if candidates
-                    else "this place"
-                )
-                return ChatResponse(
-                    type="clarification",
-                    message=f"Low confidence on {name} — is this the place you meant?",
-                    data={"interrupt": interrupt_val},
-                )
+            # The only producer of GraphInterrupt was the save tool's
+            # needs_review branch (ADR-063). ADR-071 removed that branch
+            # and ADR-073 removed the save tool entirely, so the agent
+            # can no longer raise GraphInterrupt — no handler needed.
+            final_state = await self._agent_graph.ainvoke(payload, config=graph_config)
 
             messages = final_state.get("messages", [])
             ai_message = _last_ai_message(messages)

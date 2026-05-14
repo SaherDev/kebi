@@ -36,8 +36,7 @@ def test_summarize_results_payload_with_names() -> None:
     )
     out = _summarize_tool_payload(msg)
     assert out == (
-        "[recall] earlier call returned 3 result(s): "
-        "Cafe Noir, Bun Bo Hue, The Citadel"
+        "[recall] earlier call returned 3 result(s): Cafe Noir, Bun Bo Hue, The Citadel"
     )
 
 
@@ -57,10 +56,10 @@ def test_summarize_results_without_names_falls_back_to_count() -> None:
     assert out == "[recall] earlier call returned 2 result(s); details elided"
 
 
-def test_summarize_save_results_use_top_level_place_name() -> None:
-    """Save results may use top-level place_name (not nested under .place)."""
+def test_summarize_results_use_top_level_place_name() -> None:
+    """Tool results may use top-level place_name (not nested under .place)."""
     msg = _tool_msg(
-        "save",
+        "recall",
         {"results": [{"status": "saved", "place_name": "Vondelpark"}]},
         "tc1",
     )
@@ -69,8 +68,8 @@ def test_summarize_save_results_use_top_level_place_name() -> None:
 
 
 def test_summarize_status_payload() -> None:
-    msg = _tool_msg("save", {"status": "saved", "request_id": "r1"}, "tc1")
-    assert "status=saved" in _summarize_tool_payload(msg)
+    msg = _tool_msg("recall", {"status": "ok", "request_id": "r1"}, "tc1")
+    assert "status=ok" in _summarize_tool_payload(msg)
 
 
 def test_summarize_error_payload() -> None:
@@ -103,9 +102,7 @@ def test_compact_noop_when_under_window() -> None:
 
 
 def test_compact_keeps_recent_replaces_older() -> None:
-    big_payload = {
-        "results": [{"place": {"place_name": f"P{i}"}} for i in range(10)]
-    }
+    big_payload = {"results": [{"place": {"place_name": f"P{i}"}} for i in range(10)]}
     msgs = [
         HumanMessage(content="hi"),
         AIMessage(content="", tool_calls=[{"name": "recall", "args": {}, "id": "tc1"}]),

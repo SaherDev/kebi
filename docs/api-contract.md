@@ -130,54 +130,12 @@ The system classifies intent, dispatches to the correct pipeline, and returns a 
 
 | Field             | Type             | Notes                                                                                                          |
 | ----------------- | ---------------- | -------------------------------------------------------------------------------------------------------------- |
-| `type`            | `string`         | One of: `agent`, `extract-place`, `consult`, `recall`, `clarification`, `error` (ADR-065: `assistant` removed) |
+| `type`            | `string`         | One of: `agent`, `consult`, `recall`, `clarification`, `error` (ADR-073 removed `extract-place` — saves no longer flow through chat) |
 | `message`         | `string`         | Human-readable response text                                                                                   |
 | `data`            | `object \| null` | Structured payload from downstream service; shape varies by `type` — see sections below                        |
-| `tool_calls_used` | `integer`        | Count of tool invocations (save, recall, consult) during this turn. Always present; `0` when no tools ran. Read by NestJS to increment the daily tool-call counter. |
+| `tool_calls_used` | `integer`        | Count of tool invocations (recall, consult) during this turn. Always present; `0` when no tools ran. Read by NestJS to increment the daily tool-call counter. |
 
 **Response Types by Intent:**
-
-### `extract-place`
-
-```json
-{
-  "type": "extract-place",
-  "message": "Saved: Nara Eatery, Bangkok",
-  "data": {
-    "status": "completed",
-    "results": [
-      {
-        "place": {
-          /* PlaceObject — see Shared Types */
-        },
-        "confidence": 0.87,
-        "status": "saved"
-      }
-    ],
-    "raw_input": "https://tiktok.com/@user/video/123",
-    "request_id": "req_01HZ..."
-  }
-}
-```
-
-`data` (`ExtractPlaceResponse`, ADR-063):
-
-| Field        | Type                                 | Notes                                                                                                                                        |
-| ------------ | ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| `status`     | `"pending" \| "completed" \| "failed"` | Pipeline-level state. `pending` = dispatch returned immediately; `completed` = at least one real outcome; `failed` = no usable outcome |
-| `results`    | `ExtractPlaceItem[]`                 | Empty iff `status != "completed"`. Below-threshold outcomes never appear here                                                                |
-| `raw_input`  | `string \| null`                     | Original user-supplied input, **verbatim** (no trimming, no URL canonicalization). Replaces the pre-ADR-063 `source_url` envelope field      |
-| `request_id` | `string \| null`                     | Polling handle when `status="pending"`; also carried on terminal envelopes                                                                   |
-
-`ExtractPlaceItem` shape:
-
-| Field        | Type                                              | Notes                                                                                                                                                               |
-| ------------ | ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `place`      | `PlaceObject`                                     | Required, non-null. The extracted place                                                                                                                             |
-| `confidence` | `float`                                           | Required, non-null. Extraction confidence score in `[0.0, 1.0]`                                                                                                     |
-| `status`     | `"saved" \| "needs_review" \| "duplicate"`        | Per-place outcome. `"needs_review"` = confidence in the tentative band between `save_threshold` and `confident_threshold` (ADR-057). Pipeline states live on the envelope, never here |
-
-Operational note: status payloads are cached in Redis under the `extraction:v2:{request_id}` key prefix per ADR-063. Legacy `extraction:{request_id}` keys from pre-ADR-063 deploys are not read — the polling route returns `404` for any key not found under the v2 prefix (same code path as TTL expiry).
 
 ### `consult`
 
@@ -228,7 +186,7 @@ Operational note: status payloads are cached in Redis under the `extraction:v2:{
 | `step`       | `string`                                          | Identifier: `agent.tool_decision`, `tool.summary`, `fallback`, `max_steps_detail`, etc.                                                                 |
 | `summary`    | `string`                                          | Human-readable description. For `agent.tool_decision` steps this is the LLM's reasoning text **truncated to 200 chars** — do not use as the full response |
 | `source`     | `"tool" \| "agent" \| "fallback"`                 | Which part of the graph produced this step                                                                                                              |
-| `tool_name`  | `"recall" \| "save" \| "consult" \| null`         | Set iff `source == "tool"`, `null` otherwise                                                                                                            |
+| `tool_name`  | `"recall" \| "consult" \| null`         | Set iff `source == "tool"`, `null` otherwise (ADR-073 removed `"save"`)                                                                                                            |
 | `visibility` | `"user" \| "debug"`                               | Only `"user"` steps appear in API responses; `"debug"` steps go to Langfuse/SSE only                                                                   |
 | `duration_ms`| `float`                                           | Latency in ms. `0` for `agent.tool_decision` steps (agent node doesn't measure LLM latency); populated for tool steps                                   |
 | `timestamp`  | `ISO-8601 string`                                 | UTC timestamp when the step was recorded                                                                                                                |
@@ -316,27 +274,13 @@ Primary response type since M11 (ADR-065). Returned for all conversational turns
 
 | Field          | Type             | Notes                                                                  |
 | -------------- | ---------------- | ---------------------------------------------------------------------- |
-| `tool`         | `string \| null` | Tool name: `"recall"`, `"save"`, or `"consult"`                        |
+| `tool`         | `string \| null` | Tool name: `"recall"` or `"consult"` (ADR-073 removed `"save"`)                        |
 | `tool_call_id` | `string \| null` | LangGraph tool call identifier                                         |
 | `payload`      | `object \| null` | Parsed JSON from the tool's service response; `null` if unparseable    |
 
 ### `clarification`
 
-```json
-{
-  "type": "clarification",
-  "message": "Low confidence on Nara Eatery — is this the place you meant?",
-  "data": {
-    "interrupt": {
-      "type": "save_needs_review",
-      "request_id": "req_01HZ...",
-      "candidates": [{ /* ExtractPlaceItem */ }]
-    }
-  }
-}
-```
-
-Returned when the save tool extracts a place with confidence in the tentative band and requires user confirmation (NodeInterrupt — ADR-063). `data.interrupt.candidates` contains the low-confidence `ExtractPlaceItem` objects for the frontend to render a confirmation UI.
+Reserved for future agent-side clarification flows. Not currently emitted — the save-time `needs_review` NodeInterrupt that previously triggered this was removed by ADR-071, and the save tool itself was removed by ADR-073.
 
 ### `error`
 
@@ -366,7 +310,6 @@ All downstream exceptions are caught and surfaced as `type="error"` with HTTP 20
 **Notes:**
 
 - `location` is forwarded to the agent and available to the consult tool; ignored for direct-response turns.
-- `type="clarification"` is triggered by a NodeInterrupt from the save tool (low-confidence extraction), not by an intent classification threshold. `data` is never `null` on clarification — it carries the interrupt payload.
 - All downstream exceptions are caught and returned as `type="error"` with HTTP 200 (not 5xx).
 - Consult results are persisted to the `recommendations` table after a successful response (ADR-060). The response includes a `recommendation_id` (UUID) referencing the persisted row. Write failures are logged but do not fail the caller response — `recommendation_id` will be `null` in that case.
 
@@ -405,7 +348,6 @@ data: {"tool_calls_used": 2}
 
 - **Recall + consult turn** — only the `consult` tool_result is emitted. Recall is an internal step; consult already merges saved + discovered results.
 - **Recall-only turn** — the `recall` tool_result is emitted.
-- **Save turn** — the `save` tool_result is emitted.
 
 **Expected client behaviour per frame type:**
 
@@ -432,13 +374,49 @@ data: {"detail": "<error string>"}
 
 ---
 
+## POST /v1/extract
+
+Canonical product-facing extraction endpoint (ADR-073). The product repo calls this directly whenever a user submits a URL or place name to save. `/v1/chat` is conversation-only and does not write to `user_places`.
+
+**Request:**
+
+```json
+{
+  "raw_input": "https://www.tiktok.com/@user/video/123",
+  "user_id": "user-uuid"
+}
+```
+
+| Field       | Type     | Required | Description                                                          |
+| ----------- | -------- | -------- | -------------------------------------------------------------------- |
+| `raw_input` | `string` | yes      | URL (TikTok / Instagram / YouTube / Google Maps list) or place name. |
+| `user_id`   | `string` | yes      | The submitting user's ID. Used as the `user_places` owner.           |
+
+**Response (200):** `ExtractPlaceResponse` — `places: list[ExtractPlaceItem]` with full evidence trail per item. Per ADR-071 every picker candidate is persisted with `approved=False`; the user curates after the fact via the product UI.
+
+**Latency profile:**
+
+- Text input (a single place name) → typically <1 s.
+- URL input (TikTok/Instagram caption only) → 2–5 s.
+- URL input (video that needs yt-dlp + Whisper + vision frames) → 30–60 s. The client should show a progress indicator and tolerate a long synchronous response.
+
+**HTTP Status Codes:**
+
+| Code  | When                                                                  |
+| ----- | --------------------------------------------------------------------- |
+| `200` | Extraction completed — response includes any saved places + duplicates |
+| `400` | Malformed request (missing `raw_input` / `user_id`, or `raw_input` exceeds the size cap) |
+| `500` | Pipeline failure — see `error` field in response                       |
+
+---
+
 ## GET /v1/extraction/{request_id}
 
-Polls the status of a background extraction. Background extractions are dispatched when a save operation takes longer than the inline timeout — `request_id` is returned in the `data.request_id` field of the original `extract-place` response with `status="pending"`.
+**Reserved for future async use.** No product flow writes status keys today — the canonical extraction path is synchronous `POST /v1/extract`. This route remains so a future async/background variant can plug in without API churn.
 
 **Request:** No body. `request_id` is a path parameter.
 
-**Response (200):** `ExtractPlaceResponse` — same shape as the `data` block in `POST /v1/chat` `extract-place` responses. See the `extract-place` section above.
+**Response (200):** `ExtractPlaceResponse` — same shape as `POST /v1/extract`.
 
 **HTTP Status Codes:**
 
@@ -447,7 +425,7 @@ Polls the status of a background extraction. Background extractions are dispatch
 | `200` | Result found in Redis                                      |
 | `404` | Key not found — still running, or TTL expired              |
 
-Extraction results are cached under the `extraction:v2:{request_id}` key prefix (ADR-063). Legacy `extraction:{request_id}` keys are not read — poll returns `404` for those.
+Extraction results would be cached under the `extraction:v2:{request_id}` key prefix (ADR-063).
 
 ---
 
@@ -679,7 +657,8 @@ Always HTTP 200 — DB outages surface via `db: "disconnected"`, not a non-2xx s
 | --------------------------------- | --------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
 | POST /v1/chat                     | Unified conversational entry point      | user_id, message, optional location, optional signal_tier                                                                                                       | type, message, data, tool_calls_used                                                     |
 | POST /v1/chat/stream              | SSE streaming chat                      | Same as POST /v1/chat                                                                                                                                           | reasoning_step frames, message frame, done frame (tool_calls_used)                       |
-| GET /v1/extraction/{request_id}   | Poll background extraction status       | request_id (path param)                                                                                                                                         | ExtractPlaceResponse (200) or 404                                                        |
+| POST /v1/extract                  | Canonical extraction (save a place)     | raw_input, user_id                                                                                                                                              | ExtractPlaceResponse                                                                     |
+| GET /v1/extraction/{request_id}   | Poll background extraction (reserved)   | request_id (path param)                                                                                                                                         | ExtractPlaceResponse (200) or 404                                                        |
 | GET /v1/user/context              | User taste context for product UI       | user_id (query param)                                                                                                                                           | saved_places_count, signal_tier, chips (each with status + selection_round)              |
 | POST /v1/signal                   | Recommendation feedback OR chip_confirm | Discriminated on `signal_type` — recommendation variant (recommendation_id + place_id) OR chip_confirm variant (metadata.chips[] with per-chip selection_round) | status (202)                                                                             |
 | GET /v1/health                    | Service health check                    | —                                                                                                                                                               | status, db connectivity                                                                  |

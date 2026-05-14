@@ -71,7 +71,7 @@ This repo (kebi) is the AI engine of Kebi. It owns all AI logic: intent parsing,
 
 ## Data Flow: Extract a Place
 
-extract-place is a level-driven deterministic workflow, not an agent. No LangGraph. No tool selection. No reasoning loop. The full pipeline always runs as a background task — the HTTP response returns immediately with `status="pending"` and a `request_id`. The caller polls `GET /v1/extraction/{request_id}` for the final result.
+extract-place is a level-driven deterministic workflow, not an agent. No LangGraph. No tool selection. No reasoning loop. **Saves are HTTP-only (ADR-073)** — the product repo calls `POST /v1/extract` directly. `/v1/chat` is conversation-only and does not write to `user_places`.
 
 The pipeline is built from `EnrichmentLevel`s (text/signal producers grouped by stage) plus a single shared **finalizer** (today: `LLMNEREnricher`) that runs after every executed level. Each level has a `name`, an `enrichers` list, an optional `requires_url` flag, and a `summary_fn`. Adding a new stage is: declare a new `EnrichmentLevel`, append it to the levels list. The pipeline loop is identical for every level.
 
@@ -79,12 +79,10 @@ The pipeline is built from `EnrichmentLevel`s (text/signal producers grouped by 
 Raw input (URL, plain text, or mixed)
     │
     ▼
-POST /v1/chat
-    │  Agent selects save tool → ExtractionService.run(raw_input, user_id, limit?)
-    │  Returns immediately: { status: "pending", request_id }
-    │  asyncio.create_task fires the full pipeline in the background
+POST /v1/extract  (synchronous — blocks until pipeline completes)
+    │  ExtractionService.run(raw_input, user_id, limit?)
     │
-    └── Background task: ExtractionPipeline.run()
+    └── ExtractionPipeline.run()
         │  context = ExtractionContext(url, user_id, supplementary_text)
         │  context.source auto-derived from url via source_from_url()
         │  effective_limit = limit ?? DEFAULT_MAX_CANDIDATES  (default 25)
@@ -97,22 +95,20 @@ POST /v1/chat
         │   │           appends candidates directly)
         │   ├── Run pipeline finalizer (LLMNEREnricher): one consolidated NER call
         │   │   over caption + transcript + supplementary_text; dedup again
-        │   ├── Emit save.{name} reasoning step
         │   ├── Cap-check: if len(candidates) > effective_limit
-        │   │   → emit save.cap_exceeded, raise TooManyCandidatesError, drop request
+        │   │   → raise TooManyCandidatesError, drop request
         │   ├── validator.validate(candidates) — Google Places parallel fan-out
-        │   └── If results non-empty: emit save.validate, dedup_validated_by_provider_id,
+        │   └── If results non-empty: dedup_validated_by_provider_id,
         │       short-circuit return  ← early exit, deeper levels never run
         │
-        ├── If loop exits with no validated results: emit save.validate
-        │   "Could not confirm any places", return []
+        ├── If loop exits with no validated results: return []
         │
-        └── ExtractionService persists each surviving outcome → emit save.persist
-            → write ExtractPlaceResponse to extraction:v2:{request_id} in Redis
+        └── ExtractionService persists each surviving outcome (per ADR-071,
+            every picker candidate lands in user_places with approved=False)
+            → returns ExtractPlaceResponse synchronously to the caller
 
 GET /v1/extraction/{request_id}
-    Reads Redis → returns ExtractPlaceResponse (same shape as chat data payload)
-    404 while still running or after TTL (1 hour) expires
+    Reserved for future async use. No product flow writes those keys today.
 ```
 
 The pipeline runs the full cascade deterministically. No mid-pipeline callbacks to NestJS.
@@ -223,9 +219,9 @@ POST /v1/chat
 - Graceful fallback: text-only path exists; embedding failure does not crash
 - Deterministic match_reason: reflects actual search behavior; no guessing
 
-## Agent Orchestration (ADR-062, ADR-065)
+## Agent Orchestration (ADR-062, ADR-065, ADR-073)
 
-All conversational traffic routes through the LangGraph agent (Claude Sonnet 4.6 via the `orchestrator` model role). The agent selects from three tools per turn — recall, save, consult — and returns a `ChatResponse(type="agent")`. The legacy intent-router / intent-parser / chat_assistant dispatch path was deleted (ADR-065).
+All conversational traffic routes through the LangGraph agent (Claude Sonnet 4.6 via the `orchestrator` model role). The agent selects from two tools per turn — recall, consult — and returns a `ChatResponse(type="agent")`. The legacy intent-router / intent-parser / chat_assistant dispatch path was deleted (ADR-065). The save tool was removed by ADR-073; saves go through `POST /v1/extract` directly.
 
 ### Graph Structure
 
@@ -285,19 +281,18 @@ The Postgres checkpointer (`AsyncPostgresSaver` backed by `AsyncConnectionPool`)
 
 ### Tools
 
-All three tools are `@tool`-decorated async functions built by factory functions (`build_recall_tool`, `build_consult_tool`, `build_save_tool`). Each tool uses `Annotated[AgentState, InjectedState]` and `Annotated[str, InjectedToolCallId]` for LangGraph injection — no `args_schema=` passed to `@tool` (that short-circuits LangGraph's injection inspection).
+Both tools are `@tool`-decorated async functions built by factory functions (`build_recall_tool`, `build_consult_tool`). Each tool uses `Annotated[AgentState, InjectedState]` and `Annotated[str, InjectedToolCallId]` for LangGraph injection — no `args_schema=` passed to `@tool` (that short-circuits LangGraph's injection inspection).
 
-Every tool wraps its body in `with_timeout(tool_name, ...)` which enforces the per-tool timeout from `app.yaml` (`tool_timeouts_seconds.recall/consult/save`) and returns a degraded `Command` on timeout or unhandled exception (increments `error_count`, emits a user-visible `tool.summary` step). `NodeInterrupt` and `GraphInterrupt` are re-raised — they are LangGraph control-flow signals.
+Every tool wraps its body in `with_timeout(tool_name, ...)` which enforces the per-tool timeout from `app.yaml` (`tool_timeouts_seconds.recall/consult`) and returns a degraded `Command` on timeout or unhandled exception (increments `error_count`, emits a user-visible `tool.summary` step). `NodeInterrupt` and `GraphInterrupt` are re-raised — they are LangGraph control-flow signals (no current producer; reserved for future use).
 
 | Tool | Trigger | Reads from state | Writes to state | Writes to DB |
 |---|---|---|---|---|
 | `recall` | User references their saves, or consult precondition | `user_id`, `location`, `last_recall_results` (none) | `last_recall_results` (list of PlaceObjects) | Nothing |
-| `save` | User shares a URL or names a place | `user_id` | `reasoning_steps`, `messages` | `places` + `embeddings` (via ExtractionService) |
 | `consult` | User asks for a recommendation | `user_id`, `location`, `last_recall_results` (from prior recall in same turn) | `reasoning_steps`, `messages` | `recommendations` table (via ConsultService — ADR-060) |
 
 **recall → consult handoff:** When the agent calls both in one turn, `recall_tool` sets `state["last_recall_results"]`. `consult_tool` reads it from state directly — the LLM does not need to pass the list explicitly; LangGraph threads it automatically.
 
-**save + NodeInterrupt:** When extraction returns a `needs_review` result, `save_tool` raises `NodeInterrupt`. LangGraph checkpoints the state and suspends the graph. The caller receives `type="interrupt"` and the low-confidence candidates for user confirmation. Resuming with confirmation re-enters the graph at the interrupted node.
+**URL submissions:** The agent does not save places. If the user pastes a URL or asks the agent to save something, the prompt redirects them to the product's share / submit input — that flow calls `POST /v1/extract` directly. See ADR-073.
 
 ### Reasoning Steps
 
@@ -320,7 +315,8 @@ Callers filter `reasoning_steps` by `visibility` to decide what reaches the prod
 | Endpoint                          | Request                               | Response                                              |
 | --------------------------------- | ------------------------------------- | ----------------------------------------------------- |
 | POST /v1/chat                     | user_id, message, optional location   | type, message, optional data payload (ADR-052)        |
-| GET /v1/extraction/{request_id}   | —                                     | ExtractPlaceResponse (results, source_url, request_id); 404 while pending or after TTL |
+| POST /v1/extract                  | raw_input, user_id                    | ExtractPlaceResponse (canonical save endpoint, ADR-073) |
+| GET /v1/extraction/{request_id}   | —                                     | ExtractPlaceResponse; reserved for future async use   |
 | GET /v1/health                    | —                                     | status, db connectivity                               |
 
 All requests come from NestJS after auth verification. This repo never receives requests directly from the frontend.

@@ -92,7 +92,10 @@ def _recall_summary(
 def build_recall_tool(service: RecallService) -> BaseTool:
     """Return the @tool-decorated recall callable bound to `service`.
 
-    No `args_schema=` here — see the save_tool docstring for why.
+    No `args_schema=` is passed to `@tool` — that short-circuits
+    LangGraph's `Annotated[..., InjectedState / InjectedToolCallId]`
+    inspection, so injection never wires up. Let `@tool` build the
+    schema from the function signature instead.
     """
 
     @tool("recall")

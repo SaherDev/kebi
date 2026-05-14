@@ -11,10 +11,8 @@ from kebi.api.schemas.consult import Location
 SignalTierHint = Literal["cold", "warming", "chip_selection", "active"]
 
 ChatResponseType = Literal[
-    "extract-place",
     "consult",
     "recall",
-    "clarification",
     "error",
     "agent",
 ]
@@ -40,17 +38,19 @@ class ChatRequest(BaseModel):
 class ChatResponse(BaseModel):
     """Response body for POST /v1/chat endpoint.
 
-    type: One of "extract-place", "consult", "recall", "agent",
-          "clarification", "error". "assistant" removed in ADR-065;
-          the agent is the only dispatch path since M11.
+    type: One of "consult", "recall", "agent", "error". ADR-073
+          removed "extract-place" and "clarification" — saves no
+          longer flow through chat, and there is no remaining producer
+          of GraphInterrupt to map onto clarification. The agent is the
+          only dispatch path (ADR-065).
     message: Human-readable response text.
-    data: Structured payload from downstream service; null for
-          clarification / assistant / error; on the "agent" path carries
+    data: Structured payload from downstream service; null for error;
+          on the "agent" path carries
           `{"reasoning_steps": [<ReasoningStep.model_dump>, ...]}` —
           only user-visible steps survive the serialization filter.
-    tool_calls_used: Count of tool invocations during this turn (save,
-                     recall, consult). Read by NestJS to increment the
-                     daily tool-call counter.
+    tool_calls_used: Count of tool invocations during this turn
+                     (recall, consult). Read by NestJS to increment
+                     the daily tool-call counter.
     """
 
     type: ChatResponseType

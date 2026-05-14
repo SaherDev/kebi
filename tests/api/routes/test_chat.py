@@ -58,25 +58,6 @@ class TestChatRouteHappyPath:
         assert data["message"] == "Try Nara Eatery"
         assert data["data"] is not None
 
-    def test_extract_place_intent_returns_200_with_type(
-        self, client: TestClient, mock_chat_service: AsyncMock
-    ) -> None:
-        """Response shape for extract-place intent."""
-        mock_chat_service.run.return_value = ChatResponse(
-            type="extract-place",
-            message="Saved: Ichiran Ramen",
-            data={"places": []},
-        )
-
-        response = client.post(
-            "/v1/chat",
-            json={"user_id": "user_1", "message": "https://tiktok.com/video/123"},
-        )
-
-        assert response.status_code == 200
-        data = response.json()
-        assert data["type"] == "extract-place"
-
     def test_recall_intent_returns_200_with_type(
         self, client: TestClient, mock_chat_service: AsyncMock
     ) -> None:
@@ -145,32 +126,6 @@ class TestChatRouteHappyPath:
 
         assert response.status_code == 200
         mock_chat_service.run.assert_called_once()
-
-
-class TestChatRouteClarification:
-    """Phase 4 / US2 — T015: Verify clarification response from route."""
-
-    def test_clarification_response_returns_null_data(
-        self, client: TestClient, mock_chat_service: AsyncMock
-    ) -> None:
-        """Route returns type='clarification' with null data for ambiguous input."""
-        mock_chat_service.run.return_value = ChatResponse(
-            type="clarification",
-            message=(
-                "Are you looking for a saved place called Fuji or a recommendation?"
-            ),
-            data=None,
-        )
-
-        response = client.post(
-            "/v1/chat",
-            json={"user_id": "user_1", "message": "fuji"},
-        )
-
-        assert response.status_code == 200
-        data = response.json()
-        assert data["type"] == "clarification"
-        assert data["data"] is None
 
 
 class TestChatRouteToolCallsUsed:

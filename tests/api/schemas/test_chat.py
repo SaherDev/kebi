@@ -9,15 +9,8 @@ from kebi.api.schemas.chat import ChatResponse
 
 
 def test_chat_response_accepts_all_valid_types() -> None:
-    """All valid ChatResponse types are accepted by the schema (ADR-065)."""
-    valid = (
-        "extract-place",
-        "consult",
-        "recall",
-        "agent",
-        "clarification",
-        "error",
-    )
+    """All valid ChatResponse types are accepted by the schema (ADR-073)."""
+    valid = ("consult", "recall", "agent", "error")
     for t in valid:
         resp = ChatResponse(type=t, message="m")  # type: ignore[arg-type]
         assert resp.type == t
@@ -27,6 +20,18 @@ def test_chat_response_rejects_legacy_assistant_type() -> None:
     """'assistant' was removed in ADR-065 and must not be accepted."""
     with pytest.raises(ValidationError):
         ChatResponse(type="assistant", message="m")  # type: ignore[arg-type]
+
+
+def test_chat_response_rejects_legacy_extract_place_type() -> None:
+    """'extract-place' was removed by ADR-073 — saves no longer flow through chat."""
+    with pytest.raises(ValidationError):
+        ChatResponse(type="extract-place", message="m")  # type: ignore[arg-type]
+
+
+def test_chat_response_rejects_legacy_clarification_type() -> None:
+    """'clarification' was removed by ADR-073 — no GraphInterrupt producer remains."""
+    with pytest.raises(ValidationError):
+        ChatResponse(type="clarification", message="m")  # type: ignore[arg-type]
 
 
 def test_chat_response_accepts_agent_type_value() -> None:

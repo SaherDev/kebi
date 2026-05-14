@@ -15,6 +15,16 @@ Format:
 
 ---
 
+## ADR-073: Drop the agent's save tool — extraction is HTTP-only
+
+**Date:** 2026-05-14\
+**Status:** accepted\
+**Context:** ADR-062 / ADR-063 / ADR-064 / ADR-065 stood up a three-tool agent (recall, save, consult). The save tool wrapped `ExtractionService.run(...)`; ADR-071 then removed the only agent-specific decision inside it (the `NodeInterrupt` on `needs_review`), leaving the save tool as a thin pass-through that pays LLM tokens and latency on every URL paste. A dedicated `POST /v1/extract` route already covers the same surface synchronously — but was labeled "debug/internal only" so the product repo never used it. Two paths, one of them charging the LLM tax.\
+**Decision:** The agent loses the save tool. `/v1/chat` handles only recall + consult — it is a conversation surface, not a write surface. The product repo calls `POST /v1/extract` directly to save a place; that route is promoted to canonical (the "debug/internal" label is dropped and the contract is documented). `GET /v1/extraction/{request_id}` is retained as reserved infrastructure for a future async variant but is unused by the product flow today. `ExtractionService`, `ExtractionPipeline`, the enrichers, and `POST /v1/extract` itself are unchanged. `ChatService` no longer holds `ExtractionService`, `get_agent_graph` no longer depends on it, and `build_tools` becomes `(recall, consult)`. The `clarification` and `extract-place` chat response types are removed along with the `GraphInterrupt → clarification` handler — both depended on the save tool that no longer exists.\
+**Consequences:** Save no longer flows through the LLM, eliminating that token/latency cost from URL submissions and giving the product a synchronous endpoint with a predictable contract. The agent prompt narrows to two tools and gains a one-line redirect ("place saves happen through the share / submit input"). ADR-062's three-tool claim, ADR-063's "Save tool in M5" reference, ADR-064's save-side reasoning traces, ADR-065's save-as-new-path claim, and ADR-071's `save_tool needs_review NodeInterrupt` discussion are obsoleted in their save-specific portions — the recall/consult framework those ADRs established remains in force. The `/v1/chat` response shape is stable except for the removed `type` values: save results never embedded in `ChatResponse` (they flowed as SSE tool-result events); `tool_calls_used` just counts fewer tool kinds. If a future product surface needs an async save flow with progress events, this ADR does not preclude it — it requires reviving the polling key writes under `extraction:v2:{request_id}` and adding a new `POST /v1/extraction` route, which the reserved `GET /v1/extraction/{request_id}` plus existing `ExtractionStatusRepository` make straightforward.
+
+---
+
 ## ADR-072: Shared-Singleton Provider (SSP) pattern for expensive, request-state-free dependencies
 
 **Date:** 2026-05-14\

@@ -5,7 +5,6 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock
 
 from langchain_core.messages import AIMessage
-from langgraph.errors import GraphInterrupt
 
 from kebi.api.schemas.chat import ChatRequest
 from kebi.core.chat.service import ChatService
@@ -25,7 +24,6 @@ def _make_service(agent_graph: MagicMock, dispatcher: MagicMock) -> ChatService:
     places_service.resolve_location_label = AsyncMock(return_value=None)
 
     return ChatService(
-        extraction_service=MagicMock(),
         consult_service=MagicMock(),
         recall_service=MagicMock(),
         event_dispatcher=dispatcher,
@@ -62,25 +60,6 @@ async def test_run_dispatches_turn_completed_on_success() -> None:
     assert isinstance(event, TurnCompleted)
     assert event.user_id == "u-1"
     assert event.user_message == "find ramen"
-
-
-async def test_run_dispatches_turn_completed_on_graph_interrupt() -> None:
-    """Clarification turns are exactly when users state preferences — must capture."""
-    graph = AsyncMock()
-    graph.ainvoke = AsyncMock(side_effect=GraphInterrupt({"candidates": []}))
-    dispatcher = _make_dispatcher()
-    service = _make_service(agent_graph=graph, dispatcher=dispatcher)
-
-    result = await service.run(
-        ChatRequest(user_id="u-2", message="I'm vegetarian, the first one")
-    )
-
-    assert result.type == "clarification"
-    dispatcher.dispatch.assert_awaited_once()
-    event = dispatcher.dispatch.await_args.args[0]
-    assert isinstance(event, TurnCompleted)
-    assert event.user_id == "u-2"
-    assert event.user_message == "I'm vegetarian, the first one"
 
 
 async def test_run_dispatches_turn_completed_on_outer_error() -> None:

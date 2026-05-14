@@ -46,7 +46,6 @@ def _make_service(
     dispatcher.dispatch = AsyncMock()
 
     return ChatService(
-        extraction_service=MagicMock(),
         consult_service=MagicMock(),
         recall_service=MagicMock(),
         event_dispatcher=dispatcher,

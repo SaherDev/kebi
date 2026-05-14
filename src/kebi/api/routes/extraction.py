@@ -1,12 +1,13 @@
 """Extraction routes.
 
-`POST /v1/extract` — direct extraction endpoint that bypasses the agent
-(ADR-052 routes everything through `/v1/chat`; this is a debug/internal
-hook for testing the pipeline in isolation, with the full Evidence
-trail surfaced on every result item).
+`POST /v1/extract` — canonical product-facing extraction endpoint
+(ADR-073). The product repo calls this directly to save a place. The
+agent (`/v1/chat`) is conversation-only and does not write to
+`user_places`.
 
-`GET /v1/extraction/{request_id}` — poll Redis status for a background
-extraction by request_id.
+`GET /v1/extraction/{request_id}` — reserved for future async use;
+polls Redis status for a background extraction by request_id. No
+product flow writes those keys today.
 """
 
 from __future__ import annotations
@@ -29,15 +30,17 @@ async def extract_place(
     body: ExtractPlaceRequest,
     service: ExtractionService = Depends(get_extraction_service),  # noqa: B008
 ) -> ExtractPlaceResponse:
-    """Run the extraction pipeline directly, bypassing the agent.
+    """Run the extraction pipeline and save the place(s) — canonical
+    product-facing entry point (ADR-073).
 
-    Useful for debugging the cascade in isolation — the response carries
-    the full per-candidate `evidence` trail so callers can see exactly
-    which producers contributed and which media (caption / transcript /
-    frame / image / …) the extraction came from.
-
-    Production traffic still goes through `POST /v1/chat`; this route
-    is for iteration on the extraction layer itself.
+    Synchronous: blocks until the pipeline completes. Latency profile —
+    text inputs land in milliseconds; URL inputs that hit yt-dlp /
+    Whisper / vision can take 30–60 seconds. The response carries the
+    full per-candidate `evidence` trail so callers can see which
+    producers contributed and which media (caption / transcript /
+    frame / image / …) the extraction came from. Per ADR-071, every
+    picker candidate is persisted to `user_places` with `approved=False`;
+    the user curates after the fact.
     """
     return await service.run(raw_input=body.raw_input, user_id=body.user_id)
 

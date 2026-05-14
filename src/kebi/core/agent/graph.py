@@ -66,7 +66,6 @@ async def _invoke_llm_with_retry(bound: Any, conversation: list[Any]) -> Any:
 # something concrete to render.
 _TOOL_DECISION_FALLBACKS: dict[str, str] = {
     "recall": "recall — user referenced saved places",
-    "save": "save — message contains URL or named place",
     "consult": "consult — recommendation request",
 }
 _DIRECT_RESPONSE_FALLBACK = "responding directly"
@@ -215,9 +214,7 @@ def _summarize_tool_payload(msg: ToolMessage) -> str:
         if status:
             return f"[{name}] earlier call status={status}; details elided"
         if "error" in data:
-            return (
-                f"[{name}] earlier call errored ({data.get('type', 'error')})"
-            )
+            return f"[{name}] earlier call errored ({data.get('type', 'error')})"
     return f"[{name}] earlier result elided"
 
 
@@ -311,7 +308,11 @@ def make_agent_node(llm: Any, tools: list[Any]) -> Any:
         system_text = _render_system_prompt(state)
         if get_config().agent.prompt_caching_enabled:
             system_content: str | list[str | dict[str, Any]] = [
-                {"type": "text", "text": system_text, "cache_control": {"type": "ephemeral"}}
+                {
+                    "type": "text",
+                    "text": system_text,
+                    "cache_control": {"type": "ephemeral"},
+                }
             ]
         else:
             system_content = system_text

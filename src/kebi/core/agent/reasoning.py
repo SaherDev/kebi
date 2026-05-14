@@ -32,7 +32,7 @@ class ReasoningStep(BaseModel):
     step: str
     summary: str
     source: Literal["tool", "agent", "fallback"]
-    tool_name: Literal["recall", "save", "consult"] | None = None
+    tool_name: Literal["recall", "consult"] | None = None
     visibility: Literal["user", "debug"] = "user"
     timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
     duration_ms: float | None = None

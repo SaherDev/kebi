@@ -90,7 +90,10 @@ def _consult_summary(response: ConsultResponse) -> str:
 def build_consult_tool(service: ConsultService) -> BaseTool:
     """Return the @tool-decorated consult callable bound to `service`.
 
-    No `args_schema=` here — see the save_tool docstring for why.
+    No `args_schema=` is passed to `@tool` — that short-circuits
+    LangGraph's `Annotated[..., InjectedState / InjectedToolCallId]`
+    inspection, so injection never wires up. Let `@tool` build the
+    schema from the function signature instead.
     """
 
     @tool("consult")

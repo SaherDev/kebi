@@ -630,7 +630,6 @@ def get_extraction_service(
 
 def get_agent_graph(
     recall_service: RecallService = Depends(get_recall_service),  # noqa: B008
-    extraction_service: ExtractionService = Depends(get_extraction_service),  # noqa: B008
     consult_service: ConsultService = Depends(get_consult_service),  # noqa: B008
     checkpointer: Any = Depends(get_agent_checkpointer),  # noqa: B008
 ) -> Any:
@@ -638,7 +637,9 @@ def get_agent_graph(
 
     Compiling per-request keeps tool-bound services request-scoped (fresh
     SQLAlchemy sessions, real EventDispatcher) while reusing the
-    process-scoped checkpointer that owns its own psycopg pool.
+    process-scoped checkpointer that owns its own psycopg pool. The save
+    tool was removed by ADR-073; the agent's tool surface is recall +
+    consult.
     """
     if checkpointer is None:
         return None
@@ -646,13 +647,12 @@ def get_agent_graph(
     from kebi.core.agent.tools import build_tools
     from kebi.providers.llm import get_langchain_chat_model
 
-    tools = build_tools(recall_service, extraction_service, consult_service)
+    tools = build_tools(recall_service, consult_service)
     llm = get_langchain_chat_model("orchestrator")
     return build_graph(llm, tools, checkpointer)
 
 
 async def get_chat_service(
-    extraction_service: ExtractionService = Depends(get_extraction_service),  # noqa: B008
     consult_service: ConsultService = Depends(get_consult_service),  # noqa: B008
     recall_service: RecallService = Depends(get_recall_service),  # noqa: B008
     event_dispatcher: EventDispatcher = Depends(get_event_dispatcher),  # noqa: B008
@@ -662,9 +662,8 @@ async def get_chat_service(
     config: AppConfig = Depends(get_config),  # noqa: B008
     agent_graph: Any = Depends(get_agent_graph),  # noqa: B008
 ) -> ChatService:
-    """FastAPI dependency providing a fully wired ChatService (ADR-019, ADR-052)."""
+    """FastAPI dependency for ChatService (ADR-019, ADR-052, ADR-073)."""
     return ChatService(
-        extraction_service=extraction_service,
         consult_service=consult_service,
         recall_service=recall_service,
         event_dispatcher=event_dispatcher,
