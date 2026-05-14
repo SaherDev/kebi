@@ -1,6 +1,7 @@
 """LLM provider factory - resolves configured LLM clients by role."""
 
 import base64
+import functools
 from collections.abc import AsyncGenerator
 from typing import Any, Protocol, cast, runtime_checkable
 
@@ -330,6 +331,7 @@ def get_llm(role: str) -> LLMClientProtocol:
     raise ValueError(f"Unsupported provider: {provider}")
 
 
+@functools.cache
 def get_langchain_chat_model(role: str) -> Any:
     """Return a LangChain-compatible chat model for the given logical role.
 
@@ -340,6 +342,11 @@ def get_langchain_chat_model(role: str) -> Any:
     `config/app.yaml` entries under `models.<role>` and constructs the
     matching LangChain `Chat*` model. Feature 028 M6 uses this for the
     orchestrator.
+
+    Process-wide singleton per `role` (cache key). The underlying
+    Anthropic/OpenAI SDK clients hold connection pools that are only
+    useful if reused across requests. Tests clear via the autouse
+    fixture in tests/conftest.py.
 
     Raises:
         ValueError: If the configured provider has no LangChain adapter yet.
@@ -380,11 +387,17 @@ def get_langchain_chat_model(role: str) -> Any:
     )
 
 
+@functools.cache
 def get_instructor_client(role: str) -> InstructorClient:
     """Get Instructor-patched client for structured extraction.
 
     Resolves provider and model from config/app.yaml under the 'models' key.
     Currently only supports OpenAI provider.
+
+    Process-wide singleton per `role` (cache key). The underlying
+    openai.AsyncOpenAI client holds a connection pool that is only
+    useful if reused across requests. Tests clear via the autouse
+    fixture in tests/conftest.py.
 
     Args:
         role: Logical role (e.g., 'extractor')

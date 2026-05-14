@@ -45,11 +45,15 @@ class VisionImagesEnricher(SourceFilteredEnricher):
     full evidence trail.
     """
 
-    def __init__(self, vision_extractor: VisionExtractorProtocol) -> None:
-        super().__init__(
-            allowed_sources={PlaceSource.tiktok, PlaceSource.instagram}
-        )
+    def __init__(
+        self,
+        *,
+        vision_extractor: VisionExtractorProtocol,
+        http: httpx.AsyncClient,
+    ) -> None:
+        super().__init__(allowed_sources={PlaceSource.tiktok, PlaceSource.instagram})
         self._vision_extractor = vision_extractor
+        self._http = http
 
     async def _run(self, context: ExtractionContext) -> None:
         if not context.is_photo_post or not context.image_urls:
@@ -61,9 +65,7 @@ class VisionImagesEnricher(SourceFilteredEnricher):
                 timeout=_TOTAL_TIMEOUT_SECONDS,
             )
         except TimeoutError:
-            logger.warning(
-                "VisionImagesEnricher timed out for url=%s", context.url
-            )
+            logger.warning("VisionImagesEnricher timed out for url=%s", context.url)
         except Exception as exc:
             logger.warning(
                 "VisionImagesEnricher failed for url=%s: %s", context.url, exc
@@ -71,13 +73,10 @@ class VisionImagesEnricher(SourceFilteredEnricher):
 
     async def _fetch_and_extract(self, context: ExtractionContext) -> None:
         urls = context.image_urls[:_MAX_IMAGES]
-        async with httpx.AsyncClient(
-            timeout=_PER_REQUEST_TIMEOUT_SECONDS, follow_redirects=True
-        ) as client:
-            results = await asyncio.gather(
-                *(self._download(client, u) for u in urls),
-                return_exceptions=True,
-            )
+        results = await asyncio.gather(
+            *(self._download(self._http, u) for u in urls),
+            return_exceptions=True,
+        )
         images: list[bytes] = [r for r in results if isinstance(r, bytes) and r]
         if not images:
             return
@@ -94,15 +93,15 @@ class VisionImagesEnricher(SourceFilteredEnricher):
                     )
                 )
 
-    async def _download(
-        self, client: httpx.AsyncClient, url: str
-    ) -> bytes | None:
+    async def _download(self, client: httpx.AsyncClient, url: str) -> bytes | None:
         try:
-            response = await client.get(url)
+            response = await client.get(
+                url,
+                timeout=_PER_REQUEST_TIMEOUT_SECONDS,
+                follow_redirects=True,
+            )
             response.raise_for_status()
             return response.content
         except Exception as exc:
-            logger.debug(
-                "VisionImagesEnricher download failed for %s: %s", url, exc
-            )
+            logger.debug("VisionImagesEnricher download failed for %s: %s", url, exc)
             return None

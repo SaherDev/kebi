@@ -8,7 +8,6 @@ parse + field copy.
 
 from __future__ import annotations
 
-import functools
 import logging
 from typing import TYPE_CHECKING
 
@@ -23,24 +22,9 @@ logger = logging.getLogger(__name__)
 _KEY_PREFIX = "place_v2:"
 
 
-@functools.cache
-def _shared_redis_client(url: str) -> Redis:
-    """Process-wide Redis client per URL — shares the connection pool
-    across every RedisPlacesCache instance. Closed at process exit."""
-    from redis.asyncio import Redis
-
-    client: Redis = Redis.from_url(url, decode_responses=True)
-    return client
-
-
 class RedisPlacesCache:
     def __init__(self, redis: Redis) -> None:
         self._redis = redis
-
-    @classmethod
-    def from_url(cls, url: str) -> RedisPlacesCache:
-        """Construct a cache backed by the shared per-URL Redis client."""
-        return cls(_shared_redis_client(url))
 
     async def mget(self, provider_ids: list[str]) -> dict[str, PlaceObject]:
         if not provider_ids:

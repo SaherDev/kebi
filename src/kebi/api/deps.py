@@ -63,8 +63,9 @@ from kebi.db.session import _get_session_factory, get_session
 from kebi.providers import get_instructor_client
 from kebi.providers.cache import CacheBackend
 from kebi.providers.embeddings import EmbedderProtocol, get_embedder
+from kebi.providers.http_client import get_shared_http_client
 from kebi.providers.llm import get_transcription_client, get_vision_extractor
-from kebi.providers.redis_cache import RedisCacheBackend
+from kebi.providers.redis_cache import RedisCacheBackend, get_redis_client
 
 
 def get_taste_service() -> TasteModelService:
@@ -77,7 +78,7 @@ def get_taste_service() -> TasteModelService:
 
 def get_cache_backend() -> CacheBackend:
     """FastAPI dependency providing CacheBackend (RedisCacheBackend by default)."""
-    return RedisCacheBackend(url=get_env().REDIS_URL)
+    return RedisCacheBackend(client=get_redis_client(get_env().REDIS_URL))
 
 
 def get_status_repo(
@@ -88,16 +89,13 @@ def get_status_repo(
 
 
 def _build_places_cache() -> PlacesCache:
-    """Construct a PlacesCache from the Redis URL in secrets.
+    """Construct a PlacesCache backed by the shared per-URL Redis client.
 
-    A fresh `redis.asyncio.Redis` client is built per call. The async client
-    reuses its connection pool internally, so per-request construction is
-    cheap and avoids the "client bound to the wrong event loop" pitfall.
+    The underlying `redis.asyncio.Redis` is a process-wide singleton owned
+    by `providers/redis_cache.get_redis_client`, so the connection pool is
+    reused across requests (ADR-019).
     """
-    from redis.asyncio import Redis
-
-    redis_client = Redis.from_url(get_env().REDIS_URL, decode_responses=True)
-    return PlacesCache(redis_client)
+    return PlacesCache(get_redis_client(get_env().REDIS_URL))
 
 
 def get_places_service(
@@ -124,18 +122,15 @@ def get_embedding_repo(
 
 
 def _build_message_buffer() -> MessageBuffer:
-    """Construct a per-user message buffer backed by a fresh Redis client.
+    """Construct a per-user message buffer backed by the shared Redis client.
 
-    Per `_build_places_cache`'s pattern: build a fresh `redis.asyncio.Redis`
-    per call. The async client reuses its connection pool internally, so
-    per-request construction is cheap and avoids the wrong-event-loop pitfall.
+    The underlying `redis.asyncio.Redis` is a process-wide singleton owned
+    by `providers/redis_cache.get_redis_client`, so the connection pool is
+    reused across requests (ADR-019).
     """
-    from redis.asyncio import Redis
-
     cfg = get_config()
-    redis_client = Redis.from_url(get_env().REDIS_URL, decode_responses=True)
     return MessageBuffer(
-        redis=redis_client,
+        redis=get_redis_client(get_env().REDIS_URL),
         ttl_seconds=cfg.memory.extraction.buffer_ttl_seconds,
     )
 
@@ -165,23 +160,18 @@ def get_extraction_config(
 
 async def get_event_dispatcher(
     background_tasks: BackgroundTasks,
-    db_session: AsyncSession = Depends(get_session),  # noqa: B008
+    taste_service: TasteModelService = Depends(get_taste_service),  # noqa: B008
+    memory_service: UserMemoryService = Depends(get_user_memory_service),  # noqa: B008
 ) -> EventDispatcher:
     """FastAPI dependency providing a fully wired EventDispatcher (ADR-043).
 
-    Taste and memory services use session_factory — each repo method opens
+    Pulls `taste_service` and `memory_service` from the existing
+    `Depends(...)` factories so FastAPI's per-request dedup hands out the
+    same instances the rest of the request graph already uses (ADR-019).
+    Both services use session_factory internally — each repo method opens
     its own session, so background tasks don't depend on request session.
+    `BackgroundTasks` stays request-scoped (FastAPI requirement).
     """
-    cfg = get_config()
-    sf = _get_session_factory()
-    taste_service = TasteModelService(session_factory=sf)
-    memory_service = UserMemoryService(
-        repo=SQLAlchemyUserMemoryRepository(sf),
-        extractor=MemoryExtractor(get_instructor_client("memory_extractor")),
-        confidence_config=cfg.memory.confidence,
-        buffer=_build_message_buffer(),
-        debounce_messages=cfg.memory.extraction.debounce_messages,
-    )
     handlers = EventHandlers(
         taste_service=taste_service,
         memory_service=memory_service,
@@ -244,16 +234,17 @@ def _make_inline_level() -> EnrichmentLevel:
         VideoMetadataEnricher,
     )
 
+    http = get_shared_http_client()
     return EnrichmentLevel(
         name="enrich",
         enrichers=[
             ParallelEnricherGroup(
                 [
-                    CircuitBreakerEnricher(TikTokCaptionEnricher()),
+                    CircuitBreakerEnricher(TikTokCaptionEnricher(http=http)),
                     CircuitBreakerEnricher(VideoMetadataEnricher()),
-                    CircuitBreakerEnricher(GoogleMapsListEnricher()),
-                    CircuitBreakerEnricher(InstagramPostEnricher()),
-                    CircuitBreakerEnricher(TikTokPhotoEnricher()),
+                    CircuitBreakerEnricher(GoogleMapsListEnricher(http=http)),
+                    CircuitBreakerEnricher(InstagramPostEnricher(http=http)),
+                    CircuitBreakerEnricher(TikTokPhotoEnricher(http=http)),
                 ]
             ),
         ],
@@ -296,7 +287,10 @@ def _make_deep_level() -> EnrichmentLevel:
                 transcription_client=get_transcription_client(),
             ),
             VisionFramesEnricher(vision_extractor=vision_extractor),
-            VisionImagesEnricher(vision_extractor=vision_extractor),
+            VisionImagesEnricher(
+                vision_extractor=vision_extractor,
+                http=get_shared_http_client(),
+            ),
         ],
         summary_fn=deep_summary,
         requires_url=True,
@@ -361,27 +355,25 @@ def get_signal_service(
 
 
 async def get_consult_service(
-    db_session: AsyncSession = Depends(get_session),  # noqa: B008
     recommendation_repo: RecommendationRepository = Depends(get_recommendation_repo),  # noqa: B008
+    places_service: PlacesService = Depends(get_places_service),  # noqa: B008
+    taste_service: TasteModelService = Depends(get_taste_service),  # noqa: B008
 ) -> ConsultService:
     """FastAPI dependency providing a fully wired ConsultService (feature 028 M4).
 
-    Wires the 4-phase pipeline dependencies: places client, places service,
-    taste model service (active-tier chip filter only, ADR-061), and
-    recommendation repository (ADR-060). IntentParser, RecallService, and
+    Wires the 4-phase pipeline dependencies via existing `Depends(...)`
+    factories (ADR-019): places service, taste model service (active-tier
+    chip filter only, ADR-061), and recommendation repository (ADR-060).
+    The inline `GooglePlacesClient()` is the v1 client and will be retired
+    as part of the places_v2 migration. IntentParser, RecallService, and
     UserMemoryService are no longer held by the consult service — the
     caller supplies pre-parsed `query`, pre-loaded `saved_places`, and an
     optional `preference_context`.
     """
-    places_service = PlacesService(
-        repo=PlacesRepository(db_session),
-        cache=_build_places_cache(),
-        client=GooglePlacesClient(),
-    )
     return ConsultService(
         places_client=GooglePlacesClient(),
         places_service=places_service,
-        taste_service=TasteModelService(session_factory=_get_session_factory()),
+        taste_service=taste_service,
         recommendation_repo=recommendation_repo,
     )
 
@@ -440,17 +432,20 @@ def get_user_places_repo(
 def get_places_v2_cache() -> RedisPlacesCache:
     """FastAPI dependency providing RedisPlacesCache (place_v2: key prefix).
 
-    Backed by a process-wide Redis client owned by places_v2 itself.
+    Backed by the process-wide Redis client from `providers/redis_cache`.
     """
-    return RedisPlacesCache.from_url(get_env().REDIS_URL)
+    return RedisPlacesCache(redis=get_redis_client(get_env().REDIS_URL))
 
 
 def get_google_places_client_v2() -> GooglePlacesClientV2:
     """FastAPI dependency providing GooglePlacesClient (places_v2).
 
-    Backed by a process-wide httpx.AsyncClient owned by places_v2 itself.
+    Backed by the process-wide httpx.AsyncClient from `providers/http_client`.
     """
-    return GooglePlacesClientV2(api_key=get_env().GOOGLE_API_KEY or "")
+    return GooglePlacesClientV2(
+        api_key=get_env().GOOGLE_API_KEY or "",
+        http=get_shared_http_client(),
+    )
 
 
 def get_embeddings_repo_v2(
@@ -472,9 +467,9 @@ def get_embedder_v2() -> EmbedderProtocol:
     `model_name` lives in the key, so a model swap automatically
     invalidates without manual cleanup.
     """
-    return CachedEmbedder.from_url(
+    return CachedEmbedder(
         embedder=get_embedder(),
-        url=get_env().REDIS_URL,
+        redis=get_redis_client(get_env().REDIS_URL),
         model_name=get_config().models["embedder"].model,
     )
 

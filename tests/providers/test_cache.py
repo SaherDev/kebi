@@ -1,5 +1,9 @@
 """Tests for CacheBackend Protocol and RedisCacheBackend structural compliance (US3)."""
 
+from unittest.mock import AsyncMock
+
+from redis.asyncio import Redis
+
 from kebi.providers.cache import CacheBackend
 from kebi.providers.redis_cache import RedisCacheBackend
 
@@ -34,7 +38,7 @@ def test_in_memory_stub_satisfies_cache_backend_protocol() -> None:
 
 def test_redis_cache_backend_satisfies_cache_backend_protocol() -> None:
     """RedisCacheBackend satisfies CacheBackend Protocol — no network call needed."""
-    backend = RedisCacheBackend(url="redis://localhost:6379/0")
+    backend = RedisCacheBackend(client=AsyncMock(spec=Redis))
     assert isinstance(backend, CacheBackend)
 
 

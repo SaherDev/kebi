@@ -54,6 +54,7 @@ from kebi.core.places_v2 import query_examples as qx
 from kebi.core.places_v2.embedding_service import EmbeddingService
 from kebi.db.session import _get_session_factory
 from kebi.providers.embeddings import VoyageEmbedder
+from kebi.providers.redis_cache import get_redis_client
 
 OUT = Path(__file__).resolve().parent / "places_v2_calls.json"
 
@@ -282,13 +283,15 @@ async def main() -> None:
     counter = _CountingEmbedder(
         VoyageEmbedder(model=cfg.model, api_key=env.VOYAGE_API_KEY)
     )
-    cached = CachedEmbedder.from_url(counter, env.REDIS_URL, model_name=cfg.model)
+    cached = CachedEmbedder(
+        counter, get_redis_client(env.REDIS_URL), model_name=cfg.model
+    )
 
     # ---- RedisPlacesCache round-trip --------------------------------------
     # mset 3 real PlaceObjects → mget them back → confirm Pydantic round-trip
     # through Redis preserves the full shape (including business_status enum).
     print("\n--- redis cache ---")
-    cache = RedisPlacesCache.from_url(env.REDIS_URL)
+    cache = RedisPlacesCache(redis=get_redis_client(env.REDIS_URL))
     if sample_places:
         await cache.mset(sample_places)
         ids_back = await cache.mget(

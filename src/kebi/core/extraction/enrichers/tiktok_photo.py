@@ -72,8 +72,9 @@ class TikTokPhotoEnricher(SourceFilteredEnricher):
     Does NOT catch exceptions — they propagate to `CircuitBreakerEnricher`.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, *, http: httpx.AsyncClient) -> None:
         super().__init__(allowed_sources={PlaceSource.tiktok})
+        self._http = http
 
     async def _run(self, context: ExtractionContext) -> None:
         if context.is_photo_post or context.image_urls:
@@ -96,7 +97,7 @@ class TikTokPhotoEnricher(SourceFilteredEnricher):
             and _is_image_entry(data)
             and context.url is not None
         ):
-            carousel = await _fetch_tiktok_carousel_urls(context.url)
+            carousel = await _fetch_tiktok_carousel_urls(self._http, context.url)
             if len(carousel) > len(urls):
                 urls = carousel
 
@@ -127,9 +128,7 @@ class TikTokPhotoEnricher(SourceFilteredEnricher):
         stdout, _ = await proc.communicate()
 
         if proc.returncode != 0:
-            raise RuntimeError(
-                f"yt-dlp exited with code {proc.returncode} for {url}"
-            )
+            raise RuntimeError(f"yt-dlp exited with code {proc.returncode} for {url}")
 
         # Photo posts may emit one JSON object per line (one per entry).
         # `--dump-json` on a playlist gives newline-delimited JSON; on a
@@ -221,7 +220,7 @@ def _extract_image_urls(data: dict[str, Any]) -> list[str]:
     return []
 
 
-async def _fetch_tiktok_carousel_urls(url: str) -> list[str]:
+async def _fetch_tiktok_carousel_urls(client: httpx.AsyncClient, url: str) -> list[str]:
     """Pull all carousel slide URLs from a TikTok photo-post page.
 
     yt-dlp doesn't expose carousel slides for TikTok — only the cover
@@ -235,11 +234,13 @@ async def _fetch_tiktok_carousel_urls(url: str) -> list[str]:
     `[]` so the caller can fall back to yt-dlp's cover thumbnail.
     """
     try:
-        async with httpx.AsyncClient(
-            follow_redirects=True, timeout=_TIKTOK_PAGE_TIMEOUT_SECONDS
-        ) as client:
-            response = await client.get(url, headers=_TIKTOK_PAGE_HEADERS)
-            response.raise_for_status()
+        response = await client.get(
+            url,
+            headers=_TIKTOK_PAGE_HEADERS,
+            timeout=_TIKTOK_PAGE_TIMEOUT_SECONDS,
+            follow_redirects=True,
+        )
+        response.raise_for_status()
     except (httpx.HTTPError, httpx.TimeoutException) as exc:
         logger.warning(
             "tiktok_carousel_fetch_failed",

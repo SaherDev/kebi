@@ -43,3 +43,21 @@ def override_session_dependency(mock_session: AsyncMock) -> None:
     from kebi.api import deps
 
     app.dependency_overrides[deps.get_session] = lambda: mock_session
+
+
+@pytest.fixture(autouse=True)
+def clear_provider_factory_caches() -> None:
+    """Reset @functools.cache on provider factories between tests.
+
+    Keys are call args (e.g. `role`), not `get_config()` / `get_env()`
+    outputs — so a test that patches config could otherwise see a stale
+    instance cached by an earlier test using the same role.
+    """
+    from kebi.providers.embeddings import get_embedder
+    from kebi.providers.http_client import get_shared_http_client
+    from kebi.providers.llm import get_instructor_client, get_langchain_chat_model
+
+    get_embedder.cache_clear()
+    get_instructor_client.cache_clear()
+    get_langchain_chat_model.cache_clear()
+    get_shared_http_client.cache_clear()

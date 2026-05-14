@@ -26,7 +26,6 @@ space.
 
 from __future__ import annotations
 
-import functools
 import hashlib
 import json
 import logging
@@ -46,16 +45,6 @@ _KEY_PREFIX = "qembed:"
 DEFAULT_TTL_SECONDS: int = 90 * 24 * 60 * 60
 
 
-@functools.cache
-def _shared_redis_client(url: str) -> Redis:
-    """Process-wide Redis client per URL — shares the connection pool
-    across every CachedEmbedder instance. Mirrors RedisPlacesCache."""
-    from redis.asyncio import Redis
-
-    client: Redis = Redis.from_url(url, decode_responses=True)
-    return client
-
-
 class CachedEmbedder:
     def __init__(
         self,
@@ -69,20 +58,7 @@ class CachedEmbedder:
         self._model_name = model_name
         self._ttl_seconds = ttl_seconds
 
-    @classmethod
-    def from_url(
-        cls,
-        embedder: EmbedderProtocol,
-        url: str,
-        model_name: str,
-        ttl_seconds: int = DEFAULT_TTL_SECONDS,
-    ) -> CachedEmbedder:
-        """Construct backed by the shared per-URL Redis client."""
-        return cls(embedder, _shared_redis_client(url), model_name, ttl_seconds)
-
-    async def embed(
-        self, texts: list[str], input_type: str
-    ) -> list[list[float]]:
+    async def embed(self, texts: list[str], input_type: str) -> list[list[float]]:
         if not texts:
             return []
 

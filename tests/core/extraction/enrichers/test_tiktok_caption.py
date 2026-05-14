@@ -2,6 +2,7 @@
 
 from unittest.mock import AsyncMock, patch
 
+import httpx
 import pytest
 
 from kebi.core.extraction.enrichers.tiktok_caption import TikTokCaptionEnricher
@@ -15,7 +16,8 @@ from kebi.core.extraction.types import (
 
 @pytest.fixture
 def enricher() -> TikTokCaptionEnricher:
-    return TikTokCaptionEnricher()
+    # http is injected but unused — every test mocks `_fetch_caption` directly.
+    return TikTokCaptionEnricher(http=AsyncMock(spec=httpx.AsyncClient))
 
 
 class TestTikTokCaptionEnricher:

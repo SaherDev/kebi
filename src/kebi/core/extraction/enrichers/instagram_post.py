@@ -62,6 +62,8 @@ class InstagramPostEnricher(SourceFilteredEnricher):
 
     def __init__(
         self,
+        *,
+        http: httpx.AsyncClient,
         token: str | None = None,
         timeout_seconds: float = _DEFAULT_TIMEOUT_SECONDS,
     ) -> None:
@@ -71,6 +73,7 @@ class InstagramPostEnricher(SourceFilteredEnricher):
         # explicitly if they want.
         self._token = token
         self._timeout_seconds = timeout_seconds
+        self._http = http
 
     def _resolve_token(self) -> str | None:
         return self._token or get_env().APIFY_TOKEN
@@ -79,8 +82,7 @@ class InstagramPostEnricher(SourceFilteredEnricher):
         token = self._resolve_token()
         if not token:
             logger.info(
-                "InstagramPostEnricher skipped — APIFY_TOKEN not configured "
-                "(url=%s)",
+                "InstagramPostEnricher skipped — APIFY_TOKEN not configured (url=%s)",
                 context.url,
             )
             return
@@ -135,24 +137,19 @@ class InstagramPostEnricher(SourceFilteredEnricher):
                         producer=Producer.PHOTO_DETECTOR,
                         medium=Medium.IMAGE,
                         snippet=None,
-                        metadata=(
-                            ("image_count", len(context.image_urls)),
-                        ),
+                        metadata=(("image_count", len(context.image_urls)),),
                     )
                 )
 
-    async def _fetch_post(
-        self, url: str, token: str
-    ) -> dict[str, Any] | None:
+    async def _fetch_post(self, url: str, token: str) -> dict[str, Any] | None:
         body = {"username": [url], "resultsLimit": 1}
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                _APIFY_ENDPOINT,
-                params={"token": token},
-                json=body,
-                timeout=self._timeout_seconds,
-            )
-            response.raise_for_status()
+        response = await self._http.post(
+            _APIFY_ENDPOINT,
+            params={"token": token},
+            json=body,
+            timeout=self._timeout_seconds,
+        )
+        response.raise_for_status()
         data = response.json()
         if not isinstance(data, list) or not data:
             return None

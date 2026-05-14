@@ -4,6 +4,7 @@ Resolves configured embedder clients by role (ADR-020, ADR-038, ADR-040).
 """
 
 import asyncio
+import functools
 import logging
 import time
 from typing import Protocol, cast, runtime_checkable
@@ -128,9 +129,7 @@ class VoyageEmbedder:
             #    past that is the retry-backoff loop and not worth waiting
             #    for.
             result = await asyncio.wait_for(
-                self._client.embed(
-                    texts, model=self._model, input_type=input_type
-                ),
+                self._client.embed(texts, model=self._model, input_type=input_type),
                 timeout=hard_timeout,
             )
             span.end()
@@ -144,17 +143,14 @@ class VoyageEmbedder:
                 hard_timeout,
                 cooldown,
             )
-            raise RuntimeError(
-                f"Voyage embed timed out after {hard_timeout}s"
-            ) from e
+            raise RuntimeError(f"Voyage embed timed out after {hard_timeout}s") from e
         except Exception as e:
             # Trip the breaker only on rate-limit signals — other errors
             # (transient network, model error) shouldn't lock everyone out.
             if _looks_like_rate_limit(e):
                 _VOYAGE_COOLDOWN_UNTIL = time.monotonic() + cooldown
                 logger.warning(
-                    "Voyage rate-limit detected; tripping circuit breaker "
-                    "for %.0fs.",
+                    "Voyage rate-limit detected; tripping circuit breaker for %.0fs.",
                     cooldown,
                 )
             span.end(output={"error": str(e)}, level="ERROR")
@@ -176,10 +172,16 @@ def _looks_like_rate_limit(exc: BaseException) -> bool:
 # --- Factory ---
 
 
+@functools.cache
 def get_embedder() -> EmbedderProtocol:
     """Get embedder client for the configured role.
 
     Resolves provider and model from config/app.yaml under the 'models.embedder' key.
+
+    Process-wide singleton (one client per process). The underlying SDK
+    client (e.g. voyageai.AsyncClient) holds a connection pool that is
+    only useful if reused across requests. Tests that swap config call
+    `.cache_clear()` via the autouse fixture in tests/conftest.py.
 
     Returns:
         Embedder client implementing EmbedderProtocol

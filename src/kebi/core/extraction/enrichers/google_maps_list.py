@@ -63,6 +63,8 @@ class GoogleMapsListEnricher(SourceFilteredEnricher):
 
     def __init__(
         self,
+        *,
+        http: httpx.AsyncClient,
         token: str | None = None,
         timeout_seconds: float = _DEFAULT_TIMEOUT_SECONDS,
     ) -> None:
@@ -72,6 +74,7 @@ class GoogleMapsListEnricher(SourceFilteredEnricher):
         # explicitly if they want.
         self._token = token
         self._timeout_seconds = timeout_seconds
+        self._http = http
 
     def _resolve_token(self) -> str | None:
         return self._token or get_env().APIFY_TOKEN
@@ -80,8 +83,7 @@ class GoogleMapsListEnricher(SourceFilteredEnricher):
         token = self._resolve_token()
         if not token:
             logger.info(
-                "GoogleMapsListEnricher skipped — APIFY_TOKEN not configured "
-                "(url=%s)",
+                "GoogleMapsListEnricher skipped — APIFY_TOKEN not configured (url=%s)",
                 context.url,
             )
             return
@@ -110,16 +112,14 @@ class GoogleMapsListEnricher(SourceFilteredEnricher):
             # without it.
             "proxyConfiguration": {"useApifyProxy": False},
         }
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                _APIFY_ENDPOINT,
-                params={"token": token},
-                json=body,
-                timeout=self._timeout_seconds,
-            )
-            response.raise_for_status()
+        response = await self._http.post(
+            _APIFY_ENDPOINT,
+            params={"token": token},
+            json=body,
+            timeout=self._timeout_seconds,
+        )
+        response.raise_for_status()
         data = response.json()
         if not isinstance(data, list):
             return []
         return data
-

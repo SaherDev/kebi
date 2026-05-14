@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import functools
 import logging
 from datetime import UTC, datetime
 from typing import Any
@@ -61,19 +60,10 @@ _DETAILS_FIELD_MASK = _FIELD_MASK.replace("places.", "")
 _DETAILS_CONCURRENCY = 5
 
 
-@functools.cache
-def _shared_http_client() -> httpx.AsyncClient:
-    """Process-wide httpx.AsyncClient — shares the connection pool across
-    every GooglePlacesClient instance. Closed at process exit."""
-    return httpx.AsyncClient()
-
-
 class GooglePlacesClient:
-    def __init__(
-        self, api_key: str, http: httpx.AsyncClient | None = None
-    ) -> None:
+    def __init__(self, *, api_key: str, http: httpx.AsyncClient) -> None:
         self._api_key = api_key
-        self._http = http if http is not None else _shared_http_client()
+        self._http = http
 
     async def search(self, query: PlaceQuery, limit: int = 20) -> list[PlaceObject]:
         """Route to Google's :searchText or :searchNearby based on what the
@@ -121,7 +111,7 @@ class GooglePlacesClient:
                 extra={"provider_id": provider_id},
             )
             return None
-        google_id = provider_id[len(GOOGLE_PROVIDER_PREFIX):]
+        google_id = provider_id[len(GOOGLE_PROVIDER_PREFIX) :]
         results = await self._request("GET", f"/{google_id}", _DETAILS_FIELD_MASK)
         return results[0] if results else None
 
@@ -157,9 +147,7 @@ class GooglePlacesClient:
         if included_type:
             body["includedType"] = included_type
         _apply_common_filters(body, query)
-        return await self._request(
-            "POST", ":searchText", _FIELD_MASK, body=body
-        )
+        return await self._request("POST", ":searchText", _FIELD_MASK, body=body)
 
     async def _nearby_search(
         self, query: PlaceQuery, limit: int = 20
@@ -181,9 +169,7 @@ class GooglePlacesClient:
         if google_types:
             body["includedTypes"] = google_types
         _apply_common_filters(body, query)
-        return await self._request(
-            "POST", ":searchNearby", _FIELD_MASK, body=body
-        )
+        return await self._request("POST", ":searchNearby", _FIELD_MASK, body=body)
 
     async def _request(
         self,
@@ -234,11 +220,7 @@ class GooglePlacesClient:
             return []
         raws = data.get("places") if "places" in data else [data]
         now = datetime.now(UTC)
-        return [
-            obj
-            for raw in (raws or [])
-            if (obj := map_place(raw, now)) is not None
-        ]
+        return [obj for raw in (raws or []) if (obj := map_place(raw, now)) is not None]
 
 
 def _apply_common_filters(body: dict[str, Any], query: PlaceQuery) -> None:
