@@ -279,6 +279,12 @@ class EmbeddingsConfig(BaseModel):
     list and emits each available value separated by
     `description_separator`. Retrieval evals can re-tune field order and
     inclusion by editing the config and re-embedding — no code change.
+
+    `hard_timeout_seconds` / `rate_limit_cooldown_seconds` tune the
+    process-wide circuit breaker in `providers/embeddings.VoyageEmbedder`:
+    the SDK's internal `tenacity` retry chain takes ~15s to exhaust on
+    rate-limit responses, so the breaker hard-times-out individual calls
+    and short-circuits subsequent ones for `rate_limit_cooldown_seconds`.
     """
 
     dimensions: int = 1024
@@ -297,6 +303,9 @@ class EmbeddingsConfig(BaseModel):
         "city",
         "country",
     ]
+    # Voyage rate-limit circuit breaker tuning.
+    hard_timeout_seconds: float = 3.0
+    rate_limit_cooldown_seconds: float = 60.0
 
 
 class SystemPromptsConfig(BaseModel):
