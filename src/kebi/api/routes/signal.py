@@ -35,7 +35,7 @@ async def post_signal(
             signal_type=request.signal_type,
             user_id=request.user_id,
             recommendation_id=request.recommendation_id,
-            place_id=request.place_id,
+            place_core_id=request.place_core_id,
         )
     except RecommendationNotFoundError:
         raise HTTPException(

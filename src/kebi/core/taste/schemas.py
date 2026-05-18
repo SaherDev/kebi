@@ -18,13 +18,16 @@ from pydantic import BaseModel, Field
 class RawInteraction(BaseModel):
     """One interactions row, place data not yet resolved.
 
-    The repository returns these (type + place_id only); the service
-    resolves place_id against the places_v2 catalog and builds the
-    richer InteractionRow.
+    The repository returns these (type + place_core_id only); the service
+    resolves place_core_id against the places_v2 catalog and builds the
+    richer InteractionRow. `place_core_id` is the `places_v2.id` value
+    stored in the `interactions.place_id` column (the column name is
+    unchanged; only the field disambiguates it from user_place_id /
+    provider_id).
     """
 
     type: str
-    place_id: str | None = None
+    place_core_id: str | None = None
 
 
 class InteractionRow(BaseModel):

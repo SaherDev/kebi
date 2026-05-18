@@ -44,7 +44,7 @@ async def test_log_interaction_persists_metadata() -> None:
     await repo.log_interaction(
         user_id="user_abc",
         interaction_type=InteractionType.SAVE,
-        place_id="pid-1",
+        place_core_id="pid-1",
         metadata=metadata,
     )
 
@@ -66,7 +66,7 @@ async def test_log_interaction_without_metadata_stores_null() -> None:
     await repo.log_interaction(
         user_id="user_abc",
         interaction_type=InteractionType.SAVE,
-        place_id="pid-1",
+        place_core_id="pid-1",
     )
 
     interaction = session.add.call_args[0][0]
@@ -86,8 +86,9 @@ async def test_get_interactions_returns_raw_rows_no_join() -> None:
 
     result = await repo.get_interactions("user_abc")
 
-    # Enum coerced to its value; None place_id preserved.
-    assert [(r.type, r.place_id) for r in result] == [
+    # Enum coerced to its value; None place_core_id preserved. The DB
+    # column stays `place_id`; RawInteraction exposes it as place_core_id.
+    assert [(r.type, r.place_core_id) for r in result] == [
         ("save", "pv2-a"),
         ("rejected", None),
     ]

@@ -38,34 +38,34 @@ class TestOnTasteSignal:
     async def test_place_saved_calls_handle_signal_per_place(
         self, handlers: EventHandlers, mock_taste_service: MagicMock
     ) -> None:
-        event = PlaceSaved(user_id="u1", place_ids=["p1", "p2"], place_metadata={})
+        event = PlaceSaved(user_id="u1", place_core_ids=["p1", "p2"], place_metadata={})
         await handlers.on_taste_signal(event)
         assert mock_taste_service.handle_signal.await_count == 2
         calls = mock_taste_service.handle_signal.call_args_list
         assert calls[0].kwargs["signal_type"] == InteractionType.SAVE
-        assert calls[0].kwargs["place_id"] == "p1"
-        assert calls[1].kwargs["place_id"] == "p2"
+        assert calls[0].kwargs["place_core_id"] == "p1"
+        assert calls[1].kwargs["place_core_id"] == "p2"
 
     async def test_recommendation_accepted(
         self, handlers: EventHandlers, mock_taste_service: MagicMock
     ) -> None:
         event = RecommendationAccepted(
-            user_id="u1", recommendation_id="r1", place_id="p1"
+            user_id="u1", recommendation_id="r1", place_core_id="p1"
         )
         await handlers.on_taste_signal(event)
         mock_taste_service.handle_signal.assert_awaited_once_with(
-            user_id="u1", signal_type=InteractionType.ACCEPTED, place_id="p1"
+            user_id="u1", signal_type=InteractionType.ACCEPTED, place_core_id="p1"
         )
 
     async def test_recommendation_rejected(
         self, handlers: EventHandlers, mock_taste_service: MagicMock
     ) -> None:
         event = RecommendationRejected(
-            user_id="u1", recommendation_id="r1", place_id="p1"
+            user_id="u1", recommendation_id="r1", place_core_id="p1"
         )
         await handlers.on_taste_signal(event)
         mock_taste_service.handle_signal.assert_awaited_once_with(
-            user_id="u1", signal_type=InteractionType.REJECTED, place_id="p1"
+            user_id="u1", signal_type=InteractionType.REJECTED, place_core_id="p1"
         )
 
     async def test_exception_does_not_raise(
@@ -73,7 +73,7 @@ class TestOnTasteSignal:
     ) -> None:
         mock_taste_service.handle_signal = AsyncMock(side_effect=RuntimeError("boom"))
         event = RecommendationAccepted(
-            user_id="u1", recommendation_id="r1", place_id="p1"
+            user_id="u1", recommendation_id="r1", place_core_id="p1"
         )
         await handlers.on_taste_signal(event)  # should not raise
 

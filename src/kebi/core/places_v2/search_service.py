@@ -79,7 +79,9 @@ class PlacesSearchService:
         fetched_map = {p.provider_id: p for p in fetched if p.provider_id}
         return {**cached, **fetched_map}
 
-    async def get_cores_by_ids(self, ids: list[str]) -> dict[str, PlaceCore]:
+    async def get_cores_by_ids(
+        self, place_core_ids: list[str]
+    ) -> dict[str, PlaceCore]:
         """Resolve persisted catalog rows by internal ``places_v2.id``.
 
         DB-only: no cache overlay, no provider fallback, no upsert. This is
@@ -90,9 +92,9 @@ class PlacesSearchService:
 
         Ids the catalog can't resolve are simply absent from the result.
         """
-        if not ids:
+        if not place_core_ids:
             return {}
-        cores = await self._repo.get_by_ids(ids)
+        cores = await self._repo.get_by_ids(place_core_ids)
         return {c.id: c for c in cores if c.id}
 
     # ------------------------------------------------------------------

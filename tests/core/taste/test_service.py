@@ -59,8 +59,8 @@ def _make_repo_mock() -> AsyncMock:
     return repo
 
 
-def _raw(type_: str = "save", place_id: str = "p1") -> RawInteraction:
-    return RawInteraction(type=type_, place_id=place_id)
+def _raw(type_: str = "save", place_core_id: str = "p1") -> RawInteraction:
+    return RawInteraction(type=type_, place_core_id=place_core_id)
 
 
 def _core(pid: str = "p1") -> PlaceCore:
@@ -195,7 +195,9 @@ class TestRunRegen:
     async def test_orphan_place_skipped(self, mock_get_llm: MagicMock) -> None:
         """Interactions whose place_id doesn't resolve are dropped."""
         repo = _make_repo_mock()
-        repo.get_interactions.return_value = [_raw(place_id="gone") for _ in range(5)]
+        repo.get_interactions.return_value = [
+            _raw(place_core_id="gone") for _ in range(5)
+        ]
         repo.get_by_user_id.return_value = None
 
         mock_llm = AsyncMock()

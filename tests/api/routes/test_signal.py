@@ -36,7 +36,7 @@ def test_unknown_signal_type_returns_422(svc: AsyncMock) -> None:
             "signal_type": "no_such_type",
             "user_id": "user_abc",
             "recommendation_id": "rec_1",
-            "place_id": "pl_1",
+            "place_core_id": "pl_1",
         },
     )
 
@@ -52,7 +52,7 @@ def test_recommendation_accepted_still_routes_correctly(svc: AsyncMock) -> None:
             "signal_type": "recommendation_accepted",
             "user_id": "user_abc",
             "recommendation_id": "rec_1",
-            "place_id": "pl_1",
+            "place_core_id": "pl_1",
         },
     )
 

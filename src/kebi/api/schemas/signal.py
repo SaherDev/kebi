@@ -1,7 +1,8 @@
 """Request/response schemas for POST /v1/signal endpoint.
 
 Carries accept/reject feedback on a prior recommendation
-(feature 022, ADR-060): recommendation_id + place_id.
+(feature 022, ADR-060): recommendation_id + place_core_id (ADR-077
+disambiguates this from user_place_id / provider_id).
 """
 
 from __future__ import annotations
@@ -21,7 +22,9 @@ class RecommendationSignalRequest(BaseModel):
     recommendation_id: str = Field(
         ..., description="ID of the recommendation being responded to"
     )
-    place_id: str = Field(..., description="The place the user acted on")
+    place_core_id: str = Field(
+        ..., description="places_v2.id of the place the user acted on"
+    )
 
 
 SignalRequest = RecommendationSignalRequest

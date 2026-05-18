@@ -487,7 +487,7 @@ Behavioral signal endpoint (ADR-060). Replaces `POST /v1/feedback`. Carries reco
   "signal_type": "recommendation_accepted",
   "user_id": "<user_id>",
   "recommendation_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
-  "place_id": "google:ChIJN1t_tDeuEmsRUsoyG83frY4"
+  "place_core_id": "c0ffee00-1111-2222-3333-444455556666"
 }
 ```
 
@@ -496,7 +496,7 @@ Behavioral signal endpoint (ADR-060). Replaces `POST /v1/feedback`. Carries reco
 | `signal_type`       | `string` | Yes      | `"recommendation_accepted"` or `"recommendation_rejected"` |
 | `user_id`           | `string` | Yes      | Clerk-issued user ID                                       |
 | `recommendation_id` | `string` | Yes      | Must exist in recommendations table                        |
-| `place_id`          | `string` | Yes      | Trusted, not validated against places table                |
+| `place_core_id`     | `string` | Yes      | `places_v2.id` of the place (ADR-077; renamed from `place_id` to disambiguate from `user_place_id` / `provider_id`). Trusted, not validated. |
 
 **Responses:** `202 { "status": "accepted" }`; `404` if recommendation_id unknown; `422` on schema errors (including unknown `signal_type`).
 

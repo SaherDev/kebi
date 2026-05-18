@@ -375,14 +375,14 @@ class ExtractionService:
                     source_url=source_url,
                 )
 
-        linked_place_ids = [
+        linked_place_core_ids = [
             c.id for c in cores if c.id and c.id not in duplicate_place_ids
         ]
-        if linked_place_ids:
+        if linked_place_core_ids:
             await self._event_dispatcher.dispatch(
                 PlaceSaved(
                     user_id=user_id,
-                    place_ids=linked_place_ids,
+                    place_core_ids=linked_place_core_ids,
                     place_metadata={},
                     request_id=request_id,
                 )

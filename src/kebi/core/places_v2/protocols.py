@@ -84,7 +84,7 @@ class PlacesSearchServiceProtocol(Protocol):
     ) -> dict[str, PlaceObject]: ...
 
     async def get_cores_by_ids(
-        self, ids: list[str]
+        self, place_core_ids: list[str]
     ) -> dict[str, PlaceCore]: ...
 
 

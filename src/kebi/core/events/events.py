@@ -18,7 +18,7 @@ class PlaceSaved(DomainEvent):
     """Event: User saved a place"""
 
     event_type: str = "place_saved"
-    place_ids: list[str]
+    place_core_ids: list[str]  # places_v2.id values (the PlaceCore id)
     place_metadata: dict[str, Any] = Field(default_factory=dict)
     request_id: str = ""
 
@@ -28,7 +28,7 @@ class RecommendationAccepted(DomainEvent):
 
     event_type: str = "recommendation_accepted"
     recommendation_id: str
-    place_id: str
+    place_core_id: str
 
 
 class RecommendationRejected(DomainEvent):
@@ -36,7 +36,7 @@ class RecommendationRejected(DomainEvent):
 
     event_type: str = "recommendation_rejected"
     recommendation_id: str
-    place_id: str
+    place_core_id: str
 
 
 class TurnCompleted(DomainEvent):

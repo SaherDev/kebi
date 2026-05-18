@@ -231,7 +231,7 @@ async def test_successful_save_emits_completed_envelope() -> None:
     c.user_places.save_places.assert_awaited_once()
     c.event_dispatcher.dispatch.assert_awaited_once()
     event = c.event_dispatcher.dispatch.await_args.args[0]
-    assert event.place_ids == ["place-uuid-1"]
+    assert event.place_core_ids == ["place-uuid-1"]
     assert event.user_id == "u1"
 
 
@@ -284,7 +284,7 @@ async def test_mixed_save_and_duplicate_dispatches_event_for_new_link_only() -> 
     # PlaceSaved fires for the newly linked p1 only.
     c.event_dispatcher.dispatch.assert_awaited_once()
     event = c.event_dispatcher.dispatch.await_args.args[0]
-    assert event.place_ids == ["p1"]
+    assert event.place_core_ids == ["p1"]
 
 
 @pytest.mark.asyncio
@@ -403,7 +403,7 @@ async def test_cache_hit_with_duplicates_dispatches_only_for_newly_linked() -> N
     # PlaceSaved fired once, with only the non-duplicate id.
     c.event_dispatcher.dispatch.assert_awaited_once()
     event = c.event_dispatcher.dispatch.await_args.args[0]
-    assert event.place_ids == ["place-B"]
+    assert event.place_core_ids == ["place-B"]
 
 
 @pytest.mark.asyncio

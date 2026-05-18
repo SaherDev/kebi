@@ -31,7 +31,7 @@ class TasteModelRepository(Protocol):
         self,
         user_id: str,
         interaction_type: InteractionType,
-        place_id: str | None,
+        place_core_id: str | None,
         metadata: dict[str, Any] | None = None,
     ) -> None: ...
 
@@ -86,24 +86,26 @@ class SQLAlchemyTasteModelRepository:
         self,
         user_id: str,
         interaction_type: InteractionType,
-        place_id: str | None,
+        place_core_id: str | None,
         metadata: dict[str, Any] | None = None,
     ) -> None:
         async with self._session_factory() as session:
+            # DB column stays `place_id`; it holds the places_v2.id value.
             interaction = Interaction(
                 user_id=user_id,
                 type=interaction_type,
-                place_id=place_id,
+                place_id=place_core_id,
                 metadata_=metadata,
             )
             session.add(interaction)
             await session.commit()
 
     async def get_interactions(self, user_id: str) -> list[RawInteraction]:
-        """Raw interaction rows (type + place_id), ordered by created_at.
+        """Raw interaction rows (type + place_core_id), ordered by created_at.
 
-        Place data is NOT joined here — the service resolves place_id
-        against the places_v2 catalog (ADR-077).
+        Place data is NOT joined here — the service resolves place_core_id
+        against the places_v2 catalog (ADR-077). The `interactions.place_id`
+        column carries the `places_v2.id` value.
         """
         async with self._session_factory() as session:
             stmt = (
@@ -119,7 +121,7 @@ class SQLAlchemyTasteModelRepository:
                         if hasattr(row.type, "value")
                         else row.type
                     ),
-                    place_id=row.place_id,
+                    place_core_id=row.place_id,
                 )
                 for row in result
             ]

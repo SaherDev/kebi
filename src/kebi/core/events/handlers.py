@@ -23,7 +23,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Map event_type → (InteractionType, how to get place_ids)
+# Map event_type → (InteractionType, how to get place_core_ids)
 _TASTE_EVENT_MAP: dict[str, InteractionType] = {
     "recommendation_accepted": InteractionType.ACCEPTED,
     "recommendation_rejected": InteractionType.REJECTED,
@@ -47,22 +47,24 @@ class EventHandlers:
         """Unified handler for all taste-related events.
 
         Dispatches to handle_signal with the correct InteractionType.
-        Handles PlaceSaved (multiple place_ids), RecommendationAccepted,
+        Handles PlaceSaved (multiple place_core_ids), RecommendationAccepted,
         and RecommendationRejected.
         """
         try:
-            # Build (signal_type, place_id) pairs from the event shape
+            # Build (signal_type, place_core_id) pairs from the event shape
             pairs: list[tuple[InteractionType, str]] = []
             if isinstance(event, PlaceSaved):
-                pairs = [(InteractionType.SAVE, pid) for pid in event.place_ids]
+                pairs = [
+                    (InteractionType.SAVE, pcid) for pcid in event.place_core_ids
+                ]
             elif isinstance(event, RecommendationAccepted | RecommendationRejected):
-                pairs = [(_TASTE_EVENT_MAP[event.event_type], event.place_id)]
+                pairs = [(_TASTE_EVENT_MAP[event.event_type], event.place_core_id)]
 
-            for signal_type, place_id in pairs:
+            for signal_type, place_core_id in pairs:
                 await self.taste_service.handle_signal(
                     user_id=event.user_id,
                     signal_type=signal_type,
-                    place_id=place_id,
+                    place_core_id=place_core_id,
                 )
 
             self._tracer.capture_message(

@@ -60,10 +60,10 @@ class TasteModelService:
         self,
         user_id: str,
         signal_type: InteractionType,
-        place_id: str,
+        place_core_id: str,
     ) -> None:
         """Write interaction row, schedule debounced regen."""
-        await self._repo.log_interaction(user_id, signal_type, place_id)
+        await self._repo.log_interaction(user_id, signal_type, place_core_id)
 
         # Import here to avoid circular dependency at module level
         from kebi.core.taste.debounce import regen_debouncer
@@ -113,27 +113,28 @@ class TasteModelService:
 
         DB-only via the source-of-truth service's analytical read; no Google
         fallback, no cache mutation. Save source comes from the per-user
-        save record. Interactions whose place_id no longer resolves
+        save record. Interactions whose place_core_id no longer resolves
         (TTL-wiped / orphaned) are skipped.
         """
-        place_ids = list({r.place_id for r in raw if r.place_id})
+        place_core_ids = list({r.place_core_id for r in raw if r.place_core_id})
         async with self._session_factory() as session:
             search = self._search_service_factory(session)
             user_places_repo = self._user_places_repo_factory(session)
-            cores = await search.get_cores_by_ids(place_ids)
+            cores = await search.get_cores_by_ids(place_core_ids)
             user_places = await user_places_repo.get_by_user(user_id)
 
-        source_by_pid = {up.place_id: up.source.value for up in user_places}
+        # user_places.place_id holds the same places_v2.id value (FK).
+        source_by_core_id = {up.place_id: up.source.value for up in user_places}
         rows: list[InteractionRow] = []
         for r in raw:
-            if not r.place_id:
+            if not r.place_core_id:
                 continue
-            core = cores.get(r.place_id)
+            core = cores.get(r.place_core_id)
             if core is None:
                 continue  # orphan / TTL-wiped place — skip
             rows.append(
                 place_to_interaction_row(
-                    r.type, core, source_by_pid.get(r.place_id)
+                    r.type, core, source_by_core_id.get(r.place_core_id)
                 )
             )
         return rows

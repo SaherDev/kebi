@@ -53,7 +53,7 @@ class SignalService:
         signal_type: str,
         user_id: str,
         recommendation_id: str | None = None,
-        place_id: str | None = None,
+        place_core_id: str | None = None,
     ) -> None:
         """Validate (if needed) and dispatch the signal event.
 
@@ -74,12 +74,12 @@ class SignalService:
                 event = RecommendationAccepted(
                     user_id=user_id,
                     recommendation_id=recommendation_id,
-                    place_id=place_id or "",
+                    place_core_id=place_core_id or "",
                 )
             else:
                 event = RecommendationRejected(
                     user_id=user_id,
                     recommendation_id=recommendation_id,
-                    place_id=place_id or "",
+                    place_core_id=place_core_id or "",
                 )
             await self._event_dispatcher.dispatch(event)
