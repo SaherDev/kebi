@@ -28,6 +28,7 @@ truth for place lookups. Extraction never calls Google directly.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Protocol
 
@@ -48,6 +49,7 @@ from kebi.core.extraction.types import (
 )
 from kebi.core.places_v2 import (
     LocationContext,
+    PlaceObject,
     PlaceQuery,
     PlacesSearchServiceProtocol,
 )
@@ -147,6 +149,10 @@ def _enforce_candidate_limit(
 # (typo, ambiguous brand, etc.) and tight enough that quota stays sane
 # under many-name requests like a Google Maps shared list.
 _SEARCH_LIMIT_PER_QUERY = 5
+# Cap on parallel PlacesSearchService.find() calls across producer names.
+# Bounds DB/cache/provider QPS the way the places_v2 client's own fan-out
+# semaphores do, while collapsing the N-name latency to ~one call.
+_SEARCH_CONCURRENCY = 5
 
 
 class ExtractionPipeline:
@@ -275,20 +281,30 @@ class ExtractionPipeline:
 
         location_hint = _location_hint_from(context)
 
-        for query, producer, medium in queries:
+        sem = asyncio.Semaphore(_SEARCH_CONCURRENCY)
+
+        async def _find(query: str) -> list[PlaceObject]:
+            """Run one name's search; best-effort — errors degrade to []."""
             try:
-                results = await self._search_service.find(
-                    PlaceQuery(place_names=[query], location=location_hint),
-                    limit=_SEARCH_LIMIT_PER_QUERY,
-                )
+                async with sem:
+                    return await self._search_service.find(
+                        PlaceQuery(place_names=[query], location=location_hint),
+                        limit=_SEARCH_LIMIT_PER_QUERY,
+                    )
             except Exception as exc:  # noqa: BLE001 — best-effort per query
                 logger.warning(
                     "places_search_failed",
                     extra={"query": query, "error": str(exc)},
                 )
-                searched_queries.add(normalize_query(query))
-                continue
+                return []
 
+        batches = await asyncio.gather(*[_find(q) for q, _, _ in queries])
+
+        # Merge in `queries` order (not completion order) so cross-name dedup
+        # stays deterministic — first producer to claim a provider_id wins.
+        for (query, producer, medium), results in zip(
+            queries, batches, strict=True
+        ):
             for place in drop_geographic_features(results):
                 if not place.provider_id:
                     continue

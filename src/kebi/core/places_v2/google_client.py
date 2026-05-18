@@ -10,7 +10,11 @@ from typing import Any
 import httpx
 
 from ._google_mapper import GOOGLE_PROVIDER_PREFIX, map_place
-from ._google_query_builder import build_text_search_params, query_to_google_types
+from ._google_query_builder import (
+    build_text_search_param_sets,
+    build_text_search_params,
+    query_to_google_types,
+)
 from .models import PlaceObject, PlaceQuery
 
 logger = logging.getLogger(__name__)
@@ -58,6 +62,10 @@ _DETAILS_FIELD_MASK = _FIELD_MASK.replace("places.", "")
 # Cap on parallel Place Details GETs. Bounds provider QPS and cost when a
 # caller asks for many ids at once (e.g. post-TTL stale refresh).
 _DETAILS_CONCURRENCY = 5
+# Cap on parallel :searchText calls when a query carries multiple place_names
+# (OR semantics → one searchText per name). Bounds provider QPS/cost the same
+# way _DETAILS_CONCURRENCY does for Place Details.
+_TEXT_SEARCH_CONCURRENCY = 5
 
 
 class GooglePlacesClient:
@@ -120,7 +128,49 @@ class GooglePlacesClient:
         query: PlaceQuery,
         limit: int = 20,
     ) -> list[PlaceObject]:
-        text, included_type = build_text_search_params(query)
+        """Run Google :searchText, fanning out one request per place_name.
+
+        place_names is OR across values; searchText has no OR, so each name is
+        its own request (build_text_search_param_sets). Single-name / no-name
+        queries stay a single request. Multi-name results are merged in name
+        order, deduped on provider_id (then id), and truncated to `limit`.
+        """
+        param_sets = build_text_search_param_sets(query)
+        if not param_sets:
+            return []
+        if len(param_sets) == 1:
+            return await self._search_text_once(query, param_sets[0], limit)
+
+        sem = asyncio.Semaphore(_TEXT_SEARCH_CONCURRENCY)
+
+        async def _bounded(
+            params: tuple[str, str | None],
+        ) -> list[PlaceObject]:
+            async with sem:
+                return await self._search_text_once(query, params, limit)
+
+        batches = await asyncio.gather(*[_bounded(p) for p in param_sets])
+        merged: list[PlaceObject] = []
+        seen: set[str] = set()
+        for batch in batches:
+            for place in batch:
+                key = place.provider_id or place.id
+                if key is not None:
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                merged.append(place)
+                if len(merged) >= limit:
+                    return merged
+        return merged
+
+    async def _search_text_once(
+        self,
+        query: PlaceQuery,
+        params: tuple[str, str | None],
+        limit: int,
+    ) -> list[PlaceObject]:
+        text, included_type = params
         if not text:
             return []
         loc = query.location

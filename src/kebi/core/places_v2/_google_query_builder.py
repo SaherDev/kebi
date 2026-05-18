@@ -177,25 +177,19 @@ def query_to_google_types(query: PlaceQuery) -> list[str]:
     return types
 
 
-def build_text_search_params(query: PlaceQuery) -> tuple[str, str | None]:
-    """Build (textQuery, includedType) for Google searchText.
-
-    The first term mappable to a Google type ID (categories checked in order
-    before tags) becomes includedType, and that same term is omitted from
-    textQuery to avoid sending the same concept twice. Additional categories
-    beyond the first fall through into textQuery — searchText has no plural
-    form, so the OR is expressed in text and the first as the typed filter.
-
-    Edge case: searchText requires a non-empty textQuery. If stripping
-    the type-mapped term would leave textQuery empty, the term is kept
-    in text (the duplication is forced by Google's API contract).
+def _collect_text_params(
+    query: PlaceQuery, names: list[str]
+) -> tuple[str, str | None]:
+    """Build one (textQuery, includedType) from `names` + the query's
+    category/tag terms. Factored out of build_text_search_params so the
+    same logic serves both the single-set and per-name fan-out callers.
     """
     primary_type: str | None = None
     primary_term: str | None = None
     text_parts: list[str] = []
 
-    if query.place_names:
-        text_parts.extend(query.place_names)
+    if names:
+        text_parts.extend(names)
 
     if query.categories:
         for cat in query.categories:
@@ -225,3 +219,41 @@ def build_text_search_params(query: PlaceQuery) -> tuple[str, str | None]:
         text_parts.append(primary_term)
 
     return " ".join(dict.fromkeys(text_parts)), primary_type
+
+
+def build_text_search_params(query: PlaceQuery) -> tuple[str, str | None]:
+    """Build a single (textQuery, includedType) for Google searchText.
+
+    The first term mappable to a Google type ID (categories checked in order
+    before tags) becomes includedType, and that same term is omitted from
+    textQuery to avoid sending the same concept twice. Additional categories
+    beyond the first fall through into textQuery — searchText has no plural
+    form, so the OR is expressed in text and the first as the typed filter.
+
+    Edge case: searchText requires a non-empty textQuery. If stripping
+    the type-mapped term would leave textQuery empty, the term is kept
+    in text (the duplication is forced by Google's API contract).
+
+    All place_names collapse into one space-joined textQuery here. For true
+    OR-across-names semantics use build_text_search_param_sets, which fans
+    each name out into its own request.
+    """
+    return _collect_text_params(query, list(query.place_names or []))
+
+
+def build_text_search_param_sets(query: PlaceQuery) -> list[tuple[str, str | None]]:
+    """Expand a PlaceQuery into one (textQuery, includedType) per place name.
+
+    place_names is OR across values, but Google searchText has no OR operator —
+    space-joining names into a single query makes Google treat them as one
+    natural-language phrase. So each name becomes its own searchText request,
+    with the shared category/tag terms (and the type filter) repeated into
+    every set. With 0 or 1 names this is a single set identical to
+    build_text_search_params. Sets with an empty textQuery are dropped — the
+    caller fans these out to Google, which rejects an empty textQuery.
+    """
+    names = list(query.place_names or [])
+    if len(names) <= 1:
+        text, included_type = _collect_text_params(query, names)
+        return [(text, included_type)] if text else []
+    return [_collect_text_params(query, [name]) for name in names]

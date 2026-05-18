@@ -7,7 +7,10 @@ from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 
-from kebi.core.places_v2._google_query_builder import build_text_search_params
+from kebi.core.places_v2._google_query_builder import (
+    build_text_search_param_sets,
+    build_text_search_params,
+)
 from kebi.core.places_v2.google_client import (
     _DETAILS_CONCURRENCY,
     GooglePlacesClient,
@@ -37,6 +40,13 @@ def _make_client() -> GooglePlacesClient:
     client._text_search = AsyncMock(return_value=[])
     client._nearby_search = AsyncMock(return_value=[])
     return client
+
+
+def _client_with_request(**mock_kw: object) -> GooglePlacesClient:
+    """Real client with only the HTTP layer (_request) stubbed via AsyncMock."""
+    c = GooglePlacesClient(api_key="test", http=MagicMock(spec=httpx.AsyncClient))
+    c._request = AsyncMock(**mock_kw)
+    return c
 
 
 # ---------------------------------------------------------------------------
@@ -196,6 +206,76 @@ class TestBuildTextSearchParams:
         q = PlaceQuery(place_names=["Ramen"], tags=["Ramen"])
         text, _ = build_text_search_params(q)
         assert text.count("Ramen") == 1
+
+
+# ---------------------------------------------------------------------------
+# build_text_search_param_sets — OR-across-names fan-out
+# ---------------------------------------------------------------------------
+
+class TestBuildTextSearchParamSets:
+    def test_single_name_is_one_set_matching_single_builder(self) -> None:
+        q = PlaceQuery(place_names=["Blue Bottle"], tags=[CuisineTag.thai])
+        assert build_text_search_param_sets(q) == [build_text_search_params(q)]
+
+    def test_no_name_is_one_set_when_text_present(self) -> None:
+        q = PlaceQuery(categories=[PlaceCategory.cafe])
+        assert build_text_search_param_sets(q) == [("cafe", "cafe")]
+
+    def test_empty_query_yields_no_sets(self) -> None:
+        assert build_text_search_param_sets(PlaceQuery()) == []
+
+    def test_multi_name_fans_out_one_set_per_name(self) -> None:
+        q = PlaceQuery(
+            place_names=["Blue Bottle", "Verve"],
+            categories=[PlaceCategory.cafe],
+        )
+        # cafe is consumed as includedType and stripped from each textQuery.
+        sets = build_text_search_param_sets(q)
+        assert sets == [
+            ("Blue Bottle", "cafe"),
+            ("Verve", "cafe"),
+        ]
+
+
+# ---------------------------------------------------------------------------
+# _text_search() — per-name fan-out, merge + dedup
+# ---------------------------------------------------------------------------
+
+def _place(provider_id: str, name: str) -> PlaceObject:
+    return PlaceObject(provider_id=provider_id, place_name=name)
+
+
+class TestTextSearchFanOut:
+    async def test_single_name_issues_one_request(self) -> None:
+        c = _client_with_request(return_value=[_place("google:a", "A")])
+        out = await c._text_search(PlaceQuery(place_names=["A"]), limit=5)
+        assert [p.provider_id for p in out] == ["google:a"]
+        c._request.assert_awaited_once()
+
+    async def test_multi_name_merges_in_order_and_dedups(self) -> None:
+        c = _client_with_request(
+            side_effect=[
+                [_place("google:a", "A"), _place("google:shared", "S")],
+                [_place("google:shared", "S"), _place("google:b", "B")],
+            ]
+        )
+        out = await c._text_search(PlaceQuery(place_names=["A", "B"]), limit=10)
+        assert [p.provider_id for p in out] == [
+            "google:a",
+            "google:shared",
+            "google:b",
+        ]
+        assert c._request.await_count == 2
+
+    async def test_merged_results_truncated_to_limit(self) -> None:
+        c = _client_with_request(
+            side_effect=[
+                [_place("google:a", "A"), _place("google:b", "B")],
+                [_place("google:c", "C")],
+            ]
+        )
+        out = await c._text_search(PlaceQuery(place_names=["x", "y"]), limit=2)
+        assert [p.provider_id for p in out] == ["google:a", "google:b"]
 
 
 # ---------------------------------------------------------------------------
