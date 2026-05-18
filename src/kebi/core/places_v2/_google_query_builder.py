@@ -194,8 +194,8 @@ def build_text_search_params(query: PlaceQuery) -> tuple[str, str | None]:
     primary_term: str | None = None
     text_parts: list[str] = []
 
-    if query.place_name:
-        text_parts.append(query.place_name)
+    if query.place_names:
+        text_parts.extend(query.place_names)
 
     if query.categories:
         for cat in query.categories:

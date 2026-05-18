@@ -52,7 +52,7 @@ class TestSearchRouting:
 
     async def test_cuisine_tag_routes_to_text_search(self) -> None:
         c = _make_client()
-        await c.search(PlaceQuery(place_name="Thai food"), limit=5)
+        await c.search(PlaceQuery(place_names=["Thai food"]), limit=5)
         c._text_search.assert_awaited_once()
         c._nearby_search.assert_not_awaited()
 
@@ -116,7 +116,7 @@ class TestSearchRouting:
 
 class TestBuildTextSearchParams:
     def test_strips_type_mapped_tag_from_text_when_other_text_remains(self) -> None:
-        q = PlaceQuery(place_name="ramen", tags=[CuisineTag.thai])
+        q = PlaceQuery(place_names=["ramen"], tags=[CuisineTag.thai])
         text, included_type = build_text_search_params(q)
         assert text == "ramen"
         assert included_type == "thai_restaurant"
@@ -145,7 +145,7 @@ class TestBuildTextSearchParams:
     def test_category_takes_precedence_as_includedType(self) -> None:
         # Category checked before tags — its type wins the includedType slot.
         q = PlaceQuery(
-            place_name="ramen",
+            place_names=["ramen"],
             categories=[PlaceCategory.restaurant],
             tags=[CuisineTag.thai],
         )
@@ -158,14 +158,14 @@ class TestBuildTextSearchParams:
 
     def test_unmapped_tag_falls_through_to_text(self) -> None:
         # FeatureTag has no entry in _TAG_TO_GOOGLE_TYPE — goes to text only.
-        q = PlaceQuery(place_name="cafe", tags=[FeatureTag.outdoor_seating])
+        q = PlaceQuery(place_names=["cafe"], tags=[FeatureTag.outdoor_seating])
         text, included_type = build_text_search_params(q)
         assert included_type is None
         assert "cafe" in text
         assert "outdoor seating" in text
 
     def test_skip_tags_excluded_entirely(self) -> None:
-        q = PlaceQuery(place_name="park", tags=[TimeTag.late_night])
+        q = PlaceQuery(place_names=["park"], tags=[TimeTag.late_night])
         text, included_type = build_text_search_params(q)
         assert text == "park"
         assert included_type is None
@@ -176,7 +176,7 @@ class TestBuildTextSearchParams:
         assert included_type is None
 
     def test_place_name_only(self) -> None:
-        q = PlaceQuery(place_name="ramen near Shibuya")
+        q = PlaceQuery(place_names=["ramen near Shibuya"])
         text, included_type = build_text_search_params(q)
         assert text == "ramen near Shibuya"
         assert included_type is None
@@ -184,7 +184,7 @@ class TestBuildTextSearchParams:
     def test_underscores_in_unmapped_tags_converted_to_spaces(self) -> None:
         # ServiceTag and AtmosphereTag have no Google type mapping → fall to text.
         q = PlaceQuery(
-            place_name="bar",
+            place_names=["bar"],
             tags=[ServiceTag.serves_cocktails, AtmosphereTag.laid_back],
         )
         text, _ = build_text_search_params(q)
@@ -193,7 +193,7 @@ class TestBuildTextSearchParams:
 
     def test_deduplicates_repeated_parts(self) -> None:
         # place_name and a tag with the same value collapse to a single token.
-        q = PlaceQuery(place_name="Ramen", tags=["Ramen"])
+        q = PlaceQuery(place_names=["Ramen"], tags=["Ramen"])
         text, _ = build_text_search_params(q)
         assert text.count("Ramen") == 1
 

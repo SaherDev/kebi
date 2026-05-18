@@ -278,7 +278,7 @@ class ExtractionPipeline:
         for query, producer, medium in queries:
             try:
                 results = await self._search_service.find(
-                    PlaceQuery(place_name=query, location=location_hint),
+                    PlaceQuery(place_names=[query], location=location_hint),
                     limit=_SEARCH_LIMIT_PER_QUERY,
                 )
             except Exception as exc:  # noqa: BLE001 — best-effort per query

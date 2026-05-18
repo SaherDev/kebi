@@ -107,7 +107,11 @@ def _make_pipeline(
     results_map = search_results_by_query or {}
 
     async def _find(query: Any, limit: int = 5) -> list[PlaceObject]:
-        return list(results_map.get(query.place_name, []))
+        names = query.place_names or []
+        merged: list[PlaceObject] = []
+        for name in names:
+            merged.extend(results_map.get(name, []))
+        return merged
 
     search_service.find = AsyncMock(side_effect=_find)
 

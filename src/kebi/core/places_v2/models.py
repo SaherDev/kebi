@@ -203,15 +203,23 @@ SortField = Literal["created_at", "refreshed_at", "place_name"]
 class PlaceQuery(BaseModel):
     """Structured search query. All fields optional, combined with AND.
 
-    DB filters:  place_name, categories, tags, location, created_after/before, sort_*
+    DB filters:  ids, provider_ids, place_names, categories, tags,
+                 location, created_after/before, sort_*
     Client hints: open_now (passed through to the search client)
 
+    `ids` / `provider_ids` are OR across values (exact match — known-identity
+    batch lookup, e.g. resolving saved places through the source-of-truth
+    service per ADR-070). `place_names` is OR across values (ILIKE any on DB);
+    it also drives client/Google text search.
     `categories` is OR across values (a place matches if its category is in the list).
     `tags` is AND (all listed tag values must be present on the place).
     """
 
-    # DB filters
-    place_name: str | None = None    # ILIKE on DB; also drives client text search
+    # DB filters — known-identity batch lookup (exact, OR across values)
+    ids: list[str] | None = None             # places_v2.id exact match
+    provider_ids: list[str] | None = None    # namespaced provider_id exact match
+
+    place_names: list[str] | None = None  # ILIKE any (OR); also drives text search
     categories: list[PlaceCategory] | None = None  # OR across values
     tags: list[str] | None = None   # tag values; all must be present (AND)
     location: LocationContext | None = None

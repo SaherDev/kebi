@@ -18,6 +18,7 @@ from sqlalchemy import (
     and_,
     cast,
     func,
+    or_,
     select,
     update,
 )
@@ -100,8 +101,16 @@ class PlacesRepo:
     async def find(self, query: PlaceQuery, limit: int = 20) -> list[PlaceCore]:
         conditions: list[ColumnElement[bool]] = []
 
-        if query.place_name:
-            conditions.append(_t.place_name.ilike(f"%{query.place_name}%"))
+        if query.ids:
+            conditions.append(_t.id.in_(query.ids))
+
+        if query.provider_ids:
+            conditions.append(_t.provider_id.in_(query.provider_ids))
+
+        if query.place_names:
+            conditions.append(
+                or_(*[_t.place_name.ilike(f"%{n}%") for n in query.place_names])
+            )
 
         if query.categories:
             # Array overlap: a place matches if its categories list shares

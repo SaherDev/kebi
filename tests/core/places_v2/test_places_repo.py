@@ -203,12 +203,29 @@ class TestFind:
         assert result == []
         session.execute.assert_awaited_once()
 
-    async def test_place_name_filter_applied(self) -> None:
+    async def test_ids_filter_applied(self) -> None:
         repo, session = _make_repo([])
-        await repo.find(PlaceQuery(place_name="ramen"))
+        await repo.find(PlaceQuery(ids=["a", "b"]))
         stmt = session.execute.call_args.args[0]
         compiled = str(stmt.compile(compile_kwargs={"literal_binds": True}))
-        assert "ramen" in compiled.lower()
+        assert "places_v2.id IN" in compiled
+        assert "'a'" in compiled and "'b'" in compiled
+
+    async def test_provider_ids_filter_applied(self) -> None:
+        repo, session = _make_repo([])
+        await repo.find(PlaceQuery(provider_ids=["google:a", "google:b"]))
+        stmt = session.execute.call_args.args[0]
+        compiled = str(stmt.compile(compile_kwargs={"literal_binds": True}))
+        assert "provider_id IN" in compiled
+        assert "google:a" in compiled and "google:b" in compiled
+
+    async def test_place_names_filter_applied_as_or(self) -> None:
+        repo, session = _make_repo([])
+        await repo.find(PlaceQuery(place_names=["ramen", "udon"]))
+        stmt = session.execute.call_args.args[0]
+        compiled = str(stmt.compile(compile_kwargs={"literal_binds": True})).lower()
+        assert "ramen" in compiled and "udon" in compiled
+        assert " or " in compiled
 
     async def test_category_filter_applied(self) -> None:
         repo, session = _make_repo([])

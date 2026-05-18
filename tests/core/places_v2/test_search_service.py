@@ -118,7 +118,7 @@ class TestColdPath:
             repo=repo, cache=cache, client=client, upsert_service=upsert
         )
         results = await svc.find(
-            PlaceQuery(place_name="Thai restaurants Bangkok"), limit=5
+            PlaceQuery(place_names=["Thai restaurants Bangkok"]), limit=5
         )
 
         client.search.assert_awaited_once()
@@ -164,7 +164,7 @@ class TestColdPath:
         svc = _make_service(
             repo=repo, cache=cache, client=client, upsert_service=upsert
         )
-        await svc.find(PlaceQuery(place_name="ghost town"))
+        await svc.find(PlaceQuery(place_names=["ghost town"]))
 
         upsert.upsert_and_embed.assert_not_awaited()
         cache.mset.assert_not_awaited()
@@ -179,7 +179,7 @@ class TestColdPath:
         svc = _make_service(
             repo=repo, cache=cache, client=client, upsert_service=upsert
         )
-        results = await svc.find(PlaceQuery(place_name="busy"))
+        results = await svc.find(PlaceQuery(place_names=["busy"]))
 
         upsert.upsert_and_embed.assert_awaited_once()
         cache.mset.assert_awaited_once_with(results_in)
@@ -699,7 +699,7 @@ class TestFindContract:
         svc = _make_service(
             repo=repo, cache=cache, client=client, upsert_service=upsert
         )
-        await svc.find(PlaceQuery(place_name="x"), limit=5)
+        await svc.find(PlaceQuery(place_names=["x"]), limit=5)
 
         client.search.assert_not_awaited()
         client.get_by_ids.assert_not_awaited()
