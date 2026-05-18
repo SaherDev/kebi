@@ -5,8 +5,6 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from kebi.core.events.events import (
-    ChipConfirmed,
-    OnboardingSignal,
     PlaceSaved,
     RecommendationAccepted,
     RecommendationRejected,
@@ -70,24 +68,6 @@ class TestOnTasteSignal:
             user_id="u1", signal_type=InteractionType.REJECTED, place_id="p1"
         )
 
-    async def test_onboarding_confirmed(
-        self, handlers: EventHandlers, mock_taste_service: MagicMock
-    ) -> None:
-        event = OnboardingSignal(user_id="u1", place_id="p1", confirmed=True)
-        await handlers.on_taste_signal(event)
-        mock_taste_service.handle_signal.assert_awaited_once_with(
-            user_id="u1", signal_type=InteractionType.ONBOARDING_CONFIRM, place_id="p1"
-        )
-
-    async def test_onboarding_dismissed(
-        self, handlers: EventHandlers, mock_taste_service: MagicMock
-    ) -> None:
-        event = OnboardingSignal(user_id="u1", place_id="p1", confirmed=False)
-        await handlers.on_taste_signal(event)
-        mock_taste_service.handle_signal.assert_awaited_once_with(
-            user_id="u1", signal_type=InteractionType.ONBOARDING_DISMISS, place_id="p1"
-        )
-
     async def test_exception_does_not_raise(
         self, handlers: EventHandlers, mock_taste_service: MagicMock
     ) -> None:
@@ -144,50 +124,3 @@ class TestOnTurnCompleted:
         )
         event = TurnCompleted(user_id="user-1", user_message="anything")
         await handlers.on_turn_completed(event)  # must not raise
-
-
-class TestOnChipConfirmed:
-    """Tests for the chip_confirmed handler (feature 023)."""
-
-    @pytest.fixture
-    def mock_taste_service(self) -> MagicMock:
-        svc = MagicMock()
-        svc.run_regen_now = AsyncMock()
-        svc.handle_signal = AsyncMock()
-        return svc
-
-    @pytest.fixture
-    def handlers(self, mock_taste_service: MagicMock) -> EventHandlers:
-        return EventHandlers(
-            taste_service=mock_taste_service,
-            memory_service=MagicMock(),
-            tracer=MagicMock(
-                generation=MagicMock(return_value=MagicMock()),
-                capture_message=MagicMock(),
-                flush=MagicMock(),
-            ),
-        )
-
-    async def test_invokes_run_regen_now_once(
-        self, handlers: EventHandlers, mock_taste_service: MagicMock
-    ) -> None:
-        event = ChipConfirmed(user_id="user-1")
-        await handlers.on_chip_confirmed(event)
-        mock_taste_service.run_regen_now.assert_awaited_once_with("user-1")
-
-    async def test_ignores_non_chip_confirmed_events(
-        self, handlers: EventHandlers, mock_taste_service: MagicMock
-    ) -> None:
-        event = TurnCompleted(user_id="user-1", user_message="hi")
-        await handlers.on_chip_confirmed(event)
-        mock_taste_service.run_regen_now.assert_not_awaited()
-
-    async def test_catches_exceptions(
-        self, handlers: EventHandlers, mock_taste_service: MagicMock
-    ) -> None:
-        mock_taste_service.run_regen_now = AsyncMock(
-            side_effect=RuntimeError("LLM blew up")
-        )
-        event = ChipConfirmed(user_id="user-1")
-        # Must not raise — ADR-043 requires background handlers to swallow.
-        await handlers.on_chip_confirmed(event)

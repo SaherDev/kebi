@@ -39,24 +39,6 @@ class RecommendationRejected(DomainEvent):
     place_id: str
 
 
-class OnboardingSignal(DomainEvent):
-    """Event: User confirmed or dismissed an onboarding taste chip"""
-
-    event_type: str = "onboarding_signal"
-    place_id: str
-    confirmed: bool
-
-
-class ChipConfirmed(DomainEvent):
-    """Event: User submitted chip_confirm selections (feature 023).
-
-    Carries only user_id — the handler re-reads fresh chip state from the
-    DB so stale payloads can't corrupt the rewrite.
-    """
-
-    event_type: str = "chip_confirmed"
-
-
 class TurnCompleted(DomainEvent):
     """Event: A user turn finished (success, clarification, or error).
 

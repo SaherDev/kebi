@@ -4,9 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
-
-SignalTierHint = Literal["cold", "warming", "chip_selection", "active"]
+from pydantic import BaseModel
 
 ChatResponseType = Literal[
     "error",
@@ -27,15 +25,6 @@ class ChatRequest(BaseModel):
     user_id: str
     message: str
     location: Location | None = None
-    signal_tier: SignalTierHint | None = Field(
-        default=None,
-        description=(
-            "Optional tier hint from the product repo (feature 023). Product "
-            "reads GET /v1/user/context and forwards the tier. Retained for "
-            "request-shape stability; no longer drives behavior now that the "
-            "agent has no tools."
-        ),
-    )
 
 
 class ChatResponse(BaseModel):

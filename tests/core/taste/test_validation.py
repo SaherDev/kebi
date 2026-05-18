@@ -10,7 +10,7 @@ from kebi.core.taste.aggregation import (
     TotalCounts,
 )
 from kebi.core.taste.regen import format_summary_for_agent, validate_grounded
-from kebi.core.taste.schemas import Chip, SummaryLine, TasteArtifacts
+from kebi.core.taste.schemas import SummaryLine, TasteArtifacts
 
 
 @pytest.fixture()
@@ -37,7 +37,7 @@ def test_valid_summary_line_passes(signal_counts: SignalCounts) -> None:
         source_field="attributes.cuisine",
         source_value="japanese",
     )
-    artifacts = TasteArtifacts(summary=[line], chips=[])
+    artifacts = TasteArtifacts(summary=[line])
     validated, dropped = validate_grounded(artifacts, signal_counts)
 
     assert len(validated.summary) == 1
@@ -52,7 +52,7 @@ def test_bad_source_field_drops_summary(signal_counts: SignalCounts) -> None:
         source_field="attributes.nonexistent",
         source_value="mexican",
     )
-    artifacts = TasteArtifacts(summary=[line], chips=[])
+    artifacts = TasteArtifacts(summary=[line])
     validated, dropped = validate_grounded(artifacts, signal_counts)
 
     assert len(validated.summary) == 0
@@ -69,101 +69,26 @@ def test_null_source_value_for_aggregate_passes(signal_counts: SignalCounts) -> 
         source_field="totals",
         source_value=None,
     )
-    artifacts = TasteArtifacts(summary=[line], chips=[])
+    artifacts = TasteArtifacts(summary=[line])
     validated, dropped = validate_grounded(artifacts, signal_counts)
 
     assert len(validated.summary) == 1
     assert dropped == []
 
 
-# ---------------------------------------------------------------------------
-# validate_grounded — chips
-# ---------------------------------------------------------------------------
-
-
-def test_valid_chip_passes(signal_counts: SignalCounts) -> None:
-    chip = Chip(
-        label="Japanese",
-        source_field="attributes.cuisine",
-        source_value="japanese",
-        signal_count=8,
-    )
-    artifacts = TasteArtifacts(summary=[], chips=[chip])
-    validated, dropped = validate_grounded(artifacts, signal_counts)
-
-    assert len(validated.chips) == 1
-    assert validated.chips[0].label == "Japanese"
-    assert dropped == []
-
-
-def test_bad_source_field_drops_chip(signal_counts: SignalCounts) -> None:
-    chip = Chip(
-        label="Thai",
-        source_field="attributes.nonexistent",
-        source_value="thai",
-        signal_count=5,
-    )
-    artifacts = TasteArtifacts(summary=[], chips=[chip])
-    validated, dropped = validate_grounded(artifacts, signal_counts)
-
-    assert len(validated.chips) == 0
-    assert len(dropped) == 1
-    assert dropped[0]["type"] == "chip"
-    assert dropped[0]["source_field"] == "attributes.nonexistent"
-
-
-def test_mismatched_source_value_drops(signal_counts: SignalCounts) -> None:
-    """Chip with a value not present at the valid path is dropped."""
-    chip = Chip(
-        label="Thai",
-        source_field="attributes.cuisine",
-        source_value="thai",
-        signal_count=5,
-    )
-    artifacts = TasteArtifacts(summary=[], chips=[chip])
-    validated, dropped = validate_grounded(artifacts, signal_counts)
-
-    assert len(validated.chips) == 0
-    assert len(dropped) == 1
-    assert dropped[0]["type"] == "chip"
-
-
-def test_chip_below_min_signal_count_drops(signal_counts: SignalCounts) -> None:
-    """Chips with signal_count < 3 are dropped regardless of grounding."""
-    chip = Chip(
-        label="Italian",
-        source_field="attributes.cuisine",
-        source_value="italian",
-        signal_count=2,
-    )
-    artifacts = TasteArtifacts(summary=[], chips=[chip])
-    validated, dropped = validate_grounded(artifacts, signal_counts)
-
-    assert len(validated.chips) == 0
-    assert len(dropped) == 1
-    assert dropped[0]["reason"] == "signal_count < 3"
-
-
 def test_all_items_dropped_returns_empty(signal_counts: SignalCounts) -> None:
-    """When every item fails validation, returns empty lists and logs warning."""
+    """When every item fails validation, returns empty list and logs warning."""
     line = SummaryLine(
         text="Bad line",
         signal_count=3,
         source_field="nonexistent.path",
         source_value="x",
     )
-    chip = Chip(
-        label="Bad chip",
-        source_field="nonexistent.path",
-        source_value="y",
-        signal_count=5,
-    )
-    artifacts = TasteArtifacts(summary=[line], chips=[chip])
+    artifacts = TasteArtifacts(summary=[line])
     validated, dropped = validate_grounded(artifacts, signal_counts)
 
     assert validated.summary == []
-    assert validated.chips == []
-    assert len(dropped) == 2
+    assert len(dropped) == 1
 
 
 # ---------------------------------------------------------------------------

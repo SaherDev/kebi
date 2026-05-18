@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 logger = logging.getLogger(__name__)
@@ -358,15 +358,10 @@ class WarmingBlendConfig(BaseModel):
 
 
 class TasteModelConfig(BaseModel):
-    """Taste model configuration (ADR-058: signal_counts + LLM summary + chips)."""
+    """Taste model configuration (ADR-058: signal_counts + LLM summary)."""
 
     debounce_window_seconds: int = 30
     regen: TasteRegenConfig = TasteRegenConfig()
-    chip_threshold: int = 2
-    chip_max_count: int = 8
-    chip_selection_stages: dict[str, int] = Field(
-        default_factory=lambda: {"round_1": 5, "round_2": 20, "round_3": 50}
-    )
     warming_blend: WarmingBlendConfig = WarmingBlendConfig()
 
 

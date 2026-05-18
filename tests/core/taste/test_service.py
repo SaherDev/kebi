@@ -9,7 +9,6 @@ import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from kebi.core.taste.schemas import (
-    Chip,
     InteractionRow,
     SummaryLine,
     TasteArtifacts,
@@ -63,42 +62,17 @@ def _sample_artifacts() -> TasteArtifacts:
                 source_value="restaurant",
             )
         ],
-        chips=[
-            Chip(
-                label="Japanese lover",
-                source_field="attributes.cuisine",
-                source_value="japanese",
-                signal_count=3,
-            )
-        ],
     )
 
 
 class TestGetTasteProfile:
     """Tests for TasteModelService.get_taste_profile defensive coercion."""
 
-    async def test_corrupt_chips_dict_is_coerced_to_empty_list(self) -> None:
-        """Older rows sometimes have chips={} (dict) — must not 500 the endpoint."""
-        repo = _make_repo_mock()
-        taste_model = MagicMock()
-        taste_model.taste_profile_summary = []
-        taste_model.signal_counts = {}
-        taste_model.chips = {}  # corrupt — should be a list
-        taste_model.generated_from_log_count = 0
-        repo.get_by_user_id.return_value = taste_model
-
-        service = _make_service(repo)
-        profile = await service.get_taste_profile("user1")
-
-        assert profile is not None
-        assert profile.chips == []
-
     async def test_corrupt_summary_dict_is_coerced_to_empty_list(self) -> None:
         repo = _make_repo_mock()
         taste_model = MagicMock()
         taste_model.taste_profile_summary = {}  # corrupt
         taste_model.signal_counts = {}
-        taste_model.chips = []
         taste_model.generated_from_log_count = 0
         repo.get_by_user_id.return_value = taste_model
 
@@ -108,21 +82,18 @@ class TestGetTasteProfile:
         assert profile is not None
         assert profile.taste_profile_summary == []
 
-    async def test_valid_chips_list_is_preserved(self) -> None:
+    async def test_valid_summary_list_is_preserved(self) -> None:
         repo = _make_repo_mock()
         taste_model = MagicMock()
-        taste_model.taste_profile_summary = []
-        taste_model.signal_counts = {}
-        taste_model.chips = [
+        taste_model.taste_profile_summary = [
             {
-                "label": "Ramen",
-                "source_field": "attributes.cuisine",
-                "source_value": "ramen",
+                "text": "Favors restaurant under food_and_drink.",
                 "signal_count": 3,
-                "status": "confirmed",
-                "selection_round": "round_1",
+                "source_field": "subcategory.food_and_drink",
+                "source_value": "restaurant",
             }
         ]
+        taste_model.signal_counts = {"totals": {"saves": 5}}
         taste_model.generated_from_log_count = 5
         repo.get_by_user_id.return_value = taste_model
 
@@ -130,8 +101,8 @@ class TestGetTasteProfile:
         profile = await service.get_taste_profile("user1")
 
         assert profile is not None
-        assert len(profile.chips) == 1
-        assert profile.chips[0].status.value == "confirmed"
+        assert len(profile.taste_profile_summary) == 1
+        assert profile.generated_from_log_count == 5
 
 
 class TestHandleSignal:
@@ -201,7 +172,7 @@ class TestRunRegen:
         assert call_kwargs["user_id"] == "user1"
         assert call_kwargs["log_count"] == 5
         assert len(call_kwargs["summary"]) > 0
-        assert len(call_kwargs["chips"]) > 0
+        assert "chips" not in call_kwargs
 
     @patch("kebi.core.taste.service.get_llm")
     async def test_parse_failure_skips_regen(self, mock_get_llm: MagicMock) -> None:
@@ -219,115 +190,3 @@ class TestRunRegen:
 
         repo.upsert_regen.assert_not_awaited()
         assert mock_llm.complete.await_count == 2  # retried once
-
-    @patch("kebi.core.taste.service.get_llm")
-    async def test_regen_preserves_confirmed_chips_and_resurfaces_rejected(
-        self, mock_get_llm: MagicMock
-    ) -> None:
-        """Feature 023: merge_chips_after_regen semantics through the service.
-
-        - A pre-existing confirmed chip not present in LLM output is preserved verbatim.
-        - A previously rejected chip with grown signal_count is reset to pending.
-        - A brand-new fresh chip comes in as pending.
-        """
-        rows = [_sample_row() for _ in range(6)]
-        repo = _make_repo_mock()
-        repo.get_interactions_with_places.return_value = rows
-
-        pre_existing_confirmed = {
-            "label": "TikTok fan",
-            "source_field": "source",
-            "source_value": "tiktok",
-            "signal_count": 4,
-            "status": "confirmed",
-            "selection_round": "round_1",
-        }
-        pre_existing_rejected = {
-            "label": "Casual",
-            "source_field": "attributes.ambiance",
-            "source_value": "casual",
-            "signal_count": 2,
-            "status": "rejected",
-            "selection_round": "round_1",
-        }
-        taste_model = MagicMock()
-        taste_model.generated_from_log_count = 3  # < len(rows) to pass stale guard
-        taste_model.chips = [pre_existing_confirmed, pre_existing_rejected]
-        repo.get_by_user_id.return_value = taste_model
-
-        # LLM returns fresh chips: confirms tiktok would be dropped (LLM might drop it
-        # since it doesn't know the status), rejected chip has grown signal, and a
-        # brand-new cuisine chip emerges.
-        llm_artifacts = TasteArtifacts(
-            summary=[
-                SummaryLine(
-                    text="Favors restaurant under food_and_drink.",
-                    signal_count=6,
-                    source_field="subcategory.food_and_drink",
-                    source_value="restaurant",
-                )
-            ],
-            chips=[
-                Chip(
-                    label="Casual spot",
-                    source_field="attributes.ambiance",
-                    source_value="casual",
-                    signal_count=5,  # grew from 2 -> should reset rejected to pending
-                ),
-                Chip(
-                    label="Japanese lover",
-                    source_field="attributes.cuisine",
-                    source_value="japanese",
-                    signal_count=3,  # brand new
-                ),
-            ],
-        )
-
-        mock_llm = AsyncMock()
-        mock_llm.complete.return_value = json.dumps(llm_artifacts.model_dump())
-        mock_get_llm.return_value = mock_llm
-
-        service = _make_service(repo)
-        await service._run_regen("user1")
-
-        repo.upsert_regen.assert_awaited_once()
-        persisted_chips = repo.upsert_regen.await_args.kwargs["chips"]
-        by_key = {(c["source_field"], c["source_value"]): c for c in persisted_chips}
-
-        # Pre-existing confirmed chip preserved verbatim even though LLM dropped it.
-        assert ("source", "tiktok") in by_key
-        assert by_key[("source", "tiktok")]["status"] == "confirmed"
-        assert by_key[("source", "tiktok")]["selection_round"] == "round_1"
-
-        # Rejected chip resurfaces as pending because signal_count grew.
-        assert ("attributes.ambiance", "casual") in by_key
-        assert by_key[("attributes.ambiance", "casual")]["status"] == "pending"
-        assert by_key[("attributes.ambiance", "casual")]["selection_round"] is None
-        assert by_key[("attributes.ambiance", "casual")]["signal_count"] == 5
-
-        # Brand-new LLM chip lands as pending.
-        assert ("attributes.cuisine", "japanese") in by_key
-        assert by_key[("attributes.cuisine", "japanese")]["status"] == "pending"
-
-    @patch("kebi.core.taste.service.get_llm")
-    async def test_run_regen_now_bypasses_stale_guard(
-        self, mock_get_llm: MagicMock
-    ) -> None:
-        """run_regen_now forces a rewrite even when stale-guard would skip."""
-        rows = [_sample_row() for _ in range(5)]
-        repo = _make_repo_mock()
-        repo.get_interactions_with_places.return_value = rows
-
-        taste_model = MagicMock()
-        taste_model.generated_from_log_count = 5  # equal -> stale guard would skip
-        taste_model.chips = []
-        repo.get_by_user_id.return_value = taste_model
-
-        mock_llm = AsyncMock()
-        mock_llm.complete.return_value = json.dumps(_sample_artifacts().model_dump())
-        mock_get_llm.return_value = mock_llm
-
-        service = _make_service(repo)
-        await service.run_regen_now("user1")
-
-        repo.upsert_regen.assert_awaited_once()

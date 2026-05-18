@@ -1,11 +1,11 @@
 # Taste Model Architecture (ADR-058)
 
-The taste model builds a per-user preference profile from behavioral signals. Each interaction (save, accept, reject, onboarding confirm/dismiss) is logged as an append-only row. Signal counts are aggregated from all interactions, and an LLM generates two artifacts: a structured summary (3-6 lines) and taste chips (3-8 UI labels). Both are grounded in signal_counts — every item references a specific path and value in the aggregation.
+The taste model builds a per-user preference profile from behavioral signals. Each interaction (save, accept, reject) is logged as an append-only row. Signal counts are aggregated from all interactions, and an LLM generates a structured summary (3-6 lines) grounded in signal_counts — every item references a specific path and value in the aggregation. (The chip artifact and signal tier were removed in ADR-076.)
 
 ## Data Flow
 
 ```
-User Action (save place / accept rec / reject rec / onboarding)
+User Action (save place / accept rec / reject rec)
     │
     ▼
 EventDispatcher → on_taste_signal()
@@ -22,9 +22,9 @@ TasteModelService.handle_signal()
             ├── Min-signals guard (skip if < 3 interactions)
             ├── Stale guard (skip if log_count unchanged)
             ├── LLM call (GPT-4o-mini via provider abstraction)
-            │   └── JSON mode → TasteArtifacts (summary + chips)
+            │   └── JSON mode → TasteArtifacts (summary)
             ├── validate_grounded() → drop ungrounded items
-            └── upsert_regen() → persist signal_counts + summary + chips
+            └── upsert_regen() → persist signal_counts + summary
 ```
 
 ## Storage
@@ -33,14 +33,13 @@ TasteModelService.handle_signal()
 taste_model (PostgreSQL, keyed by user_id):
 ├── signal_counts    JSONB  — structured aggregation of all interactions
 ├── taste_profile_summary  JSONB  — list of SummaryLine (text, signal_count, source_field, source_value)
-├── chips            JSONB  — list of Chip (label, source_field, source_value, signal_count)
 ├── generated_at     TIMESTAMPTZ
 └── generated_from_log_count  INT  — stale-summary guard
 
 interactions (PostgreSQL, append-only):
 ├── id         BIGSERIAL PK
 ├── user_id    TEXT
-├── type       ENUM (save, accepted, rejected, onboarding_confirm, onboarding_dismiss)
+├── type       ENUM (save, accepted, rejected)
 ├── place_id   TEXT FK → places.id
 └── created_at TIMESTAMPTZ
 ```
@@ -52,14 +51,12 @@ interactions (PostgreSQL, append-only):
 | save | Main tree + source | Source counted for saves only |
 | accepted | Main tree | No source tracking |
 | rejected | Rejected branch | Separate from main tree |
-| onboarding_confirm | Main tree | Same as save, no source |
-| onboarding_dismiss | Rejected branch | Same as rejected |
 
 ## Signal Counts Shape
 
 ```json
 {
-  "totals": {"saves": N, "accepted": N, "rejected": N, "onboarding_confirmed": N, "onboarding_dismissed": N},
+  "totals": {"saves": N, "accepted": N, "rejected": N},
   "place_type": {"food_and_drink": N, ...},
   "subcategory": {"food_and_drink": {"restaurant": N, "cafe": N}, ...},
   "source": {"tiktok": N, "instagram": N, ...},

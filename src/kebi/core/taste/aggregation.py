@@ -5,12 +5,6 @@ aggregate_signal_counts() is a pure function — no I/O.
 Positive types (save, accepted) feed the main tree.
 Negative types (rejected) feed the rejected branch.
 Source is counted for saves only.
-
-`chip_confirm` interactions are written with `place_id=NULL` and never
-appear in `get_interactions_with_places`, so they don't flow through
-this aggregator — their effect on the taste profile is captured via
-`taste_model.chips[].status` and passed to the regen prompt as
-`confirmed_chips` / `rejected_chips` arrays (feature 023).
 """
 
 from __future__ import annotations

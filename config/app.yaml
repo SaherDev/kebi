@@ -297,7 +297,7 @@ agent:
 
 # ---------------------------------------------------------------------------
 # Taste Model Configuration
-# Signal-counts aggregation + LLM-generated taste_profile_summary + chips
+# Signal-counts aggregation + LLM-generated taste_profile_summary
 # ADR-058: RankingService deleted, agent-driven ranking deferred
 # ---------------------------------------------------------------------------
 taste_model:
@@ -305,12 +305,6 @@ taste_model:
   regen:
     min_signals: 3
     early_signal_threshold: 10
-  chip_threshold: 2
-  chip_max_count: 8
-  chip_selection_stages:
-    round_1: 5
-    round_2: 20
-    round_3: 50
   warming_blend:
     discovered: 0.8
     saved: 0.2

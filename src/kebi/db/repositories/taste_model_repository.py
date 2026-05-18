@@ -25,7 +25,6 @@ class TasteModelRepository(Protocol):
         user_id: str,
         signal_counts: dict[str, Any],
         summary: list[dict[str, Any]],
-        chips: list[dict[str, Any]],
         log_count: int,
     ) -> None: ...
 
@@ -43,12 +42,6 @@ class TasteModelRepository(Protocol):
 
     async def count_interactions(self, user_id: str) -> int: ...
 
-    async def merge_chip_statuses(
-        self,
-        user_id: str,
-        updated_chips: list[dict[str, Any]],
-    ) -> None: ...
-
 
 class SQLAlchemyTasteModelRepository:
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
@@ -65,7 +58,6 @@ class SQLAlchemyTasteModelRepository:
         user_id: str,
         signal_counts: dict[str, Any],
         summary: list[dict[str, Any]],
-        chips: list[dict[str, Any]],
         log_count: int,
     ) -> None:
         async with self._session_factory() as session:
@@ -75,7 +67,6 @@ class SQLAlchemyTasteModelRepository:
                     user_id=user_id,
                     signal_counts=signal_counts,
                     taste_profile_summary=summary,
-                    chips=chips,
                     generated_at=func.now(),
                     generated_from_log_count=log_count,
                 )
@@ -84,7 +75,6 @@ class SQLAlchemyTasteModelRepository:
                     set_={
                         "signal_counts": signal_counts,
                         "taste_profile_summary": summary,
-                        "chips": chips,
                         "generated_at": func.now(),
                         "generated_from_log_count": log_count,
                     },
@@ -152,32 +142,3 @@ class SQLAlchemyTasteModelRepository:
             )
             result = await session.execute(stmt)
             return result.scalar_one()
-
-    async def merge_chip_statuses(
-        self,
-        user_id: str,
-        updated_chips: list[dict[str, Any]],
-    ) -> None:
-        """Replace the stored chips JSONB array for a user in one transaction.
-
-        Caller is responsible for having already merged status/selection_round
-        into the chip dicts (see core.taste.chip_merge.merge_chip_statuses).
-        No-op if no taste_model row exists yet (cold user).
-        """
-        async with self._session_factory() as session:
-            stmt = (
-                pg_insert(TasteModel)
-                .values(
-                    user_id=user_id,
-                    chips=updated_chips,
-                    taste_profile_summary=[],
-                    signal_counts={},
-                    generated_from_log_count=0,
-                )
-                .on_conflict_do_update(
-                    index_elements=["user_id"],
-                    set_={"chips": updated_chips},
-                )
-            )
-            await session.execute(stmt)
-            await session.commit()

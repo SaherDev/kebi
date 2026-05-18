@@ -180,16 +180,11 @@ async def get_event_dispatcher(
         "place_saved",
         "recommendation_accepted",
         "recommendation_rejected",
-        "onboarding_signal",
     ):
         dispatcher.register_handler(event_type, handlers.on_taste_signal)
     dispatcher.register_handler(
         "turn_completed",
         handlers.on_turn_completed,  # type: ignore[arg-type]
-    )
-    dispatcher.register_handler(
-        "chip_confirmed",
-        handlers.on_chip_confirmed,
     )
 
     return dispatcher
@@ -323,18 +318,15 @@ def get_recommendation_repo(
 
 def get_signal_service(
     event_dispatcher: EventDispatcher = Depends(get_event_dispatcher),  # noqa: B008
-    taste_service: TasteModelService = Depends(get_taste_service),  # noqa: B008
 ) -> SignalService:
-    """FastAPI dependency providing SignalService (ADR-060 + feature 023).
+    """FastAPI dependency providing SignalService (ADR-060).
 
     SignalService owns the RecommendationRepository internally via
-    session_factory. It also delegates chip_confirm handling to the
-    TasteModelService (for chip read and merge persistence).
+    session_factory.
     """
     return SignalService(
         session_factory=_get_session_factory(),
         event_dispatcher=event_dispatcher,
-        taste_service=taste_service,
     )
 
 

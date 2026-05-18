@@ -112,13 +112,10 @@ class InteractionType(PyEnum):
     SAVE = "save"
     ACCEPTED = "accepted"
     REJECTED = "rejected"
-    ONBOARDING_CONFIRM = "onboarding_confirm"
-    ONBOARDING_DISMISS = "onboarding_dismiss"
-    CHIP_CONFIRM = "chip_confirm"
 
 
 class TasteModel(Base):
-    """Per-user taste profile: signal_counts + LLM summary + chips (ADR-058)."""
+    """Per-user taste profile: signal_counts + LLM summary (ADR-058)."""
 
     __tablename__ = "taste_model"
 
@@ -128,9 +125,6 @@ class TasteModel(Base):
     )
     signal_counts: Mapped[dict] = mapped_column(  # type: ignore[type-arg]
         JSONB, nullable=False, server_default=text("'{}'::jsonb")
-    )
-    chips: Mapped[list] = mapped_column(  # type: ignore[type-arg]
-        JSONB, nullable=False, server_default=text("'[]'::jsonb")
     )
     generated_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True

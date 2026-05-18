@@ -115,7 +115,6 @@ The system classifies intent, dispatches to the correct pipeline, and returns a 
 | `user_id`     | `string`                                                      | Yes      | Clerk-issued user ID; trusted, not validated here                                                                                                                                                                                                                                                                                                                                                                                                |
 | `message`     | `string`                                                      | Yes      | Natural language message from the user                                                                                                                                                                                                                                                                                                                                                                                                           |
 | `location`    | `{ lat: float, lng: float }`                                  | No       | Passed to consult pipeline only; ignored for all other intents                                                                                                                                                                                                                                                                                                                                                                                   |
-| `signal_tier` | `"cold" \| "warming" \| "chip_selection" \| "active" \| null` | No       | Tier hint from the product repo (ADR-061). Read from `GET /v1/user/context` and forwarded so consult can apply tier-aware behavior (warming candidate-count blend, active-tier rejected-chip filter). When `null`, consult defaults to `"active"`. At `cold` and `chip_selection` the product repo should not call `/v1/chat` with a consult-intent message at all — it renders onboarding / chip-selection UI directly from `/v1/user/context`. |
 
 **Response:**
 
@@ -429,70 +428,6 @@ Extraction results would be cached under the `extraction:v2:{request_id}` key pr
 
 ---
 
-## GET /v1/user/context
-
-Returns taste profile context for the product UI (ADR-060).
-
-**Request:**
-
-```
-GET /v1/user/context
-```
-
-**Response (200):**
-
-```json
-{
-  "saved_places_count": 5,
-  "signal_tier": "chip_selection",
-  "chips": [
-    {
-      "label": "Ramen lover",
-      "source_field": "attributes.cuisine",
-      "source_value": "ramen",
-      "signal_count": 3,
-      "status": "pending",
-      "selection_round": "round_1"
-    },
-    {
-      "label": "Finds places on TikTok",
-      "source_field": "source",
-      "source_value": "tiktok",
-      "signal_count": 4,
-      "status": "pending",
-      "selection_round": "round_1"
-    }
-  ]
-}
-```
-
-Note: `selection_round` is always a string in `chip_selection` tier — the server stamps pending chips with the current crossed-stage name. The frontend copies each chip's `selection_round` verbatim into the `chip_confirm` submission; no separate `round` field needed.
-
-| Field                | Type                                                  | Notes                                                                                                                               |
-| -------------------- | ----------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| `saved_places_count` | `integer`                                             | Total number of saves; read from precomputed taste_model (not a live DB count)                                                      |
-| `signal_tier`        | `"cold" \| "warming" \| "chip_selection" \| "active"` | Derived by `derive_signal_tier` (ADR-061). Config-driven — adding a new stage to `chip_selection_stages` works without code changes |
-| `chips`              | `ChipView[]`                                          | Full structured chips; see shape below                                                                                              |
-
-`ChipView` shape:
-
-| Field             | Type                                     | Notes                                                                                                                                                                                                                                                        |
-| ----------------- | ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `label`           | `string`                                 | Short display label                                                                                                                                                                                                                                          |
-| `source_field`    | `string`                                 | JSON path into signal_counts that surfaced the chip                                                                                                                                                                                                          |
-| `source_value`    | `string`                                 | Value at that path                                                                                                                                                                                                                                           |
-| `signal_count`    | `integer`                                | Aggregate signal count                                                                                                                                                                                                                                       |
-| `status`          | `"pending" \| "confirmed" \| "rejected"` | Lifecycle; defaults to `"pending"` until a `chip_confirm` signal lands                                                                                                                                                                                       |
-| `selection_round` | `string \| null`                         | For confirmed/rejected chips: the round the user decided in. For still-pending chips: the round the frontend should submit the chip under (server stamps the current crossed-stage name). `null` only at cold/warming tiers where no stage has been crossed. |
-
-**Notes:**
-
-- Cold start (no taste profile): returns `saved_places_count: 0`, `signal_tier: "cold"`, `chips: []`.
-- No LLM call. Single DB round-trip.
-- **Tier gating lives in the product repo** (ADR-061). The product reads `signal_tier` and decides what UI to render — onboarding at `cold`, chip-selection at `chip_selection`, normal chat at `warming`/`active`. At the first two tiers the product should NOT call `/v1/chat` with a consult-intent message; `/v1/consult` is not short-circuited server-side.
-
----
-
 ## DELETE /v1/user/{user_id}/data
 
 Hard-deletes every trace of a user's **AI-owned data**. Does NOT delete the user account — that lives in NestJS/Clerk. Called by the product repo as part of its account-deletion flow: NestJS deletes its own `users` / `user_settings` rows and calls this endpoint to wipe the AI side.
@@ -543,9 +478,7 @@ A scope set containing `all` collapses to "wipe everything" regardless of any ot
 
 ## POST /v1/signal
 
-Behavioral signal endpoint (ADR-060, ADR-061). Replaces `POST /v1/feedback`. Discriminated union on `signal_type`.
-
-### Variant 1: `recommendation_accepted` / `recommendation_rejected`
+Behavioral signal endpoint (ADR-060). Replaces `POST /v1/feedback`. Carries recommendation accept/reject feedback.
 
 **Request:**
 
@@ -565,61 +498,7 @@ Behavioral signal endpoint (ADR-060, ADR-061). Replaces `POST /v1/feedback`. Dis
 | `recommendation_id` | `string` | Yes      | Must exist in recommendations table                        |
 | `place_id`          | `string` | Yes      | Trusted, not validated against places table                |
 
-**Responses:** `202 { "status": "accepted" }`; `404` if recommendation_id unknown; `422` on schema errors.
-
-### Variant 2: `chip_confirm` (feature 023)
-
-**Request:**
-
-```json
-{
-  "signal_type": "chip_confirm",
-  "user_id": "<user_id>",
-  "metadata": {
-    "chips": [
-      {
-        "label": "Ramen lover",
-        "signal_count": 3,
-        "source_field": "attributes.cuisine",
-        "source_value": "ramen",
-        "status": "confirmed",
-        "selection_round": "round_1"
-      },
-      {
-        "label": "Casual spots",
-        "signal_count": 2,
-        "source_field": "attributes.ambiance",
-        "source_value": "casual",
-        "status": "rejected",
-        "selection_round": "round_1"
-      }
-    ]
-  }
-}
-```
-
-| Field                               | Type                        | Required | Notes                                                                                |
-| ----------------------------------- | --------------------------- | -------- | ------------------------------------------------------------------------------------ |
-| `signal_type`                       | `"chip_confirm"`            | Yes      | Discriminator                                                                        |
-| `user_id`                           | `string`                    | Yes      | Clerk-issued user ID                                                                 |
-| `metadata.chips[i].status`          | `"confirmed" \| "rejected"` | Yes      | `"pending"` is not a valid submission (user is making a decision)                    |
-| `metadata.chips[i].selection_round` | `string`                    | Yes      | Copied verbatim from the chip's `selection_round` in the `/v1/user/context` response |
-
-The frontend just echoes each chip back with an updated `status`. No outer `round` field — each chip already carries its anchor round.
-
-**Responses:** `202 { "status": "accepted" }`; `422` on empty chips array, missing `selection_round`, unknown `status` value, or unknown discriminator.
-
-**Server-side handling** (ADR-061):
-
-1. Write an `Interaction` row with `type=chip_confirm`, `metadata=<request.metadata>`.
-2. Read current `taste_model.chips`, merge submitted statuses in (confirmed chips are never mutated; pending/rejected can be overwritten by the submission; chips in the submission that don't match any stored chip are silently ignored).
-3. Persist the merged chips array back to `taste_model.chips`.
-4. Dispatch `ChipConfirmed` → handler runs an immediate taste-profile rewrite (bypasses the debouncer).
-
-**Notes:**
-
-- Handler runs as background task after HTTP 202 (ADR-043).
-- No deduplication (clarification Q3). Duplicate chip_confirm submissions (e.g. network retries) each write their own row and dispatch their own event; the rewrite handler is idempotent on unchanged state.
+**Responses:** `202 { "status": "accepted" }`; `404` if recommendation_id unknown; `422` on schema errors (including unknown `signal_type`).
 
 ---
 
@@ -655,12 +534,11 @@ Always HTTP 200 — DB outages surface via `db: "disconnected"`, not a non-2xx s
 
 | Endpoint                          | Purpose                                 | NestJS Sends                                                                                                                                                    | kebi Returns                                                                        |
 | --------------------------------- | --------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| POST /v1/chat                     | Unified conversational entry point      | user_id, message, optional location, optional signal_tier                                                                                                       | type, message, data, tool_calls_used                                                     |
+| POST /v1/chat                     | Unified conversational entry point      | user_id, message, optional location                                                                                                                             | type, message, data, tool_calls_used                                                     |
 | POST /v1/chat/stream              | SSE streaming chat                      | Same as POST /v1/chat                                                                                                                                           | reasoning_step frames, message frame, done frame (tool_calls_used)                       |
 | POST /v1/extract                  | Canonical extraction (save a place)     | raw_input, user_id                                                                                                                                              | ExtractPlaceResponse                                                                     |
 | GET /v1/extraction/{request_id}   | Poll background extraction (reserved)   | request_id (path param)                                                                                                                                         | ExtractPlaceResponse (200) or 404                                                        |
-| GET /v1/user/context              | User taste context for product UI       | user_id (query param)                                                                                                                                           | saved_places_count, signal_tier, chips (each with status + selection_round)              |
-| POST /v1/signal                   | Recommendation feedback OR chip_confirm | Discriminated on `signal_type` — recommendation variant (recommendation_id + place_id) OR chip_confirm variant (metadata.chips[] with per-chip selection_round) | status (202)                                                                             |
+| POST /v1/signal                   | Recommendation accept/reject feedback   | `signal_type` (recommendation_accepted/rejected), recommendation_id, place_id                                                                                    | status (202)                                                                             |
 | GET /v1/health                    | Service health check                    | —                                                                                                                                                               | status, db connectivity                                                                  |
 
 ---

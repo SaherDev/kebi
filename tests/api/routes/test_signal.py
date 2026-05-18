@@ -1,4 +1,4 @@
-"""Tests for POST /v1/signal discriminated union (feature 023)."""
+"""Tests for POST /v1/signal recommendation accept/reject (ADR-060)."""
 
 from __future__ import annotations
 
@@ -25,102 +25,6 @@ def svc() -> AsyncMock:
     service = AsyncMock(spec=SignalService)
     service.handle_signal = AsyncMock()
     return service
-
-
-def test_chip_confirm_happy_path_returns_202(svc: AsyncMock) -> None:
-    client = _make_app(svc)
-
-    response = client.post(
-        "/v1/signal",
-        json={
-            "signal_type": "chip_confirm",
-            "user_id": "user_abc",
-            "metadata": {
-                "chips": [
-                    {
-                        "label": "Ramen lover",
-                        "signal_count": 3,
-                        "source_field": "attributes.cuisine",
-                        "source_value": "ramen",
-                        "status": "confirmed",
-                        "selection_round": "round_1",
-                    }
-                ],
-            },
-        },
-    )
-
-    assert response.status_code == 202
-    svc.handle_signal.assert_awaited_once()
-
-
-def test_chip_confirm_empty_chips_array_returns_422(svc: AsyncMock) -> None:
-    client = _make_app(svc)
-
-    response = client.post(
-        "/v1/signal",
-        json={
-            "signal_type": "chip_confirm",
-            "user_id": "user_abc",
-            "metadata": {"chips": []},
-        },
-    )
-
-    assert response.status_code == 422
-
-
-def test_chip_confirm_invalid_status_value_returns_422(svc: AsyncMock) -> None:
-    client = _make_app(svc)
-
-    response = client.post(
-        "/v1/signal",
-        json={
-            "signal_type": "chip_confirm",
-            "user_id": "user_abc",
-            "metadata": {
-                "chips": [
-                    {
-                        "label": "X",
-                        "signal_count": 3,
-                        "source_field": "source",
-                        "source_value": "tiktok",
-                        "status": "pending",  # not allowed at the boundary
-                        "selection_round": "round_1",
-                    }
-                ],
-            },
-        },
-    )
-
-    assert response.status_code == 422
-
-
-def test_chip_confirm_missing_selection_round_on_chip_returns_422(
-    svc: AsyncMock,
-) -> None:
-    client = _make_app(svc)
-
-    response = client.post(
-        "/v1/signal",
-        json={
-            "signal_type": "chip_confirm",
-            "user_id": "user_abc",
-            "metadata": {
-                "chips": [
-                    {
-                        "label": "X",
-                        "signal_count": 3,
-                        "source_field": "source",
-                        "source_value": "tiktok",
-                        "status": "confirmed",
-                        # selection_round missing
-                    }
-                ],
-            },
-        },
-    )
-
-    assert response.status_code == 422
 
 
 def test_unknown_signal_type_returns_422(svc: AsyncMock) -> None:

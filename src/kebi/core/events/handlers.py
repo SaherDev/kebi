@@ -1,6 +1,6 @@
 """Event handlers for domain events (ADR-058 simplified).
 
-One taste handler (`on_taste_signal`) covers all 4 taste event types.
+One taste handler (`on_taste_signal`) covers all taste event types.
 Per ADR-043, failures are logged and traced but never propagated.
 """
 
@@ -8,9 +8,7 @@ import logging
 from typing import TYPE_CHECKING
 
 from kebi.core.events.events import (
-    ChipConfirmed,
     DomainEvent,
-    OnboardingSignal,
     PlaceSaved,
     RecommendationAccepted,
     RecommendationRejected,
@@ -50,20 +48,13 @@ class EventHandlers:
 
         Dispatches to handle_signal with the correct InteractionType.
         Handles PlaceSaved (multiple place_ids), RecommendationAccepted,
-        RecommendationRejected, and OnboardingSignal.
+        and RecommendationRejected.
         """
         try:
             # Build (signal_type, place_id) pairs from the event shape
             pairs: list[tuple[InteractionType, str]] = []
             if isinstance(event, PlaceSaved):
                 pairs = [(InteractionType.SAVE, pid) for pid in event.place_ids]
-            elif isinstance(event, OnboardingSignal):
-                st = (
-                    InteractionType.ONBOARDING_CONFIRM
-                    if event.confirmed
-                    else InteractionType.ONBOARDING_DISMISS
-                )
-                pairs = [(st, event.place_id)]
             elif isinstance(event, RecommendationAccepted | RecommendationRejected):
                 pairs = [(_TASTE_EVENT_MAP[event.event_type], event.place_id)]
 
@@ -89,41 +80,6 @@ class EventHandlers:
             )
             self._tracer.capture_message(
                 message=f"{event.event_type} handler error: {exc}",
-                level="error",
-                metadata={"event_id": event.event_id, "user_id": event.user_id},
-            )
-            self._tracer.flush()
-
-    async def on_chip_confirmed(self, event: DomainEvent) -> None:
-        """Handle ChipConfirmed — force an immediate taste-profile rewrite.
-
-        Chip confirmation is an explicit user action; debouncing would make
-        the summary rewrite feel disconnected from the action. Bypasses the
-        debouncer via run_regen_now. Failures are logged via tracing per
-        ADR-025 but never re-raised (ADR-043).
-        """
-        if not isinstance(event, ChipConfirmed):
-            return
-        try:
-            await self.taste_service.run_regen_now(event.user_id)
-            self._tracer.capture_message(
-                message="chip_confirmed_regen handled",
-                level="info",
-                metadata={
-                    "event_id": event.event_id,
-                    "user_id": event.user_id,
-                },
-            )
-        except Exception as exc:
-            logger.error(
-                "Failed chip_confirmed_regen for user %s: %s",
-                event.user_id,
-                exc,
-                exc_info=True,
-                extra={"user_id": event.user_id, "event_type": event.event_type},
-            )
-            self._tracer.capture_message(
-                message=f"chip_confirmed_regen error: {exc}",
                 level="error",
                 metadata={"event_id": event.event_id, "user_id": event.user_id},
             )
