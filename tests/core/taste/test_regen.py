@@ -60,13 +60,13 @@ def test_format_summary_for_agent() -> None:
         SummaryLine(
             text="Loves Italian food",
             signal_count=7,
-            source_field="attributes.cuisine",
+            source_field="tags.cuisine",
             source_value="italian",
         ),
         SummaryLine(
             text="Prefers casual vibes",
             signal_count=3,
-            source_field="attributes.ambiance",
+            source_field="tags.atmosphere",
             source_value="casual",
         ),
     ]

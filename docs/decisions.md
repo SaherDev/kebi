@@ -15,6 +15,16 @@ Format:
 
 ---
 
+## ADR-077: Re-key the taste model to the places_v2 catalog
+
+**Date:** 2026-05-18\
+**Status:** accepted\
+**Context:** Extraction moved to the places_v2 catalog (ADR-070, ADR-074), so every saved place is now identified by its shared catalog identity. Behavioral interactions record that identity, but taste-profile regeneration still resolves places against the retired legacy place store and its old vocabulary (a coarse place type, a subcategory, and a free-form attribute bag). Nothing writes that legacy store anymore, so the resolution finds nothing and every post-cutover signal is silently discarded — the taste profile is effectively dead for all current users, and the legacy vocabulary it was built around no longer has a producer.\
+**Decision:** Re-key the taste model to the places_v2 catalog. Behavioral signals aggregate against the shared, cross-user place identity rather than a per-user place row — this is the correct grain for personalization and is a prerequisite for later "users with similar taste" collaboration. The aggregated signal vocabulary is replaced with the catalog's native vocabulary: flat place categories, typed tag dimensions (cuisine, price, atmosphere, dietary, feature, service, and the rest), location context from the catalog, and save provenance from the per-user save record. Place data for regeneration is resolved through the catalog's single source-of-truth service via a read that consults only stored catalog data — deliberately distinct from the discovery reads that fall back to an external provider, which is correct for finding new places but wrong for a historical, point-in-time aggregation that must not incur provider cost or mutate the catalog. Pre-cutover behavioral rows reference the retired identity space and cannot be reliably mapped forward; they are abandoned and the profile rebuilds from go-forward signal.\
+**Consequences:** Completes the taste-vocabulary portion of ADR-058's supersession (its ranking is already moot under ADR-075 and its chips under ADR-076). Builds on ADR-070 and ADR-074 (the catalog is the place store of record) and reuses the ADR-076 / a7c3d2e9f4b1 precedent for a schema-reversible but not data-reversible cleanup. The aggregated signal-count shape is internal only — its sole consumer is the agent's free-form preference summary — so there is no external API contract change; the product repo sees the same `/v1/chat` and `/v1/signal` surfaces. Signal-count rows written under the old shape are harmless: the next regeneration overwrites them and the read path already coerces unexpected shapes. No new long-lived shared dependency is introduced (ADR-072 reviewed, not triggered) — the catalog read runs within the background regeneration's own short-lived database scope.
+
+---
+
 ## ADR-076: Remove chips, signal tier, and onboarding/chip-confirm signals
 
 **Date:** 2026-05-18\

@@ -1,25 +1,34 @@
-"""TasteModelService — signal_counts + LLM summary (ADR-058).
+"""TasteModelService — signal_counts + LLM summary (ADR-077).
 
-Replaces the former EMA-based taste model. All EMA logic is deleted.
+Signals are aggregated against the shared places_v2 catalog identity;
+place data is resolved through the source-of-truth service's DB-only
+analytical read plus the per-user save record.
 """
 
 from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Coroutine
+from collections.abc import Callable, Coroutine
 from typing import Any
 
 from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from kebi.core.config import get_config
+from kebi.core.places_v2.protocols import (
+    PlacesSearchServiceProtocol,
+    UserPlacesRepoProtocol,
+)
 from kebi.core.taste.aggregation import aggregate_signal_counts
+from kebi.core.taste.mapping import place_to_interaction_row
 from kebi.core.taste.regen import (
     build_regen_messages,
     validate_grounded,
 )
 from kebi.core.taste.schemas import (
+    InteractionRow,
+    RawInteraction,
     TasteArtifacts,
     TasteProfile,
 )
@@ -33,8 +42,18 @@ logger = logging.getLogger(__name__)
 
 
 class TasteModelService:
-    def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
+    def __init__(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        search_service_factory: Callable[
+            [AsyncSession], PlacesSearchServiceProtocol
+        ],
+        user_places_repo_factory: Callable[[AsyncSession], UserPlacesRepoProtocol],
+    ) -> None:
         self._repo = SQLAlchemyTasteModelRepository(session_factory)
+        self._session_factory = session_factory
+        self._search_service_factory = search_service_factory
+        self._user_places_repo_factory = user_places_repo_factory
         self._config = get_config()
 
     async def handle_signal(
@@ -87,20 +106,54 @@ class TasteModelService:
             generated_from_log_count=taste_model.generated_from_log_count,
         )
 
+    async def _resolve_rows(
+        self, user_id: str, raw: list[RawInteraction]
+    ) -> list[InteractionRow]:
+        """Resolve raw interactions against the places_v2 catalog (ADR-077).
+
+        DB-only via the source-of-truth service's analytical read; no Google
+        fallback, no cache mutation. Save source comes from the per-user
+        save record. Interactions whose place_id no longer resolves
+        (TTL-wiped / orphaned) are skipped.
+        """
+        place_ids = list({r.place_id for r in raw if r.place_id})
+        async with self._session_factory() as session:
+            search = self._search_service_factory(session)
+            user_places_repo = self._user_places_repo_factory(session)
+            cores = await search.get_cores_by_ids(place_ids)
+            user_places = await user_places_repo.get_by_user(user_id)
+
+        source_by_pid = {up.place_id: up.source.value for up in user_places}
+        rows: list[InteractionRow] = []
+        for r in raw:
+            if not r.place_id:
+                continue
+            core = cores.get(r.place_id)
+            if core is None:
+                continue  # orphan / TTL-wiped place — skip
+            rows.append(
+                place_to_interaction_row(
+                    r.type, core, source_by_pid.get(r.place_id)
+                )
+            )
+        return rows
+
     async def _run_regen(self, user_id: str) -> None:
-        """Read interactions -> aggregate -> LLM artifacts -> validate -> write."""
-        rows = await self._repo.get_interactions_with_places(user_id)
+        """Read interactions -> resolve -> aggregate -> LLM -> validate -> write."""
+        raw = await self._repo.get_interactions(user_id)
 
         # Min-signals guard
-        if len(rows) < self._config.taste_model.regen.min_signals:
+        if len(raw) < self._config.taste_model.regen.min_signals:
             return
 
-        signal_counts = aggregate_signal_counts(rows)
-
-        # Stale guard: skip if no new signals since last regen
+        # Stale guard: skip if no new signals since last regen (before the
+        # place-resolution reads — nothing to recompute when unchanged).
         taste_model = await self._repo.get_by_user_id(user_id)
-        if taste_model and taste_model.generated_from_log_count == len(rows):
+        if taste_model and taste_model.generated_from_log_count == len(raw):
             return
+
+        rows = await self._resolve_rows(user_id, raw)
+        signal_counts = aggregate_signal_counts(rows)
 
         # Build prompt and call LLM
         messages = build_regen_messages(
@@ -118,7 +171,8 @@ class TasteModelService:
         # Langfuse trace metadata
         metadata: dict[str, Any] = {
             "user_id": user_id,
-            "log_row_count": len(rows),
+            "log_row_count": len(raw),
+            "resolved_row_count": len(rows),
             "prior_log_count": (
                 taste_model.generated_from_log_count if taste_model else 0
             ),
@@ -142,7 +196,7 @@ class TasteModelService:
             user_id=user_id,
             signal_counts=signal_counts.model_dump(exclude_defaults=False),
             summary=[line.model_dump() for line in artifacts.summary],
-            log_count=len(rows),
+            log_count=len(raw),
         )
 
     async def _call_llm_with_retry(

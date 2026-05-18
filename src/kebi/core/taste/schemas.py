@@ -1,6 +1,8 @@
-"""Pydantic schemas for taste model artifacts (ADR-058).
+"""Pydantic schemas for taste model artifacts (ADR-077).
 
-InteractionRow — typed shape for the interactions JOIN places query result.
+RawInteraction — minimal interaction row read from the DB (no place JOIN).
+InteractionRow — places_v2-vocabulary row, built in the service from a
+    resolved PlaceCore + the per-user save source.
 SummaryLine — grounded LLM output items.
 TasteArtifacts — combined LLM output schema.
 TasteProfile — read model returned by TasteModelService.get_taste_profile.
@@ -12,22 +14,42 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from kebi.core.places.models import PlaceAttributes
 
+class RawInteraction(BaseModel):
+    """One interactions row, place data not yet resolved.
 
-class InteractionRow(BaseModel):
-    """Typed shape for the interactions JOIN places query result.
-
-    Fields mirror PlaceObject Tier 1 columns. Repository hydrates
-    this from the JSONB column via PlaceAttributes(**row.attributes).
+    The repository returns these (type + place_id only); the service
+    resolves place_id against the places_v2 catalog and builds the
+    richer InteractionRow.
     """
 
     type: str
-    place_type: str
-    subcategory: str | None = None
-    source: str | None = None
-    tags: list[str] = Field(default_factory=list)
-    attributes: PlaceAttributes = Field(default_factory=PlaceAttributes)
+    place_id: str | None = None
+
+
+class InteractionRow(BaseModel):
+    """places_v2-vocabulary interaction row (ADR-077).
+
+    Built by core/taste/mapping.place_to_interaction_row from a resolved
+    PlaceCore plus the per-user save source. Typed tag dimensions mirror
+    places_v2 TagType; `categories` are flat PlaceCategory values.
+    """
+
+    type: str
+    categories: list[str] = Field(default_factory=list)
+    cuisine: list[str] = Field(default_factory=list)
+    dietary: list[str] = Field(default_factory=list)
+    feature: list[str] = Field(default_factory=list)
+    atmosphere: list[str] = Field(default_factory=list)
+    service: list[str] = Field(default_factory=list)
+    price: str | None = None  # last price tag wins (single-value semantics)
+    accessibility: list[str] = Field(default_factory=list)
+    time: list[str] = Field(default_factory=list)
+    season: list[str] = Field(default_factory=list)
+    neighborhood: str | None = None
+    city: str | None = None
+    country: str | None = None
+    source: str | None = None  # UserPlace.source, save-only at aggregation
 
 
 class SummaryLine(BaseModel):

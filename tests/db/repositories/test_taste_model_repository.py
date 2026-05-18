@@ -5,6 +5,7 @@ Covers log_interaction accepting and persisting the optional metadata kwarg.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -70,3 +71,23 @@ async def test_log_interaction_without_metadata_stores_null() -> None:
 
     interaction = session.add.call_args[0][0]
     assert interaction.metadata_ is None
+
+
+@pytest.mark.asyncio
+async def test_get_interactions_returns_raw_rows_no_join() -> None:
+    """get_interactions selects type + place_id only (no places JOIN)."""
+    factory, session = _mock_session_factory()
+    rows = [
+        SimpleNamespace(type=InteractionType.SAVE, place_id="pv2-a"),
+        SimpleNamespace(type="rejected", place_id=None),
+    ]
+    session.execute = AsyncMock(return_value=rows)
+    repo = SQLAlchemyTasteModelRepository(factory)
+
+    result = await repo.get_interactions("user_abc")
+
+    # Enum coerced to its value; None place_id preserved.
+    assert [(r.type, r.place_id) for r in result] == [
+        ("save", "pv2-a"),
+        ("rejected", None),
+    ]

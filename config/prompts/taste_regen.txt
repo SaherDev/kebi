@@ -4,32 +4,35 @@ You generate one artifact from a user's behavioral signal counts:
 Input is JSON following this shape:
 {
   "totals": {"saves": int, "accepted": int, "rejected": int},
-  "place_type": {"<place_type>": count},
-  "subcategory": {"<place_type>": {"<subcategory>": count}},
+  "categories": {"<category>": count},
   "source": {"<source>": count},
-  "tags": {"<tag>": count},
-  "attributes": {
+  "tags": {
     "cuisine": {"<value>": count},
-    "price_hint": {"<value>": count},
-    "ambiance": {"<value>": count},
     "dietary": {"<value>": count},
-    "good_for": {"<value>": count},
-    "location_context": {
-      "neighborhood": {"<value>": count},
-      "city": {"<value>": count},
-      "country": {"<value>": count}
-    }
+    "feature": {"<value>": count},
+    "atmosphere": {"<value>": count},
+    "service": {"<value>": count},
+    "price": {"<value>": count},
+    "accessibility": {"<value>": count},
+    "time": {"<value>": count},
+    "season": {"<value>": count}
+  },
+  "location": {
+    "neighborhood": {"<value>": count},
+    "city": {"<value>": count},
+    "country": {"<value>": count}
   },
   "rejected": {
-    "subcategory": {"<place_type>": {"<subcategory>": count}},
-    "attributes": { same shape as attributes }
+    "categories": {"<category>": count},
+    "tags": { same shape as tags },
+    "location": { same shape as location }
   }
 }
 
 Rules for summary:
-- Each summary item has: text (the human-readable pattern), signal_count (integer), source_field (JSON path in the input), source_value (the value at that path, or null for aggregate claims).
+- Each summary item has: text (the human-readable pattern), signal_count (integer), source_field (JSON path in the input), source_value (the key at that path, or null for aggregate claims).
 - signal_count must appear verbatim in the input JSON. Do not invent numbers.
-- Use exact field values from signal_counts (subcategory names, cuisine names, source names).
+- Use exact field values from signal_counts (category names, tag values, source names).
 - If totals.saves < {early_signal_threshold}, prefix each text with "Early signal:".
 - One pattern per item. No preamble in text fields.
 - Do not produce negative-language sentences from low signal counts alone — negatives come only from the rejected signal_counts branch.
@@ -38,28 +41,28 @@ Output strict JSON. No markdown, no prose wrapper.
 
 Example 1 — food and nightlife user:
 INPUT:
-{"totals": {"saves": 28, "accepted": 11, "rejected": 6}, "place_type": {"food_and_drink": 24, "things_to_do": 3, "accommodation": 1}, "subcategory": {"food_and_drink": {"bar": 8, "restaurant": 6, "cafe": 5, "bakery": 3}, "things_to_do": {"nightlife": 2}}, "source": {"tiktok": 18, "instagram": 6, "manual": 4}, "attributes": {"cuisine": {"izakaya": 8, "ramen": 6}, "price_hint": {"low": 9, "mid": 15, "high": 4}, "location_context": {"neighborhood": {"Shibuya": 9, "Shimokitazawa": 5}}}, "rejected": {"subcategory": {"accommodation": {"hotel": 3}}}}
+{"totals": {"saves": 28, "accepted": 11, "rejected": 6}, "categories": {"bar": 8, "restaurant": 6, "cafe": 5, "bakery": 3, "nightclub": 2, "hotel": 1}, "source": {"tiktok": 18, "instagram": 6, "manual": 4}, "tags": {"cuisine": {"japanese": 8, "ramen": 6}, "price": {"budget": 9, "moderate": 15, "expensive": 4}, "atmosphere": {"lively": 7, "cozy": 4}}, "location": {"neighborhood": {"Shibuya": 9, "Shimokitazawa": 5}}, "rejected": {"categories": {"hotel": 3}}}
 
 OUTPUT:
-{"summary": [{"text": "Favors bar subcategory under food_and_drink.", "signal_count": 8, "source_field": "subcategory.food_and_drink", "source_value": "bar"}, {"text": "Primary save source is TikTok.", "signal_count": 18, "source_field": "source", "source_value": "tiktok"}, {"text": "Prefers mid price_hint over high.", "signal_count": 15, "source_field": "attributes.price_hint", "source_value": "mid"}, {"text": "Saves cluster in Shibuya neighborhood.", "signal_count": 9, "source_field": "attributes.location_context.neighborhood", "source_value": "Shibuya"}, {"text": "Rejects hotel accommodation.", "signal_count": 3, "source_field": "rejected.subcategory.accommodation", "source_value": "hotel"}]}
+{"summary": [{"text": "Favors bar category.", "signal_count": 8, "source_field": "categories", "source_value": "bar"}, {"text": "Primary save source is TikTok.", "signal_count": 18, "source_field": "source", "source_value": "tiktok"}, {"text": "Prefers moderate price over expensive.", "signal_count": 15, "source_field": "tags.price", "source_value": "moderate"}, {"text": "Saves cluster in Shibuya neighborhood.", "signal_count": 9, "source_field": "location.neighborhood", "source_value": "Shibuya"}, {"text": "Rejects hotel category.", "signal_count": 3, "source_field": "rejected.categories", "source_value": "hotel"}]}
 
 Example 2 — museum traveler:
 INPUT:
-{"totals": {"saves": 67, "accepted": 22, "rejected": 3}, "place_type": {"things_to_do": 58, "food_and_drink": 9}, "subcategory": {"things_to_do": {"museum": 28, "cultural_site": 22, "experience": 8}, "food_and_drink": {"restaurant": 9}}, "source": {"manual": 52, "link": 15}, "attributes": {"price_hint": {"mid": 40, "high": 18}, "location_context": {"city": {"Rome": 15, "Paris": 14, "Madrid": 12, "Vienna": 10, "Berlin": 8}}}, "rejected": {}}
+{"totals": {"saves": 67, "accepted": 22, "rejected": 3}, "categories": {"museum": 28, "art_gallery": 22, "historical_site": 8, "restaurant": 9}, "source": {"manual": 52, "google_maps_list": 15}, "tags": {"price": {"moderate": 40, "expensive": 18}}, "location": {"city": {"Rome": 15, "Paris": 14, "Madrid": 12, "Vienna": 10, "Berlin": 8}}, "rejected": {}}
 
 OUTPUT:
-{"summary": [{"text": "Favors museum subcategory under things_to_do.", "signal_count": 28, "source_field": "subcategory.things_to_do", "source_value": "museum"}, {"text": "Favors cultural_site subcategory under things_to_do.", "signal_count": 22, "source_field": "subcategory.things_to_do", "source_value": "cultural_site"}, {"text": "Prefers mid price_hint over high.", "signal_count": 40, "source_field": "attributes.price_hint", "source_value": "mid"}, {"text": "Saves cluster in Rome, Paris, Madrid.", "signal_count": 41, "source_field": "totals", "source_value": null}]}
+{"summary": [{"text": "Favors museum category.", "signal_count": 28, "source_field": "categories", "source_value": "museum"}, {"text": "Favors art_gallery category.", "signal_count": 22, "source_field": "categories", "source_value": "art_gallery"}, {"text": "Prefers moderate price over expensive.", "signal_count": 40, "source_field": "tags.price", "source_value": "moderate"}, {"text": "Active traveler across many saves.", "signal_count": 67, "source_field": "totals", "source_value": null}]}
 
 Example 3 — sparse user:
 INPUT:
-{"totals": {"saves": 3, "accepted": 0, "rejected": 0}, "place_type": {"food_and_drink": 4}, "subcategory": {"food_and_drink": {"cafe": 3, "restaurant": 1}}, "source": {"instagram": 3}, "attributes": {"cuisine": {"coffee": 3}}, "rejected": {}}
+{"totals": {"saves": 3, "accepted": 0, "rejected": 0}, "categories": {"cafe": 3, "restaurant": 1}, "source": {"instagram": 3}, "tags": {"cuisine": {"coffee": 3}}, "location": {}, "rejected": {}}
 
 OUTPUT:
-{"summary": [{"text": "Early signal: cafe subcategory under food_and_drink.", "signal_count": 3, "source_field": "subcategory.food_and_drink", "source_value": "cafe"}, {"text": "Early signal: primary save source is Instagram.", "signal_count": 3, "source_field": "source", "source_value": "instagram"}, {"text": "Early signal: coffee cuisine preference.", "signal_count": 3, "source_field": "attributes.cuisine", "source_value": "coffee"}]}
+{"summary": [{"text": "Early signal: cafe category.", "signal_count": 3, "source_field": "categories", "source_value": "cafe"}, {"text": "Early signal: primary save source is Instagram.", "signal_count": 3, "source_field": "source", "source_value": "instagram"}, {"text": "Early signal: coffee cuisine preference.", "signal_count": 3, "source_field": "tags.cuisine", "source_value": "coffee"}]}
 
 Example 4 — shopping user:
 INPUT:
-{"totals": {"saves": 52, "accepted": 20, "rejected": 2}, "place_type": {"shopping": 44, "food_and_drink": 8}, "subcategory": {"shopping": {"boutique": 18, "market": 14, "specialty_store": 8, "bookstore": 4}, "food_and_drink": {"cafe": 8}}, "source": {"tiktok": 30, "instagram": 18}, "attributes": {"price_hint": {"low": 25, "mid": 20}, "location_context": {"neighborhood": {"Shimokitazawa": 15, "Harajuku": 10}}}, "rejected": {}}
+{"totals": {"saves": 52, "accepted": 20, "rejected": 2}, "categories": {"boutique": 18, "night_market": 14, "specialty_shop": 8, "bookstore": 4, "cafe": 8}, "source": {"tiktok": 30, "instagram": 18}, "tags": {"price": {"budget": 25, "moderate": 20}, "atmosphere": {"trendy": 12}}, "location": {"neighborhood": {"Shimokitazawa": 15, "Harajuku": 10}}, "rejected": {}}
 
 OUTPUT:
-{"summary": [{"text": "Favors boutique subcategory under shopping.", "signal_count": 18, "source_field": "subcategory.shopping", "source_value": "boutique"}, {"text": "Favors market subcategory under shopping.", "signal_count": 14, "source_field": "subcategory.shopping", "source_value": "market"}, {"text": "Primary save source is TikTok.", "signal_count": 30, "source_field": "source", "source_value": "tiktok"}, {"text": "Prefers low price_hint over mid.", "signal_count": 25, "source_field": "attributes.price_hint", "source_value": "low"}, {"text": "Saves cluster in Shimokitazawa neighborhood.", "signal_count": 15, "source_field": "attributes.location_context.neighborhood", "source_value": "Shimokitazawa"}]}
+{"summary": [{"text": "Favors boutique category.", "signal_count": 18, "source_field": "categories", "source_value": "boutique"}, {"text": "Favors night_market category.", "signal_count": 14, "source_field": "categories", "source_value": "night_market"}, {"text": "Primary save source is TikTok.", "signal_count": 30, "source_field": "source", "source_value": "tiktok"}, {"text": "Prefers budget price over moderate.", "signal_count": 25, "source_field": "tags.price", "source_value": "budget"}, {"text": "Saves cluster in Shimokitazawa neighborhood.", "signal_count": 15, "source_field": "location.neighborhood", "source_value": "Shimokitazawa"}]}

@@ -858,3 +858,33 @@ class TestGetByIds:
 
         client.get_by_ids.assert_not_awaited()
         assert result["google:a"].rating is None
+
+
+# ---------------------------------------------------------------------------
+# get_cores_by_ids — DB-only analytical read (ADR-077)
+# ---------------------------------------------------------------------------
+
+
+class TestGetCoresByIds:
+    async def test_empty_input_returns_empty(self) -> None:
+        svc = _make_service()
+        assert await svc.get_cores_by_ids([]) == {}
+
+    async def test_db_only_keyed_by_internal_id(self) -> None:
+        repo = MagicMock(
+            find=AsyncMock(return_value=[]),
+            get_by_ids=AsyncMock(return_value=[_core("a"), _core("b")]),
+        )
+        cache = MagicMock(mget=AsyncMock(), mset=AsyncMock())
+        client = MagicMock(search=AsyncMock(), get_by_ids=AsyncMock())
+        svc = _make_service(repo=repo, cache=cache, client=client)
+
+        out = await svc.get_cores_by_ids(["a", "b"])
+
+        assert set(out) == {"a", "b"}
+        assert out["a"].id == "a"
+        repo.get_by_ids.assert_awaited_once_with(["a", "b"])
+        # No cache overlay, no provider fallback.
+        cache.mget.assert_not_awaited()
+        client.get_by_ids.assert_not_awaited()
+        client.search.assert_not_awaited()

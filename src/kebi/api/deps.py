@@ -69,9 +69,18 @@ from kebi.providers.redis_cache import RedisCacheBackend, get_redis_client
 def get_taste_service() -> TasteModelService:
     """FastAPI dependency providing TasteModelService.
 
-    Uses session_factory so each repo method opens its own session.
+    Uses session_factory so each repo method opens its own session. The
+    place-resolution dependencies are session-scoped factories built per
+    regen inside the service's own short-lived DB scope (ADR-077
+    analytical read; ADR-072: no new long-lived shared dependency).
+    `_build_taste_place_resolver` is defined in the places_v2 deps
+    section below and resolved at call time.
     """
-    return TasteModelService(session_factory=_get_session_factory())
+    return TasteModelService(
+        session_factory=_get_session_factory(),
+        search_service_factory=_build_taste_place_resolver,
+        user_places_repo_factory=UserPlacesRepo,
+    )
 
 
 def get_cache_backend() -> CacheBackend:
@@ -472,6 +481,40 @@ def get_places_search_service(
         cache=cache,
         client=client,
         upsert_service=upsert_service,
+    )
+
+
+def _build_taste_place_resolver(session: AsyncSession) -> PlacesSearchService:
+    """Background-safe PlacesSearchService bound to one explicit session.
+
+    Reuses the exact request-path factories (`get_places_search_service`
+    and its transitive `get_place_upsert_service` / `get_embedding_service_v2`)
+    — the only difference is the DB session is supplied explicitly instead
+    of resolved by FastAPI's `Depends(get_session)`, because taste regen
+    runs in a background debounced task with no request scope. Those
+    factories are plain functions; their `Depends()` defaults only apply
+    when FastAPI resolves them, so calling with explicit args is the
+    documented reuse path. No construction logic is duplicated.
+
+    Used only by TasteModelService's analytical read (ADR-077): it calls
+    `get_cores_by_ids`, which is DB-only — cache/client/upsert satisfy the
+    constructor contract but are never exercised there. Factory
+    construction stays in the wiring layer (ADR-072); the consumer
+    receives this callable via injection.
+    """
+    repo = PlacesRepo(session)
+    return get_places_search_service(
+        repo=repo,
+        cache=get_places_v2_cache(),
+        client=get_google_places_client_v2(),
+        upsert_service=get_place_upsert_service(
+            repo=repo,
+            embedding_service=get_embedding_service_v2(
+                repo=EmbeddingsRepo(session),
+                embedder=get_embedder_v2(),
+                config=get_config(),
+            ),
+        ),
     )
 
 

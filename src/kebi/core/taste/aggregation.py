@@ -1,10 +1,15 @@
-"""Pure signal_counts aggregation from interaction rows (ADR-058).
+"""Pure signal_counts aggregation from interaction rows (ADR-077).
 
 aggregate_signal_counts() is a pure function — no I/O.
 
 Positive types (save, accepted) feed the main tree.
 Negative types (rejected) feed the rejected branch.
 Source is counted for saves only.
+
+Vocabulary is places_v2-native: flat `categories`, typed tag dimensions
+(cuisine/price/atmosphere/...), and location context. All count containers
+stay nested `dict[str, int]` so the grounding validator's dotted-path walk
+(regen._resolve_path) works unchanged.
 """
 
 from __future__ import annotations
@@ -24,35 +29,36 @@ class TotalCounts(BaseModel):
     rejected: int = 0
 
 
-class LocationContextCounts(BaseModel):
+class LocationCounts(BaseModel):
     neighborhood: dict[str, int] = Field(default_factory=dict)
     city: dict[str, int] = Field(default_factory=dict)
     country: dict[str, int] = Field(default_factory=dict)
 
 
-class AttributeCounts(BaseModel):
+class TagCounts(BaseModel):
     cuisine: dict[str, int] = Field(default_factory=dict)
-    price_hint: dict[str, int] = Field(default_factory=dict)
-    ambiance: dict[str, int] = Field(default_factory=dict)
     dietary: dict[str, int] = Field(default_factory=dict)
-    good_for: dict[str, int] = Field(default_factory=dict)
-    location_context: LocationContextCounts = Field(
-        default_factory=LocationContextCounts
-    )
+    feature: dict[str, int] = Field(default_factory=dict)
+    atmosphere: dict[str, int] = Field(default_factory=dict)
+    service: dict[str, int] = Field(default_factory=dict)
+    price: dict[str, int] = Field(default_factory=dict)
+    accessibility: dict[str, int] = Field(default_factory=dict)
+    time: dict[str, int] = Field(default_factory=dict)
+    season: dict[str, int] = Field(default_factory=dict)
 
 
 class RejectedCounts(BaseModel):
-    subcategory: dict[str, dict[str, int]] = Field(default_factory=dict)
-    attributes: AttributeCounts = Field(default_factory=AttributeCounts)
+    categories: dict[str, int] = Field(default_factory=dict)
+    tags: TagCounts = Field(default_factory=TagCounts)
+    location: LocationCounts = Field(default_factory=LocationCounts)
 
 
 class SignalCounts(BaseModel):
     totals: TotalCounts = Field(default_factory=TotalCounts)
-    place_type: dict[str, int] = Field(default_factory=dict)
-    subcategory: dict[str, dict[str, int]] = Field(default_factory=dict)
+    categories: dict[str, int] = Field(default_factory=dict)
     source: dict[str, int] = Field(default_factory=dict)
-    tags: dict[str, int] = Field(default_factory=dict)
-    attributes: AttributeCounts = Field(default_factory=AttributeCounts)
+    tags: TagCounts = Field(default_factory=TagCounts)
+    location: LocationCounts = Field(default_factory=LocationCounts)
     rejected: RejectedCounts = Field(default_factory=RejectedCounts)
 
 
@@ -70,31 +76,32 @@ def _increment(d: dict[str, int], key: str | None) -> None:
         d[key] = d.get(key, 0) + 1
 
 
-def _increment_nested(
-    d: dict[str, dict[str, int]], outer_key: str | None, inner_key: str | None
-) -> None:
-    """Increment count in a nested dict[str, dict[str, int]]."""
-    if outer_key is not None and inner_key is not None:
-        if outer_key not in d:
-            d[outer_key] = {}
-        d[outer_key][inner_key] = d[outer_key].get(inner_key, 0) + 1
+def _add_tags(target: TagCounts, row: InteractionRow) -> None:
+    """Increment typed-tag counts from an interaction row."""
+    for c in row.cuisine:
+        _increment(target.cuisine, c)
+    for v in row.dietary:
+        _increment(target.dietary, v)
+    for v in row.feature:
+        _increment(target.feature, v)
+    for v in row.atmosphere:
+        _increment(target.atmosphere, v)
+    for v in row.service:
+        _increment(target.service, v)
+    _increment(target.price, row.price)
+    for v in row.accessibility:
+        _increment(target.accessibility, v)
+    for v in row.time:
+        _increment(target.time, v)
+    for v in row.season:
+        _increment(target.season, v)
 
 
-def _add_attributes(target: AttributeCounts, row: InteractionRow) -> None:
-    """Increment attribute counts from an interaction row."""
-    attrs = row.attributes
-    _increment(target.cuisine, attrs.cuisine)
-    _increment(target.price_hint, attrs.price_hint)
-    _increment(target.ambiance, attrs.ambiance)
-    for d in attrs.dietary:
-        _increment(target.dietary, d)
-    for g in attrs.good_for:
-        _increment(target.good_for, g)
-    if attrs.location_context:
-        lc = attrs.location_context
-        _increment(target.location_context.neighborhood, lc.neighborhood)
-        _increment(target.location_context.city, lc.city)
-        _increment(target.location_context.country, lc.country)
+def _add_location(target: LocationCounts, row: InteractionRow) -> None:
+    """Increment location-context counts from an interaction row."""
+    _increment(target.neighborhood, row.neighborhood)
+    _increment(target.city, row.city)
+    _increment(target.country, row.country)
 
 
 # ---------------------------------------------------------------------------
@@ -118,11 +125,10 @@ def aggregate_signal_counts(rows: list[InteractionRow]) -> SignalCounts:
 
         if row.type in _POSITIVE_TYPES:
             # Main tree
-            _increment(counts.place_type, row.place_type)
-            _increment_nested(counts.subcategory, row.place_type, row.subcategory)
-            for tag in row.tags:
-                _increment(counts.tags, tag)
-            _add_attributes(counts.attributes, row)
+            for cat in row.categories:
+                _increment(counts.categories, cat)
+            _add_tags(counts.tags, row)
+            _add_location(counts.location, row)
 
             # Source is save-only
             if row.type == "save":
@@ -130,9 +136,9 @@ def aggregate_signal_counts(rows: list[InteractionRow]) -> SignalCounts:
 
         elif row.type in _NEGATIVE_TYPES:
             # Rejected branch
-            _increment_nested(
-                counts.rejected.subcategory, row.place_type, row.subcategory
-            )
-            _add_attributes(counts.rejected.attributes, row)
+            for cat in row.categories:
+                _increment(counts.rejected.categories, cat)
+            _add_tags(counts.rejected.tags, row)
+            _add_location(counts.rejected.location, row)
 
     return counts

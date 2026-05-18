@@ -1,4 +1,9 @@
-"""Prompt builder, artifact validation, and agent formatting (ADR-058).
+"""Prompt builder, artifact validation, and agent formatting (ADR-077).
+
+Grounding is shape-agnostic: `_resolve_path` walks any nested dict by
+dotted `source_field`, so the places_v2-vocabulary signal_counts works
+unchanged (e.g. `categories`, `tags.price`, `location.city`,
+`rejected.categories`).
 
 - build_regen_messages: construct system + user messages for LLM call.
 - validate_grounded: drop SummaryLine items not backed by signal_counts.

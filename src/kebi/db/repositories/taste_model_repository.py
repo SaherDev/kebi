@@ -1,4 +1,4 @@
-"""Taste model repository — Protocol + SQLAlchemy implementation (ADR-058).
+"""Taste model repository — Protocol + SQLAlchemy implementation (ADR-077).
 
 Each method opens its own session via session_factory so it works in any
 context (request, background task, debouncer).
@@ -12,9 +12,8 @@ from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from kebi.core.places.models import PlaceAttributes
-from kebi.core.taste.schemas import InteractionRow
-from kebi.db.models import Interaction, InteractionType, Place, TasteModel
+from kebi.core.taste.schemas import RawInteraction
+from kebi.db.models import Interaction, InteractionType, TasteModel
 
 
 class TasteModelRepository(Protocol):
@@ -36,9 +35,9 @@ class TasteModelRepository(Protocol):
         metadata: dict[str, Any] | None = None,
     ) -> None: ...
 
-    async def get_interactions_with_places(
+    async def get_interactions(
         self, user_id: str
-    ) -> list[InteractionRow]: ...
+    ) -> list[RawInteraction]: ...
 
     async def count_interactions(self, user_id: str) -> int: ...
 
@@ -100,38 +99,30 @@ class SQLAlchemyTasteModelRepository:
             session.add(interaction)
             await session.commit()
 
-    async def get_interactions_with_places(self, user_id: str) -> list[InteractionRow]:
+    async def get_interactions(self, user_id: str) -> list[RawInteraction]:
+        """Raw interaction rows (type + place_id), ordered by created_at.
+
+        Place data is NOT joined here — the service resolves place_id
+        against the places_v2 catalog (ADR-077).
+        """
         async with self._session_factory() as session:
             stmt = (
-                select(
-                    Interaction.type,
-                    Place.place_type,
-                    Place.subcategory,
-                    Place.source,
-                    Place.tags,
-                    Place.attributes,
-                )
-                .join(Place, Interaction.place_id == Place.id)
+                select(Interaction.type, Interaction.place_id)
                 .where(Interaction.user_id == user_id)
                 .order_by(Interaction.created_at)
             )
             result = await session.execute(stmt)
-            rows: list[InteractionRow] = []
-            for row in result:
-                attrs = PlaceAttributes(**(row.attributes or {}))
-                rows.append(
-                    InteractionRow(
-                        type=(
-                            row.type.value if hasattr(row.type, "value") else row.type
-                        ),
-                        place_type=row.place_type,
-                        subcategory=row.subcategory,
-                        source=row.source,
-                        tags=row.tags or [],
-                        attributes=attrs,
-                    )
+            return [
+                RawInteraction(
+                    type=(
+                        row.type.value
+                        if hasattr(row.type, "value")
+                        else row.type
+                    ),
+                    place_id=row.place_id,
                 )
-            return rows
+                for row in result
+            ]
 
     async def count_interactions(self, user_id: str) -> int:
         async with self._session_factory() as session:

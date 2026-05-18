@@ -83,6 +83,10 @@ class PlacesSearchServiceProtocol(Protocol):
         self, provider_ids: list[str]
     ) -> dict[str, PlaceObject]: ...
 
+    async def get_cores_by_ids(
+        self, ids: list[str]
+    ) -> dict[str, PlaceCore]: ...
+
 
 class PlaceUpsertServiceProtocol(Protocol):
     async def upsert_and_embed(
