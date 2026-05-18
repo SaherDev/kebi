@@ -1,4 +1,9 @@
-"""Tests for ReasoningStep Pydantic model (feature 027 M3)."""
+"""Tests for ReasoningStep Pydantic model (feature 027 M3, ADR-075).
+
+ADR-075 removed the recall/consult tools, so ReasoningStep no longer has
+a `tool_name` field or a `source="tool"` variant — `source` is only
+`agent` or `fallback`.
+"""
 
 from __future__ import annotations
 
@@ -24,50 +29,16 @@ class TestReasoningStepDefaults:
         assert before <= s.timestamp <= after
         assert s.timestamp.tzinfo is not None
 
-    def test_tool_name_optional_for_agent_source(self) -> None:
-        s = ReasoningStep(step="agent.tool_decision", summary="...", source="agent")
-        assert s.tool_name is None
-
-
-class TestReasoningStepSourceToolNameConsistency:
-    def test_tool_source_requires_tool_name(self) -> None:
-        with pytest.raises(ValidationError, match="tool_name"):
-            ReasoningStep(step="recall.mode", summary="...", source="tool")
-
-    def test_agent_source_forbids_tool_name(self) -> None:
-        with pytest.raises(ValidationError, match="forbids tool_name"):
-            ReasoningStep(
-                step="agent.tool_decision",
-                summary="...",
-                source="agent",
-                tool_name="recall",
-            )
-
-    def test_fallback_source_forbids_tool_name(self) -> None:
-        with pytest.raises(ValidationError, match="forbids tool_name"):
-            ReasoningStep(
-                step="fallback",
-                summary="...",
-                source="fallback",
-                tool_name="consult",
-            )
-
-    def test_tool_source_with_tool_name_ok(self) -> None:
+    def test_fallback_source_allowed(self) -> None:
         s = ReasoningStep(
-            step="recall.mode",
-            summary="hybrid_search",
-            source="tool",
-            tool_name="recall",
-            visibility="debug",
+            step="fallback", summary="...", source="fallback", visibility="debug"
         )
-        assert s.tool_name == "recall"
+        assert s.source == "fallback"
         assert s.visibility == "debug"
 
 
-class TestConsultReasoningStepReexport:
-    def test_consult_schema_reexports_same_class(self) -> None:
-        """FR-024: api/schemas/consult.py re-exports the richer shape."""
-        from kebi.api.schemas.consult import ReasoningStep as ConsultReasoningStep
-        from kebi.core.agent.reasoning import ReasoningStep as AgentReasoningStep
-
-        assert ConsultReasoningStep is AgentReasoningStep
+class TestReasoningStepSourceValidation:
+    def test_tool_source_rejected(self) -> None:
+        """`source="tool"` is no longer a valid value (ADR-075)."""
+        with pytest.raises(ValidationError):
+            ReasoningStep(step="x", summary="...", source="tool")

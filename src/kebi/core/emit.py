@@ -1,14 +1,14 @@
 """EmitFn — primitive callback Protocol for pipeline-stage emission (feature 028 M4).
 
-Services (`RecallService`, `ConsultService`, `ExtractionService`) accept an
-optional `emit: EmitFn | None = None` parameter and call
-`emit(step, summary)` — or `emit(step, summary, duration_ms=elapsed)` when
-the service measured the operation directly — at each pipeline boundary.
+The extraction pipeline accepts an optional `emit: EmitFn | None = None`
+parameter and calls `emit(step, summary)` — or
+`emit(step, summary, duration_ms=elapsed)` when it measured the
+operation directly — at each pipeline boundary.
 
 Services never construct `ReasoningStep` objects and never import from
-`core/agent/*`. Agent-layer fields (`source`, `tool_name`, `visibility`,
-`timestamp`, `duration_ms`) are stamped by the tool wrapper's emit closure
-in `core/agent/tools/_emit.py`.
+`core/agent/*`. (ADR-075 removed the recall/consult tools and their
+emit-closure wrappers; this Protocol remains for the extraction
+pipeline's progress emission.)
 
 `EmitFn` must be a `typing.Protocol` (not a plain `Callable` alias),
 because the third positional argument `duration_ms` has a default value —

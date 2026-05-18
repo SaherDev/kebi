@@ -21,9 +21,9 @@ class TestBuildTurnPayload:
             taste_profile_summary="different",
             memory_summary="different",
         )
-        assert p1["last_recall_results"] is None
+        assert "last_recall_results" not in p1
         assert p1["reasoning_steps"] == []
-        assert p2["last_recall_results"] is None
+        assert "last_recall_results" not in p2
         assert p2["reasoning_steps"] == []
 
     def test_resets_counters_on_every_call(self) -> None:

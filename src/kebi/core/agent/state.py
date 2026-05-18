@@ -6,9 +6,8 @@ across turns but is bounded by `agent.state_message_cap` to keep the
 checkpointer blob from growing without limit. Every other field has
 plain-overwrite semantics (FR-021).
 
-`last_recall_results` and `reasoning_steps` reset on every turn via
-`build_turn_payload` in invocation.py — see that module for the single
-construction site.
+`reasoning_steps` resets on every turn via `build_turn_payload` in
+invocation.py — see that module for the single construction site.
 """
 
 from __future__ import annotations
@@ -21,7 +20,6 @@ from langgraph.graph.message import add_messages
 from typing_extensions import TypedDict
 
 from kebi.core.agent.reasoning import ReasoningStep
-from kebi.core.places.models import PlaceObject
 
 logger = logging.getLogger(__name__)
 
@@ -95,9 +93,7 @@ class AgentState(TypedDict):
                             via reverse-geocode cache so the agent can reason
                             about the user's city (coords alone are too low-
                             info for the LLM to reverse-geocode in its head).
-      last_recall_results — set by recall_tool (M5), read by consult_tool (M5);
-                            reset to None on every new user message.
-      reasoning_steps     — agent + tool trace; reset to [] on every new user
+      reasoning_steps     — agent trace; reset to [] on every new user
                             message; no reducer (plain overwrite, FR-021).
       steps_taken         — incremented by agent_node; bounds should_continue.
       error_count         — incremented by tool error handlers (M9); bounds
@@ -112,7 +108,6 @@ class AgentState(TypedDict):
     user_id: str
     location: dict[str, float] | None
     location_label: str | None
-    last_recall_results: list[PlaceObject] | None
     reasoning_steps: list[ReasoningStep]
     steps_taken: int
     error_count: int

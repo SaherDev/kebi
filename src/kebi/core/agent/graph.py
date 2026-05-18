@@ -61,13 +61,9 @@ async def _invoke_llm_with_retry(bound: Any, conversation: list[Any]) -> Any:
     raise last_exc
 
 
-# Synthesized fallback decisions when AIMessage.content is empty but a
-# tool was called — gives the user-visible `agent.tool_decision` step
-# something concrete to render.
-_TOOL_DECISION_FALLBACKS: dict[str, str] = {
-    "recall": "recall — user referenced saved places",
-    "consult": "consult — recommendation request",
-}
+# Shown for the user-visible `agent.tool_decision` step when the LLM
+# returns empty content. The agent has no tools (ADR-075), so a direct
+# response is the only outcome.
 _DIRECT_RESPONSE_FALLBACK = "responding directly"
 
 # Node names are re-used by tests asserting graph structure.
@@ -360,7 +356,6 @@ def make_agent_node(llm: Any, tools: list[Any]) -> Any:
                 step="agent.tool_decision",
                 summary=f"Connection error ({type(exc).__name__}) — please retry",
                 source="agent",
-                tool_name=None,
                 visibility="user",
                 duration_ms=0.0,
             )
@@ -372,18 +367,8 @@ def make_agent_node(llm: Any, tools: list[Any]) -> Any:
             }
 
         full_text = extract_text_content(getattr(ai_msg, "content", None)).strip()
-        tool_calls = getattr(ai_msg, "tool_calls", None) or []
-        first_tool_name = tool_calls[0].get("name") if tool_calls else None
 
-        if not full_text:
-            if first_tool_name is not None:
-                summary_source = _TOOL_DECISION_FALLBACKS.get(
-                    first_tool_name, _DIRECT_RESPONSE_FALLBACK
-                )
-            else:
-                summary_source = _DIRECT_RESPONSE_FALLBACK
-        else:
-            summary_source = full_text
+        summary_source = full_text if full_text else _DIRECT_RESPONSE_FALLBACK
 
         try:
             writer = get_stream_writer()
@@ -396,7 +381,6 @@ def make_agent_node(llm: Any, tools: list[Any]) -> Any:
             step="agent.tool_decision",
             summary=summary_source[:200],
             source="agent",
-            tool_name=None,
             visibility="user",
             duration_ms=0.0,
         )
@@ -404,7 +388,8 @@ def make_agent_node(llm: Any, tools: list[Any]) -> Any:
         return {
             "messages": [ai_msg],
             "steps_taken": state.get("steps_taken", 0) + 1,
-            "tool_calls_used": state.get("tool_calls_used", 0) + len(tool_calls),
+            # Agent has no tools (ADR-075) — stays 0; retained for shape stability.
+            "tool_calls_used": state.get("tool_calls_used", 0),
             "reasoning_steps": existing_steps + [step],
         }
 
@@ -457,7 +442,6 @@ def fallback_node(state: AgentState) -> dict[str, Any]:
                 step="max_steps_detail",
                 summary=f"exceeded max_steps={cfg.max_steps}",
                 source="fallback",
-                tool_name=None,
                 visibility="debug",
             )
         )
@@ -469,7 +453,6 @@ def fallback_node(state: AgentState) -> dict[str, Any]:
                 step="max_errors_detail",
                 summary=f"exceeded max_errors={cfg.max_errors}",
                 source="fallback",
-                tool_name=None,
                 visibility="debug",
             )
         )
@@ -485,7 +468,6 @@ def fallback_node(state: AgentState) -> dict[str, Any]:
         step="fallback",
         summary=summary,
         source="fallback",
-        tool_name=None,
         visibility="user",
     )
     existing_steps = state.get("reasoning_steps") or []
@@ -501,9 +483,9 @@ def _handle_tool_node_error(exc: Exception) -> str:
     ToolNode's default handler stringifies the exception into plain text,
     which (a) hides the stack trace from the server log and (b) produces
     non-JSON ToolMessage content that the SSE `tool_result` frame cannot
-    parse. Logging here captures the real cause (usually Pydantic
-    validation on `ConsultFilters` args from the LLM), and returning
-    JSON keeps the client payload structured.
+    parse. The agent has no tools since ADR-075, so this is dormant
+    scaffolding kept for a future tool; logging here captures the real
+    cause and returning JSON keeps the client payload structured.
     """
     logger.exception("ToolNode caught exception: %s", exc)
     return json.dumps(

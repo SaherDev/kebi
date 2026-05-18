@@ -41,11 +41,10 @@ def mock_graph() -> MagicMock:
         payload: Any, config: Any, stream_mode: Any = None
     ) -> AsyncGenerator[tuple[str, Any], None]:
         rs = ReasoningStep(
-            step="recall.search",
-            summary="searching saves",
-            source="tool",
-            tool_name="recall",
-            visibility="debug",
+            step="agent.tool_decision",
+            summary="responding directly",
+            source="agent",
+            visibility="user",
         )
         yield ("custom", rs.model_dump(mode="json"))
 

@@ -330,14 +330,6 @@ class ConsultConfig(BaseModel):
     named_location_radius_m: int = 10000
 
 
-class RecallConfig(BaseModel):
-    max_results: int = 10
-    rrf_k: int = 60
-    candidate_multiplier: int = 2
-    min_rrf_score: float = 0.01
-    max_cosine_distance: float = 0.65
-
-
 class TasteRegenConfig(BaseModel):
     """Regen thresholds for taste profile regeneration."""
 
@@ -348,8 +340,8 @@ class TasteRegenConfig(BaseModel):
 class WarmingBlendConfig(BaseModel):
     """Warming-tier candidate-count ratio (feature 023).
 
-    Applied in `ConsultService.consult` when the user's signal_tier is
-    "warming". Values must sum to 1.0 — enforced below.
+    Dormant since ADR-075 removed the consult service that consumed it;
+    retained as taste-model config. Values must sum to 1.0 — enforced below.
     """
 
     discovered: float = 0.8
@@ -467,9 +459,9 @@ class ToolTimeoutsConfig(BaseModel):
 class AgentConfig(BaseModel):
     """Typed configuration for the agent path (feature 027 M2, ADR-062).
 
-    `max_steps` and `max_errors` bound the graph's should_continue loop (M3 reads these).
-    `checkpointer_ttl_seconds` is reserved for a future cleanup job
-    (Postgres has no native TTL).
+    `max_steps` and `max_errors` bound the graph's should_continue loop
+    (M3 reads these). `checkpointer_ttl_seconds` is reserved for a future
+    cleanup job (Postgres has no native TTL).
     `prompt_caching_enabled` wraps the system message in an Anthropic
     `cache_control: ephemeral` block (ADR-067). Disable for non-Anthropic orchestrators.
     """
@@ -535,7 +527,6 @@ class AppConfig(BaseModel):
     embeddings: EmbeddingsConfig = EmbeddingsConfig()
     system_prompts: SystemPromptsConfig = SystemPromptsConfig()
     consult: ConsultConfig = ConsultConfig()
-    recall: RecallConfig = RecallConfig()
     taste_model: TasteModelConfig = TasteModelConfig()
     memory: MemoryConfig = MemoryConfig()
     places: PlacesConfig = PlacesConfig()

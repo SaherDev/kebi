@@ -19,7 +19,6 @@ def _base_state(**overrides: object) -> dict:
         "memory_summary": "",
         "user_id": "u1",
         "location": None,
-        "last_recall_results": None,
         "reasoning_steps": [],
         "steps_taken": 0,
         "error_count": 0,

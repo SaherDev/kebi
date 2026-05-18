@@ -6,16 +6,19 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-from kebi.api.schemas.consult import Location
-
 SignalTierHint = Literal["cold", "warming", "chip_selection", "active"]
 
 ChatResponseType = Literal[
-    "consult",
-    "recall",
     "error",
     "agent",
 ]
+
+
+class Location(BaseModel):
+    """User's geographic location."""
+
+    lat: float
+    lng: float
 
 
 class ChatRequest(BaseModel):
@@ -28,9 +31,9 @@ class ChatRequest(BaseModel):
         default=None,
         description=(
             "Optional tier hint from the product repo (feature 023). Product "
-            "reads GET /v1/user/context and forwards the tier so consult can "
-            "apply tier-aware behavior (e.g. warming candidate-count blend) "
-            "without a second DB read. When null, consult defaults to 'active'."
+            "reads GET /v1/user/context and forwards the tier. Retained for "
+            "request-shape stability; no longer drives behavior now that the "
+            "agent has no tools."
         ),
     )
 
@@ -38,19 +41,17 @@ class ChatRequest(BaseModel):
 class ChatResponse(BaseModel):
     """Response body for POST /v1/chat endpoint.
 
-    type: One of "consult", "recall", "agent", "error". ADR-073
-          removed "extract-place" and "clarification" — saves no
-          longer flow through chat, and there is no remaining producer
-          of GraphInterrupt to map onto clarification. The agent is the
-          only dispatch path (ADR-065).
+    type: One of "agent", "error". ADR-075 removed the recall and
+          consult tools — the agent is now a zero-tool conversational
+          Q&A surface, so "consult" and "recall" response types no
+          longer exist (ADR-073 had already removed "extract-place" and
+          "clarification"). The agent is the only dispatch path (ADR-065).
     message: Human-readable response text.
-    data: Structured payload from downstream service; null for error;
-          on the "agent" path carries
-          `{"reasoning_steps": [<ReasoningStep.model_dump>, ...]}` —
-          only user-visible steps survive the serialization filter.
-    tool_calls_used: Count of tool invocations during this turn
-                     (recall, consult). Read by NestJS to increment
-                     the daily tool-call counter.
+    data: Structured payload; null for error; on the "agent" path
+          carries `{"reasoning_steps": [<ReasoningStep.model_dump>, ...]}`
+          — only user-visible steps survive the serialization filter.
+    tool_calls_used: Always 0 — the agent has no tools (ADR-075).
+                     Retained for response-shape stability.
     """
 
     type: ChatResponseType

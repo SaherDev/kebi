@@ -18,7 +18,6 @@ def _base_state(**overrides: object) -> dict:
         "memory_summary": "",
         "user_id": "u1",
         "location": None,
-        "last_recall_results": None,
         "reasoning_steps": [],
         "steps_taken": 0,
         "error_count": 0,
@@ -48,7 +47,6 @@ def test_fallback_node_emits_user_visible_step_on_max_steps() -> None:
     assert isinstance(step, ReasoningStep)
     assert step.step == "fallback"
     assert step.source == "fallback"
-    assert step.tool_name is None
     assert str(cfg.max_steps) in step.summary
 
 

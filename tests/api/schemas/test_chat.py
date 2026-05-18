@@ -9,11 +9,19 @@ from kebi.api.schemas.chat import ChatResponse
 
 
 def test_chat_response_accepts_all_valid_types() -> None:
-    """All valid ChatResponse types are accepted by the schema (ADR-073)."""
-    valid = ("consult", "recall", "agent", "error")
+    """ADR-075 narrowed ChatResponseType to agent|error (recall/consult
+    tools removed — the agent is a zero-tool Q&A surface)."""
+    valid = ("agent", "error")
     for t in valid:
         resp = ChatResponse(type=t, message="m")  # type: ignore[arg-type]
         assert resp.type == t
+
+
+def test_chat_response_rejects_removed_consult_recall_types() -> None:
+    """'consult' and 'recall' were removed by ADR-075."""
+    for t in ("consult", "recall"):
+        with pytest.raises(ValidationError):
+            ChatResponse(type=t, message="m")  # type: ignore[arg-type]
 
 
 def test_chat_response_rejects_legacy_assistant_type() -> None:

@@ -1,9 +1,9 @@
 """Per-turn AgentState payload builder (feature 027 M3, FR-022).
 
-Single construction site for per-turn state updates. Resets both transient
-fields (`last_recall_results`, `reasoning_steps`) in lockstep so they
-cannot drift across turns. Any future invocation site (streaming endpoint,
-retry path) must route through this helper.
+Single construction site for per-turn state updates. Resets the transient
+`reasoning_steps` field so it cannot drift across turns. Any future
+invocation site (streaming endpoint, retry path) must route through this
+helper.
 """
 
 from __future__ import annotations
@@ -26,8 +26,7 @@ def build_turn_payload(
     LangGraph's default state-merge semantics overwrite non-reducer fields
     with whatever the incoming payload contains. For `messages` (reducer:
     add_messages), a single-element list appends to history. For
-    `last_recall_results` and `reasoning_steps` (no reducer), passing
-    `None` / `[]` resets them.
+    `reasoning_steps` (no reducer), passing `[]` resets it.
 
     Args:
       message: user-supplied input for this turn.
@@ -44,7 +43,6 @@ def build_turn_payload(
     """
     return {
         "messages": [HumanMessage(content=message)],
-        "last_recall_results": None,
         "reasoning_steps": [],
         "taste_profile_summary": taste_profile_summary,
         "memory_summary": memory_summary,

@@ -17,9 +17,7 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from kebi.api.schemas.chat import ChatRequest, ChatResponse
 from kebi.core.agent.invocation import build_turn_payload
 from kebi.core.agent.messages import extract_text_content
-from kebi.core.consult.service import ConsultService
 from kebi.core.events.events import TurnCompleted
-from kebi.core.recall.service import RecallService
 from kebi.core.taste.regen import format_summary_for_agent
 from kebi.core.taste.schemas import SummaryLine
 
@@ -38,8 +36,6 @@ class ChatService:
 
     def __init__(
         self,
-        consult_service: ConsultService,
-        recall_service: RecallService,
         event_dispatcher: EventDispatcherProtocol,
         memory_service: UserMemoryService,
         taste_service: TasteModelService,
@@ -47,8 +43,6 @@ class ChatService:
         config: AppConfig,
         agent_graph: Any,
     ) -> None:
-        self._consult = consult_service
-        self._recall = recall_service
         self._dispatcher = event_dispatcher
         self._memory = memory_service
         self._taste_service = taste_service
@@ -172,13 +166,12 @@ def _last_ai_message(messages: list[Any]) -> AIMessage | None:
 def _parse_tool_message_payload(m: ToolMessage) -> dict[str, Any] | None:
     """Return a dict payload for the tool_result SSE frame.
 
-    Our tool wrappers (consult/recall/save + `with_timeout`) always put
-    a JSON string in `ToolMessage.content`. LangGraph's `ToolNode`, however,
-    returns a plain error-string ToolMessage when the tool's argument
-    schema fails Pydantic validation (that happens before our wrapper
-    runs), producing `status="error"` and non-JSON content. Surface that
-    as a structured error payload so the client sees something actionable
-    instead of a bare `null`.
+    The agent has no tools since ADR-075, so no ToolMessages are
+    produced today; this stays as scaffolding for a future tool. When a
+    ToolMessage does carry a JSON string in `content`, parse it;
+    LangGraph's `ToolNode` returns a plain error-string ToolMessage with
+    `status="error"` on argument-schema validation failure, which is
+    surfaced as a structured error payload instead of a bare `null`.
     """
     content = m.content if isinstance(m.content, str) else ""
     if getattr(m, "status", None) == "error":
@@ -201,9 +194,8 @@ def _collect_current_turn_tool_results(messages: list[Any]) -> list[dict[str, An
     turn. `ToolMessage.content` carries the tool's `response.model_dump_json()`
     string, which we parse back into a dict for the client.
 
-    When recall and consult both ran in the same turn, recall is suppressed —
-    consult already merges saved + discovered results so the recall payload
-    is redundant for the consumer.
+    The agent has no tools since ADR-075, so this returns `[]` today; it
+    stays as scaffolding so a future tool repopulates it without rewiring.
     """
     current_turn: list[Any] = []
     for m in reversed(messages):
@@ -224,9 +216,4 @@ def _collect_current_turn_tool_results(messages: list[Any]) -> list[dict[str, An
             }
         )
 
-    tool_names = {r["tool"] for r in raw}
-    if "consult" in tool_names:
-        raw = [r for r in raw if r["tool"] != "recall"]
-
-    results = raw
-    return results
+    return raw

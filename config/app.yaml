@@ -207,18 +207,10 @@ external_services:
     timeout_seconds: 3.0
 
 # ---------------------------------------------------------------------------
-# Recall service configuration — Hybrid search with RRF
-# ADR-045: Reciprocal Rank Fusion of pgvector + FTS
-# ---------------------------------------------------------------------------
-recall:
-  max_results: 10
-  rrf_k: 60
-  candidate_multiplier: 2
-  min_rrf_score: 0.01
-  max_cosine_distance: 0.65
-
-# ---------------------------------------------------------------------------
-# Consult service configuration — Phase 3: 6-step pipeline
+# Legacy place-discovery radii — ADR-075 removed the recall + consult
+# services and agent tools. This block is retained only because the
+# deferred-scope legacy core/places client still reads
+# `consult.default_radius_m` on its dormant discover/validate path.
 # ADR-049: PlacesClient moved to core/places
 # ---------------------------------------------------------------------------
 consult:
@@ -274,7 +266,8 @@ prompts:
 # Agent Configuration (feature 027 M2, ADR-062)
 # enabled is controlled by AGENT_ENABLED env var (EnvConfig), default true.
 # max_steps / max_errors bound the graph's should_continue loop (M3).
-# tool_timeouts_seconds consumed by tool wrappers (M5) and timeout guard (M9).
+# ADR-075: the agent has no tools — tool_timeouts_seconds /
+# tool_result_window are dormant scaffolding kept for a future tool.
 # checkpointer_ttl_seconds reserved for a future cleanup job (Postgres has
 # no native TTL; periodic cleanup is deferred).
 # ---------------------------------------------------------------------------
@@ -298,9 +291,9 @@ agent:
   state_message_floor: 150
   checkpointer_ttl_seconds: 86400
   prompt_caching_enabled: false  # ADR-067: Anthropic-only (ephemeral cache_control). Re-enable when orchestrator returns to Anthropic.
-  tool_timeouts_seconds:
-    recall: 5
-    consult: 10
+  # tool_timeouts_seconds intentionally omitted — ADR-075 removed all
+  # agent tools (recall + consult). ToolTimeoutsConfig defaults apply;
+  # nothing reads them while the agent is zero-tool.
 
 # ---------------------------------------------------------------------------
 # Taste Model Configuration

@@ -9,7 +9,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from kebi.core.chat.service import ChatService
 from kebi.core.config import AppConfig, ExtractionConfig, get_config, get_env
-from kebi.core.consult.service import ConsultService
 from kebi.core.events.dispatcher import EventDispatcher
 from kebi.core.events.handlers import EventHandlers
 from kebi.core.extraction.enrichment_level import EnrichmentLevel
@@ -46,7 +45,6 @@ from kebi.core.places_v2 import (
 from kebi.core.places_v2 import (
     GooglePlacesClient as GooglePlacesClientV2,
 )
-from kebi.core.recall.service import RecallService
 from kebi.core.signal.service import SignalService
 from kebi.core.taste.debounce import regen_debouncer
 from kebi.core.taste.service import TasteModelService
@@ -54,7 +52,6 @@ from kebi.core.user.service import UserDataDeletionService
 from kebi.db.repositories import (
     EmbeddingRepository,
     SQLAlchemyEmbeddingRepository,
-    SQLAlchemyRecallRepository,
 )
 from kebi.db.repositories.recommendation_repository import (
     RecommendationRepository,
@@ -106,7 +103,7 @@ def get_places_service(
 
     Wires the `PlacesRepository`, `PlacesCache`, and `GooglePlacesClient` so
     every caller consuming `PlacesService` sees a fully functional
-    `enrich_batch` in both recall (`geo_only=True`) and consult modes.
+    `enrich_batch` (e.g. the chat service's location-label resolution).
     """
     return PlacesService(
         repo=PlacesRepository(db_session),
@@ -317,20 +314,6 @@ def _get_deep_level() -> EnrichmentLevel:
 # default-value Depends() at module load time.
 
 
-async def get_recall_service(
-    db_session: AsyncSession = Depends(get_session),  # noqa: B008
-    config: AppConfig = Depends(get_config),  # noqa: B008
-    places_service: PlacesService = Depends(get_places_service),  # noqa: B008
-) -> RecallService:
-    """FastAPI dependency providing a fully wired RecallService."""
-    return RecallService(
-        embedder=get_embedder(),
-        recall_repo=SQLAlchemyRecallRepository(db_session),
-        config=config.recall,
-        places_service=places_service,
-    )
-
-
 def get_recommendation_repo(
     db_session: AsyncSession = Depends(get_session),  # noqa: B008
 ) -> RecommendationRepository:
@@ -352,30 +335,6 @@ def get_signal_service(
         session_factory=_get_session_factory(),
         event_dispatcher=event_dispatcher,
         taste_service=taste_service,
-    )
-
-
-async def get_consult_service(
-    recommendation_repo: RecommendationRepository = Depends(get_recommendation_repo),  # noqa: B008
-    places_service: PlacesService = Depends(get_places_service),  # noqa: B008
-    taste_service: TasteModelService = Depends(get_taste_service),  # noqa: B008
-) -> ConsultService:
-    """FastAPI dependency providing a fully wired ConsultService (feature 028 M4).
-
-    Wires the 4-phase pipeline dependencies via existing `Depends(...)`
-    factories (ADR-019): places service, taste model service (active-tier
-    chip filter only, ADR-061), and recommendation repository (ADR-060).
-    The inline `GooglePlacesClient()` is the v1 client and will be retired
-    as part of the places_v2 migration. IntentParser, RecallService, and
-    UserMemoryService are no longer held by the consult service — the
-    caller supplies pre-parsed `query`, pre-loaded `saved_places`, and an
-    optional `preference_context`.
-    """
-    return ConsultService(
-        places_client=GooglePlacesClient(),
-        places_service=places_service,
-        taste_service=taste_service,
-        recommendation_repo=recommendation_repo,
     )
 
 
@@ -653,17 +612,15 @@ def get_extraction_service(
 
 
 def get_agent_graph(
-    recall_service: RecallService = Depends(get_recall_service),  # noqa: B008
-    consult_service: ConsultService = Depends(get_consult_service),  # noqa: B008
     checkpointer: Any = Depends(get_agent_checkpointer),  # noqa: B008
 ) -> Any:
     """Build the agent StateGraph per-request.
 
-    Compiling per-request keeps tool-bound services request-scoped (fresh
-    SQLAlchemy sessions, real EventDispatcher) while reusing the
-    process-scoped checkpointer that owns its own psycopg pool. The save
-    tool was removed by ADR-073; the agent's tool surface is recall +
-    consult.
+    Compiling per-request reuses the process-scoped checkpointer that
+    owns its own psycopg pool. The agent has no tools since ADR-075
+    (recall + consult removed; save was removed earlier by ADR-073), so
+    `build_tools()` returns `[]` — the graph is a zero-tool
+    conversational Q&A surface.
     """
     if checkpointer is None:
         return None
@@ -671,14 +628,11 @@ def get_agent_graph(
     from kebi.core.agent.tools import build_tools
     from kebi.providers.llm import get_langchain_chat_model
 
-    tools = build_tools(recall_service, consult_service)
     llm = get_langchain_chat_model("orchestrator")
-    return build_graph(llm, tools, checkpointer)
+    return build_graph(llm, build_tools(), checkpointer)
 
 
 async def get_chat_service(
-    consult_service: ConsultService = Depends(get_consult_service),  # noqa: B008
-    recall_service: RecallService = Depends(get_recall_service),  # noqa: B008
     event_dispatcher: EventDispatcher = Depends(get_event_dispatcher),  # noqa: B008
     memory_service: UserMemoryService = Depends(get_user_memory_service),  # noqa: B008
     taste_service: TasteModelService = Depends(get_taste_service),  # noqa: B008
@@ -686,10 +640,8 @@ async def get_chat_service(
     config: AppConfig = Depends(get_config),  # noqa: B008
     agent_graph: Any = Depends(get_agent_graph),  # noqa: B008
 ) -> ChatService:
-    """FastAPI dependency for ChatService (ADR-019, ADR-052, ADR-073)."""
+    """FastAPI dependency for ChatService (ADR-019, ADR-052, ADR-073, ADR-075)."""
     return ChatService(
-        consult_service=consult_service,
-        recall_service=recall_service,
         event_dispatcher=event_dispatcher,
         memory_service=memory_service,
         taste_service=taste_service,

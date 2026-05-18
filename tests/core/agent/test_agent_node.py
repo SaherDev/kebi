@@ -20,7 +20,9 @@ def _system_text(msg: SystemMessage) -> str:
     """Extract the text from a SystemMessage regardless of caching format."""
     if isinstance(msg.content, str):
         return msg.content
-    return "".join(block["text"] for block in msg.content if block.get("type") == "text")
+    return "".join(
+        block["text"] for block in msg.content if block.get("type") == "text"
+    )
 
 
 def _base_state(**overrides: object) -> dict:
@@ -30,7 +32,6 @@ def _base_state(**overrides: object) -> dict:
         "memory_summary": "MEMORY-SUBSTITUTED",
         "user_id": "u1",
         "location": None,
-        "last_recall_results": None,
         "reasoning_steps": [],
         "steps_taken": 0,
         "error_count": 0,

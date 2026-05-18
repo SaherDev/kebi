@@ -46,8 +46,6 @@ def _make_service(
     dispatcher.dispatch = AsyncMock()
 
     return ChatService(
-        consult_service=MagicMock(),
-        recall_service=MagicMock(),
         event_dispatcher=dispatcher,
         memory_service=memory_service,
         taste_service=taste_service,
@@ -79,16 +77,14 @@ async def test_run_filters_reasoning_steps_to_user_visible() -> None:
     """Only user-visible ReasoningStep objects survive the serialization filter."""
     user_step = ReasoningStep(
         step="agent.tool_decision",
-        summary="chose recall",
+        summary="responding directly",
         source="agent",
-        tool_name=None,
         visibility="user",
     )
     debug_step = ReasoningStep(
-        step="recall.mode",
-        summary="mode=hybrid",
-        source="tool",
-        tool_name="recall",
+        step="max_errors_detail",
+        summary="exceeded max_errors",
+        source="fallback",
         visibility="debug",
     )
 
@@ -141,7 +137,7 @@ async def test_run_returns_error_on_graph_exception() -> None:
 async def test_run_resolves_location_label_when_location_present() -> None:
     """ChatService passes lat/lng to PlacesService.resolve_location_label and
     threads the result into the agent payload as `location_label`."""
-    from kebi.api.schemas.consult import Location
+    from kebi.api.schemas.chat import Location
 
     graph = AsyncMock()
     graph.ainvoke = AsyncMock(
@@ -186,7 +182,7 @@ async def test_run_skips_label_resolution_when_no_location() -> None:
 
 async def test_run_uses_none_label_when_geocode_fails() -> None:
     """resolve_location_label returns None on failure → payload carries None."""
-    from kebi.api.schemas.consult import Location
+    from kebi.api.schemas.chat import Location
 
     graph = AsyncMock()
     graph.ainvoke = AsyncMock(

@@ -26,61 +26,13 @@ def client(mock_chat_service: AsyncMock) -> TestClient:
 
 
 class TestChatRouteHappyPath:
-    """Verify POST /v1/chat returns 200 for each intent type."""
-
-    def test_consult_intent_returns_200_with_type(
-        self, client: TestClient, mock_chat_service: AsyncMock
-    ) -> None:
-        """Response shape for consult intent."""
-        mock_chat_service.run.return_value = ChatResponse(
-            type="consult",
-            message="Try Nara Eatery",
-            data={
-                "results": [
-                    {
-                        "place": {"place_name": "Nara Eatery"},
-                        "confidence": 0.87,
-                        "source": "saved",
-                    }
-                ],
-                "reasoning_steps": [],
-            },
-        )
-
-        response = client.post(
-            "/v1/chat",
-            json={"user_id": "user_1", "message": "cheap dinner nearby"},
-        )
-
-        assert response.status_code == 200
-        data = response.json()
-        assert data["type"] == "consult"
-        assert data["message"] == "Try Nara Eatery"
-        assert data["data"] is not None
-
-    def test_recall_intent_returns_200_with_type(
-        self, client: TestClient, mock_chat_service: AsyncMock
-    ) -> None:
-        """Response shape for recall intent."""
-        mock_chat_service.run.return_value = ChatResponse(
-            type="recall",
-            message="Found 1 place matching your search.",
-            data={"results": [], "total": 0, "empty_state": False},
-        )
-
-        response = client.post(
-            "/v1/chat",
-            json={"user_id": "user_1", "message": "that ramen place I saved"},
-        )
-
-        assert response.status_code == 200
-        data = response.json()
-        assert data["type"] == "recall"
+    """Verify POST /v1/chat returns 200. ADR-075: the agent is a
+    zero-tool Q&A surface — only `type="agent"` (or `"error"`)."""
 
     def test_agent_intent_returns_200_with_type(
         self, client: TestClient, mock_chat_service: AsyncMock
     ) -> None:
-        """Response shape for agent response (ADR-065: replaces legacy assistant)."""
+        """Response shape for agent response (ADR-065/ADR-075)."""
         mock_chat_service.run.return_value = ChatResponse(
             type="agent",
             message="Tipping is not expected in Japan.",
@@ -95,31 +47,23 @@ class TestChatRouteHappyPath:
         assert response.status_code == 200
         data = response.json()
         assert data["type"] == "agent"
+        assert data["message"] == "Tipping is not expected in Japan."
 
     def test_chat_with_location_passes_through(
         self, client: TestClient, mock_chat_service: AsyncMock
     ) -> None:
         """POST /v1/chat accepts optional location field."""
         mock_chat_service.run.return_value = ChatResponse(
-            type="consult",
-            message="Try Nara Eatery",
-            data={
-                "results": [
-                    {
-                        "place": {"place_name": "Nara Eatery"},
-                        "confidence": 0.87,
-                        "source": "saved",
-                    }
-                ],
-                "reasoning_steps": [],
-            },
+            type="agent",
+            message="Magdeburg is known for its cathedral.",
+            data={"reasoning_steps": []},
         )
 
         response = client.post(
             "/v1/chat",
             json={
                 "user_id": "user_1",
-                "message": "cheap dinner nearby",
+                "message": "what's this city known for",
                 "location": {"lat": 13.7563, "lng": 100.5018},
             },
         )

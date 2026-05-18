@@ -24,8 +24,6 @@ def _make_service(agent_graph: MagicMock, dispatcher: MagicMock) -> ChatService:
     places_service.resolve_location_label = AsyncMock(return_value=None)
 
     return ChatService(
-        consult_service=MagicMock(),
-        recall_service=MagicMock(),
         event_dispatcher=dispatcher,
         memory_service=memory_service,
         taste_service=taste_service,

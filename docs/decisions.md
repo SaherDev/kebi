@@ -15,6 +15,16 @@ Format:
 
 ---
 
+## ADR-075: Drop the recall and consult services and agent tools
+
+**Date:** 2026-05-18\
+**Status:** accepted\
+**Context:** ADR-073 had already reduced the agent to two tools — recall and consult. Both are being replaced by a different retrieval/recommendation approach that has not yet been designed. Keeping them running in the meantime means carrying two whole pipelines (hybrid pgvector+FTS retrieval; the multi-phase discovery/merge/rank/persist consult flow), their config, prompts, and tests, plus the LLM tax of routing every conversational turn through tool selection — all for behavior that is about to be thrown away. Dead weight that also constrains the design space of the replacement.\
+**Decision:** Remove the recall and consult services entirely, and remove both agent tools. `/v1/chat` (and its streaming variant) remains, but the agent becomes a zero-tool conversational Q&A surface: it answers from general knowledge and the user's taste/memory context, and redirects place save / retrieval / recommendation requests to the product's own surfaces. The agent graph, checkpointer, and chat scaffolding are intentionally kept so the future approach can re-introduce tools without re-deriving the orchestration layer. The `recommendations` table and its repository, the recommendation-accept/reject signal path, and their event handlers are kept dormant and untouched — no longer written, still read for signal validation — so the change is reversible and the signal/taste layer is undisturbed.\
+**Consequences:** Supersedes ADR-058 (agent-driven ranking is moot with no consult). Obsoletes the recall/consult-specific portions of ADR-052, ADR-060, ADR-062, ADR-064, ADR-065, and ADR-073; the recall/consult framework those ADRs established is retired, but their conversational-agent and recommendations-table framing otherwise stands. Externally observable contract change for the product repo: `/v1/chat` never returns a `consult` or `recall` response type and the stream emits no tool-result events; the response is otherwise shape-stable (`agent` type, empty tool results, zero tool calls). Coordinate the product repo to stop branching on those types. Reasoning traces lose the tool-sourced variant — every step is now agent- or fallback-sourced. The legacy place-discovery client retains one configuration value it still reads on a dormant path; pruning that legacy client is explicitly deferred, so its config block is kept with a note rather than removed. Until the replacement lands, the save→recall→consult product loop has no server-side recall/recommendation capability — this is an accepted, temporary gap.
+
+---
+
 ## ADR-074: Cache extraction results by canonical URL
 
 **Date:** 2026-05-14\

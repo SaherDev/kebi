@@ -17,13 +17,12 @@ def test_agent_state_typed_dict_shape() -> None:
         "memory_summary": "vegetarian",
         "user_id": "u1",
         "location": {"lat": 13.7, "lng": 100.5},
-        "last_recall_results": None,
         "reasoning_steps": [],
         "steps_taken": 0,
         "error_count": 0,
     }
     assert state["user_id"] == "u1"
-    assert state["last_recall_results"] is None
+    assert state["reasoning_steps"] == []
 
 
 async def test_add_messages_reducer_appends_across_invocations() -> None:
@@ -50,7 +49,6 @@ async def test_add_messages_reducer_appends_across_invocations() -> None:
             "memory_summary": "",
             "user_id": "u1",
             "location": None,
-            "last_recall_results": None,
             "reasoning_steps": [],
             "steps_taken": 0,
             "error_count": 0,
@@ -62,7 +60,6 @@ async def test_add_messages_reducer_appends_across_invocations() -> None:
     state2 = await app.ainvoke(
         {
             "messages": [HumanMessage(content="two")],
-            "last_recall_results": None,
             "reasoning_steps": [],
         },
         config=config,
