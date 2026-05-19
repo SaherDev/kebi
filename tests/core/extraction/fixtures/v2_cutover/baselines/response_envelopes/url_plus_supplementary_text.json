@@ -1,8 +1,0 @@
-{
-  "failure_message": "No venue could be extracted from the post \u2014 the caption, transcript, and visible text didn't contain a recognizable place name.",
-  "failure_reason": "no_candidates",
-  "raw_input": "https://www.tiktok.com/@example/video/0000000000000000005 -- this was the wine bar near Phrom Phong",
-  "request_id": "a3266a8a2a9a447496e50a5c5b92996f",
-  "results": [],
-  "status": "failed"
-}

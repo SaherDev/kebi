@@ -1,8 +1,0 @@
-{
-  "failure_message": "No venue could be extracted from the post \u2014 the caption, transcript, and visible text didn't contain a recognizable place name.",
-  "failure_reason": "no_candidates",
-  "raw_input": "1. Fuji Ramen, 2. Pizza Place, 3. Sukhumvit Coffee Roasters",
-  "request_id": "73403c081d854a5885579d9a7f2d516e",
-  "results": [],
-  "status": "failed"
-}

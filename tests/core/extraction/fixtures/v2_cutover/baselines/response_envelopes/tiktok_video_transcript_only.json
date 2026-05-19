@@ -1,8 +1,0 @@
-{
-  "failure_message": "No venue could be extracted from the post \u2014 the caption, transcript, and visible text didn't contain a recognizable place name.",
-  "failure_reason": "no_candidates",
-  "raw_input": "https://www.tiktok.com/@example/video/0000000000000000004",
-  "request_id": "9f68dd3c3fab44fb980b359b1db81eff",
-  "results": [],
-  "status": "failed"
-}

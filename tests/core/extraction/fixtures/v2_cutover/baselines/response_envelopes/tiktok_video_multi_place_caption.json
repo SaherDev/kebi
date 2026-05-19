@@ -1,8 +1,0 @@
-{
-  "failure_message": "No venue could be extracted from the post \u2014 the caption, transcript, and visible text didn't contain a recognizable place name.",
-  "failure_reason": "no_candidates",
-  "raw_input": "https://www.tiktok.com/@lizeandtom/video/7580498058878766358?is_from_webapp=1&sender_device=pc&web_id=7595386767118779924",
-  "request_id": "147d725ff84047a6bd82c32d721abaff",
-  "results": [],
-  "status": "failed"
-}

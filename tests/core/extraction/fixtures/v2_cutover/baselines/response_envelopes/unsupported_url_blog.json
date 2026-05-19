@@ -1,8 +1,0 @@
-{
-  "failure_message": "Sorry \u2014 I can't read links from this site yet. I currently support TikTok, Instagram, YouTube, and Google Maps share links. Try sharing the place name directly, or paste a link from one of those. (https://example.com/blog/best-restaurants-in-bangkok)",
-  "failure_reason": "unsupported_url",
-  "raw_input": "https://example.com/blog/best-restaurants-in-bangkok",
-  "request_id": "8d146ec1aaf54166836979df630c21ab",
-  "results": [],
-  "status": "failed"
-}

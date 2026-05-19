@@ -1,7 +1,0 @@
-{
-  "failure_message": "HTTP 400: {\"error_type\":\"bad_request\",\"detail\":\"raw_input cannot be empty\"}",
-  "failure_reason": "pipeline_error",
-  "raw_input": "   ",
-  "results": [],
-  "status": "failed"
-}

@@ -1,8 +1,0 @@
-{
-  "failure_message": "No venue could be extracted from the post \u2014 the caption, transcript, and visible text didn't contain a recognizable place name.",
-  "failure_reason": "no_candidates",
-  "raw_input": "\ud83c\udf63 Tsuta Ramen Tokyo - best tonkotsu I've ever had",
-  "request_id": "eef8d3d656784361ba738f328bc4497a",
-  "results": [],
-  "status": "failed"
-}
