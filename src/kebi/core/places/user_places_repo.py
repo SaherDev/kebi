@@ -83,7 +83,15 @@ class UserPlacesRepo:
     async def save_user_places(
         self, user_places: list[UserPlace]
     ) -> list[UserPlace]:
-        """INSERT or UPDATE on user_place_id primary key."""
+        """INSERT or UPDATE on user_place_id primary key.
+
+        Rolls back the session on any execute error before re-raising —
+        asyncpg leaves the transaction in an aborted state on errors
+        like a foreign-key violation, and every subsequent statement on
+        the same connection fails with `InFailedSQLTransactionError`
+        until rollback. ADR-074's stale-cache fallback path retries on
+        the same request-scoped session, so this is load-bearing.
+        """
         if not user_places:
             return []
 
@@ -102,8 +110,12 @@ class UserPlacesRepo:
             },
         ).returning(*_UserPlacesTable.c)
 
-        result = await self._session.execute(stmt)
-        await self._session.commit()
+        try:
+            result = await self._session.execute(stmt)
+            await self._session.commit()
+        except Exception:
+            await self._session.rollback()
+            raise
         return [_row_to_user_place(row._mapping) for row in result]
 
     async def delete_by_user(self, user_id: str) -> int:
