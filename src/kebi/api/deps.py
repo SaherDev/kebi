@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import Any
 
 from fastapi import BackgroundTasks, Depends, Request
@@ -14,6 +16,7 @@ from kebi.core.events.handlers import EventHandlers
 from kebi.core.extraction.enrichment_level import EnrichmentLevel
 from kebi.core.extraction.extraction_pipeline import (
     ExtractionPipeline,
+    SearchServiceFactory,
     deep_summary,
     inline_summary,
 )
@@ -453,6 +456,52 @@ def _build_taste_place_resolver(session: AsyncSession) -> PlacesSearchService:
     )
 
 
+def get_search_service_factory(
+    cache: RedisPlacesCache = Depends(get_places_cache),  # noqa: B008
+    client: GooglePlacesClient = Depends(get_google_places_client),  # noqa: B008
+) -> SearchServiceFactory:
+    """Per-task PlacesSearchService factory for the extraction fan-out
+    (ADR-070, ADR-072).
+
+    `ExtractionPipeline._extend_search_set` issues N `find()` calls
+    concurrently under `asyncio.gather`. A SQLAlchemy `AsyncSession`
+    is not concurrency-safe, so each call must use its own session.
+    Each `async with factory()` opens a fresh session, builds the
+    DB-bound repos against it, and yields a `PlacesSearchService`
+    reusing the exact request-path factories (mirrors
+    `_build_taste_place_resolver` — no construction logic duplicated).
+    Cache + Google client are process-safe and shared across tasks;
+    only the session/repos are per-task.
+
+    Pool sizing: the fan-out is bounded by the pipeline's search
+    semaphore (`_SEARCH_CONCURRENCY = 5`), so peak open sessions per
+    in-flight extraction is 1 (request) + 5 (fan-out) = 6, well under
+    the async engine's default 15 (pool_size 5 + overflow 10). Each
+    `async with` closes its session promptly. Raising
+    `_SEARCH_CONCURRENCY` requires revisiting pool size.
+    """
+
+    @asynccontextmanager
+    async def _factory() -> AsyncIterator[PlacesSearchService]:
+        async with _get_session_factory()() as session:
+            repo = PlacesRepo(session)
+            yield get_places_search_service(
+                repo=repo,
+                cache=cache,
+                client=client,
+                upsert_service=get_place_upsert_service(
+                    repo=repo,
+                    embedding_service=get_embedding_service(
+                        repo=EmbeddingsRepo(session),
+                        embedder=get_places_embedder(),
+                        config=get_config(),
+                    ),
+                ),
+            )
+
+    return _factory
+
+
 def get_user_places_service(
     places_repo: PlacesRepo = Depends(get_places_repo),  # noqa: B008
     user_places_repo: UserPlacesRepo = Depends(get_user_places_repo),  # noqa: B008
@@ -502,6 +551,9 @@ def get_extraction_pipeline(
     search_service: PlacesSearchService = Depends(  # noqa: B008
         get_places_search_service
     ),
+    search_service_factory: SearchServiceFactory = Depends(  # noqa: B008
+        get_search_service_factory
+    ),
 ) -> ExtractionPipeline:
     """FastAPI dependency providing ExtractionPipeline with all levels wired.
 
@@ -515,6 +567,7 @@ def get_extraction_pipeline(
     return ExtractionPipeline(
         levels=[_get_inline_level(), _get_deep_level()],
         search_service=search_service,
+        search_service_factory=search_service_factory,
         picker=LLMPlacePicker(
             instructor_client=get_instructor_client("extractor"),
             confidence_config=extraction_config.confidence,

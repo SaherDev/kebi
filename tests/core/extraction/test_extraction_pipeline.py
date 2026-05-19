@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -115,6 +118,10 @@ def _make_pipeline(
 
     search_service.find = AsyncMock(side_effect=_find)
 
+    @asynccontextmanager
+    async def _factory() -> AsyncIterator[MagicMock]:
+        yield search_service
+
     extraction_config = ExtractionConfig(
         confidence_weights=ConfidenceWeights(
             base_scores={}, places_modifiers={}
@@ -126,6 +133,7 @@ def _make_pipeline(
     pipeline = ExtractionPipeline(
         levels=levels,  # type: ignore[arg-type]
         search_service=search_service,
+        search_service_factory=_factory,
         picker=picker,
         extraction_config=extraction_config,
     )
@@ -233,6 +241,86 @@ async def test_search_service_invoked_once_per_unique_name() -> None:
     )
     await pipeline.run(url="https://x.com", user_id="u1", limit=_TEST_LIMIT)
     assert search_service.find.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_concurrent_fanout_uses_per_task_session_no_shared_session() -> None:
+    """Regression: the parallel fan-out must use the factory (one fresh
+    session per query), never a single shared session.
+
+    Simulates SQLAlchemy's non-concurrency-safe AsyncSession: each
+    factory-yielded service is backed by its own session that raises
+    if re-entered while already active. With a shared session (the old
+    bug) the concurrent finds would collide and degrade to []; with
+    per-task sessions all names resolve. The pipeline's single
+    `search_service` is wired to raise, proving the fan-out does not
+    use it.
+    """
+    names = ["Alpha", "Beta", "Gamma"]
+    inline = _StubLevel(
+        name="inline",
+        seeds=[
+            KnownPlace(name=n, producer=Producer.VISION_IMAGES, medium=Medium.IMAGE)
+            for n in names
+        ],
+    )
+
+    picker = MagicMock()
+    captured: dict[str, Any] = {}
+
+    async def _pick(context: Any, search_set: Any) -> list[ValidatedCandidate]:
+        captured["search_set"] = dict(search_set)
+        return []
+
+    picker.pick = AsyncMock(side_effect=_pick)
+
+    shared = MagicMock()
+    shared.find = AsyncMock(
+        side_effect=AssertionError("fan-out used the shared session")
+    )
+
+    class _SessionSim:
+        """One independent session. Re-entering the SAME instance while
+        already active (the shared-session bug) raises, like SQLAlchemy."""
+
+        def __init__(self) -> None:
+            self._active = False
+
+        async def find(self, query: Any, limit: int = 5) -> list[PlaceObject]:
+            if self._active:
+                raise RuntimeError(
+                    "concurrent operations are not permitted"
+                )  # pragma: no cover
+            self._active = True
+            try:
+                await asyncio.sleep(0)  # force interleave across tasks
+                name = (query.place_names or [""])[0]
+                return [_place_object(f"google:{name.lower()}", name)]
+            finally:
+                self._active = False
+
+    @asynccontextmanager
+    async def _factory() -> AsyncIterator[_SessionSim]:
+        # A fresh session/service per call — the whole point of the fix.
+        yield _SessionSim()
+
+    extraction_config = ExtractionConfig(
+        confidence_weights=ConfidenceWeights(base_scores={}, places_modifiers={}),
+        thresholds=ExtractionThresholds(),
+        confidence=ConfidenceConfig(),
+    )
+    pipeline = ExtractionPipeline(
+        levels=[inline],  # type: ignore[list-item]
+        search_service=shared,
+        search_service_factory=_factory,
+        picker=picker,
+        extraction_config=extraction_config,
+    )
+
+    await pipeline.run(url="https://x.com", user_id="u1", limit=_TEST_LIMIT)
+
+    search_set = captured["search_set"]
+    assert {ar.place.place_name for ar in search_set.values()} == set(names)
 
 
 @pytest.mark.asyncio

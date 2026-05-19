@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from contextlib import AbstractAsyncContextManager
 from typing import Protocol
 
 from kebi.core.config import ExtractionConfig
@@ -66,6 +67,23 @@ class PickerProtocol(Protocol):
         context: ExtractionContext,
         search_set: dict[str, AttributedSearchResult],
     ) -> list[ValidatedCandidate]: ...
+
+
+class SearchServiceFactory(Protocol):
+    """Per-task `PlacesSearchService` factory for the search fan-out.
+
+    `_extend_search_set` issues N `find()` calls concurrently. A
+    SQLAlchemy `AsyncSession` is NOT concurrency-safe, so the calls
+    must not share one session. Each call to this factory yields a
+    `PlacesSearchService` bound to its own fresh `AsyncSession`
+    (opened on `__aenter__`, closed on `__aexit__`); the cache and
+    provider client are process-safe and shared. The wiring layer
+    (`api/deps.py`) owns construction (ADR-072).
+    """
+
+    def __call__(
+        self,
+    ) -> AbstractAsyncContextManager[PlacesSearchServiceProtocol]: ...
 
 
 _ENRICHER_LABELS = {
@@ -174,11 +192,17 @@ class ExtractionPipeline:
         self,
         levels: list[EnrichmentLevel],
         search_service: PlacesSearchServiceProtocol,
+        search_service_factory: SearchServiceFactory,
         picker: PickerProtocol,
         extraction_config: ExtractionConfig,
     ) -> None:
         self._levels = levels
+        # Kept for protocol completeness / single-shot callers; the
+        # parallel fan-out in `_extend_search_set` uses the factory so
+        # each concurrent `find()` gets its own AsyncSession (a shared
+        # session is not concurrency-safe).
         self._search_service = search_service
+        self._search_service_factory = search_service_factory
         self._picker = picker
         self._extraction_config = extraction_config
 
@@ -284,10 +308,17 @@ class ExtractionPipeline:
         sem = asyncio.Semaphore(_SEARCH_CONCURRENCY)
 
         async def _find(query: str) -> list[PlaceObject]:
-            """Run one name's search; best-effort — errors degrade to []."""
+            """Run one name's search; best-effort — errors degrade to [].
+
+            Each task acquires its own `PlacesSearchService` bound to a
+            fresh `AsyncSession` via the factory: these run concurrently
+            under `asyncio.gather` and a shared session is not
+            concurrency-safe. The semaphore bounds both QPS and the
+            number of simultaneously-open extra sessions.
+            """
             try:
-                async with sem:
-                    return await self._search_service.find(
+                async with sem, self._search_service_factory() as svc:
+                    return await svc.find(
                         PlaceQuery(place_names=[query], location=location_hint),
                         limit=_SEARCH_LIMIT_PER_QUERY,
                     )
@@ -334,6 +365,7 @@ def _location_hint_from(context: ExtractionContext) -> LocationContext | None:
 __all__ = [
     "ExtractionPipeline",
     "PickerProtocol",
+    "SearchServiceFactory",
     "TooManyCandidatesError",
     "inline_summary",
     "deep_summary",
