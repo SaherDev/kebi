@@ -15,6 +15,16 @@ Format:
 
 ---
 
+## ADR-079: Rename the places_v2 layer to its canonical unqualified name
+
+**Date:** 2026-05-19\
+**Status:** accepted\
+**Context:** ADR-078 removed the last of the v1 places store. The `_v2` qualifier on the place layer — its code modules and symbols, the dependency-injection factory names, the `place_v2:` Redis cache namespace, the `places_v2` and `place_embeddings_v2` database tables, and the naming throughout configuration and documentation — only ever existed to disambiguate the new store from the old one during a migration. With no v1 left, the suffix is scar tissue: it implies a versioned split that no longer exists, invites the recurring "is there still a v1?" question, and every new reference perpetuates a distinction with no meaning. The place layer is the single source of truth and should be named as one.\
+**Decision:** Retire the `_v2` qualifier everywhere a living surface carries it — code, dependency wiring, the cache key namespace, the database tables and their indexes/constraints, configuration, scripts, and documentation — so the place layer is referred to by its plain unqualified name. The database rename is the consequential part and is treated as an intentional, coordinated cross-repo breaking change rather than an internal refactor: the physical table names are part of the data contract the product repo reads, and the behavioral-signal API documents the place identity by table name, so the rename must be sequenced with product-repo coordination and a single coordinated deploy. The schema migration handles the full-text-search generated column and its known text-search-config fragility explicitly rather than letting schema autogenerate touch it, and preserves row identity so existing data and behavioral history survive the rename. Immutable historical records — past migration files and dated specification artifacts — keep their original names; only living surfaces are renamed.\
+**Consequences:** Completes the v1 → v2 → canonical arc and supersedes the `_v2` naming convention introduced by ADR-070, ADR-071, ADR-074, and ADR-077; those decisions otherwise stand unchanged — only the name moves. The result is one unqualified place vocabulary across code, cache, schema, and docs, ending the version-ambiguity question permanently. This is a breaking change at the product-repo boundary: the product repo must update every reference to the old table names, and the behavioral-signal contract's documented identity source changes name; it therefore requires a coordinated deploy, not an independent merge. Cache continuity is deliberately not preserved — entries under the old namespace are abandoned and expire within the existing fail-open TTL window, costing only a one-time cold-cache warm-up with no user-visible effect. The table rename preserves data (unlike the ADR-078 drops) and is schema-reversible, but its reversal must move the full-text-search/generated-column handling in lockstep. Execution is deferred: a follow-up plan will order the code, cache, schema, documentation, and product-repo-coordination work; until that plan is approved and run, nothing changes.
+
+---
+
 ## ADR-078: Delete the v1 places store, the agent location hint, and the dormant recommendations table
 
 **Date:** 2026-05-19\

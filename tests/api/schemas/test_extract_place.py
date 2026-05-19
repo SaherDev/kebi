@@ -15,7 +15,7 @@ from kebi.api.schemas.extract_place import (
     ExtractPlaceItem,
     ExtractPlaceResponse,
 )
-from kebi.core.places_v2 import PlaceCategory, PlaceObject
+from kebi.core.places import PlaceCategory, PlaceObject
 
 
 def _make_place(name: str = "Nara Eatery", place_id: str = "pl_01HZ001") -> PlaceObject:

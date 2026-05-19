@@ -1,6 +1,6 @@
 """TasteModelService — signal_counts + LLM summary (ADR-077).
 
-Signals are aggregated against the shared places_v2 catalog identity;
+Signals are aggregated against the shared places catalog identity;
 place data is resolved through the source-of-truth service's DB-only
 analytical read plus the per-user save record.
 """
@@ -16,7 +16,7 @@ from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from kebi.core.config import get_config
-from kebi.core.places_v2.protocols import (
+from kebi.core.places.protocols import (
     PlacesSearchServiceProtocol,
     UserPlacesRepoProtocol,
 )
@@ -109,7 +109,7 @@ class TasteModelService:
     async def _resolve_rows(
         self, user_id: str, raw: list[RawInteraction]
     ) -> list[InteractionRow]:
-        """Resolve raw interactions against the places_v2 catalog (ADR-077).
+        """Resolve raw interactions against the places catalog (ADR-077).
 
         DB-only via the source-of-truth service's analytical read; no Google
         fallback, no cache mutation. Save source comes from the per-user
@@ -123,7 +123,7 @@ class TasteModelService:
             cores = await search.get_cores_by_ids(place_core_ids)
             user_places = await user_places_repo.get_by_user(user_id)
 
-        # user_places.place_id holds the same places_v2.id value (FK).
+        # user_places.place_id holds the same places.id value (FK).
         source_by_core_id = {up.place_id: up.source.value for up in user_places}
         rows: list[InteractionRow] = []
         for r in raw:

@@ -11,7 +11,7 @@ This enricher is a **pure text producer** — it appends each Apify
 item's name to `context.known_places` and stops. The pipeline's NER
 finalizer (`LLMNEREnricher`) reads that list as another text source
 and emits structured candidates with inferred categories and tags
-(places_v2 vocabulary). That's the same path subtitle/whisper text
+(places vocabulary). That's the same path subtitle/whisper text
 takes — one consolidator owns the "name → structured place" step.
 
 Notes:
@@ -38,7 +38,7 @@ from kebi.core.extraction.types import (
     Medium,
     Producer,
 )
-from kebi.core.places_v2 import PlaceSource
+from kebi.core.places import PlaceSource
 
 logger = logging.getLogger(__name__)
 

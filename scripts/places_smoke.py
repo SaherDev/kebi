@@ -4,7 +4,7 @@ Logs every call to one JSON file as {function, input, output}, rewritten
 after each call so a partial log survives a crash. Add or comment-out
 `await call(...)` lines to change coverage.
 
-    poetry run python scripts/places_v2_smoke.py
+    poetry run python scripts/places_smoke.py
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable
 
 from kebi.core.config import get_config, get_env
-from kebi.core.places_v2 import (
+from kebi.core.places import (
     AccessibilityTag,
     AtmosphereTag,
     CachedEmbedder,
@@ -49,14 +49,14 @@ from kebi.core.places_v2 import (
     UserPlacesRepo,
     UserPlacesService,
 )
-from kebi.core.places_v2._place_merge import merge_place
-from kebi.core.places_v2 import query_examples as qx
-from kebi.core.places_v2.embedding_service import EmbeddingService
+from kebi.core.places._place_merge import merge_place
+from kebi.core.places import query_examples as qx
+from kebi.core.places.embedding_service import EmbeddingService
 from kebi.db.session import _get_session_factory
 from kebi.providers.embeddings import VoyageEmbedder
 from kebi.providers.redis_cache import get_redis_client
 
-OUT = Path(__file__).resolve().parent / "places_v2_calls.json"
+OUT = Path(__file__).resolve().parent / "places_calls.json"
 
 # Geo anchors — small radii so the results land in the expected city.
 TOKYO_SHIBUYA = LocationContext(lat=35.6595, lng=139.7005, radius_m=1500)
@@ -403,7 +403,7 @@ async def main() -> None:
                 _record(
                     "db_upsert",
                     {
-                        "function": "places_v2",
+                        "function": "places",
                         "input": {
                             "provider_ids": [
                                 c.provider_id for c in cores_in if c.provider_id
@@ -794,8 +794,8 @@ async def main() -> None:
 
                 async def _row_count() -> int:
                     from sqlalchemy import func, select
-                    from kebi.core.places_v2.places_repo import _PlacesV2Table
-                    r = await session.execute(select(func.count()).select_from(_PlacesV2Table))
+                    from kebi.core.places.places_repo import _PlacesTable
+                    r = await session.execute(select(func.count()).select_from(_PlacesTable))
                     return r.scalar_one()
 
                 async def _record_find(label: str, q: PlaceQuery, *, expected_branch: str) -> None:
@@ -1219,7 +1219,7 @@ async def main() -> None:
                 # only ever needed in tests/migrations.
                 await session.execute(
                     text(
-                        "UPDATE places_v2 SET refreshed_at = NOW() - INTERVAL '40 days' "
+                        "UPDATE places SET refreshed_at = NOW() - INTERVAL '40 days' "
                         "WHERE provider_id = ANY(:ids)"
                     ).bindparams(bindparam("ids", value=target_ids)),
                 )

@@ -1,5 +1,5 @@
 """
-Tag-based PlaceQuery patterns for places_v2.
+Tag-based PlaceQuery patterns for places.
 
 Tags carry type, value, and source.  Querying uses values only (AND semantics).
 Every example below maps a human intent to a PlaceQuery the system can execute.
@@ -18,12 +18,12 @@ Tag types in use:
 
 from __future__ import annotations
 
-from kebi.core.places_v2.models import (
+from kebi.core.places.models import (
     LocationContext,
     PlaceCategory,
     PlaceQuery,
 )
-from kebi.core.places_v2.tags import (
+from kebi.core.places.tags import (
     AccessibilityTag,
     AtmosphereTag,
     CuisineTag,

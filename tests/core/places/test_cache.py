@@ -6,8 +6,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from kebi.core.places_v2.cache import RedisPlacesCache
-from kebi.core.places_v2.models import PlaceObject
+from kebi.core.places.cache import RedisPlacesCache
+from kebi.core.places.models import PlaceObject
 
 
 def _make_cache(redis: MagicMock) -> RedisPlacesCache:
@@ -80,7 +80,7 @@ class TestRedisPlacesCacheMset:
 
         pipeline_mock.set.assert_called_once()
         call_kwargs = pipeline_mock.set.call_args
-        assert "place_v2:google:abc" in call_kwargs.args
+        assert "place:google:abc" in call_kwargs.args
         assert call_kwargs.kwargs.get("ex") == 3600
 
     async def test_empty_list_is_noop(self, redis_mock: MagicMock) -> None:
@@ -113,7 +113,7 @@ class TestRedisPlacesCacheDeleteMany:
         cache = _make_cache(redis_mock)
         await cache.delete_many(["google:a", "google:b"])
         redis_mock.delete.assert_awaited_once_with(
-            "place_v2:google:a", "place_v2:google:b"
+            "place:google:a", "place:google:b"
         )
 
     async def test_redis_error_is_swallowed(self, redis_mock: MagicMock) -> None:

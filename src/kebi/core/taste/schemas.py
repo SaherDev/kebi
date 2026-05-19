@@ -1,7 +1,7 @@
 """Pydantic schemas for taste model artifacts (ADR-077).
 
 RawInteraction — minimal interaction row read from the DB (no place JOIN).
-InteractionRow — places_v2-vocabulary row, built in the service from a
+InteractionRow — places-vocabulary row, built in the service from a
     resolved PlaceCore + the per-user save source.
 SummaryLine — grounded LLM output items.
 TasteArtifacts — combined LLM output schema.
@@ -19,8 +19,8 @@ class RawInteraction(BaseModel):
     """One interactions row, place data not yet resolved.
 
     The repository returns these (type + place_core_id only); the service
-    resolves place_core_id against the places_v2 catalog and builds the
-    richer InteractionRow. `place_core_id` is the `places_v2.id` value
+    resolves place_core_id against the places catalog and builds the
+    richer InteractionRow. `place_core_id` is the `places.id` value
     stored in the `interactions.place_id` column (the column name is
     unchanged; only the field disambiguates it from user_place_id /
     provider_id).
@@ -31,11 +31,11 @@ class RawInteraction(BaseModel):
 
 
 class InteractionRow(BaseModel):
-    """places_v2-vocabulary interaction row (ADR-077).
+    """places-vocabulary interaction row (ADR-077).
 
     Built by core/taste/mapping.place_to_interaction_row from a resolved
     PlaceCore plus the per-user save source. Typed tag dimensions mirror
-    places_v2 TagType; `categories` are flat PlaceCategory values.
+    places TagType; `categories` are flat PlaceCategory values.
     """
 
     type: str

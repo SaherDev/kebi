@@ -23,7 +23,7 @@ class RecommendationSignalRequest(BaseModel):
         ..., description="ID of the recommendation being responded to"
     )
     place_core_id: str = Field(
-        ..., description="places_v2.id of the place the user acted on"
+        ..., description="places.id of the place the user acted on"
     )
 
 

@@ -14,7 +14,7 @@ from kebi.core.extraction.result_cache import (
     _KEY_PREFIX,
     ExtractionResultCache,
 )
-from kebi.core.places_v2 import PlaceCore
+from kebi.core.places import PlaceCore
 
 _CANONICAL_URL = "https://www.tiktok.com/@user/video/123"
 # Tests use a fixed TTL; the production wiring layer pulls it from

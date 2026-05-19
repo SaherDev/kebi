@@ -17,13 +17,13 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from sqlalchemy.dialects import postgresql as pg_dialect
 
-from kebi.core.places_v2.hybrid_search_repo import (
+from kebi.core.places.hybrid_search_repo import (
     _TS_CONFIG,
     HybridSearchRepo,
     _filter_conditions,
     _row_to_hit,
 )
-from kebi.core.places_v2.models import (
+from kebi.core.places.models import (
     HybridSearchFilters,
     HybridSearchHit,
     LocationContext,
@@ -73,7 +73,7 @@ def _hit_row(
 ) -> dict[str, Any]:
     saved_at = datetime.now(UTC)
     return {
-        # places_v2 columns
+        # places columns
         "id": pid,
         "provider_id": f"google:{pid}",
         "place_name": place_name,
@@ -553,7 +553,7 @@ class TestUserScoping:
         sql = str(_compiled(stmt)).lower()
         # filtered CTE pulls from both tables
         assert "user_places" in sql
-        assert "places_v2" in sql
+        assert "places" in sql
 
     async def test_user_id_appears_as_bound_value(self) -> None:
         repo, session = _make_repo([])

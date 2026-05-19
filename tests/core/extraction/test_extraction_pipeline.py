@@ -26,7 +26,7 @@ from kebi.core.extraction.types import (
     Producer,
     ValidatedCandidate,
 )
-from kebi.core.places_v2 import (
+from kebi.core.places import (
     LocationContext,
     PlaceCategory,
     PlaceObject,

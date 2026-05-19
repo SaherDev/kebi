@@ -1,6 +1,6 @@
 """Tests for TasteModelService (ADR-077).
 
-Covers handle_signal, _run_regen guards, the places_v2 resolve path,
+Covers handle_signal, _run_regen guards, the places resolve path,
 orphan-skip, and the happy path.
 """
 
@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from kebi.core.places_v2 import PlaceCategory, PlaceCore
+from kebi.core.places import PlaceCategory, PlaceCore
 from kebi.core.taste.schemas import (
     RawInteraction,
     SummaryLine,
@@ -187,7 +187,7 @@ class TestRunRegen:
         assert kwargs["user_id"] == "user1"
         assert kwargs["log_count"] == 5
         assert len(kwargs["summary"]) > 0
-        # places_v2 vocabulary persisted
+        # places vocabulary persisted
         assert kwargs["signal_counts"]["categories"] == {"restaurant": 5}
         assert "place_type" not in kwargs["signal_counts"]
 

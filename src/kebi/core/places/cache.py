@@ -1,6 +1,6 @@
 """RedisPlacesCache — flat PlaceObject cache keyed by provider_id.
 
-Cache key: `place_v2:{provider_id}`. TTL: 30 days (2_592_000 s) by default.
+Cache key: `place:{provider_id}`. TTL: 30 days (2_592_000 s) by default.
 Live fields only (rating, hours, phone, website, popularity, business_status,
 cached_at). The full PlaceObject is stored so overlays are a simple JSON
 parse + field copy.
@@ -19,7 +19,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_KEY_PREFIX = "place_v2:"
+_KEY_PREFIX = "place:"
 
 
 class RedisPlacesCache:
@@ -33,7 +33,7 @@ class RedisPlacesCache:
         try:
             values = await self._redis.mget(*keys)
         except Exception:
-            logger.exception("places_v2_cache_mget_error")
+            logger.exception("places_cache_mget_error")
             return {}
 
         result: dict[str, PlaceObject] = {}
@@ -43,7 +43,7 @@ class RedisPlacesCache:
                     result[pid] = PlaceObject.model_validate_json(val)
                 except Exception:
                     logger.warning(
-                        "places_v2_cache_decode_error",
+                        "places_cache_decode_error",
                         extra={"provider_id": pid},
                     )
         return result
@@ -61,7 +61,7 @@ class RedisPlacesCache:
                     pipe.set(key, place.model_dump_json(), ex=ttl_seconds)
                 await pipe.execute()
         except Exception:
-            logger.exception("places_v2_cache_mset_error")
+            logger.exception("places_cache_mset_error")
 
     async def delete_many(self, provider_ids: list[str]) -> None:
         """Drop cache entries for the given provider_ids.
@@ -75,4 +75,4 @@ class RedisPlacesCache:
         try:
             await self._redis.delete(*keys)
         except Exception:
-            logger.exception("places_v2_cache_delete_error")
+            logger.exception("places_cache_delete_error")

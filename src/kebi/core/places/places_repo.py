@@ -1,4 +1,4 @@
-"""PlacesRepo — sole writer/reader of the places_v2 DB table."""
+"""PlacesRepo — sole writer/reader of the places DB table."""
 
 from __future__ import annotations
 
@@ -40,8 +40,8 @@ from .models import (
 # Table reference — typed columns for native query building
 # ---------------------------------------------------------------------------
 _metadata = MetaData()
-_PlacesV2Table = Table(
-    "places_v2",
+_PlacesTable = Table(
+    "places",
     _metadata,
     Column("id", String),
     Column("provider_id", String),
@@ -53,7 +53,7 @@ _PlacesV2Table = Table(
     Column("created_at", DateTime(timezone=True)),
     Column("refreshed_at", DateTime(timezone=True)),
 )
-_t = _PlacesV2Table.c
+_t = _PlacesTable.c
 
 # Allowlist of legal sort keys. Decouples the public sort literal from the
 # underlying column/expression — values can become computed expressions
@@ -83,7 +83,7 @@ class PlacesRepo:
     async def get_by_ids(self, place_ids: list[str]) -> list[PlaceCore]:
         if not place_ids:
             return []
-        stmt = select(_PlacesV2Table).where(_t.id.in_(place_ids))
+        stmt = select(_PlacesTable).where(_t.id.in_(place_ids))
         result = await self._session.execute(stmt)
         return [_row_to_core(row._mapping) for row in result]
 
@@ -92,7 +92,7 @@ class PlacesRepo:
     ) -> dict[str, PlaceCore]:
         if not provider_ids:
             return {}
-        stmt = select(_PlacesV2Table).where(_t.provider_id.in_(provider_ids))
+        stmt = select(_PlacesTable).where(_t.provider_id.in_(provider_ids))
         result = await self._session.execute(stmt)
         return {
             row._mapping["provider_id"]: _row_to_core(row._mapping) for row in result
@@ -165,7 +165,7 @@ class PlacesRepo:
         if query.created_before:
             conditions.append(_t.created_at <= query.created_before)
 
-        stmt = select(_PlacesV2Table)
+        stmt = select(_PlacesTable)
         if conditions:
             stmt = stmt.where(and_(*conditions))
 
@@ -202,7 +202,7 @@ class PlacesRepo:
         now = datetime.now(UTC)
         rows = [_core_to_dict(c, now) for c in cores]
 
-        insert_stmt = pg_insert(_PlacesV2Table).values(rows)
+        insert_stmt = pg_insert(_PlacesTable).values(rows)
         excl = insert_stmt.excluded
 
         # On conflict, overwrite every mutable column from the candidate.
@@ -218,7 +218,7 @@ class PlacesRepo:
                 "location": excl.location,
                 "refreshed_at": excl.refreshed_at,
             },
-        ).returning(*_PlacesV2Table.c)
+        ).returning(*_PlacesTable.c)
 
         result = await self._session.execute(stmt)
         await self._session.commit()
@@ -236,7 +236,7 @@ class PlacesRepo:
         so the caller can align cache state with the DB.
         """
         stmt = (
-            update(_PlacesV2Table)
+            update(_PlacesTable)
             .where(
                 and_(
                     _t.location.isnot(None),
@@ -244,7 +244,7 @@ class PlacesRepo:
                 )
             )
             .values(location=None, refreshed_at=None)
-            .returning(*_PlacesV2Table.c)
+            .returning(*_PlacesTable.c)
         )
         result = await self._session.execute(stmt)
         await self._session.commit()

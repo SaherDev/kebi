@@ -9,7 +9,7 @@ from kebi.core.extraction.types import (
     Producer,
     ValidatedCandidate,
 )
-from kebi.core.places_v2 import LocationContext, PlaceCategory, PlaceTag, TagType
+from kebi.core.places import LocationContext, PlaceCategory, PlaceTag, TagType
 
 
 def _evidence(
@@ -105,7 +105,7 @@ class TestExtractionContext:
         assert ctx.text_evidence == []
 
     def test_source_derived_from_url(self) -> None:
-        from kebi.core.places_v2 import PlaceSource
+        from kebi.core.places import PlaceSource
 
         ctx = ExtractionContext(url="https://www.instagram.com/p/x/", user_id="u1")
         assert ctx.source == PlaceSource.instagram

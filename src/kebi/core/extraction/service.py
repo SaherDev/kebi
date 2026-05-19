@@ -46,7 +46,7 @@ from kebi.core.extraction.result_cache import ExtractionResultCache
 from kebi.core.extraction.status_repository import ExtractionStatusRepository
 from kebi.core.extraction.types import ValidatedCandidate
 from kebi.core.extraction.url_source import source_from_url
-from kebi.core.places_v2 import (
+from kebi.core.places import (
     DuplicateUserPlaceError,
     PlaceCore,
     PlaceSource,
@@ -100,7 +100,7 @@ def _candidate_to_item_dict(
     places now associated with the user (whether newly linked or
     already saved is internal). `place` is a `PlaceCore`: identity +
     static fields only, no live signals (rating/hours/popularity are
-    enriched later by the places_v2 read path, not by extraction).
+    enriched later by the places read path, not by extraction).
     """
     return {
         "place": place.model_dump(mode="json"),
@@ -223,7 +223,7 @@ class ExtractionService:
     ) -> ExtractPlaceResponse | None:
         """Look up the result cache; on hit, link the cached cores to this
         user and return the response. On miss or unrecoverable error
-        (FK violation against a deleted `places_v2` row), evict and
+        (FK violation against a deleted `places` row), evict and
         return None so the caller falls back to a full pipeline run."""
         cached_items = await self._result_cache.get(canonical_url)
         if cached_items is None:
@@ -449,7 +449,7 @@ class ExtractionService:
     ) -> ExtractPlaceResponse:
         """ADR-074 cache-hit save path. Skips pipeline + upsert.
 
-        The cached `PlaceCore`s already reference persisted `places_v2`
+        The cached `PlaceCore`s already reference persisted `places`
         rows — re-linking is the only DB write. Raises whatever
         `save_places` raises on an unhandled error; the caller in
         `_try_cache_hit` catches and falls back to a full pipeline run

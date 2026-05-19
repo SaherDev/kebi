@@ -20,7 +20,7 @@ from kebi.core.extraction.types import (
     Medium,
     Producer,
 )
-from kebi.core.places_v2 import LocationContext, PlaceCategory, PlaceObject
+from kebi.core.places import LocationContext, PlaceCategory, PlaceObject
 
 
 def _ctx(caption: str = "") -> ExtractionContext:

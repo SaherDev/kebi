@@ -5,17 +5,17 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
 
-from kebi.core.places_v2.models import (
+from kebi.core.places.models import (
     LocationContext,
     PlaceCore,
     PlaceObject,
     PlaceQuery,
 )
-from kebi.core.places_v2.place_wipe_service import (
+from kebi.core.places.place_wipe_service import (
     DEFAULT_RETENTION_DAYS,
     PlaceWipeService,
 )
-from kebi.core.places_v2.search_service import PlacesSearchService
+from kebi.core.places.search_service import PlacesSearchService
 
 
 def _wiped_core(pid: str | None) -> PlaceCore:

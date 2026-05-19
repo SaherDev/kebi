@@ -1,6 +1,6 @@
-"""Map a resolved places_v2 PlaceCore (+ save source) to an InteractionRow.
+"""Map a resolved places PlaceCore (+ save source) to an InteractionRow.
 
-ADR-077: taste aggregation consumes the places_v2 vocabulary. `core.tags`
+ADR-077: taste aggregation consumes the places vocabulary. `core.tags`
 is a list of PlaceTag{type, value, source}; we group it by TagType into the
 typed dimensions InteractionRow exposes. `price` is single-valued (last tag
 wins — matches the legacy price_hint single-value semantics). Tags whose
@@ -11,7 +11,7 @@ counts the grounding validator can't resolve.
 
 from __future__ import annotations
 
-from kebi.core.places_v2 import PlaceCore, TagType
+from kebi.core.places import PlaceCore, TagType
 from kebi.core.taste.schemas import InteractionRow
 
 # TagType -> InteractionRow list-field name. `price` is handled separately

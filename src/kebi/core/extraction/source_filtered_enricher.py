@@ -6,7 +6,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Iterable
 
 from kebi.core.extraction.types import ExtractionContext
-from kebi.core.places_v2 import PlaceSource
+from kebi.core.places import PlaceSource
 
 
 class SourceFilteredEnricher(ABC):

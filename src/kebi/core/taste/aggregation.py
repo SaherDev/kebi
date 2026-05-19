@@ -6,7 +6,7 @@ Positive types (save, accepted) feed the main tree.
 Negative types (rejected) feed the rejected branch.
 Source is counted for saves only.
 
-Vocabulary is places_v2-native: flat `categories`, typed tag dimensions
+Vocabulary is places-native: flat `categories`, typed tag dimensions
 (cuisine/price/atmosphere/...), and location context. All count containers
 stay nested `dict[str, int]` so the grounding validator's dotted-path walk
 (regen._resolve_path) works unchanged.

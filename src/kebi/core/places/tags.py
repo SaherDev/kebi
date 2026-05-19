@@ -1,4 +1,4 @@
-"""Known tag vocabulary for places_v2.
+"""Known tag vocabulary for places.
 
 All enums are str-based so their values drop directly into PlaceQuery.tags
 without conversion.  PlaceTag.type uses TagType | str to allow LLM-generated

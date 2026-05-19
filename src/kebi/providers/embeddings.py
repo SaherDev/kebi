@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 # config/app.yaml under `embeddings:` and are read per-call.
 #
 # `embed_and_store` already swallows RuntimeError as non-fatal (see
-# places_v2/embedding_service.py), so the breaker is purely a latency
+# places/embedding_service.py), so the breaker is purely a latency
 # optimization — correctness behavior is unchanged.
 
 _VOYAGE_COOLDOWN_UNTIL: float = 0.0
@@ -98,7 +98,7 @@ class VoyageEmbedder:
 
         Raises:
             RuntimeError: If the call fails or the breaker is tripped. The
-                caller (`places_v2.EmbeddingService.embed_and_store`)
+                caller (`places.EmbeddingService.embed_and_store`)
                 catches this and treats it as non-fatal.
         """
         if not texts:

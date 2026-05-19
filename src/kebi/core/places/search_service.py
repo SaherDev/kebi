@@ -82,7 +82,7 @@ class PlacesSearchService:
     async def get_cores_by_ids(
         self, place_core_ids: list[str]
     ) -> dict[str, PlaceCore]:
-        """Resolve persisted catalog rows by internal ``places_v2.id``.
+        """Resolve persisted catalog rows by internal ``places.id``.
 
         DB-only: no cache overlay, no provider fallback, no upsert. This is
         the analytical/historical read path (ADR-077) — e.g. taste-profile

@@ -22,7 +22,7 @@ The first level whose pick set is non-empty short-circuits and
 returns; subsequent levels (e.g. deep enrichment with subtitle /
 whisper / vision) only run when earlier levels produced nothing.
 
-Per ADR-070, `places_v2.PlacesSearchService` is the single source of
+Per ADR-070, `places.PlacesSearchService` is the single source of
 truth for place lookups. Extraction never calls Google directly.
 """
 
@@ -47,7 +47,7 @@ from kebi.core.extraction.types import (
     Producer,
     ValidatedCandidate,
 )
-from kebi.core.places_v2 import (
+from kebi.core.places import (
     LocationContext,
     PlaceObject,
     PlaceQuery,
@@ -150,7 +150,7 @@ def _enforce_candidate_limit(
 # under many-name requests like a Google Maps shared list.
 _SEARCH_LIMIT_PER_QUERY = 5
 # Cap on parallel PlacesSearchService.find() calls across producer names.
-# Bounds DB/cache/provider QPS the way the places_v2 client's own fan-out
+# Bounds DB/cache/provider QPS the way the places client's own fan-out
 # semaphores do, while collapsing the N-name latency to ~one call.
 _SEARCH_CONCURRENCY = 5
 

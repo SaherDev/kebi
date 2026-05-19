@@ -1,4 +1,4 @@
-"""Cross-reference test for the field-name contract across places_v2.
+"""Cross-reference test for the field-name contract across places.
 
 Three sources reference the same logical field set:
   * `EmbeddingService._build_text` — Pydantic attribute access on PlaceCore.
@@ -40,7 +40,7 @@ _EMBEDDING_SERVICE_PATH = (
     / "src"
     / "kebi"
     / "core"
-    / "places_v2"
+    / "places"
     / "embedding_service.py"
 )
 _HYBRID_SEARCH_REPO_PATH = (
@@ -48,7 +48,7 @@ _HYBRID_SEARCH_REPO_PATH = (
     / "src"
     / "kebi"
     / "core"
-    / "places_v2"
+    / "places"
     / "hybrid_search_repo.py"
 )
 

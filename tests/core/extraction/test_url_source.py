@@ -7,7 +7,7 @@ TikTok photo→video rewrite) is exercised in `test_canonicalize_url.py`.
 import pytest
 
 from kebi.core.extraction.url_source import source_from_url
-from kebi.core.places_v2 import PlaceSource
+from kebi.core.places import PlaceSource
 
 
 class TestSourceFromUrl:

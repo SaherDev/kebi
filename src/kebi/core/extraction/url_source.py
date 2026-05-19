@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from urllib.parse import urlparse, urlunparse
 
-from kebi.core.places_v2 import PlaceSource
+from kebi.core.places import PlaceSource
 
 _TIKTOK_PHOTO_PATH_RE = re.compile(r"(/@[^/]+)/photo/", re.IGNORECASE)
 

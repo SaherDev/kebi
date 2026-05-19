@@ -9,14 +9,14 @@ Google types away to `PlaceCategory`, so the new filter keys on category
 emptiness + a small administrative-name allow-list instead.
 
 This is an extraction-side concern, not a generic search concern, so it
-lives here. `core/places_v2/` is frozen per spec 030 FR-010a.
+lives here. `core/places/` is frozen per spec 030 FR-010a.
 """
 
 from __future__ import annotations
 
 import re
 
-from kebi.core.places_v2 import PlaceObject
+from kebi.core.places import PlaceObject
 
 # Names that resolve to administrative units rather than savable venues.
 # Kept short on purpose — these are the most common picker-confusion

@@ -55,8 +55,8 @@ class UserDataDeletionService:
     taste_model), then the LangGraph checkpoint thread (separate connection
     pool), then any in-flight taste-regen task in the in-memory debouncer.
 
-    User-saved places live in the places_v2 catalog's per-user link table,
-    not here; that erase path is owned by places_v2 (out of scope for this
+    User-saved places live in the places catalog's per-user link table,
+    not here; that erase path is owned by places (out of scope for this
     sweep — ADR-078 removed the legacy `places` table this used to hit).
 
     Does NOT delete the user account — NestJS owns user lifecycle. The

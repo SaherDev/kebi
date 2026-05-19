@@ -10,7 +10,7 @@ from kebi.core.extraction.enrichers.google_maps_list import (
     GoogleMapsListEnricher,
 )
 from kebi.core.extraction.types import ExtractionContext
-from kebi.core.places_v2 import PlaceSource
+from kebi.core.places import PlaceSource
 
 
 def _ctx(url: str = "https://maps.app.goo.gl/9KPNCHsoi5s69xE59") -> ExtractionContext:

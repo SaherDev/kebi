@@ -1,4 +1,4 @@
-"""Domain models for the places_v2 library.
+"""Domain models for the places library.
 
 Three core classes:
 - PlaceCore: DB-side curated and locational data, shared across all users.
@@ -216,7 +216,7 @@ class PlaceQuery(BaseModel):
     """
 
     # DB filters — known-identity batch lookup (exact, OR across values)
-    ids: list[str] | None = None             # places_v2.id exact match
+    ids: list[str] | None = None             # places.id exact match
     provider_ids: list[str] | None = None    # namespaced provider_id exact match
 
     place_names: list[str] | None = None  # ILIKE any (OR); also drives text search
@@ -359,7 +359,7 @@ class HybridSearchFilters(BaseModel):
     the same constrained candidate pool.
 
     Filters split across two tables:
-      - place catalog (places_v2): categories, tags, location, geo
+      - place catalog (places): categories, tags, location, geo
       - user_places:  visited, liked, approved, saved_at range
     """
 

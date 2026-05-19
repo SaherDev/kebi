@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from kebi.core.places_v2.cached_embedder import (
+from kebi.core.places.cached_embedder import (
     DEFAULT_TTL_SECONDS,
     CachedEmbedder,
 )

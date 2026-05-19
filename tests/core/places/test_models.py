@@ -1,4 +1,4 @@
-"""Tests for places_v2 domain models."""
+"""Tests for places domain models."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 import pytest
 from pydantic import ValidationError
 
-from kebi.core.places_v2.models import (
+from kebi.core.places.models import (
     LocationContext,
     PlaceCategory,
     PlaceCore,

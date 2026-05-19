@@ -20,7 +20,7 @@ from kebi.core.extraction.types import (
     Evidence,
     ValidatedCandidate,
 )
-from kebi.core.places_v2 import PlaceCategory, PlaceTag
+from kebi.core.places import PlaceCategory, PlaceTag
 
 
 def dedup_by_provider_id(

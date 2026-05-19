@@ -1,4 +1,4 @@
-# places_v2 — User Places API Contract
+# places — User Places API Contract
 
 HTTP surface for `user_places` owned by this library. All endpoints share the prefix `/v1/users/{user_id}/places` — `user_id` is a path param. Each route lists its endpoint and the service call it maps to.
 
@@ -91,7 +91,7 @@ service.update_user_place(user_id: str, user_place_id: str, body: UpdateUserPlac
 service.delete_user_place(user_id: str, user_place_id: str) -> None
 ```
 
-Sets `user_places.deleted_at = now()` for the row. The underlying `places_v2` row is not touched. Idempotent — deleting an already-deleted row is a no-op (still returns `204`).
+Sets `user_places.deleted_at = now()` for the row. The underlying `places` row is not touched. Idempotent — deleting an already-deleted row is a no-op (still returns `204`).
 
 **New repo + service code:**
 - `UserPlacesRepo.soft_delete_by_id(user_place_id)` — `UPDATE user_places SET deleted_at = now() WHERE user_place_id = ... AND deleted_at IS NULL`.

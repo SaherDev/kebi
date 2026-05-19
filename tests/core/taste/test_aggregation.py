@@ -1,4 +1,4 @@
-"""Tests for aggregate_signal_counts (ADR-077, places_v2 vocabulary)."""
+"""Tests for aggregate_signal_counts (ADR-077, places vocabulary)."""
 
 from __future__ import annotations
 

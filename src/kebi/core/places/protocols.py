@@ -1,4 +1,4 @@
-"""Protocol interfaces for the places_v2 library (ADR-038)."""
+"""Protocol interfaces for the places library (ADR-038)."""
 
 from __future__ import annotations
 

@@ -18,7 +18,7 @@ class PlaceSaved(DomainEvent):
     """Event: User saved a place"""
 
     event_type: str = "place_saved"
-    place_core_ids: list[str]  # places_v2.id values (the PlaceCore id)
+    place_core_ids: list[str]  # places.id values (the PlaceCore id)
     place_metadata: dict[str, Any] = Field(default_factory=dict)
     request_id: str = ""
 

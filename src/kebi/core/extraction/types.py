@@ -14,7 +14,7 @@ persistence boundary in `ExtractionService.run` (per ADR-070, ADR-071).
 
 Spec 030 Phase 3: legacy place re-exports were removed. Place identity
 (`provider_id`), the place vocabulary (`PlaceCategory`, `PlaceTag`), and
-the source enum all come from `kebi.core.places_v2`.
+the source enum all come from `kebi.core.places`.
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum
 
-from kebi.core.places_v2 import (
+from kebi.core.places import (
     LocationContext,
     PlaceCategory,
     PlaceSource,

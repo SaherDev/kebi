@@ -114,10 +114,10 @@ class EmbeddingService:
         the same logical place produces a byte-identical string — that's
         what lets the diff-then-embed path skip unchanged rows.
 
-        Field list is paired with `places_v2.search_vector` in alembic
+        Field list is paired with `places.search_vector` in alembic
         migration e9f0a1b2c3d4. Adding a field here means adding it
         there too, or FTS and vector recall start surfacing different
-        places. tests/core/places_v2/test_search_fields.py pins the
+        places. tests/core/places/test_search_fields.py pins the
         contract by substring-checking both sources.
         """
         parts: list[str] = [f"Name: {core.place_name}"]

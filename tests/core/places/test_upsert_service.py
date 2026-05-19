@@ -6,12 +6,12 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from kebi.core.places_v2.models import (
+from kebi.core.places.models import (
     PlaceCore,
     PlaceNameAlias,
     PlaceTag,
 )
-from kebi.core.places_v2.upsert_service import PlaceUpsertService
+from kebi.core.places.upsert_service import PlaceUpsertService
 
 
 @pytest.fixture

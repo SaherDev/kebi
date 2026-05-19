@@ -8,15 +8,15 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from sqlalchemy.dialects import postgresql as pg_dialect
 
-from kebi.core.places_v2.models import (
+from kebi.core.places.models import (
     LocationContext,
     PlaceCategory,
     PlaceCore,
     PlaceNameAlias,
     PlaceQuery,
 )
-from kebi.core.places_v2.places_repo import PlacesRepo, _core_to_dict, _row_to_core
-from kebi.core.places_v2.tags import CuisineTag
+from kebi.core.places.places_repo import PlacesRepo, _core_to_dict, _row_to_core
+from kebi.core.places.tags import CuisineTag
 
 
 def _make_repo(rows: list[dict] | None = None) -> tuple[PlacesRepo, MagicMock]:
@@ -208,7 +208,7 @@ class TestFind:
         await repo.find(PlaceQuery(ids=["a", "b"]))
         stmt = session.execute.call_args.args[0]
         compiled = str(stmt.compile(compile_kwargs={"literal_binds": True}))
-        assert "places_v2.id IN" in compiled
+        assert "places.id IN" in compiled
         assert "'a'" in compiled and "'b'" in compiled
 
     async def test_provider_ids_filter_applied(self) -> None:

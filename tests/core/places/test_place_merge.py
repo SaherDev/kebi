@@ -1,11 +1,11 @@
-"""Tests for the pure merge policy in core/places_v2/_place_merge.py."""
+"""Tests for the pure merge policy in core/places/_place_merge.py."""
 
 from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from kebi.core.places_v2._place_merge import merge_place
-from kebi.core.places_v2.models import (
+from kebi.core.places._place_merge import merge_place
+from kebi.core.places.models import (
     LocationContext,
     PlaceCategory,
     PlaceCore,

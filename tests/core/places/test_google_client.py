@@ -7,21 +7,21 @@ from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 
-from kebi.core.places_v2._google_query_builder import (
+from kebi.core.places._google_query_builder import (
     build_text_search_param_sets,
     build_text_search_params,
 )
-from kebi.core.places_v2.google_client import (
+from kebi.core.places.google_client import (
     _DETAILS_CONCURRENCY,
     GooglePlacesClient,
 )
-from kebi.core.places_v2.models import (
+from kebi.core.places.models import (
     LocationContext,
     PlaceCategory,
     PlaceObject,
     PlaceQuery,
 )
-from kebi.core.places_v2.tags import (
+from kebi.core.places.tags import (
     AccessibilityTag,
     AtmosphereTag,
     CuisineTag,

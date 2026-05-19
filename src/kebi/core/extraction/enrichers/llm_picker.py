@@ -13,7 +13,7 @@ pick whose id escaped the set.
 
 Empty `search_set` short-circuits before the LLM call.
 
-Emits places_v2 vocabulary (categories + typed tags) — ADR-070.
+Emits places vocabulary (categories + typed tags) — ADR-070.
 """
 
 from __future__ import annotations
@@ -37,7 +37,7 @@ from kebi.core.extraction.types import (
     Producer,
     ValidatedCandidate,
 )
-from kebi.core.places_v2 import PlaceCategory, PlaceTag, TagType
+from kebi.core.places import PlaceCategory, PlaceTag, TagType
 from kebi.providers.llm import InstructorClient
 from kebi.providers.tracing import get_tracing_client
 

@@ -24,9 +24,11 @@ from kebi.core.memory.buffer import MessageBuffer
 from kebi.core.memory.extractor import MemoryExtractor
 from kebi.core.memory.repository import SQLAlchemyUserMemoryRepository
 from kebi.core.memory.service import UserMemoryService
-from kebi.core.places_v2 import (
+from kebi.core.places import (
     CachedEmbedder,
+    EmbeddingService,
     EmbeddingsRepo,
+    GooglePlacesClient,
     HybridSearchRepo,
     HybridSearchService,
     PlacesRepo,
@@ -35,12 +37,6 @@ from kebi.core.places_v2 import (
     RedisPlacesCache,
     UserPlacesRepo,
     UserPlacesService,
-)
-from kebi.core.places_v2 import (
-    EmbeddingService as EmbeddingServiceV2,
-)
-from kebi.core.places_v2 import (
-    GooglePlacesClient as GooglePlacesClientV2,
 )
 from kebi.core.signal.service import SignalService
 from kebi.core.taste.debounce import regen_debouncer
@@ -62,7 +58,7 @@ def get_taste_service() -> TasteModelService:
     place-resolution dependencies are session-scoped factories built per
     regen inside the service's own short-lived DB scope (ADR-077
     analytical read; ADR-072: no new long-lived shared dependency).
-    `_build_taste_place_resolver` is defined in the places_v2 deps
+    `_build_taste_place_resolver` is defined in the places deps
     section below and resolved at call time.
     """
     return TasteModelService(
@@ -257,7 +253,7 @@ def _get_deep_level() -> EnrichmentLevel:
 
 
 # get_extraction_pipeline and get_extraction_service are defined below
-# the places_v2 deps section so their PlacesSearchService /
+# the places deps section so their PlacesSearchService /
 # PlaceUpsertService / UserPlacesService / UserPlacesRepo factories
 # (defined there) are already in scope when FastAPI resolves the
 # default-value Depends() at module load time.
@@ -304,18 +300,18 @@ def get_user_data_deletion_service(
 
 # get_agent_graph and get_chat_service are defined at the bottom of this
 # file because they consume `get_extraction_service`, which in turn
-# consumes the places_v2 factories declared further down.
+# consumes the places factories declared further down.
 
 
 # ---------------------------------------------------------------------------
-# places_v2 dependencies
+# places dependencies
 # ---------------------------------------------------------------------------
 
 
-def get_places_v2_repo(
+def get_places_repo(
     db_session: AsyncSession = Depends(get_session),  # noqa: B008
 ) -> PlacesRepo:
-    """FastAPI dependency providing PlacesRepo (places_v2 table)."""
+    """FastAPI dependency providing PlacesRepo (places table)."""
     return PlacesRepo(db_session)
 
 
@@ -326,33 +322,33 @@ def get_user_places_repo(
     return UserPlacesRepo(db_session)
 
 
-def get_places_v2_cache() -> RedisPlacesCache:
-    """FastAPI dependency providing RedisPlacesCache (place_v2: key prefix).
+def get_places_cache() -> RedisPlacesCache:
+    """FastAPI dependency providing RedisPlacesCache (place: key prefix).
 
     Backed by the process-wide Redis client from `providers/redis_cache`.
     """
     return RedisPlacesCache(redis=get_redis_client(get_env().REDIS_URL))
 
 
-def get_google_places_client_v2() -> GooglePlacesClientV2:
-    """FastAPI dependency providing GooglePlacesClient (places_v2).
+def get_google_places_client() -> GooglePlacesClient:
+    """FastAPI dependency providing GooglePlacesClient (places).
 
     Backed by the process-wide httpx.AsyncClient from `providers/http_client`.
     """
-    return GooglePlacesClientV2(
+    return GooglePlacesClient(
         api_key=get_env().GOOGLE_API_KEY or "",
         http=get_shared_http_client(),
     )
 
 
-def get_embeddings_repo_v2(
+def get_embeddings_repo(
     db_session: AsyncSession = Depends(get_session),  # noqa: B008
 ) -> EmbeddingsRepo:
-    """FastAPI dependency providing EmbeddingsRepo (place_embeddings_v2)."""
+    """FastAPI dependency providing EmbeddingsRepo (place_embeddings)."""
     return EmbeddingsRepo(db_session)
 
 
-def get_embedder_v2() -> EmbedderProtocol:
+def get_places_embedder() -> EmbedderProtocol:
     """Single embedder used by both the document path (PlaceUpsertService
     → EmbeddingService) and the query path (HybridSearchService).
 
@@ -371,14 +367,14 @@ def get_embedder_v2() -> EmbedderProtocol:
     )
 
 
-def get_embedding_service_v2(
-    repo: EmbeddingsRepo = Depends(get_embeddings_repo_v2),  # noqa: B008
-    embedder: EmbedderProtocol = Depends(get_embedder_v2),  # noqa: B008
+def get_embedding_service(
+    repo: EmbeddingsRepo = Depends(get_embeddings_repo),  # noqa: B008
+    embedder: EmbedderProtocol = Depends(get_places_embedder),  # noqa: B008
     config: AppConfig = Depends(get_config),  # noqa: B008
-) -> EmbeddingServiceV2:
-    """FastAPI dependency providing EmbeddingService (places_v2 documents).
+) -> EmbeddingService:
+    """FastAPI dependency providing EmbeddingService (places documents).
 
-    Uses the same `get_embedder_v2` (Redis-backed CachedEmbedder) that
+    Uses the same `get_places_embedder` (Redis-backed CachedEmbedder) that
     the query path uses. The cache key includes `input_type`, so
     document and query vectors don't collide. `EmbeddingService`
     runs its diff-then-embed `(text_hash, model_name)` check first,
@@ -386,7 +382,7 @@ def get_embedding_service_v2(
     cheap Redis round-trip, with a real hit when re-extracting the
     same venue from different posts.
     """
-    return EmbeddingServiceV2(
+    return EmbeddingService(
         repo=repo,
         embedder=embedder,
         model_name=config.models["embedder"].model,
@@ -394,24 +390,24 @@ def get_embedding_service_v2(
 
 
 def get_place_upsert_service(
-    repo: PlacesRepo = Depends(get_places_v2_repo),  # noqa: B008
-    embedding_service: EmbeddingServiceV2 = Depends(  # noqa: B008
-        get_embedding_service_v2
+    repo: PlacesRepo = Depends(get_places_repo),  # noqa: B008
+    embedding_service: EmbeddingService = Depends(  # noqa: B008
+        get_embedding_service
     ),
 ) -> PlaceUpsertService:
-    """FastAPI dependency providing PlaceUpsertService (places_v2)."""
+    """FastAPI dependency providing PlaceUpsertService (places)."""
     return PlaceUpsertService(repo=repo, embedding_service=embedding_service)
 
 
 def get_places_search_service(
-    repo: PlacesRepo = Depends(get_places_v2_repo),  # noqa: B008
-    cache: RedisPlacesCache = Depends(get_places_v2_cache),  # noqa: B008
-    client: GooglePlacesClientV2 = Depends(get_google_places_client_v2),  # noqa: B008
+    repo: PlacesRepo = Depends(get_places_repo),  # noqa: B008
+    cache: RedisPlacesCache = Depends(get_places_cache),  # noqa: B008
+    client: GooglePlacesClient = Depends(get_google_places_client),  # noqa: B008
     upsert_service: PlaceUpsertService = Depends(  # noqa: B008
         get_place_upsert_service
     ),
 ) -> PlacesSearchService:
-    """FastAPI dependency providing PlacesSearchService (places_v2)."""
+    """FastAPI dependency providing PlacesSearchService (places)."""
     return PlacesSearchService(
         repo=repo,
         cache=cache,
@@ -424,7 +420,7 @@ def _build_taste_place_resolver(session: AsyncSession) -> PlacesSearchService:
     """Background-safe PlacesSearchService bound to one explicit session.
 
     Reuses the exact request-path factories (`get_places_search_service`
-    and its transitive `get_place_upsert_service` / `get_embedding_service_v2`)
+    and its transitive `get_place_upsert_service` / `get_embedding_service`)
     — the only difference is the DB session is supplied explicitly instead
     of resolved by FastAPI's `Depends(get_session)`, because taste regen
     runs in a background debounced task with no request scope. Those
@@ -441,13 +437,13 @@ def _build_taste_place_resolver(session: AsyncSession) -> PlacesSearchService:
     repo = PlacesRepo(session)
     return get_places_search_service(
         repo=repo,
-        cache=get_places_v2_cache(),
-        client=get_google_places_client_v2(),
+        cache=get_places_cache(),
+        client=get_google_places_client(),
         upsert_service=get_place_upsert_service(
             repo=repo,
-            embedding_service=get_embedding_service_v2(
+            embedding_service=get_embedding_service(
                 repo=EmbeddingsRepo(session),
-                embedder=get_embedder_v2(),
+                embedder=get_places_embedder(),
                 config=get_config(),
             ),
         ),
@@ -455,10 +451,10 @@ def _build_taste_place_resolver(session: AsyncSession) -> PlacesSearchService:
 
 
 def get_user_places_service(
-    places_repo: PlacesRepo = Depends(get_places_v2_repo),  # noqa: B008
+    places_repo: PlacesRepo = Depends(get_places_repo),  # noqa: B008
     user_places_repo: UserPlacesRepo = Depends(get_user_places_repo),  # noqa: B008
 ) -> UserPlacesService:
-    """FastAPI dependency providing UserPlacesService (places_v2)."""
+    """FastAPI dependency providing UserPlacesService (places)."""
     return UserPlacesService(
         places_repo=places_repo,
         user_places_repo=user_places_repo,
@@ -466,24 +462,24 @@ def get_user_places_service(
 
 
 # ---------------------------------------------------------------------------
-# places_v2 — hybrid search
+# places — hybrid search
 # ---------------------------------------------------------------------------
 
 
 def get_hybrid_search_repo(
     db_session: AsyncSession = Depends(get_session),  # noqa: B008
 ) -> HybridSearchRepo:
-    """FastAPI dependency providing HybridSearchRepo (places_v2)."""
+    """FastAPI dependency providing HybridSearchRepo (places)."""
     return HybridSearchRepo(db_session)
 
 
 def get_hybrid_search_service(
     repo: HybridSearchRepo = Depends(get_hybrid_search_repo),  # noqa: B008
-    embedder: EmbedderProtocol = Depends(get_embedder_v2),  # noqa: B008
+    embedder: EmbedderProtocol = Depends(get_places_embedder),  # noqa: B008
 ) -> HybridSearchService:
-    """FastAPI dependency providing HybridSearchService (places_v2).
+    """FastAPI dependency providing HybridSearchService (places).
 
-    Shares `get_embedder_v2` with the document-side EmbeddingService.
+    Shares `get_places_embedder` with the document-side EmbeddingService.
     CachedEmbedder keys by `input_type`, so query vectors don't
     collide with document vectors even though both paths hit the same
     cache.
@@ -492,7 +488,7 @@ def get_hybrid_search_service(
 
 
 # ---------------------------------------------------------------------------
-# Extraction pipeline + service (lives after places_v2 deps because it
+# Extraction pipeline + service (lives after places deps because it
 # depends on PlacesSearchService / PlaceUpsertService / UserPlacesService /
 # UserPlacesRepo factories defined above).
 # ---------------------------------------------------------------------------
@@ -507,7 +503,7 @@ def get_extraction_pipeline(
     """FastAPI dependency providing ExtractionPipeline with all levels wired.
 
     Per ADR-070, the search step delegates to
-    `places_v2.PlacesSearchService` (DB-first lookup with cache
+    `places.PlacesSearchService` (DB-first lookup with cache
     overlay, provider fallback, upsert). Extraction never calls Google
     directly anymore.
     """

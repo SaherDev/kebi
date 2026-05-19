@@ -1,6 +1,6 @@
-"""EmbeddingsRepo — sole writer/reader of the place_embeddings_v2 DB table.
+"""EmbeddingsRepo — sole writer/reader of the place_embeddings DB table.
 
-One vector per place_id (UNIQUE FK → places_v2.id, ON DELETE CASCADE). The
+One vector per place_id (UNIQUE FK → places.id, ON DELETE CASCADE). The
 repo is purely persistence: no embedding model awareness, no text building.
 The caller (EmbeddingService) owns those concerns.
 
@@ -36,7 +36,7 @@ EMBEDDING_DIMENSIONS: int = 1024
 # ---------------------------------------------------------------------------
 _metadata = MetaData()
 _PlaceEmbeddingsTable = Table(
-    "place_embeddings_v2",
+    "place_embeddings",
     _metadata,
     Column("id", String),
     Column("place_id", String),

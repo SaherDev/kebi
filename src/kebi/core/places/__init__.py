@@ -1,4 +1,4 @@
-"""places_v2 — standalone places library.
+"""places — standalone places library.
 
 Public surface: models, protocols, concrete implementations, services.
 """

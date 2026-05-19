@@ -90,7 +90,7 @@ class SQLAlchemyTasteModelRepository:
         metadata: dict[str, Any] | None = None,
     ) -> None:
         async with self._session_factory() as session:
-            # DB column stays `place_id`; it holds the places_v2.id value.
+            # DB column stays `place_id`; it holds the places.id value.
             interaction = Interaction(
                 user_id=user_id,
                 type=interaction_type,
@@ -104,8 +104,8 @@ class SQLAlchemyTasteModelRepository:
         """Raw interaction rows (type + place_core_id), ordered by created_at.
 
         Place data is NOT joined here — the service resolves place_core_id
-        against the places_v2 catalog (ADR-077). The `interactions.place_id`
-        column carries the `places_v2.id` value.
+        against the places catalog (ADR-077). The `interactions.place_id`
+        column carries the `places.id` value.
         """
         async with self._session_factory() as session:
             stmt = (

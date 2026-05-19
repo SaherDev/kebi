@@ -7,14 +7,14 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from kebi.core.places_v2.models import (
+from kebi.core.places.models import (
     LocationContext,
     PlaceCore,
     PlaceSource,
     SavedPlaceView,
     UserPlace,
 )
-from kebi.core.places_v2.user_places_service import (
+from kebi.core.places.user_places_service import (
     DuplicateUserPlaceError,
     UserPlacesService,
 )

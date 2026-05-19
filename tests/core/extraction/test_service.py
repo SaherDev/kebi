@@ -19,7 +19,7 @@ from kebi.core.extraction.types import (
     Producer,
     ValidatedCandidate,
 )
-from kebi.core.places_v2 import (
+from kebi.core.places import (
     DuplicateUserPlaceError,
     PlaceCategory,
     PlaceCore,
@@ -408,7 +408,7 @@ async def test_cache_hit_with_duplicates_dispatches_only_for_newly_linked() -> N
 
 @pytest.mark.asyncio
 async def test_cache_hit_fk_violation_falls_back_to_pipeline() -> None:
-    """A cached PlaceCore.id pointing at a deleted places_v2 row makes
+    """A cached PlaceCore.id pointing at a deleted places row makes
     save_places raise an unhandled error. The service evicts the cache
     entry and falls back to a full pipeline run."""
     cached = [_cached_item()]

@@ -1,31 +1,31 @@
 """HybridSearchRepo — vector + FTS RRF retrieval, two modes.
 
   * **Scoped** (`user_id` given) — the agent's recall path. The
-    `filtered` CTE joins `user_places` with `places_v2`, applies
+    `filtered` CTE joins `user_places` with `places`, applies
     `user_id` + filters, and uses `DISTINCT ON (place_id) ORDER BY
     place_id, saved_at DESC` so a place saved twice by the same user
     collapses to one hit. Emits hits with `user_data` populated.
   * **Unscoped** (`user_id is None`) — global catalog search across
     every place anyone has saved. The `filtered` CTE selects
-    `places_v2` directly with no `user_places` JOIN; user-side
+    `places` directly with no `user_places` JOIN; user-side
     filters (visited/liked/approved/saved_*) are rejected at the
     door because they don't make sense without a user. Emits hits
     with `user_data=None`.
 
 One SQL round-trip composed via the SQLAlchemy expression API:
 
-  1. `filtered` CTE: places_v2 ⋈ user_places, scoped by user_id and
+  1. `filtered` CTE: places ⋈ user_places, scoped by user_id and
      filtered (category, tags, geo, visited/liked/approved, saved_at
      range). Carries user_places columns through so downstream stages
      don't need to re-join.
-  2. `vec` CTE: kNN over place_embeddings_v2.vector (cosine, HNSW),
+  2. `vec` CTE: kNN over place_embeddings.vector (cosine, HNSW),
      restricted to filtered place ids. Top candidate_limit by rank.
-  3. `txt` CTE: full-text on places_v2.search_vector via
+  3. `txt` CTE: full-text on places.search_vector via
      `websearch_to_tsquery('simple_unaccent', :q)` with `ts_rank_cd`
      respecting per-field weights (A/B/C). Top candidate_limit.
   4. `fused`: FULL OUTER JOIN on place_id, RRF score
      `1/(k + v_rank) + 1/(k + t_rank)` (NULL ranks contribute 0).
-  5. Final SELECT: re-joins `places_v2` for PlaceCore columns and
+  5. Final SELECT: re-joins `places` for PlaceCore columns and
      `filtered` for the user_places columns, ordered by rrf_score.
 
 Repo does not embed — caller passes the query vector. Service owns the
@@ -85,8 +85,8 @@ logger = logging.getLogger(__name__)
 
 _metadata = MetaData()
 
-_PlacesV2Table = Table(
-    "places_v2",
+_PlacesTable = Table(
+    "places",
     _metadata,
     Column("id", String),
     Column("provider_id", String),
@@ -99,10 +99,10 @@ _PlacesV2Table = Table(
     Column("refreshed_at", DateTime(timezone=True)),
     Column("search_vector", TSVECTOR),
 )
-_p = _PlacesV2Table.c
+_p = _PlacesTable.c
 
 _PlaceEmbeddingsTable = Table(
-    "place_embeddings_v2",
+    "place_embeddings",
     _metadata,
     Column("id", String),
     Column("place_id", String),
@@ -185,7 +185,7 @@ class HybridSearchRepo:
                 func.row_number().over(order_by=text_rank.desc()).label("rank"),
             )
             .select_from(
-                _PlacesV2Table.join(filtered, filtered.c.place_id == _p.id)
+                _PlacesTable.join(filtered, filtered.c.place_id == _p.id)
             )
             .where(_p.search_vector.op("@@")(tsq))
             .order_by(text_rank.desc())
@@ -239,7 +239,7 @@ class HybridSearchRepo:
             )
             .select_from(
                 fused
-                .join(_PlacesV2Table, _p.id == fused.c.place_id)
+                .join(_PlacesTable, _p.id == fused.c.place_id)
                 .join(filtered, filtered.c.place_id == fused.c.place_id)
             )
             .order_by(fused.c.rrf_score.desc())
@@ -269,7 +269,7 @@ class HybridSearchRepo:
     def _build_scoped_filtered_cte(
         user_id: str, filters: HybridSearchFilters
     ) -> Any:
-        """places_v2 ⋈ user_places, scoped + deduped on place_id."""
+        """places ⋈ user_places, scoped + deduped on place_id."""
         conditions: list[ColumnElement[bool]] = [
             _up.user_id == user_id,
             *_filter_conditions(filters),
@@ -290,7 +290,7 @@ class HybridSearchRepo:
             )
             .distinct(_p.id)  # DISTINCT ON (place_id) — collapse duplicates
             .select_from(
-                _PlacesV2Table.join(
+                _PlacesTable.join(
                     _UserPlacesTable, _up.place_id == _p.id
                 )
             )
@@ -301,7 +301,7 @@ class HybridSearchRepo:
 
     @staticmethod
     def _build_unscoped_filtered_cte(filters: HybridSearchFilters) -> Any:
-        """places_v2 only — no user scoping, user_places columns NULL.
+        """places only — no user scoping, user_places columns NULL.
 
         Padding the user_places columns with typed NULLs keeps the
         downstream final SELECT and row mapper identical to the scoped

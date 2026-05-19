@@ -1,6 +1,6 @@
 # Taste Model Architecture (ADR-077)
 
-The taste model builds a per-user preference profile from behavioral signals. Each interaction (save, accept, reject) is logged as an append-only row keyed by the shared `places_v2` catalog identity. Signal counts are aggregated from all interactions in the places_v2 vocabulary, and an LLM generates a structured summary (3-6 lines) grounded in signal_counts — every item references a specific path and value in the aggregation. (The chip artifact and signal tier were removed in ADR-076; the legacy place vocabulary was replaced in ADR-077.)
+The taste model builds a per-user preference profile from behavioral signals. Each interaction (save, accept, reject) is logged as an append-only row keyed by the shared `places` catalog identity. Signal counts are aggregated from all interactions in the places-catalog vocabulary, and an LLM generates a structured summary (3-6 lines) grounded in signal_counts — every item references a specific path and value in the aggregation. (The chip artifact and signal tier were removed in ADR-076; the legacy place vocabulary was replaced in ADR-077.)
 
 ## Data Flow
 
@@ -12,7 +12,7 @@ EventDispatcher → on_taste_signal()
     │
     ▼
 TasteModelService.handle_signal()
-    ├── INSERT interaction row (append-only; place_id = places_v2.id)
+    ├── INSERT interaction row (append-only; place_id = places.id)
     └── Schedule debounced regen (30s window)
             │
             ▼ (after debounce expires)
@@ -37,7 +37,7 @@ Place resolution goes through the catalog's single source-of-truth service via a
 
 ```
 taste_model (PostgreSQL, keyed by user_id):
-├── signal_counts    JSONB  — places_v2-vocabulary aggregation of all interactions
+├── signal_counts    JSONB  — places-catalog-vocabulary aggregation of all interactions
 ├── taste_profile_summary  JSONB  — list of SummaryLine (text, signal_count, source_field, source_value)
 ├── generated_at     TIMESTAMPTZ
 └── generated_from_log_count  INT  — stale-summary guard (raw interaction count)
@@ -46,11 +46,11 @@ interactions (PostgreSQL, append-only):
 ├── id         BIGSERIAL PK
 ├── user_id    TEXT
 ├── type       ENUM (save, accepted, rejected)
-├── place_id   TEXT  — places_v2.id, nullable, NO FK (survives catalog TTL-wipe)
+├── place_id   TEXT  — places.id, nullable, NO FK (survives catalog TTL-wipe)
 └── created_at TIMESTAMPTZ
 ```
 
-`place_id` carries the shared cross-user `places_v2.id` (one row per real place), which is what makes future "users with similar taste" collaboration possible. No FK: accepted/rejected recs may reference places never in `user_places`, and a CASCADE FK would destroy behavioral history when the nightly catalog wipe removes a place. Pre-cutover orphan rows (legacy place ids) were purged once by migration `c7d8e9f0a1b2`.
+`place_id` carries the shared cross-user `places.id` (one row per real place), which is what makes future "users with similar taste" collaboration possible. No FK: accepted/rejected recs may reference places never in `user_places`, and a CASCADE FK would destroy behavioral history when the nightly catalog wipe removes a place. Pre-cutover orphan rows (legacy place ids) were purged once by migration `c7d8e9f0a1b2`.
 
 ## Aggregation Rules
 
