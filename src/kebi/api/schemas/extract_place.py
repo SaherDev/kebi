@@ -54,10 +54,10 @@ class ExtractPlaceItem(BaseModel):
 
     `place` is a `PlaceCore` (identity + static fields), not a
     `PlaceObject`. Extraction does not populate live fields (rating,
-    hours, popularity, business_status) — those are filled in at
-    recall/consult time via `PlacesService.enrich_batch`. Returning
-    `PlaceCore` here is the honest shape; pretending to be `PlaceObject`
-    just padded the response with always-null fields.
+    hours, popularity, business_status) — those are filled in later by
+    the places_v2 read/enrichment path. Returning `PlaceCore` here is
+    the honest shape; pretending to be `PlaceObject` just padded the
+    response with always-null fields.
     """
 
     place: PlaceCore

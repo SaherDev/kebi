@@ -99,8 +99,8 @@ def _candidate_to_item_dict(
     No `status` field — under ADR-071 the response is a flat list of
     places now associated with the user (whether newly linked or
     already saved is internal). `place` is a `PlaceCore`: identity +
-    static fields only, no live signals (those come from
-    `PlacesService.enrich_batch` at recall/consult time).
+    static fields only, no live signals (rating/hours/popularity are
+    enriched later by the places_v2 read path, not by extraction).
     """
     return {
         "place": place.model_dump(mode="json"),

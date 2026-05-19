@@ -1,5 +1,6 @@
-"""Tests for _render_location_context — proves location_label is surfaced
-to the agent when present, with a clear "unknown" fallback when absent.
+"""Tests for _render_location_context — raw GPS coords are surfaced to the
+agent when present, with a clear prompt to ask when absent. The server-side
+"City, Country" label was removed with the v1 places store (ADR-078).
 """
 
 from __future__ import annotations
@@ -9,36 +10,17 @@ from typing import Any, cast
 from kebi.core.agent.graph import _render_location_context
 
 
-def _state(
-    location: dict[str, float] | None = None,
-    location_label: str | None = None,
-) -> Any:
-    return cast(
-        Any,
-        {"location": location, "location_label": location_label},
-    )
+def _state(location: dict[str, float] | None = None) -> Any:
+    return cast(Any, {"location": location})
 
 
-def test_location_with_label_mentions_city() -> None:
-    text = _render_location_context(
-        _state(
-            location={"lat": 52.12, "lng": 11.62},
-            location_label="Magdeburg, Germany",
-        )
-    )
+def test_location_renders_gps_coords() -> None:
+    text = _render_location_context(_state(location={"lat": 52.12, "lng": 11.62}))
     assert "lat=52.12" in text
-    assert "Magdeburg, Germany" in text
-    assert "unknown" not in text
-
-
-def test_location_without_label_falls_back_to_unknown_clause() -> None:
-    text = _render_location_context(
-        _state(location={"lat": 52.12, "lng": 11.62}, location_label=None)
-    )
-    assert "lat=52.12" in text
-    assert "city is unknown" in text
+    assert "lng=11.62" in text
+    assert "Do NOT ask for their city" in text
 
 
 def test_no_location_prompts_agent_to_ask() -> None:
-    text = _render_location_context(_state(location=None, location_label=None))
+    text = _render_location_context(_state(location=None))
     assert "No location provided" in text

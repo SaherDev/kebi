@@ -24,9 +24,6 @@ from kebi.core.memory.buffer import MessageBuffer
 from kebi.core.memory.extractor import MemoryExtractor
 from kebi.core.memory.repository import SQLAlchemyUserMemoryRepository
 from kebi.core.memory.service import UserMemoryService
-from kebi.core.places import GooglePlacesClient, PlacesService
-from kebi.core.places.cache import PlacesCache
-from kebi.core.places.repository import PlacesRepository
 from kebi.core.places_v2 import (
     CachedEmbedder,
     EmbeddingsRepo,
@@ -49,14 +46,6 @@ from kebi.core.signal.service import SignalService
 from kebi.core.taste.debounce import regen_debouncer
 from kebi.core.taste.service import TasteModelService
 from kebi.core.user.service import UserDataDeletionService
-from kebi.db.repositories import (
-    EmbeddingRepository,
-    SQLAlchemyEmbeddingRepository,
-)
-from kebi.db.repositories.recommendation_repository import (
-    RecommendationRepository,
-    SQLAlchemyRecommendationRepository,
-)
 from kebi.db.session import _get_session_factory, get_session
 from kebi.providers import get_instructor_client
 from kebi.providers.cache import CacheBackend
@@ -93,39 +82,6 @@ def get_status_repo(
 ) -> ExtractionStatusRepository:
     """FastAPI dependency providing ExtractionStatusRepository."""
     return ExtractionStatusRepository(cache=cache)
-
-
-def _build_places_cache() -> PlacesCache:
-    """Construct a PlacesCache backed by the shared per-URL Redis client.
-
-    The underlying `redis.asyncio.Redis` is a process-wide singleton owned
-    by `providers/redis_cache.get_redis_client`, so the connection pool is
-    reused across requests (ADR-019).
-    """
-    return PlacesCache(get_redis_client(get_env().REDIS_URL))
-
-
-def get_places_service(
-    db_session: AsyncSession = Depends(get_session),  # noqa: B008
-) -> PlacesService:
-    """FastAPI dependency providing `PlacesService` (ADR-054, feature 019).
-
-    Wires the `PlacesRepository`, `PlacesCache`, and `GooglePlacesClient` so
-    every caller consuming `PlacesService` sees a fully functional
-    `enrich_batch` (e.g. the chat service's location-label resolution).
-    """
-    return PlacesService(
-        repo=PlacesRepository(db_session),
-        cache=_build_places_cache(),
-        client=GooglePlacesClient(),
-    )
-
-
-def get_embedding_repo(
-    db_session: AsyncSession = Depends(get_session),  # noqa: B008
-) -> EmbeddingRepository:
-    """FastAPI dependency providing EmbeddingRepository."""
-    return SQLAlchemyEmbeddingRepository(db_session)
 
 
 def _build_message_buffer() -> MessageBuffer:
@@ -197,17 +153,6 @@ async def get_event_dispatcher(
     )
 
     return dispatcher
-
-
-def get_places_cache_dep() -> PlacesCache:
-    """FastAPI dependency providing `PlacesCache`.
-
-    Extraction persistence takes this separately from `PlacesService` so
-    it can write Tier 2 geo data directly after Google validation (ADR-057
-    follow-up) — the service facade is the query path, the cache is the
-    write path.
-    """
-    return _build_places_cache()
 
 
 def _make_inline_level() -> EnrichmentLevel:
@@ -318,25 +263,16 @@ def _get_deep_level() -> EnrichmentLevel:
 # default-value Depends() at module load time.
 
 
-def get_recommendation_repo(
-    db_session: AsyncSession = Depends(get_session),  # noqa: B008
-) -> RecommendationRepository:
-    """FastAPI dependency providing a fully wired RecommendationRepository (ADR-060)."""
-    return SQLAlchemyRecommendationRepository(db_session)
-
-
 def get_signal_service(
     event_dispatcher: EventDispatcher = Depends(get_event_dispatcher),  # noqa: B008
 ) -> SignalService:
-    """FastAPI dependency providing SignalService (ADR-060).
+    """FastAPI dependency providing SignalService (ADR-060, ADR-078).
 
-    SignalService owns the RecommendationRepository internally via
-    session_factory.
+    Recommendation accept/reject signals are no longer DB-validated — the
+    recommendations table was dropped (ADR-078); the signal is trusted from
+    the product repo and dispatched as an event.
     """
-    return SignalService(
-        session_factory=_get_session_factory(),
-        event_dispatcher=event_dispatcher,
-    )
+    return SignalService(event_dispatcher=event_dispatcher)
 
 
 def get_agent_checkpointer(request: Request) -> Any:
@@ -671,16 +607,14 @@ async def get_chat_service(
     event_dispatcher: EventDispatcher = Depends(get_event_dispatcher),  # noqa: B008
     memory_service: UserMemoryService = Depends(get_user_memory_service),  # noqa: B008
     taste_service: TasteModelService = Depends(get_taste_service),  # noqa: B008
-    places_service: PlacesService = Depends(get_places_service),  # noqa: B008
     config: AppConfig = Depends(get_config),  # noqa: B008
     agent_graph: Any = Depends(get_agent_graph),  # noqa: B008
 ) -> ChatService:
-    """FastAPI dependency for ChatService (ADR-019, ADR-052, ADR-073, ADR-075)."""
+    """FastAPI dependency for ChatService (ADR-052/073/075/078)."""
     return ChatService(
         event_dispatcher=event_dispatcher,
         memory_service=memory_service,
         taste_service=taste_service,
-        places_service=places_service,
         config=config,
         agent_graph=agent_graph,
     )

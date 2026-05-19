@@ -20,14 +20,11 @@ def _make_service(agent_graph: MagicMock, dispatcher: MagicMock) -> ChatService:
     taste_service.get_taste_profile = AsyncMock(return_value=None)
     memory_service = AsyncMock()
     memory_service.load_memories = AsyncMock(return_value=[])
-    places_service = AsyncMock()
-    places_service.resolve_location_label = AsyncMock(return_value=None)
 
     return ChatService(
         event_dispatcher=dispatcher,
         memory_service=memory_service,
         taste_service=taste_service,
-        places_service=places_service,
         config=cfg,
         agent_graph=agent_graph,
     )

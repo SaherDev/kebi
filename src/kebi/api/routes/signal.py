@@ -6,14 +6,14 @@ ADR-060).
 Route is a thin facade (ADR-034) — all dispatch lives in SignalService.
 """
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, status
 
 from kebi.api.deps import get_signal_service
 from kebi.api.schemas.signal import (
     SignalRequest,
     SignalResponse,
 )
-from kebi.core.signal.service import RecommendationNotFoundError, SignalService
+from kebi.core.signal.service import SignalService
 
 router = APIRouter()
 
@@ -28,19 +28,13 @@ async def post_signal(
     """Handle a recommendation accept/reject signal.
 
     Pydantic rejects unknown `signal_type` values with 422 automatically.
-    The route dispatches to SignalService with the request's fields.
+    The route dispatches to SignalService with the request's fields. The
+    recommendation_id is trusted, not DB-validated (ADR-078).
     """
-    try:
-        await signal_service.handle_signal(
-            signal_type=request.signal_type,
-            user_id=request.user_id,
-            recommendation_id=request.recommendation_id,
-            place_core_id=request.place_core_id,
-        )
-    except RecommendationNotFoundError:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Recommendation not found",
-        ) from None
-
+    await signal_service.handle_signal(
+        signal_type=request.signal_type,
+        user_id=request.user_id,
+        recommendation_id=request.recommendation_id,
+        place_core_id=request.place_core_id,
+    )
     return SignalResponse()

@@ -13,8 +13,7 @@ pick whose id escaped the set.
 
 Empty `search_set` short-circuits before the LLM call.
 
-Spec 030 Phase 3: v2 vocabulary. Drops the legacy
-`PlaceType` / `PlaceAttributes` shape entirely.
+Emits places_v2 vocabulary (categories + typed tags) — ADR-070.
 """
 
 from __future__ import annotations

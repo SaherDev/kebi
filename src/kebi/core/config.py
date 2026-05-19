@@ -320,16 +320,6 @@ class SystemPromptsConfig(BaseModel):
     )
 
 
-class ConsultConfig(BaseModel):
-    max_alternatives: int = 2
-    placeholder_photo_url: str = "https://placehold.co/800x450.webp"
-    response_timeout_seconds: int = 10
-    default_radius_m: int = 1500
-    nearby_radius_m: int = 500
-    walking_radius_m: int = 1000
-    named_location_radius_m: int = 10000
-
-
 class TasteRegenConfig(BaseModel):
     """Regen thresholds for taste profile regeneration."""
 
@@ -401,21 +391,6 @@ class AppProvidersConfig(BaseModel):
     ollama: ProviderEndpointConfig = ProviderEndpointConfig(
         base_url="http://localhost:11434/v1"
     )
-
-
-class PlacesConfig(BaseModel):
-    """PlacesService cache TTL and per-request fetch cap (ADR-054, feature 019).
-
-    - cache_ttl_days: single lifetime for both the Tier 2 geo cache and the
-      Tier 3 enrichment cache. Both set_batch methods in PlacesCache use
-      `cache_ttl_days * 86400` seconds. Default 30 days.
-    - max_enrichment_batch: per-request cap on external provider fetches
-      in PlacesService.enrich_batch(geo_only=False). Counts unique provider_id,
-      not input positions.
-    """
-
-    cache_ttl_days: int = 30
-    max_enrichment_batch: int = 10
 
 
 class PromptConfig(BaseModel):
@@ -521,10 +496,8 @@ class AppConfig(BaseModel):
     external_services: ExternalServicesConfig = ExternalServicesConfig()
     embeddings: EmbeddingsConfig = EmbeddingsConfig()
     system_prompts: SystemPromptsConfig = SystemPromptsConfig()
-    consult: ConsultConfig = ConsultConfig()
     taste_model: TasteModelConfig = TasteModelConfig()
     memory: MemoryConfig = MemoryConfig()
-    places: PlacesConfig = PlacesConfig()
     agent: AgentConfig = AgentConfig()
     prompts: dict[str, PromptConfig] = {}
 

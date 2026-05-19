@@ -69,23 +69,4 @@ class TestBuildTurnPayload:
             memory_summary="",
         )
         assert p["location"] is None
-
-    def test_location_label_threaded_when_provided(self) -> None:
-        p = build_turn_payload(
-            message="hi",
-            user_id="u1",
-            taste_profile_summary="",
-            memory_summary="",
-            location={"lat": 52.12, "lng": 11.62},
-            location_label="Magdeburg, Germany",
-        )
-        assert p["location_label"] == "Magdeburg, Germany"
-
-    def test_location_label_defaults_to_none(self) -> None:
-        p = build_turn_payload(
-            message="hi",
-            user_id="u1",
-            taste_profile_summary="",
-            memory_summary="",
-        )
-        assert p["location_label"] is None
+        assert "location_label" not in p

@@ -207,22 +207,6 @@ external_services:
     timeout_seconds: 3.0
 
 # ---------------------------------------------------------------------------
-# Legacy place-discovery radii — ADR-075 removed the recall + consult
-# services and agent tools. This block is retained only because the
-# deferred-scope legacy core/places client still reads
-# `consult.default_radius_m` on its dormant discover/validate path.
-# ADR-049: PlacesClient moved to core/places
-# ---------------------------------------------------------------------------
-consult:
-  max_alternatives: 2
-  placeholder_photo_url: "https://placehold.co/800x450.webp"
-  response_timeout_seconds: 10
-  default_radius_m: 1500
-  nearby_radius_m: 500
-  named_location_radius_m: 10000
-  walking_radius_m: 1000
-
-# ---------------------------------------------------------------------------
 # Embeddings configuration
 # ADR-040: Voyage 4-lite chosen for 9.25% better retrieval quality
 # ---------------------------------------------------------------------------
@@ -326,20 +310,3 @@ memory:
     # append, so active users never expire. Caps Redis memory leak from
     # users who go quiet mid-batch. 7 days.
     buffer_ttl_seconds: 604800
-
-# ---------------------------------------------------------------------------
-# PlacesService Configuration (ADR-054, feature 019)
-# Single TTL for both the geo cache (Tier 2) and the enrichment cache
-# (Tier 3), plus the per-request cap on external provider fetches in
-# enrich_batch(geo_only=False).
-# ---------------------------------------------------------------------------
-places:
-  cache_ttl_days: 30
-  # Per-consult fetch cap. Raised from 10 to 20 after the initial cap hit
-  # on real Bangkok queries (1 saved + 19 discovered). Combined with the
-  # saved-pid priority in `_fetch_and_split_misses`, saved places are
-  # guaranteed to be fetched and discovered places get the remaining
-  # budget up to this cap. Each fetch is a single Places API (New) Pro-
-  # tier call, cached for `cache_ttl_days`, so the amortized cost is
-  # dominated by the first consult for each place_id.
-  max_enrichment_batch: 20

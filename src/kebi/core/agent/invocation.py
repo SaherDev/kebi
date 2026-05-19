@@ -19,7 +19,6 @@ def build_turn_payload(
     taste_profile_summary: str,
     memory_summary: str,
     location: dict[str, float] | None = None,
-    location_label: str | None = None,
 ) -> dict[str, Any]:
     """Build the per-turn state update for `graph.ainvoke(...)`.
 
@@ -34,9 +33,6 @@ def build_turn_payload(
       taste_profile_summary: behavior-derived preference bullets.
       memory_summary: user-stated facts with confidence scores.
       location: optional {lat, lng} context.
-      location_label: optional "City, Country" label resolved server-side
-        from `location`. Gives the agent a city name to reason about —
-        coords alone are too low-info for the LLM.
 
     Returns:
       dict payload suitable for `graph.ainvoke(payload, config=...)`.
@@ -48,7 +44,6 @@ def build_turn_payload(
         "memory_summary": memory_summary,
         "user_id": user_id,
         "location": location,
-        "location_label": location_label,
         "steps_taken": 0,
         "error_count": 0,
         "tool_calls_used": 0,

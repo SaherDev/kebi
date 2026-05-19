@@ -252,17 +252,10 @@ def _compact_old_tool_results(
 
 def _render_location_context(state: AgentState) -> str:
     loc = state.get("location")
-    label = state.get("location_label")
     if loc:
-        city_clause = (
-            f" The user is in {label}." if label else " The user's city is unknown."
-        )
         return (
-            f"User's current GPS location: lat={loc['lat']}, lng={loc['lng']}."
-            f"{city_clause} "
-            "Do NOT ask for their city — their coordinates are already available. "
-            "When calling consult, leave search_location_name empty and the system "
-            "will use these coordinates automatically."
+            f"User's current GPS location: lat={loc['lat']}, lng={loc['lng']}. "
+            "Do NOT ask for their city — their coordinates are already available."
         )
     return (
         "No location provided. If the user asks for nearby recommendations, "

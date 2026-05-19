@@ -13,8 +13,6 @@ from kebi.core.taste.debounce import RegenDebouncer
 from kebi.core.user.service import DataScope, UserDataDeletionService
 from kebi.db.models import (
     Interaction,
-    Place,
-    Recommendation,
     TasteModel,
     UserMemory,
 )
@@ -51,7 +49,7 @@ def _delete_targets(session: AsyncMock) -> list[type]:
     return targets
 
 
-async def test_sweep_deletes_all_five_user_scoped_tables() -> None:
+async def test_sweep_deletes_all_three_user_scoped_tables() -> None:
     factory, session = _build_session_factory_mock()
     checkpointer = AsyncMock()
     debouncer = RegenDebouncer()
@@ -66,15 +64,13 @@ async def test_sweep_deletes_all_five_user_scoped_tables() -> None:
 
     assert _delete_targets(session) == [
         Interaction,
-        Recommendation,
         UserMemory,
         TasteModel,
-        Place,
     ]
 
 
 async def test_sweep_runs_inside_transaction() -> None:
-    """All 5 deletes must execute inside the same `session.begin()` block."""
+    """All 3 deletes must execute inside the same `session.begin()` block."""
     factory, session = _build_session_factory_mock()
     service = UserDataDeletionService(
         session_factory=factory,
@@ -88,7 +84,7 @@ async def test_sweep_runs_inside_transaction() -> None:
     begin_cm = session.begin.return_value
     begin_cm.__aenter__.assert_awaited_once()
     begin_cm.__aexit__.assert_awaited_once()
-    assert session.execute.await_count == 5
+    assert session.execute.await_count == 3
 
 
 async def test_checkpointer_adelete_thread_called_with_user_id() -> None:
@@ -118,7 +114,7 @@ async def test_checkpointer_none_logs_warning_and_continues() -> None:
 
     await service.delete_user_data("user_abc")
 
-    assert session.execute.await_count == 5
+    assert session.execute.await_count == 3
     assert "user_abc" not in debouncer._pending
 
 
@@ -181,7 +177,7 @@ async def test_idempotent_double_delete() -> None:
     await service.delete_user_data("user_abc")
     await service.delete_user_data("user_abc")
 
-    assert session.execute.await_count == 10
+    assert session.execute.await_count == 6
     assert checkpointer.adelete_thread.await_count == 2
 
 
@@ -277,9 +273,7 @@ async def test_chat_history_scope_skips_sql_deletes() -> None:
         regen_debouncer=debouncer,
     )
 
-    await service.delete_user_data(
-        "user_abc", scopes={DataScope.chat_history}
-    )
+    await service.delete_user_data("user_abc", scopes={DataScope.chat_history})
 
     # Session factory was never asked for a session.
     factory.assert_not_called()
@@ -302,10 +296,8 @@ async def test_all_scope_explicit_is_same_as_no_scope() -> None:
 
     assert _delete_targets(session) == [
         Interaction,
-        Recommendation,
         UserMemory,
         TasteModel,
-        Place,
     ]
 
 
@@ -322,4 +314,4 @@ async def test_scope_set_with_all_collapses_to_all() -> None:
         "user_abc", scopes={DataScope.all, DataScope.chat_history}
     )
 
-    assert len(_delete_targets(session)) == 5  # full sweep ran
+    assert len(_delete_targets(session)) == 3  # full sweep ran

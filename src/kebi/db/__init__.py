@@ -1,3 +1,3 @@
-from kebi.db.models import Embedding, Place, TasteModel
+from kebi.db.models import TasteModel
 
-__all__ = ["Place", "Embedding", "TasteModel"]
+__all__ = ["TasteModel"]

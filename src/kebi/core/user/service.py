@@ -22,8 +22,6 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from kebi.core.taste.debounce import RegenDebouncer
 from kebi.db.models import (
     Interaction,
-    Place,
-    Recommendation,
     TasteModel,
     UserMemory,
 )
@@ -53,10 +51,13 @@ class DataScope(str, Enum):
 class UserDataDeletionService:
     """Erases every trace of a user's AI-owned data.
 
-    Hits five tables in one transaction (embeddings cascade automatically
-    from places via FK ON DELETE CASCADE — see db/models.py:96), then the
-    LangGraph checkpoint thread (separate connection pool), then any
-    in-flight taste-regen task in the in-memory debouncer.
+    Hits three tables in one transaction (interactions, user_memories,
+    taste_model), then the LangGraph checkpoint thread (separate connection
+    pool), then any in-flight taste-regen task in the in-memory debouncer.
+
+    User-saved places live in the places_v2 catalog's per-user link table,
+    not here; that erase path is owned by places_v2 (out of scope for this
+    sweep — ADR-078 removed the legacy `places` table this used to hit).
 
     Does NOT delete the user account — NestJS owns user lifecycle. The
     product repo's account-delete flow calls this service to wipe the
@@ -101,16 +102,10 @@ class UserDataDeletionService:
                     delete(Interaction).where(Interaction.user_id == user_id)
                 )
                 await session.execute(
-                    delete(Recommendation).where(Recommendation.user_id == user_id)
-                )
-                await session.execute(
                     delete(UserMemory).where(UserMemory.user_id == user_id)
                 )
                 await session.execute(
                     delete(TasteModel).where(TasteModel.user_id == user_id)
-                )
-                await session.execute(
-                    delete(Place).where(Place.user_id == user_id)
                 )
 
         if wipe_all or DataScope.chat_history in active:

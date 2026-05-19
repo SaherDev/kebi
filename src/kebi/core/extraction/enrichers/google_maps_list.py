@@ -10,10 +10,9 @@ rating, and category.
 This enricher is a **pure text producer** — it appends each Apify
 item's name to `context.known_places` and stops. The pipeline's NER
 finalizer (`LLMNEREnricher`) reads that list as another text source
-and emits structured `CandidatePlace`s with inferred `place_type`,
-`subcategory`, `cuisine`, and other attributes. That's the same
-path subtitle/whisper text takes — one consolidator owns the "name
-→ structured PlaceCreate" step.
+and emits structured candidates with inferred categories and tags
+(places_v2 vocabulary). That's the same path subtitle/whisper text
+takes — one consolidator owns the "name → structured place" step.
 
 Notes:
 - Apify returns a Google Maps internal FID (`0x...:0x...`), not a
