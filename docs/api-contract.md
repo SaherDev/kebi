@@ -6,356 +6,178 @@ This document defines the HTTP contract between the product repo (services/api) 
 
 All requests come from NestJS after auth verification. kebi never receives requests directly from the frontend.
 
+> **ADR-079 coordination note.** The place catalog tables were renamed
+> `places_v2 → places` and `place_embeddings_v2 → place_embeddings`
+> (ADR-079, from `places_v2` introduced in ADR-070). The kebi schema +
+> code and any product-repo reference to these table names must ship in
+> **one coordinated deploy**. `place_core_id` on `POST /v1/signal` is
+> now documented as `places.id`.
+
 ## Connection
 
 - Base URL loaded from YAML config: `ai_service.base_url`
 - All endpoints are prefixed with `/v1/`
 - Most requests are JSON over HTTP (`Content-Type: application/json`)
 - `POST /v1/chat/stream` uses Server-Sent Events (`Content-Type: text/event-stream`) — NestJS must forward the stream to the frontend without buffering
-- Auth between services is TBD (likely a shared secret header in later phases)
+- Auth between services is a trusted-upstream model: NestJS verifies the user and forwards `user_id`; kebi does not re-authenticate
 
 ---
 
 ## Shared Types
 
-### `PlaceObject`
+### `PlaceCore`
 
-Unified place shape returned by every read and write path (ADR-054, feat 019). Tier 1 fields come from PostgreSQL and are always present; Tier 2 (Redis geo) and Tier 3 (Redis enrichment) populate only when `enrich_batch` ran.
+The canonical place shape (ADR-070, ADR-077; the catalog table is
+`places` since ADR-079). Identity + static catalog fields only.
+Extraction returns `PlaceCore` — it does **not** populate live fields
+(rating, hours, popularity, business_status); those are filled in later
+by the catalog read/enrichment path, which has no product-facing
+endpoint today (ADR-075 removed recall/consult).
 
 ```json
 {
-  "place_id": "pl_01HZ...",
-  "place_name": "Nara Eatery",
-  "place_type": "food_and_drink",
-  "subcategory": "restaurant",
-  "tags": ["ramen", "late_night"],
-  "attributes": {
-    "cuisine": "japanese",
-    "price_hint": "$$",
-    "ambiance": "casual",
-    "dietary": ["vegetarian"],
-    "good_for": ["date_night"],
-    "location_context": {
-      "neighborhood": "Ari",
-      "city": "Bangkok",
-      "country": "TH"
-    }
-  },
-  "source_url": "https://tiktok.com/@user/video/123",
-  "source": "tiktok",
+  "id": "c0ffee00-1111-2222-3333-444455556666",
   "provider_id": "google:ChIJN1t_tDeuEmsRUsoyG83frY4",
+  "place_name": "Nara Eatery",
+  "place_name_aliases": [
+    { "value": "Nara", "source": "tiktok" }
+  ],
+  "categories": ["restaurant"],
+  "tags": [
+    { "type": "cuisine", "value": "Japanese", "source": "google" },
+    { "type": "atmosphere", "value": "casual", "source": "llm" }
+  ],
+  "location": {
+    "lat": 13.778, "lng": 100.541,
+    "address": "123 Ari Soi 4, Bangkok 10400",
+    "neighborhood": "Ari", "city": "Bangkok", "country": "TH"
+  },
   "created_at": "2026-04-12T10:15:00Z",
-
-  "lat": 13.778,
-  "lng": 100.541,
-  "address": "123 Ari Soi 4, Bangkok 10400",
-  "geo_fresh": true,
-
-  "hours": { "monday": "11:00-22:00", "timezone": "Asia/Bangkok" },
-  "rating": 4.6,
-  "phone": "+66 2 123 4567",
-  "photo_url": "https://places.googleapis.com/...",
-  "popularity": 0.82,
-  "enriched": true
+  "refreshed_at": "2026-05-01T08:00:00Z"
 }
 ```
 
-| Tier | Field         | Type                                                                                | Notes                                                                                 |
-| ---- | ------------- | ----------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
-| 1    | `place_id`    | `string`                                                                            | Internal UUID/ULID; always present                                                    |
-| 1    | `place_name`  | `string`                                                                            | Always present                                                                        |
-| 1    | `place_type`  | `"food_and_drink" \| "things_to_do" \| "shopping" \| "services" \| "accommodation"` | Enum                                                                                  |
-| 1    | `subcategory` | `string \| null`                                                                    | Validated against the per-type vocabulary (e.g. `"restaurant"`, `"cafe"`, `"museum"`) |
-| 1    | `tags`        | `string[]`                                                                          | Free-form labels                                                                      |
-| 1    | `attributes`  | `PlaceAttributes`                                                                   | Structured JSONB; shape below                                                         |
-| 1    | `source_url`  | `string \| null`                                                                    | Original URL the place was extracted from                                             |
-| 1    | `source`      | `"tiktok" \| "instagram" \| "youtube" \| "manual" \| "link" \| "consult" \| null`   | Acquisition channel                                                                   |
-| 1    | `provider_id` | `string \| null`                                                                    | Namespaced external ID (e.g. `"google:ChIJ…"`); constructed only by the repository    |
-| 1    | `created_at`  | `ISO-8601 string \| null`                                                           | From ORM row; `null` for freshly-built, unsaved objects                               |
-| 2    | `lat` / `lng` | `float \| null`                                                                     | Populated when geo cache is hydrated                                                  |
-| 2    | `address`     | `string \| null`                                                                    | Formatted address                                                                     |
-| 2    | `geo_fresh`   | `bool`                                                                              | `true` when Tier 2 fields come from a live cache hit                                  |
-| 3    | `hours`       | `object \| null`                                                                    | Keys: `sunday`–`saturday` (string or null) + `timezone` (IANA)                        |
-| 3    | `rating`      | `float \| null`                                                                     | Provider rating                                                                       |
-| 3    | `phone`       | `string \| null`                                                                    | E.164 preferred                                                                       |
-| 3    | `photo_url`   | `string \| null`                                                                    | Hotlinkable image URL                                                                 |
-| 3    | `popularity`  | `float \| null`                                                                     | Normalized 0–1                                                                        |
-| 3    | `enriched`    | `bool`                                                                              | `true` when Tier 3 fields are populated. Recall-mode responses never set this `true`  |
+| Field                | Type                                  | Notes                                                                                       |
+| -------------------- | ------------------------------------- | ------------------------------------------------------------------------------------------- |
+| `id`                 | `string \| null`                      | Catalog primary key (`places.id`). `null` only for freshly-built, unsaved objects           |
+| `provider_id`        | `string \| null`                      | Namespaced external ID (e.g. `"google:ChIJ…"`)                                               |
+| `place_name`         | `string`                              | Canonical name (provider-sourced)                                                           |
+| `place_name_aliases` | `{ value, source }[]`                 | Alternative names from non-canonical writers (TikTok caption, user note, LLM)                |
+| `categories`         | `string[]`                            | `PlaceCategory` enum values, e.g. `"restaurant"`, `"cafe"`, `"bar"`                          |
+| `tags`               | `{ type, value, source }[]`           | `type` ∈ `cuisine \| dietary \| feature \| atmosphere \| service \| price \| accessibility \| time \| season` (or an LLM free-text type); `value` is an enum or free-text; `source` e.g. `"google" \| "llm" \| "tiktok"` |
+| `location`           | `LocationContext \| null`             | `{ lat, lng, address, neighborhood, city, country }` — any field may be `null`              |
+| `created_at`         | `ISO-8601 string \| null`             | Catalog row creation                                                                        |
+| `refreshed_at`       | `ISO-8601 string \| null`             | Last provider refresh                                                                       |
 
-`PlaceAttributes` shape:
-
-| Field              | Type                                      | Notes                                |
-| ------------------ | ----------------------------------------- | ------------------------------------ |
-| `cuisine`          | `string \| null`                          | e.g. `"japanese"`                    |
-| `price_hint`       | `string \| null`                          | e.g. `"$"`, `"$$"`, `"$$$"`          |
-| `ambiance`         | `string \| null`                          | e.g. `"casual"`, `"upscale"`         |
-| `dietary`          | `string[]`                                | e.g. `["vegetarian", "gluten_free"]` |
-| `good_for`         | `string[]`                                | e.g. `["date_night", "groups"]`      |
-| `location_context` | `{ neighborhood, city, country } \| null` | All string or null                   |
+> **Migration note (ADR-070/071):** the legacy v1 `PlaceObject` shape
+> (`place_type`, `subcategory`, `attributes{}`, Tier 2/3 enrichment
+> fields) is gone. `place_type` → `categories: string[]`; `attributes`
+> → `tags: [{type,value,source}]`. The v1 `places`/`embeddings` tables
+> were dropped in ADR-078.
 
 ---
 
 ## POST /v1/chat
 
-Unified conversational entry point (ADR-052). Replaces all four former individual endpoints.
-The system classifies intent, dispatches to the correct pipeline, and returns a structured response.
+Unified conversational entry point (ADR-052, ADR-065). The agent is a
+**zero-tool conversational Q&A surface** (ADR-075): it answers from
+general knowledge plus the user's taste/memory context, and redirects
+place save / recall / recommendation requests to the product's own
+surfaces (e.g. the share/submit input → `POST /v1/extract`). It performs
+no retrieval and writes no data.
 
 **Request:**
 
 ```json
 {
   "user_id": "<user_id>",
-  "message": "cheap dinner nearby",
+  "message": "what should I look for in a good ramen place?",
   "location": { "lat": 13.7563, "lng": 100.5018 }
 }
 ```
 
-| Field         | Type                                                          | Required | Notes                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| ------------- | ------------------------------------------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `user_id`     | `string`                                                      | Yes      | Clerk-issued user ID; trusted, not validated here                                                                                                                                                                                                                                                                                                                                                                                                |
-| `message`     | `string`                                                      | Yes      | Natural language message from the user                                                                                                                                                                                                                                                                                                                                                                                                           |
-| `location`    | `{ lat: float, lng: float }`                                  | No       | Passed to consult pipeline only; ignored for all other intents                                                                                                                                                                                                                                                                                                                                                                                   |
+| Field      | Type                         | Required | Notes                                                                                 |
+| ---------- | ---------------------------- | -------- | ------------------------------------------------------------------------------------- |
+| `user_id`  | `string`                     | Yes      | Clerk-issued user ID; trusted, not validated here                                     |
+| `message`  | `string`                     | Yes      | Natural-language message from the user                                                |
+| `location` | `{ lat: float, lng: float }` | No       | Raw coords forwarded into the agent prompt. ADR-078 removed server-side city-label resolution; the field is still accepted for forward compatibility |
 
 **Response:**
 
 ```json
 {
   "type": "agent",
-  "message": "Based on what I know about you, try Nara Eatery…",
-  "data": {},
-  "tool_calls_used": 2
+  "message": "For ramen, look for a shop that…",
+  "data": { "reasoning_steps": [] },
+  "tool_calls_used": 0
 }
 ```
 
-| Field             | Type             | Notes                                                                                                          |
-| ----------------- | ---------------- | -------------------------------------------------------------------------------------------------------------- |
-| `type`            | `string`         | One of: `agent`, `consult`, `recall`, `clarification`, `error` (ADR-073 removed `extract-place` — saves no longer flow through chat) |
-| `message`         | `string`         | Human-readable response text                                                                                   |
-| `data`            | `object \| null` | Structured payload from downstream service; shape varies by `type` — see sections below                        |
-| `tool_calls_used` | `integer`        | Count of tool invocations (recall, consult) during this turn. Always present; `0` when no tools ran. Read by NestJS to increment the daily tool-call counter. |
-
-**Response Types by Intent:**
-
-### `consult`
-
-```json
-{
-  "type": "consult",
-  "message": "Here's my top pick for dinner nearby",
-  "data": {
-    "recommendation_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
-    "results": [
-      {
-        "place": {
-          /* PlaceObject — fully enriched (enriched=true) */
-        },
-        "source": "saved"
-      }
-    ],
-    "reasoning_steps": [
-      { "step": "parse_intent", "summary": "Detected: dinner, nearby, cheap" },
-      {
-        "step": "retrieve_candidates",
-        "summary": "12 saved + 8 discovered within 2km"
-      }
-    ]
-  }
-}
-```
-
-`data` (`ConsultResponse`):
-
-| Field               | Type              | Notes                                                                                             |
-| ------------------- | ----------------- | ------------------------------------------------------------------------------------------------- |
-| `recommendation_id` | `string \| null`  | UUID of the persisted row in `recommendations`. `null` if the background persist failed (ADR-060) |
-| `results`           | `ConsultResult[]` | Up to 3 items. Agent-driven ranking; order is not score-derived (ADR-058)                         |
-| `reasoning_steps`   | `ReasoningStep[]` | Flat trace for eval/debug; UI does not need to render                                             |
-
-`ConsultResult` shape:
-
-| Field    | Type                      | Notes                                                                                 |
-| -------- | ------------------------- | ------------------------------------------------------------------------------------- |
-| `place`  | `PlaceObject`             | Always fully enriched (`enriched=true`, Tier 2 + Tier 3 populated)                    |
-| `source` | `"saved" \| "discovered" \| "suggested"` | `"saved"` = from user's recall set; `"discovered"` = from keyword search; `"suggested"` = agent-supplied name validated via places provider |
+| Field             | Type             | Notes                                                                                          |
+| ----------------- | ---------------- | ---------------------------------------------------------------------------------------------- |
+| `type`            | `string`         | One of `agent`, `error`. ADR-075 removed `consult`/`recall`; ADR-073 had removed `extract-place`/`clarification`. No other values are emitted. |
+| `message`         | `string`         | Human-readable response text                                                                   |
+| `data`            | `object \| null` | `agent`: `{ "reasoning_steps": ReasoningStep[] }` (user-visible steps only). `error`: `{ "detail": string }` |
+| `tool_calls_used` | `integer`        | **Always `0`** — the agent has no tools (ADR-075). Retained for response-shape stability        |
 
 `ReasoningStep` shape:
 
-| Field        | Type                                              | Notes                                                                                                                                                   |
-| ------------ | ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `step`       | `string`                                          | Identifier: `agent.tool_decision`, `tool.summary`, `fallback`, `max_steps_detail`, etc.                                                                 |
-| `summary`    | `string`                                          | Human-readable description. For `agent.tool_decision` steps this is the LLM's reasoning text **truncated to 200 chars** — do not use as the full response |
-| `source`     | `"tool" \| "agent" \| "fallback"`                 | Which part of the graph produced this step                                                                                                              |
-| `tool_name`  | `"recall" \| "consult" \| null`         | Set iff `source == "tool"`, `null` otherwise (ADR-073 removed `"save"`)                                                                                                            |
-| `visibility` | `"user" \| "debug"`                               | Only `"user"` steps appear in API responses; `"debug"` steps go to Langfuse/SSE only                                                                   |
-| `duration_ms`| `float`                                           | Latency in ms. `0` for `agent.tool_decision` steps (agent node doesn't measure LLM latency); populated for tool steps                                   |
-| `timestamp`  | `ISO-8601 string`                                 | UTC timestamp when the step was recorded                                                                                                                |
-
-### `recall`
-
-```json
-{
-  "type": "recall",
-  "message": "Found 3 places matching your search",
-  "data": {
-    "results": [
-      {
-        "place": {
-          /* PlaceObject — Tier 2 may be present; enriched=false */
-        },
-        "match_reason": "semantic + keyword",
-        "relevance_score": 0.0187,
-        "score_type": "rrf"
-      }
-    ],
-    "total_count": 3,
-    "empty_state": false
-  }
-}
-```
-
-`data` (`RecallResponse`):
-
-| Field         | Type             | Notes                                                                        |
-| ------------- | ---------------- | ---------------------------------------------------------------------------- |
-| `results`     | `RecallResult[]` | Ordered by relevance when a query is present; by recency in filter-only mode |
-| `total_count` | `integer`        | Pre-`LIMIT` match count. Post-distance-filter this is best-effort            |
-| `empty_state` | `bool`           | `true` only when the user has zero saved places                              |
-
-`RecallResult` shape:
-
-| Field             | Type                                                          | Notes                                                                             |
-| ----------------- | ------------------------------------------------------------- | --------------------------------------------------------------------------------- |
-| `place`           | `PlaceObject`                                                 | Recall never enriches Tier 3 — `enriched` is always `false`                       |
-| `match_reason`    | `"filter" \| "semantic" \| "keyword" \| "semantic + keyword"` | Which retrieval path surfaced the row                                             |
-| `relevance_score` | `float \| null`                                               | Populated only in hybrid mode. Scale depends on `score_type`                      |
-| `score_type`      | `"rrf" \| "ts_rank" \| null`                                  | `rrf` scores are ~0.01–0.03; `ts_rank` scores are 0–1. Never compare across types |
-
-### `agent`
-
-Primary response type since M11 (ADR-065). Returned for all conversational turns that go through the LangGraph agent.
-
-```json
-{
-  "type": "agent",
-  "message": "Here are some ramen spots near you.",
-  "data": {
-    "reasoning_steps": [
-      {
-        "step": "agent.tool_decision",
-        "summary": "recall — user referenced saved places",
-        "source": "agent",
-        "tool_name": null,
-        "visibility": "user",
-        "duration_ms": 0.0,
-        "timestamp": "2026-04-23T10:00:00Z"
-      }
-    ],
-    "tool_results": [
-      {
-        "tool": "recall",
-        "tool_call_id": "toolu_01abc...",
-        "payload": { /* RecallResponse shape */ }
-      }
-    ]
-  },
-  "tool_calls_used": 2
-}
-```
-
-`data` fields:
-
-| Field             | Type               | Notes                                                                                     |
-| ----------------- | ------------------ | ----------------------------------------------------------------------------------------- |
-| `reasoning_steps` | `ReasoningStep[]`  | Only `visibility="user"` steps — `agent.tool_decision`, `tool.summary`, `fallback`        |
-| `tool_results`    | `ToolResult[]`     | Structured payloads from relevant tool calls this turn. When recall + consult both ran, only consult is included — consult already merges saved + discovered results so the recall payload is redundant. Empty array when no tools ran. |
-
-`ToolResult` shape:
-
-| Field          | Type             | Notes                                                                  |
-| -------------- | ---------------- | ---------------------------------------------------------------------- |
-| `tool`         | `string \| null` | Tool name: `"recall"` or `"consult"` (ADR-073 removed `"save"`)                        |
-| `tool_call_id` | `string \| null` | LangGraph tool call identifier                                         |
-| `payload`      | `object \| null` | Parsed JSON from the tool's service response; `null` if unparseable    |
-
-### `clarification`
-
-Reserved for future agent-side clarification flows. Not currently emitted — the save-time `needs_review` NodeInterrupt that previously triggered this was removed by ADR-071, and the save tool itself was removed by ADR-073.
+| Field         | Type                          | Notes                                                                       |
+| ------------- | ----------------------------- | --------------------------------------------------------------------------- |
+| `step`        | `string`                      | Identifier, e.g. `agent.response`, `fallback`                               |
+| `summary`     | `string`                      | Human-readable description (LLM reasoning text may be truncated)            |
+| `source`      | `"agent" \| "fallback"`       | Which node produced it. No `"tool"` source since ADR-075; `tool_name` is gone |
+| `visibility`  | `"user" \| "debug"`           | Only `"user"` steps appear in the JSON response; `"debug"` → Langfuse/SSE   |
+| `timestamp`   | `ISO-8601 string`             | UTC; when the step was recorded                                            |
+| `duration_ms` | `float \| null`               | Node latency; non-null in persisted steps                                  |
 
 ### `error`
 
 ```json
-{
-  "type": "error",
-  "message": "Something went wrong, try again",
-  "data": { "detail": "..." }
-}
+{ "type": "error", "message": "Something went wrong, try again", "data": { "detail": "..." } }
 ```
 
-| Field         | Type     | Notes                                                     |
-| ------------- | -------- | --------------------------------------------------------- |
-| `data.detail` | `string` | Internal detail string for logs; safe to ignore in the UI |
-
-All downstream exceptions are caught and surfaced as `type="error"` with HTTP 200 (not 5xx).
+`data.detail` is an internal string for logs — safe to ignore in the UI. All downstream exceptions are caught and surfaced as `type="error"` with **HTTP 200** (not 5xx).
 
 **HTTP Status Codes:**
 
-| Code  | When                                             |
-| ----- | ------------------------------------------------ |
-| `200` | All successful responses including clarification |
-| `400` | Malformed request body                           |
-| `422` | Validation error (FastAPI auto, per ADR-023)     |
-| `500` | Unhandled internal error                         |
-
-**Notes:**
-
-- `location` is forwarded to the agent and available to the consult tool; ignored for direct-response turns.
-- All downstream exceptions are caught and returned as `type="error"` with HTTP 200 (not 5xx).
-- Consult results are persisted to the `recommendations` table after a successful response (ADR-060). The response includes a `recommendation_id` (UUID) referencing the persisted row. Write failures are logged but do not fail the caller response — `recommendation_id` will be `null` in that case.
+| Code  | When                                         |
+| ----- | -------------------------------------------- |
+| `200` | All successful responses, including `error`  |
+| `400` | Malformed request body                       |
+| `422` | Validation error (FastAPI auto, per ADR-023) |
+| `500` | Unhandled internal error                     |
 
 ---
 
 ## POST /v1/chat/stream
 
-SSE streaming variant of the chat endpoint. Emits reasoning steps as they happen, then a final message frame and a done frame. Requires the agent to be enabled.
+SSE streaming variant. Emits reasoning steps as they happen, then a final message frame and a done frame. Requires the agent to be enabled.
 
 **Request:** Identical body to `POST /v1/chat`.
 
-**Response:** `Content-Type: text/event-stream`. Four frame types, emitted in this order:
+**Response:** `Content-Type: text/event-stream`. Frame types, in this order:
 
 ```
 event: reasoning_step
 data: <ReasoningStep JSON>
 
-event: tool_result
-data: {"tool": "consult", "tool_call_id": "toolu_01...", "payload": { /* ConsultResponse */ }}
-
 event: message
 data: {"content": "<final assistant text>"}
 
 event: done
-data: {"tool_calls_used": 2}
+data: {"tool_calls_used": 0}
 ```
 
-| Frame            | When emitted                                                           | Data shape                                                        |
-| ---------------- | ---------------------------------------------------------------------- | ----------------------------------------------------------------- |
-| `reasoning_step` | Each time a tool or agent node emits a custom event (real-time)        | `ReasoningStep` (all fields)                                      |
-| `tool_result`    | After graph completes — one frame per relevant tool result (see below) | `{"tool": string, "tool_call_id": string, "payload": object}`     |
-| `message`        | Once, after the graph completes, if there is text                      | `{"content": string}`                                             |
-| `done`           | Always last — even if no message was produced                          | `{"tool_calls_used": integer}`                                    |
+| Frame            | When emitted                                            | Data shape                       |
+| ---------------- | ------------------------------------------------------- | -------------------------------- |
+| `reasoning_step` | Each time the agent/fallback node emits a custom event  | `ReasoningStep` (all fields)     |
+| `message`        | Once, after the graph completes, if there is text       | `{"content": string}`            |
+| `done`           | Always last — even if no message was produced           | `{"tool_calls_used": 0}`         |
 
-**Tool result suppression rule** (applies to both SSE and non-SSE):
-
-- **Recall + consult turn** — only the `consult` tool_result is emitted. Recall is an internal step; consult already merges saved + discovered results.
-- **Recall-only turn** — the `recall` tool_result is emitted.
-
-**Expected client behaviour per frame type:**
-
-| Frame            | Client action                                                                 |
-| ---------------- | ----------------------------------------------------------------------------- |
-| `reasoning_step` | Show progress indicator (e.g. "Checking your saves…", "Ranking options…")    |
-| `tool_result`    | Render place cards as soon as they arrive — don't wait for `message`          |
-| `message`        | Render the final text bubble                                                  |
-| `done`           | Capture `tool_calls_used` for rate-limit tracking, then close the stream      |
+> ADR-075 removed all tools, so the stream emits **no `tool_result`
+> frames**. Any prior recall/consult tool-result handling in the client
+> is dead and should be removed.
 
 On error mid-stream:
 
@@ -364,12 +186,10 @@ event: error
 data: {"detail": "<error string>"}
 ```
 
-**HTTP Status Codes:**
-
-| Code | When                                          |
-| ---- | --------------------------------------------- |
-| `200`| Streaming started successfully                |
-| `400`| Agent disabled or graph unavailable           |
+| Code  | When                                |
+| ----- | ----------------------------------- |
+| `200` | Streaming started successfully      |
+| `400` | Agent disabled or graph unavailable |
 
 ---
 
@@ -380,32 +200,55 @@ Canonical product-facing extraction endpoint (ADR-073). The product repo calls t
 **Request:**
 
 ```json
-{
-  "raw_input": "https://www.tiktok.com/@user/video/123",
-  "user_id": "user-uuid"
-}
+{ "raw_input": "https://www.tiktok.com/@user/video/123", "user_id": "user-uuid" }
 ```
 
 | Field       | Type     | Required | Description                                                          |
 | ----------- | -------- | -------- | -------------------------------------------------------------------- |
-| `raw_input` | `string` | yes      | URL (TikTok / Instagram / YouTube / Google Maps list) or place name. |
-| `user_id`   | `string` | yes      | The submitting user's ID. Used as the `user_places` owner.           |
+| `raw_input` | `string` | yes      | URL (TikTok / Instagram / YouTube / Google Maps list) or place name  |
+| `user_id`   | `string` | yes      | The submitting user's ID. Used as the `user_places` owner            |
 
-**Response (200):** `ExtractPlaceResponse` — `places: list[ExtractPlaceItem]` with full evidence trail per item. Per ADR-071 every picker candidate is persisted with `approved=False`; the user curates after the fact via the product UI.
+**Response (200):** `ExtractPlaceResponse`:
 
-**Latency profile:**
+```json
+{
+  "status": "completed",
+  "results": [
+    {
+      "place": { /* PlaceCore */ },
+      "confidence": 0.82,
+      "evidence": [
+        { "producer": "tiktok_caption", "medium": "text", "snippet": "best ramen in Ari", "metadata": {} }
+      ]
+    }
+  ],
+  "raw_input": "https://www.tiktok.com/@user/video/123",
+  "request_id": "9f1c…",
+  "failure_reason": null,
+  "failure_message": null
+}
+```
 
-- Text input (a single place name) → typically <1 s.
-- URL input (TikTok/Instagram caption only) → 2–5 s.
-- URL input (video that needs yt-dlp + Whisper + vision frames) → 30–60 s. The client should show a progress indicator and tolerate a long synchronous response.
+| Field             | Type                                            | Notes                                                                                  |
+| ----------------- | ----------------------------------------------- | -------------------------------------------------------------------------------------- |
+| `status`          | `"pending" \| "completed" \| "failed"`          | Envelope-level only. `results` is non-empty **iff** `status == "completed"`             |
+| `results`         | `ExtractPlaceItem[]`                            | `{ place: PlaceCore, confidence: float (0–1), evidence: EvidenceDTO[] }`. **No per-item `status`** — ADR-071 saves every picker candidate with `approved=False`; the user curates later in the product UI |
+| `raw_input`       | `string \| null`                                | The original user-supplied string, verbatim                                            |
+| `request_id`      | `string \| null`                                | Correlation id                                                                          |
+| `failure_reason`  | `string \| null`                                | Populated only when `status == "failed"` (e.g. `unsupported_url`)                       |
+| `failure_message` | `string \| null`                                | Human-readable diagnostic, only when `status == "failed"`                               |
 
-**HTTP Status Codes:**
+`EvidenceDTO`: `{ producer: string, medium: string, snippet: string|null, metadata: object }`.
 
-| Code  | When                                                                  |
-| ----- | --------------------------------------------------------------------- |
-| `200` | Extraction completed — response includes any saved places + duplicates |
+ADR-074: results are cached by canonical URL — a repeat submission of the same URL by another user skips the pipeline and links the cached places to that user (~50 ms vs ~30 s).
+
+**Latency profile:** text → <1 s; caption-only URL → 2–5 s; video needing yt-dlp + Whisper + vision → 30–60 s (synchronous; show a progress indicator).
+
+| Code  | When                                                                                     |
+| ----- | ---------------------------------------------------------------------------------------- |
+| `200` | Extraction completed or failed — inspect `status` / `failure_reason` in the response     |
 | `400` | Malformed request (missing `raw_input` / `user_id`, or `raw_input` exceeds the size cap) |
-| `500` | Pipeline failure — see `error` field in response                       |
+| `500` | Unhandled pipeline failure                                                               |
 
 ---
 
@@ -413,72 +256,51 @@ Canonical product-facing extraction endpoint (ADR-073). The product repo calls t
 
 **Reserved for future async use.** No product flow writes status keys today — the canonical extraction path is synchronous `POST /v1/extract`. This route remains so a future async/background variant can plug in without API churn.
 
-**Request:** No body. `request_id` is a path parameter.
-
-**Response (200):** `ExtractPlaceResponse` — same shape as `POST /v1/extract`.
-
-**HTTP Status Codes:**
-
-| Code  | When                                                       |
-| ----- | ---------------------------------------------------------- |
-| `200` | Result found in Redis                                      |
-| `404` | Key not found — still running, or TTL expired              |
-
-Extraction results would be cached under the `extraction:v2:{request_id}` key prefix (ADR-063).
+**Response (200):** `ExtractPlaceResponse` — same shape as `POST /v1/extract`. `404` when the key is not found (still running, or TTL expired). Would be cached under `extraction:v2:{request_id}`.
 
 ---
 
 ## DELETE /v1/user/{user_id}/data
 
-Hard-deletes every trace of a user's **AI-owned data**. Does NOT delete the user account — that lives in NestJS/Clerk. Called by the product repo as part of its account-deletion flow: NestJS deletes its own `users` / `user_settings` rows and calls this endpoint to wipe the AI side.
+Hard-deletes a user's **AI-owned data**. Does NOT delete the user account — that lives in NestJS/Clerk. Called by the product repo's account-deletion flow after it deletes its own `users` / `user_settings` rows.
 
 **Request:**
 
 ```
 DELETE /v1/user/user_abc/data
 DELETE /v1/user/user_abc/data?scope=chat_history
-DELETE /v1/user/user_abc/data?scope=chat_history&scope=all
 ```
 
 **Response (204):** Empty body.
 
-**Optional query params:**
+| Param   | Type                                      | Description                                                                                              |
+| ------- | ----------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `scope` | repeated `DataScope` (`all` \| `chat_history`) | Selects what to delete. Omit to wipe everything (default). Unknown values → 422. A set containing `all` collapses to a full wipe. |
 
-| Param | Type | Description |
-| ----- | ---- | ----------- |
-| `scope` | repeated `DataScope` enum (`all` \| `chat_history`) | Selects what to delete. Repeat the param for multi-value. Omit to wipe everything (default; preserves the NestJS account-delete contract). Unknown values → 422 (FastAPI native enum validation). |
+**What gets deleted (default / `scope=all`):**
 
-`DataScope` values:
+1. `interactions` rows where `user_id = ?` (one DB transaction)
+2. `user_memories` rows where `user_id = ?`
+3. `taste_model` row for `user_id = ?`
+4. LangGraph checkpoint thread for `thread_id = user_id`
+5. Any pending taste-regen task in the in-memory debouncer
 
-- **`all`** (default) — full wipe across all 7 deletion targets below. Same as omitting the query param.
-- **`chat_history`** — clears only target #6 (LangGraph checkpoint thread) and target #7 (pending taste-regen task). Leaves all SQL data (places, taste_model, memories, interactions, recommendations) intact. Useful for resetting an agent that learned a stale pattern (e.g. "this URL always times out") without losing the user's saves.
+`scope=chat_history` performs only steps 4–5 (SQL untouched).
 
-A scope set containing `all` collapses to "wipe everything" regardless of any other scopes mixed in.
+> **ADR-078 change:** the `recommendations` table and the v1
+> `places`/`embeddings` tables were dropped, so they are no longer in
+> the sweep. User-saved places live in `user_places` (the `places`
+> catalog is shared/cross-user and is **not** user-scoped data); a
+> dedicated `user_places` erase path is a known follow-up, not wired
+> here.
 
-**What gets deleted (default / `scope=all`, in one DB transaction, then the checkpointer, then the in-memory debouncer):**
-
-1. `interactions` rows where `user_id = ?`
-2. `recommendations` rows where `user_id = ?`
-3. `user_memories` rows where `user_id = ?`
-4. `taste_model` row for `user_id = ?` (one per user)
-5. `places` rows where `user_id = ?` — `embeddings` cascade automatically via FK `ON DELETE CASCADE`
-6. LangGraph checkpoint thread for `thread_id = user_id` (= the agent conversation history across all turns)
-7. Any pending taste-regen task for the user in the in-memory debouncer
-
-**Notes:**
-
-- **Idempotent.** Calling on an absent user is still 204. The SQL deletes return 0 rows; `adelete_thread` is a no-op when the thread isn't there.
-- **Synchronous.** The endpoint blocks until the sweep completes. At portfolio volume the sweep is well under 1s. If a single user ever accumulates thousands of places this can move to a background task with a 202 response — see plan.
-- **Hard-delete only.** No soft-delete column, no grace window, no purge cron. This is a deliberate v1 simplification — soft-delete on `places` can be added later if a real GDPR / "oops recovery" requirement appears.
-- **No Redis cleanup.** All Redis keys in this repo are `place_id` or `request_id` scoped (see ADR-054); none are per-user.
-- **Caller trust.** No new auth — this matches every other route's "NestJS verified upstream" model.
-- **NestJS account-delete still uses no `scope`.** The product-side contract documents only the default full-wipe; `scope=chat_history` is reserved for direct frontend "Reset chat history" flows or future product features that NestJS proxies.
+**Notes:** idempotent (absent user → still 204); synchronous (sub-second at portfolio volume); hard-delete only; no per-user Redis keys to clean; trusted-upstream auth.
 
 ---
 
 ## POST /v1/signal
 
-Behavioral signal endpoint (ADR-060). Replaces `POST /v1/feedback`. Carries recommendation accept/reject feedback.
+Behavioral signal endpoint (ADR-060, narrowed by ADR-076 to recommendation accept/reject only; ADR-078 made it trusted/un-validated).
 
 **Request:**
 
@@ -491,101 +313,84 @@ Behavioral signal endpoint (ADR-060). Replaces `POST /v1/feedback`. Carries reco
 }
 ```
 
-| Field               | Type     | Required | Notes                                                      |
-| ------------------- | -------- | -------- | ---------------------------------------------------------- |
-| `signal_type`       | `string` | Yes      | `"recommendation_accepted"` or `"recommendation_rejected"` |
-| `user_id`           | `string` | Yes      | Clerk-issued user ID                                       |
-| `recommendation_id` | `string` | Yes      | Must exist in recommendations table                        |
-| `place_core_id`     | `string` | Yes      | `places.id` of the place (ADR-077; renamed from `place_id` to disambiguate from `user_place_id` / `provider_id`). Trusted, not validated. |
+| Field               | Type     | Required | Notes                                                                                                                 |
+| ------------------- | -------- | -------- | --------------------------------------------------------------------------------------------------------------------- |
+| `signal_type`       | `string` | Yes      | `"recommendation_accepted"` or `"recommendation_rejected"`                                                             |
+| `user_id`           | `string` | Yes      | Clerk-issued user ID                                                                                                   |
+| `recommendation_id` | `string` | Yes      | **Trusted, not validated.** ADR-078 dropped the `recommendations` table; the id is recorded on the event, never looked up |
+| `place_core_id`     | `string` | Yes      | `places.id` of the place (ADR-077; renamed from `place_id` to disambiguate from `user_place_id` / `provider_id`). Trusted, not validated |
 
-**Responses:** `202 { "status": "accepted" }`; `404` if recommendation_id unknown; `422` on schema errors (including unknown `signal_type`).
+**Responses:** `202 { "status": "accepted" }`; `422` on schema errors (including an unknown `signal_type`). **No `404`** — ADR-078 removed the recommendation existence check.
 
 ---
 
 ## GET /v1/health
 
-Health check endpoint. Returns service status and database connectivity.
-
-**Request:** No parameters, no body.
+Health check. **Request:** none.
 
 **Response (200):**
 
 ```json
-{
-  "status": "ok",
-  "name": "kebi",
-  "version": "0.1.0",
-  "db": "connected"
-}
+{ "status": "ok", "name": "kebi", "version": "0.1.0", "db": "connected" }
 ```
 
 | Field     | Type                            | Notes                                                                          |
 | --------- | ------------------------------- | ------------------------------------------------------------------------------ |
-| `status`  | `string`                        | Always `"ok"` when the service is up and this handler is reachable             |
-| `name`    | `string`                        | App name from `config/app.yaml` (`app.name`)                                   |
-| `version` | `string`                        | Package version from installed metadata; falls back to `"0.1.0"` if unresolved |
-| `db`      | `"connected" \| "disconnected"` | Result of a `SELECT 1` probe against the primary PostgreSQL connection         |
+| `status`  | `string`                        | Always `"ok"` when reachable                                                   |
+| `name`    | `string`                        | App name from `config/app.yaml`                                                |
+| `version` | `string`                        | Package version; falls back to `"0.1.0"`                                        |
+| `db`      | `"connected" \| "disconnected"` | `SELECT 1` probe result                                                        |
 
-Always HTTP 200 — DB outages surface via `db: "disconnected"`, not a non-2xx status.
+Always HTTP 200 — DB outages surface via `db: "disconnected"`.
 
 ---
 
 ## API Contract Summary
 
-| Endpoint                          | Purpose                                 | NestJS Sends                                                                                                                                                    | kebi Returns                                                                        |
-| --------------------------------- | --------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| POST /v1/chat                     | Unified conversational entry point      | user_id, message, optional location                                                                                                                             | type, message, data, tool_calls_used                                                     |
-| POST /v1/chat/stream              | SSE streaming chat                      | Same as POST /v1/chat                                                                                                                                           | reasoning_step frames, message frame, done frame (tool_calls_used)                       |
-| POST /v1/extract                  | Canonical extraction (save a place)     | raw_input, user_id                                                                                                                                              | ExtractPlaceResponse                                                                     |
-| GET /v1/extraction/{request_id}   | Poll background extraction (reserved)   | request_id (path param)                                                                                                                                         | ExtractPlaceResponse (200) or 404                                                        |
-| POST /v1/signal                   | Recommendation accept/reject feedback   | `signal_type` (recommendation_accepted/rejected), recommendation_id, place_core_id                                                                               | status (202)                                                                             |
-| GET /v1/health                    | Service health check                    | —                                                                                                                                                               | status, db connectivity                                                                  |
+| Endpoint                        | Purpose                              | NestJS Sends                                                   | kebi Returns                                          |
+| ------------------------------- | ------------------------------------ | -------------------------------------------------------------- | ----------------------------------------------------- |
+| POST /v1/chat                   | Conversational Q&A (zero-tool agent) | user_id, message, optional location                            | type (`agent`\|`error`), message, data, tool_calls_used (0) |
+| POST /v1/chat/stream            | SSE streaming chat                   | Same as POST /v1/chat                                           | reasoning_step frames, message frame, done frame      |
+| POST /v1/extract                | Canonical extraction (save a place)  | raw_input, user_id                                             | ExtractPlaceResponse                                  |
+| GET /v1/extraction/{request_id} | Poll background extraction (reserved) | request_id (path param)                                        | ExtractPlaceResponse (200) or 404                     |
+| POST /v1/signal                 | Recommendation accept/reject         | signal_type, user_id, recommendation_id, place_core_id         | status (202)                                          |
+| GET /v1/health                  | Service health check                 | —                                                              | status, db connectivity                               |
 
 ---
 
 ## Error Handling
 
-The AI service returns standard HTTP status codes:
+| Status  | Meaning                                | Product repo action                                     |
+| ------- | -------------------------------------- | ------------------------------------------------------- |
+| 200     | Success (including `type="error"`)     | Process response                                        |
+| 400     | Bad request (malformed input)          | Log error, return 400 to frontend                       |
+| 422     | Validation error                       | Return friendly message to frontend                     |
+| 500     | AI service internal error              | Log error, return 503 to frontend with retry suggestion |
+| Timeout | Service unreachable                    | Return 503 with "service temporarily unavailable"       |
 
-| Status  | Meaning                                                    | Product repo action                                     |
-| ------- | ---------------------------------------------------------- | ------------------------------------------------------- |
-| 200     | Success (including clarification and error type responses) | Process response                                        |
-| 400     | Bad request (malformed input)                              | Log error, return 400 to frontend                       |
-| 422     | Validation error                                           | Return friendly message to frontend                     |
-| 500     | AI service internal error                                  | Log error, return 503 to frontend with retry suggestion |
-| Timeout | Service unreachable                                        | Return 503 with "service temporarily unavailable"       |
-
-**Timeout policy:** Set HTTP client timeout to 30 seconds for all AI service calls. /v1/chat responses targeting consult intent may take up to 20s for complex queries.
+**Timeout policy:** 30 s HTTP client timeout for all AI calls. `POST /v1/extract` on a cold video URL can take up to ~60 s — size that path's timeout accordingly.
 
 ---
 
 ## Shared Configuration
 
-These values must stay in sync between both repos. A mismatch breaks the system.
+**Embedding dimensions:** 1024 (Voyage 4-lite). pgvector columns are owned by this repo's Alembic migrations; NestJS never defines vector columns.
 
-**Embedding dimensions:**
+**Database tables FastAPI owns (Alembic-managed; NestJS never writes them):**
 
-- Current: 1024 (Voyage 4-lite)
-- pgvector columns are fully owned by this repo's Alembic migrations — NestJS never defines vector columns
-- If the embedding model changes, only this repo's Alembic migration and config need updating
+- `places` — shared place catalog (renamed from `places_v2`, ADR-079)
+- `place_embeddings` — place vectors (renamed from `place_embeddings_v2`, ADR-079)
+- `user_places` — per-user saved-place links (`approved` curation flag)
+- `taste_model` — per-user taste profile
+- `interactions` — append-only behavioral signal log
+- `user_memories` — personal facts extracted from chat messages
 
-**Database tables FastAPI writes to:**
-
-- places
-- embeddings
-- taste_model
-- recommendations (ADR-060 — AI recommendation history, renamed from consult_logs)
-- user_memories (personal facts extracted from chat messages)
-- interaction_log (append-only behavioral signal log)
-
-Alembic in kebi owns migrations for these tables. NestJS never touches them. If the schema changes, run the migration from kebi only.
+> Dropped in ADR-078: v1 `places`/`embeddings` and `recommendations`.
 
 ---
 
 ## General Notes
 
-- All requests include `user_id` so FastAPI can load user-specific taste models and saved places.
-- FastAPI writes AI-generated data (places, embeddings, taste model, recommendations) directly to PostgreSQL.
-- NestJS writes product data (users, settings) to PostgreSQL.
-- Neither service writes to the other's tables.
-- The product repo is responsible for auth and validating `user_id` before calling these endpoints.
+- All requests include `user_id`; the product repo authenticates and validates it upstream (trusted-upstream model).
+- FastAPI owns all AI-generated data in PostgreSQL; NestJS owns product data (users, settings). Neither writes the other's tables.
+- The `places` / `place_embeddings` table rename (ADR-079) is a coordinated cross-repo change — deploy kebi and the product repo together.
