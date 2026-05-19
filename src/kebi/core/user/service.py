@@ -13,7 +13,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Callable
 from enum import Enum
+from typing import TYPE_CHECKING
 
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from sqlalchemy import delete
@@ -25,6 +27,9 @@ from kebi.db.models import (
     TasteModel,
     UserMemory,
 )
+
+if TYPE_CHECKING:
+    from kebi.core.places import UserPlacesRepo
 
 logger = logging.getLogger(__name__)
 
@@ -51,13 +56,16 @@ class DataScope(str, Enum):
 class UserDataDeletionService:
     """Erases every trace of a user's AI-owned data.
 
-    Hits three tables in one transaction (interactions, user_memories,
-    taste_model), then the LangGraph checkpoint thread (separate connection
-    pool), then any in-flight taste-regen task in the in-memory debouncer.
+    Hits four user-scoped tables in one transaction (interactions,
+    user_memories, taste_model, user_places), then the LangGraph
+    checkpoint thread (separate connection pool), then any in-flight
+    taste-regen task in the in-memory debouncer.
 
-    User-saved places live in the places catalog's per-user link table,
-    not here; that erase path is owned by places (out of scope for this
-    sweep — ADR-078 removed the legacy `places` table this used to hit).
+    The shared `places` catalog (and its embeddings) is deliberately NOT
+    touched: those rows are cross-user place identities, not this user's
+    data. Only the per-user `user_places` link rows — which carry the
+    user's saves plus the source URLs they personally submitted — are
+    user-owned and get wiped here.
 
     Does NOT delete the user account — NestJS owns user lifecycle. The
     product repo's account-delete flow calls this service to wipe the
@@ -69,10 +77,12 @@ class UserDataDeletionService:
         session_factory: async_sessionmaker[AsyncSession],
         checkpointer: AsyncPostgresSaver | None,
         regen_debouncer: RegenDebouncer,
+        user_places_repo_factory: Callable[[AsyncSession], UserPlacesRepo],
     ) -> None:
         self._session_factory = session_factory
         self._checkpointer = checkpointer
         self._regen_debouncer = regen_debouncer
+        self._user_places_repo_factory = user_places_repo_factory
 
     async def delete_user_data(
         self,
@@ -106,6 +116,9 @@ class UserDataDeletionService:
                 )
                 await session.execute(
                     delete(TasteModel).where(TasteModel.user_id == user_id)
+                )
+                await self._user_places_repo_factory(session).delete_by_user(
+                    user_id
                 )
 
         if wipe_all or DataScope.chat_history in active:

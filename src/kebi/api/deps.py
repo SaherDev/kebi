@@ -285,16 +285,19 @@ def get_user_data_deletion_service(
 ) -> UserDataDeletionService:
     """FastAPI dependency providing UserDataDeletionService.
 
-    Sweeps the five AI tables in one transaction (embeddings cascade
-    from places via FK), then deletes the LangGraph checkpoint thread,
-    then cancels any pending taste-regen task. Erases AI-owned data
-    only — NestJS is responsible for deleting the user account itself.
-    Hard-delete only, sync sweep, 204 No Content.
+    Sweeps the four user-scoped tables in one transaction (interactions,
+    user_memories, taste_model, user_places), then deletes the LangGraph
+    checkpoint thread, then cancels any pending taste-regen task. The
+    shared places/embeddings catalog is intentionally untouched (it is
+    cross-user, not this user's data). Erases AI-owned data only — NestJS
+    is responsible for deleting the user account itself. Hard-delete
+    only, sync sweep, 204 No Content.
     """
     return UserDataDeletionService(
         session_factory=_get_session_factory(),
         checkpointer=checkpointer,
         regen_debouncer=regen_debouncer,
+        user_places_repo_factory=UserPlacesRepo,
     )
 
 

@@ -28,10 +28,12 @@ async def delete_user_data(
 ) -> None:
     """Selectively delete a user's AI-owned data.
 
-    Default (no `scope`): hard-deletes every trace — sweeps the 6 AI
-    tables (embeddings cascade from places), deletes the LangGraph
-    checkpoint thread, and cancels any pending taste-regen task.
-    Idempotent — calling on an absent user is still 204.
+    Default (no `scope`): hard-deletes every trace — sweeps the four
+    user-scoped tables (interactions, user_memories, taste_model,
+    user_places) in one transaction, deletes the LangGraph checkpoint
+    thread, and cancels any pending taste-regen task. The shared
+    places/embeddings catalog is left intact (cross-user, not this
+    user's data). Idempotent — calling on an absent user is still 204.
 
     `scope=chat_history`: clears only the LangGraph checkpoint thread
     + pending taste-regen. Saves stay intact. Useful for resetting an

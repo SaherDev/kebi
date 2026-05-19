@@ -4,7 +4,17 @@ from __future__ import annotations
 
 import logging
 
-from sqlalchemy import Boolean, Column, DateTime, MetaData, String, Table, Text, select
+from sqlalchemy import (
+    Boolean,
+    Column,
+    DateTime,
+    MetaData,
+    String,
+    Table,
+    Text,
+    delete,
+    select,
+)
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -94,6 +104,19 @@ class UserPlacesRepo:
         result = await self._session.execute(stmt)
         await self._session.commit()
         return [_row_to_user_place(row._mapping) for row in result]
+
+    async def delete_by_user(self, user_id: str) -> int:
+        """Hard-delete every `user_places` row for `user_id`. Returns the
+        number of rows removed.
+
+        Idempotent — deleting for a user with no saved places is a 0-row
+        no-op. Unlike `save_user_places`, this does NOT commit: the caller
+        owns the transaction so the account-erase sweep can wipe
+        `user_places` atomically alongside the other AI tables.
+        """
+        stmt = delete(_UserPlacesTable).where(_u.user_id == user_id)
+        result = await self._session.execute(stmt)
+        return result.rowcount or 0
 
 
 # ---------------------------------------------------------------------------

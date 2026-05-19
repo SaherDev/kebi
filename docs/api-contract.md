@@ -282,17 +282,18 @@ DELETE /v1/user/user_abc/data?scope=chat_history
 1. `interactions` rows where `user_id = ?` (one DB transaction)
 2. `user_memories` rows where `user_id = ?`
 3. `taste_model` row for `user_id = ?`
-4. LangGraph checkpoint thread for `thread_id = user_id`
-5. Any pending taste-regen task in the in-memory debouncer
+4. `user_places` rows where `user_id = ?` (same transaction as 1–3)
+5. LangGraph checkpoint thread for `thread_id = user_id`
+6. Any pending taste-regen task in the in-memory debouncer
 
-`scope=chat_history` performs only steps 4–5 (SQL untouched).
+`scope=chat_history` performs only steps 5–6 (SQL untouched).
 
-> **ADR-078 change:** the `recommendations` table and the v1
-> `places`/`embeddings` tables were dropped, so they are no longer in
-> the sweep. User-saved places live in `user_places` (the `places`
-> catalog is shared/cross-user and is **not** user-scoped data); a
-> dedicated `user_places` erase path is a known follow-up, not wired
-> here.
+> **Scope note:** the shared `places` catalog and its `embeddings` are
+> **not** in the sweep — those rows are cross-user place identities, not
+> this user's data. Only the per-user `user_places` link rows (the
+> user's saves plus the source URLs they personally submitted) are
+> user-owned and get wiped. The `recommendations` table and the v1
+> `places`/`embeddings` tables were dropped by ADR-078.
 
 **Notes:** idempotent (absent user → still 204); synchronous (sub-second at portfolio volume); hard-delete only; no per-user Redis keys to clean; trusted-upstream auth.
 
