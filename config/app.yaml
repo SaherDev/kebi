@@ -44,7 +44,7 @@ models:
   # extraction pipeline.
   extractor:
     provider: openai
-    model: gpt-4o-mini
+    model: gpt-4o
     max_tokens: 512
     temperature: 0
   # Offline swap: set provider: ollama, model: gemma4:e2b (requires: ollama serve)
