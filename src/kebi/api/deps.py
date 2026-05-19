@@ -159,6 +159,15 @@ def _make_inline_level() -> EnrichmentLevel:
 
     Enrichers are pure caption/text producers. NER lives at the
     pipeline as the shared finalizer — runs after every executed level.
+
+    `SubtitleCheckEnricher` lives here (not in the deep level): it is a
+    cheap text producer (yt-dlp `--skip-download`), so harvesting
+    subtitles inline lets a subtitled video resolve and short-circuit
+    before the expensive deep level (Whisper + vision) runs. It
+    self-guards on no-URL / photo-post, and `WhisperAudioEnricher`
+    still early-returns when `context.transcript` is already set
+    (context persists across levels), so the deep-level Whisper is
+    still skipped when inline subtitles were found.
     """
     from kebi.core.extraction.circuit_breaker import (
         CircuitBreakerEnricher,
@@ -169,6 +178,9 @@ def _make_inline_level() -> EnrichmentLevel:
     )
     from kebi.core.extraction.enrichers.instagram_post import (
         InstagramPostEnricher,
+    )
+    from kebi.core.extraction.enrichers.subtitle_check import (
+        SubtitleCheckEnricher,
     )
     from kebi.core.extraction.enrichers.tiktok_caption import (
         TikTokCaptionEnricher,
@@ -191,6 +203,7 @@ def _make_inline_level() -> EnrichmentLevel:
                     CircuitBreakerEnricher(GoogleMapsListEnricher(http=http)),
                     CircuitBreakerEnricher(InstagramPostEnricher(http=http)),
                     CircuitBreakerEnricher(TikTokPhotoEnricher(http=http)),
+                    CircuitBreakerEnricher(SubtitleCheckEnricher()),
                 ]
             ),
         ],
@@ -210,16 +223,17 @@ def _get_inline_level() -> EnrichmentLevel:
 
 
 def _make_deep_level() -> EnrichmentLevel:
-    """Build the URL-only deep enrichment level (subtitle/audio/vision).
+    """Build the URL-only deep enrichment level (audio/vision).
 
-    Subtitle and Whisper are pure text producers — they populate
-    `context.transcript`. Vision goes image → place names directly via
-    a vision LLM (no text intermediate). NER lives at the pipeline as
-    the shared finalizer — runs after this level, sees the
-    just-populated transcript alongside any caption / supplementary
-    text, and emits one consolidated NER call.
+    Whisper is a pure text producer — it populates `context.transcript`
+    (and early-returns when subtitles already set it at the inline
+    level). Vision goes image → place names directly via a vision LLM
+    (no text intermediate). Subtitle harvesting moved to the inline
+    level — it is cheap and lets subtitled videos resolve without
+    paying for this level. NER lives at the pipeline as the shared
+    finalizer — runs after this level, sees the just-populated
+    transcript alongside any caption / supplementary text.
     """
-    from kebi.core.extraction.enrichers.subtitle_check import SubtitleCheckEnricher
     from kebi.core.extraction.enrichers.vision_frames import VisionFramesEnricher
     from kebi.core.extraction.enrichers.vision_images import VisionImagesEnricher
     from kebi.core.extraction.enrichers.whisper_audio import WhisperAudioEnricher
@@ -228,7 +242,6 @@ def _make_deep_level() -> EnrichmentLevel:
     return EnrichmentLevel(
         name="deep_enrichment",
         enrichers=[
-            SubtitleCheckEnricher(),
             WhisperAudioEnricher(
                 transcription_client=get_transcription_client(),
             ),
