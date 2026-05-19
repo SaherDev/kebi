@@ -515,8 +515,7 @@ async def test_source_label_per_user_ungated_global_alias_gated() -> None:
         "pc": None,
     }
 
-    # And it surfaces on the response item.
-    items = {i.place.place_name: i for i in resp.results}
-    assert items["Wat Phuttha Prommayan"].source_label == "Mirror Temple"
-    assert items["80th Anniversary Park"].source_label == "Park Sathorn"
-    assert items["Joe's Pizza"].source_label is None
+    # ADR-081: source_label is NOT on the extraction response — it
+    # lives only on the per-user save (read with saved places).
+    assert resp.status == "completed" and len(resp.results) == 3
+    assert not any(hasattr(i, "source_label") for i in resp.results)

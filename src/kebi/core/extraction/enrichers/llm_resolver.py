@@ -52,6 +52,17 @@ class _ResolvedCandidate(BaseModel):
             "description."
         )
     )
+    display_label: str = Field(
+        default="",
+        description=(
+            "The venue name AS THE USER SAW IT in the post, cleaned of "
+            "list numbering, decorations and emoji but NOT replaced "
+            "with the real/canonical name and NOT given a city suffix. "
+            "This is what we show the user so they recognise their "
+            "save. E.g. card '1. Mirror Temple' → 'Mirror Temple' "
+            "(even though search_query is 'Wat Phuttha Prommayan')."
+        ),
+    )
     model_config = ConfigDict(extra="forbid")
 
 
@@ -128,11 +139,17 @@ class LLMResolver:
             return self._degraded(context, names)
 
         queries: dict[str, str] = {}
+        display_labels: dict[str, str] = {}
         for c in response.candidates:
             q = c.search_query.strip() or c.raw_name.strip()
             if not q:
                 continue
-            queries[normalize_query(c.raw_name)] = q
+            key = normalize_query(c.raw_name)
+            queries[key] = q
+            # Clean human label the user saw; fall back to the raw name
+            # if the model left it blank (never the search query — that
+            # may be the swapped-in real name).
+            display_labels[key] = c.display_label.strip() or c.raw_name.strip()
 
         span.end(
             output={
@@ -143,6 +160,7 @@ class LLMResolver:
         )
         return ResolverOutput(
             queries=queries,
+            display_labels=display_labels,
             location=self._to_location(response.location, context),
             post_tags=llm_tags_to_place_tags(response.post_tags),
         )
@@ -151,9 +169,11 @@ class LLMResolver:
     def _degraded(
         context: ExtractionContext, names: list[str]
     ) -> ResolverOutput:
-        """Identity query map — search every raw name unchanged."""
+        """Identity maps — search and display every raw name unchanged."""
+        identity = {normalize_query(n): n for n in names}
         return ResolverOutput(
-            queries={normalize_query(n): n for n in names},
+            queries=identity,
+            display_labels=dict(identity),
             location=location_hint_from(context),
             post_tags=[],
         )

@@ -114,5 +114,39 @@ async def test_llm_failure_degrades_to_identity_map() -> None:
         normalize_query("Sorn"): "Sorn",
         normalize_query("Mezzaluna"): "Mezzaluna",
     }
+    # Degraded display labels mirror the identity map (raw names).
+    assert out.display_labels == {
+        normalize_query("Sorn"): "Sorn",
+        normalize_query("Mezzaluna"): "Mezzaluna",
+    }
     assert out.location is not None and out.location.address == "Bangkok"
     assert out.post_tags == []
+
+
+@pytest.mark.asyncio
+async def test_display_label_distinct_from_search_query() -> None:
+    """ADR-081: display_label is the clean name the user saw, NOT the
+    swapped-in real name (search_query) and NOT the raw numbered OCR."""
+    resp = _ResolverResponse(
+        candidates=[
+            _ResolvedCandidate(
+                raw_name="1. Mirror Temple",
+                search_query="Wat Phuttha Prommayan",
+                display_label="Mirror Temple",
+            ),
+            # Model left display_label blank → fall back to raw name.
+            _ResolvedCandidate(raw_name="SORN", search_query="Sorn Bangkok"),
+        ],
+        location=_ResolverLocation(),
+        post_tags=[],
+    )
+    out = await _resolver(resp).resolve(_ctx(["1. Mirror Temple", "SORN"]))
+
+    assert out.display_labels == {
+        normalize_query("1. Mirror Temple"): "Mirror Temple",
+        normalize_query("SORN"): "SORN",
+    }
+    # search_query is unchanged by this (still the real/searchable name).
+    assert out.queries[normalize_query("1. Mirror Temple")] == (
+        "Wat Phuttha Prommayan"
+    )

@@ -388,6 +388,9 @@ class ExtractionPipeline:
                     query_producer=producer,
                     query_medium=medium,
                     search_query=search_query,
+                    display_label=resolver_output.display_labels.get(
+                        normalize_query(raw), raw
+                    ),
                 )
             searched_queries.add(normalize_query(raw))
 

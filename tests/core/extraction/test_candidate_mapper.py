@@ -120,7 +120,9 @@ def test_candidate_to_core_aliases_optional() -> None:
     assert candidate_to_core(c, aliases=alias).place_name_aliases == alias
 
 
-def _search_set(raw_label: str, canonical: str) -> dict[str, AttributedSearchResult]:
+def _search_set(
+    raw_label: str, canonical: str, display_label: str = ""
+) -> dict[str, AttributedSearchResult]:
     return {
         "google:x": AttributedSearchResult(
             place=PlaceObject(
@@ -129,8 +131,47 @@ def _search_set(raw_label: str, canonical: str) -> dict[str, AttributedSearchRes
             query=raw_label,
             query_producer=Producer.VISION_FRAMES,
             query_medium=Medium.FRAME,
+            display_label=display_label,
         )
     }
+
+
+def test_reconcile_uses_resolver_display_label() -> None:
+    """The resolver already stripped the list number; reconcile takes
+    the clean display_label verbatim (search hit is the real name)."""
+    out = reconcile_picks(
+        [_vc()],
+        _search_set(
+            "1. Mirror Temple",  # raw producer name (numbered)
+            "Wat Phuttha Prommayan",  # canonical from search
+            display_label="Mirror Temple",  # resolver-cleaned
+        ),
+        ConfidenceConfig(),
+        ExtractionContext(url=None, user_id="u1"),
+    )
+    assert out[0].place_name == "Wat Phuttha Prommayan"
+    assert out[0].source_label == "Mirror Temple"
+
+
+def test_reconcile_source_label_none_when_display_equals_canonical() -> None:
+    out = reconcile_picks(
+        [_vc()],
+        _search_set("3. Wat Paknam", "Wat Paknam", display_label="Wat Paknam"),
+        ConfidenceConfig(),
+        ExtractionContext(url=None, user_id="u1"),
+    )
+    assert out[0].source_label is None
+
+
+def test_reconcile_falls_back_to_query_when_no_display_label() -> None:
+    """Degraded resolver path: no display_label → use the raw query."""
+    out = reconcile_picks(
+        [_vc()],
+        _search_set("Joe's Pizza", "Joe's Pizza Tokyo"),
+        ConfidenceConfig(),
+        ExtractionContext(url=None, user_id="u1"),
+    )
+    assert out[0].source_label == "Joe's Pizza"
 
 
 def test_reconcile_sets_source_label_when_raw_differs_from_canonical() -> None:

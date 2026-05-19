@@ -87,6 +87,10 @@ class AttributedSearchResult:
     # `_evidence_for_pick` normalize-join against `context.known_places`
     # remains stable.
     search_query: str = ""
+    # The clean human label the user saw in the post (resolver-LLM
+    # produced — ADR-081), distinct from both the canonical name and
+    # the search query. Empty ⇒ fall back to `query`.
+    display_label: str = ""
 
 
 def search_results_to_picker_input(
@@ -214,11 +218,13 @@ def reconcile_picks(
         # TikTok card title), kept only when it differs from the
         # canonical name — that difference is the whole point of
         # showing the user the name they know it by.
-        raw_label = attributed.query.strip()
+        # Resolver-cleaned display label (ADR-081); fall back to the
+        # raw producer name only if the resolver produced none.
+        label = (attributed.display_label or attributed.query).strip()
         source_label = (
-            raw_label
-            if raw_label
-            and normalize_query(raw_label) != normalize_query(place.place_name)
+            label
+            if label
+            and normalize_query(label) != normalize_query(place.place_name)
             else None
         )
         out.append(
@@ -328,6 +334,12 @@ class ResolverOutput:
     """
 
     queries: dict[str, str] = field(default_factory=dict)
+    # `normalize_query(raw KnownPlace name)` → the clean human label
+    # the user saw in the post (list numbering / decorations / emoji
+    # stripped by the resolver LLM, NOT swapped for the canonical or
+    # search name). Drives `user_places.source_label` + shared aliases
+    # (ADR-081). Absent ⇒ fall back to the raw name.
+    display_labels: dict[str, str] = field(default_factory=dict)
     location: LocationContext | None = None
     post_tags: list[PlaceTag] = field(default_factory=list)
 

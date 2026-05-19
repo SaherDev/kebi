@@ -108,7 +108,6 @@ def _candidate_to_item_dict(
     return {
         "place": place.model_dump(mode="json"),
         "confidence": candidate.confidence,
-        "source_label": candidate.source_label,
         "evidence": [
             {
                 "producer": e.producer.value,

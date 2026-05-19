@@ -24,6 +24,16 @@ candidate with:
   city appended ("Sorn Bangkok", "Mezzaluna Bangkok") — without it the
   search returns same-name venues in other cities and the place is
   lost. When in doubt, append the city.
+- `display_label`: the venue name AS THE USER SAW IT in the post —
+  the on-screen card title or caption label — cleaned ONLY of list
+  numbering ("1. ", "#3 "), ranking decorations and emoji. This is
+  what the user will be shown so they recognise their save, so:
+  do NOT append a city, and do NOT swap it for the real/canonical
+  name even when section 1a maps it to one. "1. Mirror Temple" →
+  display_label "Mirror Temple" while search_query is "Wat Phuttha
+  Prommayan". "3. Wat Paknam" → display_label "Wat Paknam" while
+  search_query is "Wat Paknam Bangkok". If the post already uses the
+  plain venue name, display_label is just that name cleaned.
 
 DROP non-place noise — omit it from `candidates` entirely (do not emit
 a candidate for it). Noise includes: generic words ("Food", "Brunch"),
