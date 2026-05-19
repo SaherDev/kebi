@@ -239,13 +239,18 @@ def _make_deep_level() -> EnrichmentLevel:
     from kebi.core.extraction.enrichers.whisper_audio import WhisperAudioEnricher
 
     vision_extractor = get_vision_extractor()
+    extraction_cfg = get_config().extraction
     return EnrichmentLevel(
         name="deep_enrichment",
         enrichers=[
             WhisperAudioEnricher(
                 transcription_client=get_transcription_client(),
+                config=extraction_cfg.whisper,
             ),
-            VisionFramesEnricher(vision_extractor=vision_extractor),
+            VisionFramesEnricher(
+                vision_extractor=vision_extractor,
+                config=extraction_cfg.vision,
+            ),
             VisionImagesEnricher(
                 vision_extractor=vision_extractor,
                 http=get_shared_http_client(),

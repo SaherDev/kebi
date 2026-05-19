@@ -35,7 +35,7 @@ class VisionExtractorProtocol(Protocol):
 
 
 class OpenAIVisionExtractor:
-    """OpenAI vision implementation — GPT-4o-mini, base64 PNG frames, bottom-third crop."""
+    """OpenAI vision implementation — GPT-4o-mini, base64 PNG full frames."""
 
     def __init__(self, model: str, api_key: str | None = None) -> None:
         self._model = model

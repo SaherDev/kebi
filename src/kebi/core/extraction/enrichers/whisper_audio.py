@@ -101,7 +101,11 @@ class WhisperAudioEnricher:
 
     def _get_cdn_url(self, url: str) -> str:
         result = subprocess.run(
-            ["yt-dlp", "--get-url", "-f", "ba", url],
+            # `ba/b`: best audio-only, falling back to best overall.
+            # TikTok often serves only muxed mp4 (no audio-only stream);
+            # ffmpeg (-x below) extracts the audio track from the muxed
+            # container regardless.
+            ["yt-dlp", "--get-url", "-f", "ba/b", url],
             capture_output=True,
             text=True,
             check=True,
@@ -113,7 +117,7 @@ class WhisperAudioEnricher:
             [
                 "yt-dlp",
                 "-f",
-                "ba",
+                "ba/b",  # audio-only, else muxed (see _get_cdn_url note)
                 "-x",
                 "--audio-format",
                 self._config.audio_format,

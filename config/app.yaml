@@ -164,9 +164,17 @@ extraction:
   circuit_breaker_threshold: 3
   circuit_breaker_cooldown: 900
   vision:
-    max_frames: 5
-    scene_threshold: 0.3
-    timeout_seconds: 10
+    # Listicle posts ("10 must-visit places") show one numbered card per
+    # place; 14 covers a 10-item list plus intro/outro/duplicate scene
+    # cuts. Dedup + the classifier discard near-duplicate frames.
+    max_frames: 14
+    # 0.2 (was 0.3): listicle cards cut between visually similar shots
+    # (aerial temple → aerial temple); 0.3 missed most transitions and
+    # sampled only ~5 of 10 cards.
+    scene_threshold: 0.2
+    # 25 (was 10): budget covers download + ffmpeg decode + one vision
+    # call over up to `max_frames` images. Deep level runs async.
+    timeout_seconds: 25
   whisper:
     timeout_seconds: 8
     audio_format: opus
