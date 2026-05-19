@@ -4,12 +4,42 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from kebi.core.extraction.enrichers.vision_frames import VisionFramesEnricher
+from kebi.core.extraction.enrichers.vision_frames import (
+    VisionFramesEnricher,
+    _build_ffmpeg_vf,
+    _split_png_frames,
+)
 from kebi.core.extraction.types import (
     ExtractionContext,
     Medium,
     Producer,
 )
+
+_PNG_SIG = b"\x89PNG\r\n\x1a\n"
+
+
+class TestSplitPngFrames:
+    def test_recovers_all_frames_when_idat_contains_literal_iend(self) -> None:
+        # Photographic IDAT data routinely contains the bytes "IEND" by
+        # chance. The old IEND-scanning split truncated such a frame and
+        # then skipped every frame after it; signature-based split must
+        # return both frames byte-for-byte intact.
+        frame1 = _PNG_SIG + b"AAAA" + b"IEND" + b"BBBBBBBB"
+        frame2 = _PNG_SIG + b"CCCCCCCC"
+        out = _split_png_frames(frame1 + frame2)
+        assert out == [frame1, frame2]
+        assert all(f.startswith(_PNG_SIG) for f in out)
+
+    def test_empty_and_headerless_input(self) -> None:
+        assert _split_png_frames(b"") == []
+        assert _split_png_frames(b"not a png at all") == []
+
+
+def test_build_ffmpeg_vf_has_no_crop_and_downscales() -> None:
+    vf = _build_ffmpeg_vf(0.2)
+    assert "crop" not in vf  # bottom-third crop removed (dropped top/center text)
+    assert "scale=-2:640" in vf
+    assert "scene\\,0.2" in vf
 
 
 @pytest.fixture
