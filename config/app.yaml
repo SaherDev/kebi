@@ -155,11 +155,10 @@ extraction:
       list: 0.95
     corroboration_bonus: 0.10
     max_score: 0.97
-    # ADR-057: two-band save gate.
-    #   confidence < save_threshold    → not written, surfaces as "failed".
-    #   save_threshold ≤ c < confident → written with status "needs_review".
-    #   confidence ≥ confident_threshold → written silently as "saved".
-    save_threshold: 0.30
+    # Confidence is no longer a write gate (ADR-071 — every picker
+    # output is saved). `confident_threshold` now gates only the
+    # ADR-081 shared-alias contribution: a source label enters the
+    # global place_name_aliases only when the pick is at/above it.
     confident_threshold: 0.70
   circuit_breaker_threshold: 3
   circuit_breaker_cooldown: 900

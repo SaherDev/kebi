@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import datetime
 from typing import Protocol
 
@@ -105,6 +106,7 @@ class UserPlacesServiceProtocol(Protocol):
         places: list[PlaceCore],
         source: PlaceSource,
         source_url: str | None,
+        source_labels: Mapping[str, str | None] | None = None,
     ) -> list[UserPlace]: ...
 
     async def get_user_places(self, user_id: str) -> list[SavedPlaceView]: ...

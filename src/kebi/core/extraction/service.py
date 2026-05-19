@@ -26,6 +26,7 @@ pipeline + upsert and just link the cached `PlaceCore`s to their own
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from typing import Any
 from uuid import uuid4
 
@@ -34,6 +35,7 @@ from kebi.api.schemas.extract_place import (
     ExtractPlaceResponse,
     FailureReason,
 )
+from kebi.core.config import get_config
 from kebi.core.events.dispatcher import EventDispatcherProtocol
 from kebi.core.events.events import PlaceSaved
 from kebi.core.extraction.candidate_mapper import candidate_to_core
@@ -49,6 +51,7 @@ from kebi.core.extraction.url_source import source_from_url
 from kebi.core.places import (
     DuplicateUserPlaceError,
     PlaceCore,
+    PlaceNameAlias,
     PlaceSource,
     PlaceUpsertServiceProtocol,
     UserPlacesServiceProtocol,
@@ -105,6 +108,7 @@ def _candidate_to_item_dict(
     return {
         "place": place.model_dump(mode="json"),
         "confidence": candidate.confidence,
+        "source_label": candidate.source_label,
         "evidence": [
             {
                 "producer": e.producer.value,
@@ -335,6 +339,7 @@ class ExtractionService:
         cores: list[PlaceCore],
         source: PlaceSource | None,
         source_url: str | None,
+        source_labels: Mapping[str, str | None] | None = None,
     ) -> set[str]:
         """Link `cores` to `user_places` and fire `PlaceSaved` for the
         newly-linked subset. Returns the set of `place_id`s that
@@ -361,6 +366,7 @@ class ExtractionService:
                 places=cores,
                 source=save_source,
                 source_url=source_url,
+                source_labels=source_labels,
             )
         except DuplicateUserPlaceError as exc:
             duplicate_place_ids = set(exc.conflicts)
@@ -373,6 +379,7 @@ class ExtractionService:
                     places=non_duplicates,
                     source=save_source,
                     source_url=source_url,
+                    source_labels=source_labels,
                 )
 
         linked_place_core_ids = [
@@ -405,7 +412,27 @@ class ExtractionService:
         already-linked. The saved/duplicate distinction is an internal
         optimization, not part of the response contract (ADR-071).
         """
-        cores = [candidate_to_core(c) for c in candidates]
+        # ADR-081: the as-seen label feeds the shared `place_name_aliases`
+        # only for high-confidence picks — a low-confidence (possibly
+        # wrong) match must not poison global search. The per-user
+        # `source_label` is ungated (it's the user's own memory) and is
+        # threaded separately via `source_labels` below.
+        confident_threshold = (
+            get_config().extraction.confidence.confident_threshold
+        )
+        alias_source = (source or PlaceSource.manual).value
+        cores = [
+            candidate_to_core(
+                c,
+                aliases=(
+                    [PlaceNameAlias(value=c.source_label, source=alias_source)]
+                    if c.source_label
+                    and c.confidence >= confident_threshold
+                    else None
+                ),
+            )
+            for c in candidates
+        ]
         persisted: list[PlaceCore] = await self._upsert.upsert_and_embed(cores)
 
         persisted_by_pid: dict[str, PlaceCore] = {
@@ -418,12 +445,21 @@ class ExtractionService:
             and persisted_by_pid[c.provider_id].id is not None
         ]
 
+        # Per-user display label (ungated): persisted place id → the
+        # name this user saw the place as in the post.
+        source_labels: dict[str, str | None] = {}
+        for c in candidates:
+            persisted_core = persisted_by_pid.get(c.provider_id)
+            if persisted_core is not None and persisted_core.id is not None:
+                source_labels[persisted_core.id] = c.source_label
+
         await self._link_to_user(
             user_id=user_id,
             request_id=request_id,
             cores=eligible_cores,
             source=source,
             source_url=source_url,
+            source_labels=source_labels,
         )
 
         items: list[ExtractPlaceItem] = []

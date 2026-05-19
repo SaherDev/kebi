@@ -38,6 +38,7 @@ _UserPlacesTable = Table(
     Column("note", Text),
     Column("source", String),
     Column("source_url", Text),
+    Column("source_label", Text),
     Column("saved_at", DateTime(timezone=True)),
     Column("visited_at", DateTime(timezone=True)),
 )
@@ -135,6 +136,7 @@ def _user_place_to_dict(up: UserPlace) -> dict[str, object]:
         "note": up.note,
         "source": up.source.value,
         "source_url": up.source_url,
+        "source_label": up.source_label,
         "saved_at": up.saved_at,
         "visited_at": up.visited_at,
     }
@@ -154,6 +156,7 @@ def _row_to_user_place(row: object) -> UserPlace:
         note=m.get("note"),
         source=PlaceSource(m["source"]),
         source_url=m.get("source_url"),
+        source_label=m.get("source_label"),
         saved_at=m["saved_at"],
         visited_at=m.get("visited_at"),
     )

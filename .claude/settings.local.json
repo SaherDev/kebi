@@ -53,7 +53,24 @@
       "Bash(grep -cE \"\\(src/|tests/|config/|docs/|kebi-config/|poetry run|`POST)",
       "Bash(@asynccontextmanager)",
       "Bash(xargs cat *)",
-      "Bash(pip download *)"
+      "Bash(pip download *)",
+      "Bash(sort -t- -k2 -n)",
+      "Bash(sed -n '118,124p;165,185p;700,705p' tests/core/places_v2/test_search_service.py)",
+      "Bash(sed -n '50,60p;115,125p;158,200p' tests/core/places_v2/test_google_client.py)",
+      "Bash(sed -n '275,285p' src/kebi/core/extraction/extraction_pipeline.py)",
+      "Bash(sed -i '' '121s/\\\\[\"\\\\\\\\1\"\\\\]/[\"Thai restaurants Bangkok\"]/' test_search_service.py)",
+      "Bash(sed -i '' '167s/\\\\[\"\\\\\\\\1\"\\\\]/[\"ghost town\"]/' test_search_service.py)",
+      "Bash(sed -i '' '182s/\\\\[\"\\\\\\\\1\"\\\\]/[\"busy\"]/' test_search_service.py)",
+      "Bash(sed -i '' '702s/\\\\[\"\\\\\\\\1\"\\\\]/[\"x\"]/' test_search_service.py)",
+      "Bash(sed -i '' '55s/\\\\[\"\\\\\\\\1\"\\\\]/[\"Thai food\"]/' test_google_client.py)",
+      "Bash(find *)",
+      "Bash(alembic heads *)",
+      "Bash(alembic history *)",
+      "Bash(xargs basename -a)",
+      "Bash(cat)",
+      "Bash(chmod +x /tmp/count_refs.sh)",
+      "Bash(bash /tmp/count_refs.sh)",
+      "Read(//private/tmp/**)"
     ]
   }
 }

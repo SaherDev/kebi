@@ -4,14 +4,29 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from kebi.core.config import ConfidenceConfig
 from kebi.core.extraction.candidate_mapper import (
     AttributedSearchResult,
+    candidate_to_core,
     llm_tags_to_place_tags,
     location_hint_from,
     merge_tags,
+    reconcile_picks,
 )
-from kebi.core.extraction.types import ExtractionContext, Medium, Producer
-from kebi.core.places import PlaceObject, PlaceTag, TagType
+from kebi.core.extraction.types import (
+    Evidence,
+    ExtractionContext,
+    Medium,
+    Producer,
+    ValidatedCandidate,
+)
+from kebi.core.places import (
+    PlaceCategory,
+    PlaceNameAlias,
+    PlaceObject,
+    PlaceTag,
+    TagType,
+)
 
 
 @dataclass
@@ -80,3 +95,65 @@ def test_location_hint_from_uses_location_tag() -> None:
     ctx.location_tag = "  Bangkok  "
     hint = location_hint_from(ctx)
     assert hint is not None and hint.address == "Bangkok"
+
+
+# ---------------------------------------------------------------------------
+# ADR-081: candidate_to_core aliases + reconcile_picks source_label
+# ---------------------------------------------------------------------------
+
+
+def _vc(provider_id: str = "google:x") -> ValidatedCandidate:
+    return ValidatedCandidate(
+        place_name="ignored — reconcile sources it from the search hit",
+        provider_id=provider_id,
+        categories=[PlaceCategory.restaurant],
+        tags=[],
+        confidence=0.0,
+        evidence=[Evidence(Producer.LLM_NER, Medium.CAPTION)],
+    )
+
+
+def test_candidate_to_core_aliases_optional() -> None:
+    c = _vc()
+    assert candidate_to_core(c).place_name_aliases == []
+    alias = [PlaceNameAlias(value="Mirror Temple", source="tiktok")]
+    assert candidate_to_core(c, aliases=alias).place_name_aliases == alias
+
+
+def _search_set(raw_label: str, canonical: str) -> dict[str, AttributedSearchResult]:
+    return {
+        "google:x": AttributedSearchResult(
+            place=PlaceObject(
+                provider_id="google:x", place_name=canonical, categories=[]
+            ),
+            query=raw_label,
+            query_producer=Producer.VISION_FRAMES,
+            query_medium=Medium.FRAME,
+        )
+    }
+
+
+def test_reconcile_sets_source_label_when_raw_differs_from_canonical() -> None:
+    ctx = ExtractionContext(url=None, user_id="u1")
+    out = reconcile_picks(
+        [_vc()],
+        _search_set("Mirror Temple", "Wat Phuttha Prommayan"),
+        ConfidenceConfig(),
+        ctx,
+    )
+    assert len(out) == 1
+    assert out[0].place_name == "Wat Phuttha Prommayan"
+    assert out[0].source_label == "Mirror Temple"
+
+
+def test_reconcile_source_label_none_when_normalized_equal() -> None:
+    ctx = ExtractionContext(url=None, user_id="u1")
+    # Differs only by case/punctuation/whitespace → not a distinct label.
+    out = reconcile_picks(
+        [_vc()],
+        _search_set("  joe's  PIZZA ", "Joe's Pizza"),
+        ConfidenceConfig(),
+        ctx,
+    )
+    assert len(out) == 1
+    assert out[0].source_label is None

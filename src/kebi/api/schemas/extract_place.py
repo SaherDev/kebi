@@ -62,6 +62,13 @@ class ExtractPlaceItem(BaseModel):
 
     place: PlaceCore
     confidence: float
+    # ADR-081: the name this place was shown as in the source post
+    # (e.g. a TikTok card label "Mirror Temple") when it differs from
+    # the canonical `place.place_name`; null when they coincide. The
+    # product chooses which to headline — `place_name` is the canonical
+    # identity, `source_label` is the name the user knows it by. Also
+    # persisted per save on `user_places.source_label`.
+    source_label: str | None = None
     evidence: list[EvidenceDTO] = Field(default_factory=list)
 
     @field_validator("confidence")

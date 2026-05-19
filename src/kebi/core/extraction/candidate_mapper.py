@@ -37,6 +37,7 @@ from kebi.core.places import (
     LocationContext,
     PlaceCategory,
     PlaceCore,
+    PlaceNameAlias,
     PlaceObject,
     PlaceTag,
     TagType,
@@ -112,15 +113,22 @@ def search_results_to_picker_input(
     return rows
 
 
-def candidate_to_core(c: ValidatedCandidate) -> PlaceCore:
+def candidate_to_core(
+    c: ValidatedCandidate,
+    aliases: list[PlaceNameAlias] | None = None,
+) -> PlaceCore:
     """Build a v2 `PlaceCore` from a `ValidatedCandidate` for upsert.
 
     Called once per saved candidate at the persistence boundary inside
-    `ExtractionService.run`.
+    `ExtractionService.run`. `aliases` is the optional shared
+    `place_name_aliases` contribution — the caller owns the
+    confidence gate and source attribution (ADR-081), so this stays a
+    pure constructor. The upsert merge dedups by value / existing-wins.
     """
     return PlaceCore(
         provider_id=c.provider_id,
         place_name=c.place_name,
+        place_name_aliases=aliases or [],
         categories=c.categories,
         tags=c.tags,
         location=c.location,
@@ -202,6 +210,17 @@ def reconcile_picks(
             continue
 
         place = attributed.place
+        # The raw producer label the user saw in the post (e.g. a
+        # TikTok card title), kept only when it differs from the
+        # canonical name — that difference is the whole point of
+        # showing the user the name they know it by.
+        raw_label = attributed.query.strip()
+        source_label = (
+            raw_label
+            if raw_label
+            and normalize_query(raw_label) != normalize_query(place.place_name)
+            else None
+        )
         out.append(
             ValidatedCandidate(
                 place_name=place.place_name,
@@ -212,6 +231,7 @@ def reconcile_picks(
                 evidence=evidence,
                 subcategory=pick.subcategory,
                 location=place.location,
+                source_label=source_label,
             )
         )
     return out

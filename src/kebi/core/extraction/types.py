@@ -193,3 +193,9 @@ class ValidatedCandidate:
     evidence: list[Evidence]
     subcategory: str | None = None
     location: LocationContext | None = None
+    # The name this place was shown as in the source post (the raw
+    # producer label, e.g. a TikTok card title "Mirror Temple"), set
+    # only when it differs from the canonical `place_name`. Threaded to
+    # the per-user `user_places.source_label` (ungated) and, for
+    # high-confidence picks, to the shared `place_name_aliases`.
+    source_label: str | None = None

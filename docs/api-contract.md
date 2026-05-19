@@ -217,6 +217,7 @@ Canonical product-facing extraction endpoint (ADR-073). The product repo calls t
     {
       "place": { /* PlaceCore */ },
       "confidence": 0.82,
+      "source_label": "Mirror Temple",
       "evidence": [
         { "producer": "tiktok_caption", "medium": "text", "snippet": "best ramen in Ari", "metadata": {} }
       ]
@@ -232,7 +233,7 @@ Canonical product-facing extraction endpoint (ADR-073). The product repo calls t
 | Field             | Type                                            | Notes                                                                                  |
 | ----------------- | ----------------------------------------------- | -------------------------------------------------------------------------------------- |
 | `status`          | `"pending" \| "completed" \| "failed"`          | Envelope-level only. `results` is non-empty **iff** `status == "completed"`             |
-| `results`         | `ExtractPlaceItem[]`                            | `{ place: PlaceCore, confidence: float (0–1), evidence: EvidenceDTO[] }`. **No per-item `status`** — ADR-071 saves every picker candidate with `approved=False`; the user curates later in the product UI |
+| `results`         | `ExtractPlaceItem[]`                            | `{ place: PlaceCore, confidence: float (0–1), source_label: string\|null, evidence: EvidenceDTO[] }`. **No per-item `status`** — ADR-071 saves every picker candidate with `approved=False`; the user curates later in the product UI |
 | `raw_input`       | `string \| null`                                | The original user-supplied string, verbatim                                            |
 | `request_id`      | `string \| null`                                | Correlation id                                                                          |
 | `failure_reason`  | `string \| null`                                | Populated only when `status == "failed"` (e.g. `unsupported_url`)                       |
@@ -240,7 +241,9 @@ Canonical product-facing extraction endpoint (ADR-073). The product repo calls t
 
 `EvidenceDTO`: `{ producer: string, medium: string, snippet: string|null, metadata: object }`.
 
-ADR-074: results are cached by canonical URL — a repeat submission of the same URL by another user skips the pipeline and links the cached places to that user (~50 ms vs ~30 s).
+ADR-081: `source_label` is the name the place was shown as in the source post (e.g. a TikTok card title "Mirror Temple") when it differs from the canonical `place.place_name`; `null` when they coincide. `place.place_name` is the canonical identity; `source_label` is the name the user knows it by — the product chooses which to headline. It is also persisted per save on `user_places.source_label`. Independently, a confidently-matched `source_label` is added to the shared `place.place_name_aliases` (which feeds search); low-confidence labels stay per-user-only and never enter shared search.
+
+ADR-074: results are cached by canonical URL — a repeat submission of the same URL by another user skips the pipeline and links the cached places to that user (~50 ms vs ~30 s). The cached payload includes `source_label`.
 
 **Latency profile:** text → <1 s; caption-only URL → 2–5 s; video needing yt-dlp + Whisper + vision → 30–60 s (synchronous; show a progress indicator).
 
