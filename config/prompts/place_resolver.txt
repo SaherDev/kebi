@@ -30,6 +30,32 @@ a candidate for it). Noise includes: generic words ("Food", "Brunch"),
 section headers ("Top 5 Restaurants"), hashtags, cities/countries on
 their own, people, dishes.
 
+# 1a. Caption name-mapping (HARD RULE)
+
+Listicle posts almost always spell out each on-screen card's REAL
+venue name in the caption / title / transcript / supplementary text,
+mapped from the stylized label shown on screen. Recognize these
+mappings — the label (or its list number) on the left, the real name
+on the right:
+- "Mirror Temple – Wat Phuttha Prommayan"
+- "Nextropia – A glimpse of the future in Siam Paragon"
+- "<label>: <name>", "<label> (<name>)", "1. <label> — <name>",
+  numbered lines.
+
+When a `known_places` entry matches the label side of such a mapping,
+set `search_query` to the REAL venue name from the caption side (then
+apply the section-2 city-append rule to THAT name). The on-screen
+label is frequently stylized or colloquial and not searchable on its
+own ("Mirror Temple" finds nothing — "Wat Phuttha Prommayan" does);
+the caption name is authoritative, so prefer it whenever present.
+
+Override ONLY when the caption side contains an actual place NAME
+(a proper noun, or "<Name> in <Venue>"). If the caption side is just
+a description with no proper name ("Park Sathorn – Calm in the middle
+of the city"), keep the cleaned label as the query instead. `raw_name`
+still echoes the `known_places` entry EXACTLY — only `search_query`
+changes.
+
 # 2. Shared location (HARD RULE)
 
 Infer ONE location for the whole post and put it in `location`. Signals,
