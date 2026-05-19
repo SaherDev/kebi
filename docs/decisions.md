@@ -15,6 +15,16 @@ Format:
 
 ---
 
+## ADR-080: Resolve-then-search — a pre-search LLM pass enriches queries with shared post context
+
+**Date:** 2026-05-19\
+**Status:** accepted\
+**Context:** Extraction searched the place provider with raw producer output — vision OCR fragments, list labels, caption mentions — then asked a single LLM pass to classify whatever came back. Raw names are poor search keys: they carry list numbering and decorations, and a bare common name ("Mezzaluna", "Sorn") returns same-name venues in the wrong city. The post almost always carries one shared location signal (a hashtag, a title like "5 Top-Restaurants in Bangkok") and one shared character (a fine-dining roundup), but that whole-post context was never used to bias the search or the per-venue attributes — it was left for the post-search classifier to re-derive per candidate, which it cannot do well when the correct venue is not even in the unbiased results. One LLM call also conflated three different jobs: cleaning queries, inferring shared context, and classifying real results. The net effect: multi-place posts lost the venues whose names were ambiguous without a location, and shared attributes were inconsistently applied.\
+**Decision:** Split place resolution into two LLM passes around the search step. A pre-search resolver turns the post's raw signals into one cleaned search query per real candidate, one shared location for the whole post, and one set of shared post-level attribute tags — dropping non-place noise so it is never searched. The search step is then biased by that shared location. A post-search classifier picks, validates, tags, and rejects strictly against the real provider results, and merges the shared post-level tags into every pick with per-venue specifics winning on conflict. The system still never invents a venue — every emitted place resolves to a real provider result and references a real provider identity — and every emitted place is still persisted as tentative for the user to curate. Both passes are skipped when they have no work (nothing to resolve, or no results to classify), and they run at most once per executed enrichment level, so the existing per-level short-circuit still bounds cost.\
+**Consequences:** Multi-place posts recover the venues that an unbiased raw-name search would have dropped, and shared attributes are applied once for the whole post instead of being re-guessed per venue. The cost is one additional LLM call on any level that actually searches (the resolver), bounded by the per-level short-circuit; levels that produce no names or no results add nothing. This refines the search-first cascade established by ADR-070 without weakening it — the provider remains the only source of place identity — and the persistence posture of ADR-071 (tentative, user-curated) is unchanged. The classifier and resolver system prompts move into the prompt-configuration mechanism of ADR-059. Builds on the session-per-query search fan-out: the resolver does not change the parallelism, so per-task sessions remain required.
+
+---
+
 ## ADR-079: Rename the places_v2 layer to its canonical unqualified name
 
 **Date:** 2026-05-19\

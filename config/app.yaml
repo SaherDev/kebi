@@ -245,6 +245,8 @@ embeddings:
 prompts:
   taste_regen: taste_regen.txt
   agent: agent.txt
+  place_resolver: place_resolver.txt
+  place_classifier: place_classifier.txt
 
 # ---------------------------------------------------------------------------
 # Agent Configuration (feature 027 M2, ADR-062)

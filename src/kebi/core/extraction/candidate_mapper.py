@@ -18,7 +18,9 @@ from __future__ import annotations
 
 import logging
 import re
-from dataclasses import dataclass
+from collections.abc import Iterable
+from dataclasses import dataclass, field
+from typing import Protocol
 
 from kebi.core.config import ConfidenceConfig
 from kebi.core.extraction.confidence import calculate_confidence
@@ -36,6 +38,8 @@ from kebi.core.places import (
     PlaceCategory,
     PlaceCore,
     PlaceObject,
+    PlaceTag,
+    TagType,
 )
 
 logger = logging.getLogger(__name__)
@@ -76,6 +80,12 @@ class AttributedSearchResult:
     query: str
     query_producer: Producer
     query_medium: Medium
+    # The string actually sent to the provider text search. Equals
+    # `query` for the raw-name path; differs when the resolver cleaned
+    # the name (ADR-080). `query` stays the raw KnownPlace name so the
+    # `_evidence_for_pick` normalize-join against `context.known_places`
+    # remains stable.
+    search_query: str = ""
 
 
 def search_results_to_picker_input(
@@ -283,3 +293,82 @@ def _format_location(loc: LocationContext | None) -> str:
         return ""
     parts = [loc.neighborhood, loc.city, loc.country]
     return ", ".join(p for p in parts if p)
+
+
+@dataclass(frozen=True)
+class ResolverOutput:
+    """Pre-search resolver result (ADR-080).
+
+    `queries` maps `normalize_query(raw KnownPlace name)` → the cleaned
+    string to send to provider text search. A raw name absent from the
+    map was dropped as non-place noise and must not be searched.
+    `location` is the one shared location context inferred for the
+    whole post (location-biased search). `post_tags` are shared
+    post-level attribute tags merged into every pick.
+    """
+
+    queries: dict[str, str] = field(default_factory=dict)
+    location: LocationContext | None = None
+    post_tags: list[PlaceTag] = field(default_factory=list)
+
+
+class _LLMTagLike(Protocol):
+    type: str
+    value: str
+
+
+def llm_tags_to_place_tags(tags: Iterable[_LLMTagLike]) -> list[PlaceTag]:
+    """Convert flat LLM-emitted tags → `PlaceTag` with `source="llm"`.
+
+    Shared by the resolver (post-level tags) and the classifier
+    (per-place tags). Type values outside `TagType` fall through as
+    plain strings — `PlaceTag.type` accepts `TagType | str`. Empty
+    type/value pairs are skipped.
+    """
+    out: list[PlaceTag] = []
+    for t in tags:
+        if not t.value or not t.type:
+            continue
+        try:
+            tag_type: TagType | str = TagType(t.type)
+        except ValueError:
+            tag_type = t.type
+        out.append(PlaceTag(type=tag_type, value=t.value, source="llm"))
+    return out
+
+
+def merge_tags(
+    per_place: list[PlaceTag], shared: list[PlaceTag]
+) -> list[PlaceTag]:
+    """Union per-place tags with shared post-level tags (ADR-080).
+
+    Dedupe by `(type, value)`; the per-place tag wins on conflict
+    (its evidence is venue-specific). Order: per-place first, then any
+    shared tag whose `(type, value)` is not already present.
+    """
+
+    def _key(tag: PlaceTag) -> tuple[str, str]:
+        type_str = tag.type.value if isinstance(tag.type, TagType) else tag.type
+        return (type_str, str(tag.value))
+
+    seen = {_key(t) for t in per_place}
+    out = list(per_place)
+    for t in shared:
+        if _key(t) not in seen:
+            seen.add(_key(t))
+            out.append(t)
+    return out
+
+
+def location_hint_from(context: ExtractionContext) -> LocationContext | None:
+    """Degraded location hint from the post's `location_tag`.
+
+    The resolver (ADR-080) normally supplies the shared location; this
+    is the fallback used when the resolver call fails or no resolver is
+    wired. The tag is unstructured ("Bangkok", "Sukhumvit", …) so it is
+    surfaced via `address` — the closest match for a free-text hint.
+    `None` means no hint (search runs unrestricted).
+    """
+    if not context.location_tag or not context.location_tag.strip():
+        return None
+    return LocationContext(address=context.location_tag.strip())

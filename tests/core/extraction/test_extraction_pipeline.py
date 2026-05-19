@@ -16,6 +16,7 @@ from kebi.core.config import (
     ExtractionConfig,
     ExtractionThresholds,
 )
+from kebi.core.extraction.candidate_mapper import ResolverOutput, normalize_query
 from kebi.core.extraction.extraction_pipeline import (
     ExtractionPipeline,
     TooManyCandidatesError,
@@ -33,6 +34,7 @@ from kebi.core.places import (
     LocationContext,
     PlaceCategory,
     PlaceObject,
+    PlaceTag,
 )
 
 _TEST_LIMIT = 25
@@ -98,10 +100,27 @@ class _StubLevel:
         return True, ["StubEnricher"]
 
 
+class _IdentityResolver:
+    """Test resolver: identity query map over known_places, no shared
+    location/tags — preserves pre-ADR-080 raw-name search behavior."""
+
+    async def resolve(self, context: ExtractionContext) -> ResolverOutput:
+        return ResolverOutput(
+            queries={
+                normalize_query(kp.name): kp.name.strip()
+                for kp in context.known_places
+                if kp.name and kp.name.strip()
+            },
+            location=None,
+            post_tags=[],
+        )
+
+
 def _make_pipeline(
     levels: list[_StubLevel],
     picker_returns: list[ValidatedCandidate] | None = None,
     search_results_by_query: dict[str, list[PlaceObject]] | None = None,
+    resolver: Any | None = None,
 ) -> tuple[ExtractionPipeline, MagicMock, MagicMock]:
     picker = MagicMock()
     picker.pick = AsyncMock(return_value=picker_returns or [])
@@ -134,6 +153,7 @@ def _make_pipeline(
         levels=levels,  # type: ignore[arg-type]
         search_service=search_service,
         search_service_factory=_factory,
+        resolver=resolver or _IdentityResolver(),
         picker=picker,
         extraction_config=extraction_config,
     )
@@ -244,6 +264,52 @@ async def test_search_service_invoked_once_per_unique_name() -> None:
 
 
 @pytest.mark.asyncio
+async def test_resolver_cleans_queries_drops_noise_and_passes_shared_context() -> None:
+    """ADR-080: search uses the resolver's cleaned query + shared
+    location; resolver-dropped names are not searched; the picker
+    receives the shared post-level tags."""
+    inline = _StubLevel(
+        name="inline",
+        seeds=[
+            KnownPlace(
+                name="Keep Me", producer=Producer.VISION_IMAGES, medium=Medium.IMAGE
+            ),
+            KnownPlace(
+                name="Drop Me", producer=Producer.VISION_IMAGES, medium=Medium.IMAGE
+            ),
+        ],
+    )
+    shared_tag = PlaceTag(type="atmosphere", value="upscale", source="llm")
+
+    class _Resolver:
+        async def resolve(self, context: ExtractionContext) -> ResolverOutput:
+            return ResolverOutput(
+                queries={normalize_query("Keep Me"): "Keep Me Cleaned"},
+                location=LocationContext(city="Bangkok"),
+                post_tags=[shared_tag],
+            )
+
+    pipeline, picker, search_service = _make_pipeline(
+        levels=[inline],
+        picker_returns=[],
+        search_results_by_query={"Keep Me Cleaned": [_place_object("g:k", "Keep")]},
+        resolver=_Resolver(),
+    )
+    await pipeline.run(url="https://x.com", user_id="u1", limit=_TEST_LIMIT)
+
+    queries = [
+        c.args[0] for c in search_service.find.call_args_list
+    ]
+    searched_names = [n for q in queries for n in (q.place_names or [])]
+    assert searched_names == ["Keep Me Cleaned"]  # cleaned; "Drop Me" skipped
+    assert queries[0].location is not None
+    assert queries[0].location.city == "Bangkok"
+    # shared tags forwarded to the classifier
+    assert picker.pick.await_count == 1
+    assert picker.pick.call_args.kwargs["shared_tags"] == [shared_tag]
+
+
+@pytest.mark.asyncio
 async def test_concurrent_fanout_uses_per_task_session_no_shared_session() -> None:
     """Regression: the parallel fan-out must use the factory (one fresh
     session per query), never a single shared session.
@@ -268,7 +334,9 @@ async def test_concurrent_fanout_uses_per_task_session_no_shared_session() -> No
     picker = MagicMock()
     captured: dict[str, Any] = {}
 
-    async def _pick(context: Any, search_set: Any) -> list[ValidatedCandidate]:
+    async def _pick(
+        context: Any, search_set: Any, shared_tags: Any = None
+    ) -> list[ValidatedCandidate]:
         captured["search_set"] = dict(search_set)
         return []
 
@@ -313,6 +381,7 @@ async def test_concurrent_fanout_uses_per_task_session_no_shared_session() -> No
         levels=[inline],  # type: ignore[list-item]
         search_service=shared,
         search_service_factory=_factory,
+        resolver=_IdentityResolver(),
         picker=picker,
         extraction_config=extraction_config,
     )

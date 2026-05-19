@@ -576,11 +576,15 @@ def get_extraction_pipeline(
     directly anymore.
     """
     from kebi.core.extraction.enrichers.llm_picker import LLMPlacePicker
+    from kebi.core.extraction.enrichers.llm_resolver import LLMResolver
 
     return ExtractionPipeline(
         levels=[_get_inline_level(), _get_deep_level()],
         search_service=search_service,
         search_service_factory=search_service_factory,
+        resolver=LLMResolver(
+            instructor_client=get_instructor_client("extractor"),
+        ),
         picker=LLMPlacePicker(
             instructor_client=get_instructor_client("extractor"),
             confidence_config=extraction_config.confidence,

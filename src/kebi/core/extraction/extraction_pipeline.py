@@ -37,6 +37,7 @@ from kebi.core.config import ExtractionConfig
 from kebi.core.emit import EmitFn
 from kebi.core.extraction.candidate_mapper import (
     AttributedSearchResult,
+    ResolverOutput,
     normalize_query,
 )
 from kebi.core.extraction.dedup import dedup_by_provider_id
@@ -49,24 +50,33 @@ from kebi.core.extraction.types import (
     ValidatedCandidate,
 )
 from kebi.core.places import (
-    LocationContext,
     PlaceObject,
     PlaceQuery,
     PlacesSearchServiceProtocol,
+    PlaceTag,
 )
 
 logger = logging.getLogger(__name__)
 
 
 class PickerProtocol(Protocol):
-    """Pick-step contract — LLM picks from the search_set, returns
-    `ValidatedCandidate`s."""
+    """Pick-step contract — LLM classifies the search_set, returns
+    `ValidatedCandidate`s. `shared_tags` are the resolver's post-level
+    tags merged into every pick (ADR-080)."""
 
     async def pick(
         self,
         context: ExtractionContext,
         search_set: dict[str, AttributedSearchResult],
+        shared_tags: list[PlaceTag] | None = None,
     ) -> list[ValidatedCandidate]: ...
+
+
+class ResolverProtocol(Protocol):
+    """Pre-search resolve-step contract (ADR-080) — turns the post's
+    raw signals into cleaned queries + shared location + shared tags."""
+
+    async def resolve(self, context: ExtractionContext) -> ResolverOutput: ...
 
 
 class SearchServiceFactory(Protocol):
@@ -193,6 +203,7 @@ class ExtractionPipeline:
         levels: list[EnrichmentLevel],
         search_service: PlacesSearchServiceProtocol,
         search_service_factory: SearchServiceFactory,
+        resolver: ResolverProtocol,
         picker: PickerProtocol,
         extraction_config: ExtractionConfig,
     ) -> None:
@@ -203,6 +214,7 @@ class ExtractionPipeline:
         # session is not concurrency-safe).
         self._search_service = search_service
         self._search_service_factory = search_service_factory
+        self._resolver = resolver
         self._picker = picker
         self._extraction_config = extraction_config
 
@@ -240,9 +252,19 @@ class ExtractionPipeline:
 
             _enforce_candidate_limit(context, limit, _emit)
 
-            await self._extend_search_set(context, search_set, searched_queries)
+            # Pre-search resolve (ADR-080): clean queries + shared
+            # post-level location/tags. Runs once per executed level
+            # (so deep-level vision names get their own pass) and never
+            # when an earlier level already short-circuited.
+            resolver_output = await self._resolver.resolve(context)
 
-            results = await self._picker.pick(context, search_set)
+            await self._extend_search_set(
+                context, search_set, searched_queries, resolver_output
+            )
+
+            results = await self._picker.pick(
+                context, search_set, shared_tags=resolver_output.post_tags
+            )
 
             level_summary = level.summary_fn(context, fired, len(results))
             _emit(f"save.{level.name}", level_summary)
@@ -265,49 +287,64 @@ class ExtractionPipeline:
         context: ExtractionContext,
         search_set: dict[str, AttributedSearchResult],
         searched_queries: set[str],
+        resolver_output: ResolverOutput,
     ) -> None:
-        """Fan out `PlacesSearchService.find()` over the new producer
-        names (skip queries already issued on an earlier level). Drop
-        geographic-feature results and attribute each surviving result
-        to the `KnownPlace` whose name produced it.
+        """Fan out `PlacesSearchService.find()` over the resolver-cleaned
+        producer names (skip queries already issued on an earlier level).
+        Drop geographic-feature results and attribute each surviving
+        result to the `KnownPlace` whose name produced it.
+
+        ADR-080: the string sent to the provider is the resolver's
+        cleaned query; the raw `KnownPlace` name stays the attribution
+        key (`AttributedSearchResult.query`) so the evidence
+        normalize-join against `context.known_places` is unaffected. A
+        name the resolver dropped as non-place noise is not searched.
+        Search is biased by the resolver's one shared location.
 
         Cross-name dedup: when two different producers contributed the
         same name (normalized), one search call covers both. The result
         is attributed to whichever producer was seen first.
         """
-        queries: list[tuple[str, Producer, Medium]] = []
+        # (raw_name, search_query, producer, medium)
+        queries: list[tuple[str, str, Producer, Medium]] = []
+        resolved = resolver_output.queries
 
         seen_in_batch: set[str] = set()
         for kp in context.known_places:
             if not kp.name or not kp.name.strip():
                 continue
-            q_norm = normalize_query(kp.name)
+            raw = kp.name.strip()
+            q_norm = normalize_query(raw)
             if not q_norm or q_norm in searched_queries or q_norm in seen_in_batch:
                 continue
+            cleaned = resolved.get(q_norm)
+            if cleaned is None:
+                if resolved:
+                    # Resolver ran and deliberately dropped this name as
+                    # non-place noise — do not search it.
+                    continue
+                cleaned = raw  # no resolver signal — search the raw name
             seen_in_batch.add(q_norm)
-            queries.append((kp.name.strip(), kp.producer, kp.medium))
+            queries.append((raw, cleaned, kp.producer, kp.medium))
 
         if context.location_tag and context.location_tag.strip():
-            q_norm = normalize_query(context.location_tag)
+            tag = context.location_tag.strip()
+            q_norm = normalize_query(tag)
             already_searched = q_norm in searched_queries or q_norm in seen_in_batch
             if q_norm and not already_searched:
                 seen_in_batch.add(q_norm)
                 queries.append(
-                    (
-                        context.location_tag.strip(),
-                        Producer.VIDEO_METADATA,
-                        Medium.LOCATION_TAG,
-                    )
+                    (tag, tag, Producer.VIDEO_METADATA, Medium.LOCATION_TAG)
                 )
 
         if not queries:
             return
 
-        location_hint = _location_hint_from(context)
+        location_hint = resolver_output.location
 
         sem = asyncio.Semaphore(_SEARCH_CONCURRENCY)
 
-        async def _find(query: str) -> list[PlaceObject]:
+        async def _find(search_query: str) -> list[PlaceObject]:
             """Run one name's search; best-effort — errors degrade to [].
 
             Each task acquires its own `PlacesSearchService` bound to a
@@ -319,21 +356,25 @@ class ExtractionPipeline:
             try:
                 async with sem, self._search_service_factory() as svc:
                     return await svc.find(
-                        PlaceQuery(place_names=[query], location=location_hint),
+                        PlaceQuery(
+                            place_names=[search_query], location=location_hint
+                        ),
                         limit=_SEARCH_LIMIT_PER_QUERY,
                     )
             except Exception as exc:  # noqa: BLE001 — best-effort per query
                 logger.warning(
                     "places_search_failed",
-                    extra={"query": query, "error": str(exc)},
+                    extra={"query": search_query, "error": str(exc)},
                 )
                 return []
 
-        batches = await asyncio.gather(*[_find(q) for q, _, _ in queries])
+        batches = await asyncio.gather(
+            *[_find(sq) for _, sq, _, _ in queries]
+        )
 
         # Merge in `queries` order (not completion order) so cross-name dedup
         # stays deterministic — first producer to claim a provider_id wins.
-        for (query, producer, medium), results in zip(
+        for (raw, search_query, producer, medium), results in zip(
             queries, batches, strict=True
         ):
             for place in drop_geographic_features(results):
@@ -343,28 +384,18 @@ class ExtractionPipeline:
                     continue
                 search_set[place.provider_id] = AttributedSearchResult(
                     place=place,
-                    query=query,
+                    query=raw,
                     query_producer=producer,
                     query_medium=medium,
+                    search_query=search_query,
                 )
-            searched_queries.add(normalize_query(query))
-
-
-def _location_hint_from(context: ExtractionContext) -> LocationContext | None:
-    """If the post has a location_tag, surface it to the search service
-    as a hint. v2 `PlaceQuery.location` accepts a `LocationContext`;
-    extraction only knows the tag string so the hint is name-shaped.
-    None means no hint (let the search run unrestricted)."""
-    if not context.location_tag or not context.location_tag.strip():
-        return None
-    # The tag is unstructured ("Bangkok", "Sukhumvit", …). Surface it
-    # via the `address` field — closest match for a free-text place hint.
-    return LocationContext(address=context.location_tag.strip())
+            searched_queries.add(normalize_query(raw))
 
 
 __all__ = [
     "ExtractionPipeline",
     "PickerProtocol",
+    "ResolverProtocol",
     "SearchServiceFactory",
     "TooManyCandidatesError",
     "inline_summary",
