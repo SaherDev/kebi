@@ -44,7 +44,7 @@ models:
   # extraction pipeline.
   extractor:
     provider: openai
-    model: gpt-4o-mini
+    model: gpt-4o
     max_tokens: 512
     temperature: 0
   # Offline swap: set provider: ollama, model: gemma4:e2b (requires: ollama serve)
@@ -155,18 +155,25 @@ extraction:
       list: 0.95
     corroboration_bonus: 0.10
     max_score: 0.97
-    # ADR-057: two-band save gate.
-    #   confidence < save_threshold    → not written, surfaces as "failed".
-    #   save_threshold ≤ c < confident → written with status "needs_review".
-    #   confidence ≥ confident_threshold → written silently as "saved".
-    save_threshold: 0.30
+    # Confidence is no longer a write gate (ADR-071 — every picker
+    # output is saved). `confident_threshold` now gates only the
+    # ADR-081 shared-alias contribution: a source label enters the
+    # global place_name_aliases only when the pick is at/above it.
     confident_threshold: 0.70
   circuit_breaker_threshold: 3
   circuit_breaker_cooldown: 900
   vision:
-    max_frames: 5
-    scene_threshold: 0.3
-    timeout_seconds: 10
+    # Listicle posts ("10 must-visit places") show one numbered card per
+    # place; 14 covers a 10-item list plus intro/outro/duplicate scene
+    # cuts. Dedup + the classifier discard near-duplicate frames.
+    max_frames: 14
+    # 0.2 (was 0.3): listicle cards cut between visually similar shots
+    # (aerial temple → aerial temple); 0.3 missed most transitions and
+    # sampled only ~5 of 10 cards.
+    scene_threshold: 0.2
+    # 25 (was 10): budget covers download + ffmpeg decode + one vision
+    # call over up to `max_frames` images. Deep level runs async.
+    timeout_seconds: 25
   whisper:
     timeout_seconds: 8
     audio_format: opus
@@ -245,6 +252,8 @@ embeddings:
 prompts:
   taste_regen: taste_regen.txt
   agent: agent.txt
+  place_resolver: place_resolver.txt
+  place_classifier: place_classifier.txt
 
 # ---------------------------------------------------------------------------
 # Agent Configuration (feature 027 M2, ADR-062)

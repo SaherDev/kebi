@@ -320,6 +320,12 @@ class UserPlace(BaseModel):
 
     source: PlaceSource
     source_url: str | None = None
+    # The name this place was shown as in the source post (e.g. a TikTok
+    # card label "Mirror Temple"), when it differs from the canonical
+    # provider name. Lets the product show the user the name they know
+    # it by. None when the source used the canonical name. Set once at
+    # save; never rewritten on re-save (mirrors source/source_url).
+    source_label: str | None = None
 
     saved_at: datetime
     visited_at: datetime | None = None

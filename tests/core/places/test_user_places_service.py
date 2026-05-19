@@ -191,6 +191,48 @@ class TestSavePlaces:
             )
         user_places_repo.save_user_places.assert_not_called()
 
+    async def test_source_labels_applied_per_place_id(self) -> None:
+        cores = [_core("p1"), _core("p2")]
+        places_repo = MagicMock()
+        user_places_repo = MagicMock(
+            get_existing_place_ids=AsyncMock(return_value=set()),
+            save_user_places=AsyncMock(side_effect=lambda rows: rows),
+        )
+        svc = UserPlacesService(
+            places_repo=places_repo, user_places_repo=user_places_repo
+        )
+
+        result = await svc.save_places(
+            user_id="u1",
+            places=cores,
+            source=PlaceSource.tiktok,
+            source_url="https://tiktok.com/x",
+            source_labels={"p1": "Mirror Temple"},
+        )
+
+        by_pid = {r.place_id: r for r in result}
+        assert by_pid["p1"].source_label == "Mirror Temple"
+        # Absent from the map → NULL (per-place, not platform-wide).
+        assert by_pid["p2"].source_label is None
+
+    async def test_source_labels_default_none_back_compat(self) -> None:
+        cores = [_core("p1")]
+        places_repo = MagicMock()
+        user_places_repo = MagicMock(
+            get_existing_place_ids=AsyncMock(return_value=set()),
+            save_user_places=AsyncMock(side_effect=lambda rows: rows),
+        )
+        svc = UserPlacesService(
+            places_repo=places_repo, user_places_repo=user_places_repo
+        )
+        result = await svc.save_places(
+            user_id="u1",
+            places=cores,
+            source=PlaceSource.tiktok,
+            source_url="https://tiktok.com/x",
+        )
+        assert result[0].source_label is None
+
     async def test_duplicate_aborts_whole_batch(self) -> None:
         places_repo = MagicMock()
         user_places_repo = MagicMock(

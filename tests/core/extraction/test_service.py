@@ -23,6 +23,7 @@ from kebi.core.places import (
     DuplicateUserPlaceError,
     PlaceCategory,
     PlaceCore,
+    PlaceNameAlias,
     PlaceSource,
 )
 
@@ -447,3 +448,74 @@ async def test_text_only_input_does_not_consult_or_write_cache() -> None:
     await service.run(raw_input="Fuji Ramen, Tokyo", user_id="u1")
     c.result_cache.get.assert_not_awaited()
     c.result_cache.set.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# ADR-081: per-user source_label (ungated) + gated global alias
+# ---------------------------------------------------------------------------
+
+_TIKTOK_URL = "https://www.tiktok.com/@x/video/123"
+
+
+def _labeled_candidate(
+    provider_id: str,
+    place_name: str,
+    confidence: float,
+    source_label: str | None,
+) -> ValidatedCandidate:
+    return ValidatedCandidate(
+        place_name=place_name,
+        provider_id=provider_id,
+        categories=[PlaceCategory.restaurant],
+        tags=[],
+        confidence=confidence,
+        evidence=[Evidence(Producer.LLM_NER, Medium.CAPTION)],
+        source_label=source_label,
+    )
+
+
+@pytest.mark.asyncio
+async def test_source_label_per_user_ungated_global_alias_gated() -> None:
+    """High-confidence differing label → shared place_name_aliases.
+    Low-confidence differing label (#8 'Park Sathorn' shape) → NO
+    global alias, but the per-user source_label is still recorded.
+    Label == canonical → neither."""
+    cands = [
+        _labeled_candidate("google:a", "Wat Phuttha Prommayan", 0.90, "Mirror Temple"),
+        _labeled_candidate("google:b", "80th Anniversary Park", 0.50, "Park Sathorn"),
+        _labeled_candidate("google:c", "Joe's Pizza", 0.95, None),
+    ]
+    persisted = [
+        PlaceCore(id="pa", provider_id="google:a", place_name="Wat Phuttha Prommayan"),
+        PlaceCore(id="pb", provider_id="google:b", place_name="80th Anniversary Park"),
+        PlaceCore(id="pc", provider_id="google:c", place_name="Joe's Pizza"),
+    ]
+    service, c = _build_service(pipeline_result=cands, upsert_result=persisted)
+
+    resp = await service.run(raw_input=_TIKTOK_URL, user_id="u1")
+
+    # Cores handed to upsert carry the gated shared alias.
+    upserted = c.upsert.upsert_and_embed.call_args.args[0]
+    by_pid = {core.provider_id: core for core in upserted}
+    assert by_pid["google:a"].place_name_aliases == [
+        PlaceNameAlias(value="Mirror Temple", source="tiktok")
+    ]
+    # Below confident_threshold (0.70): wrong-match label stays out of
+    # shared search.
+    assert by_pid["google:b"].place_name_aliases == []
+    # Label == canonical: nothing to add.
+    assert by_pid["google:c"].place_name_aliases == []
+
+    # Per-user source_labels passed to save_places are UNGATED — the
+    # low-confidence label is still the name *this* user knows it by.
+    save_kwargs = c.user_places.save_places.call_args.kwargs
+    assert save_kwargs["source_labels"] == {
+        "pa": "Mirror Temple",
+        "pb": "Park Sathorn",
+        "pc": None,
+    }
+
+    # ADR-081: source_label is NOT on the extraction response — it
+    # lives only on the per-user save (read with saved places).
+    assert resp.status == "completed" and len(resp.results) == 3
+    assert not any(hasattr(i, "source_label") for i in resp.results)

@@ -23,26 +23,38 @@ _DEFAULT_VISION_CONFIG = ExtractionVisionConfig()
 
 
 def _build_ffmpeg_vf(scene_threshold: float) -> str:
-    """Build ffmpeg video filter: scene-change detection + bottom-third crop."""
-    return rf"select=gt(scene\,{scene_threshold}),crop=iw:ih/3:0:2*ih/3"
+    """Build ffmpeg video filter: scene-change frame selection.
+
+    No crop — listicle/title-card posts put the place name centered or
+    at the top of the frame, so the previous bottom-third crop discarded
+    exactly the text we need. Vision reads text anywhere in the frame.
+
+    Downscaled to 640px height instead: keeps the whole frame (all text
+    regions) but ~10x smaller PNGs, so a multi-frame vision call stays
+    inside the timeout. Overlay text is large — 640px OCRs fine.
+    """
+    return rf"select=gt(scene\,{scene_threshold}),scale=-2:640"
 
 
 def _split_png_frames(data: bytes) -> list[bytes]:
-    """Split a concatenated PNG byte stream into individual PNG files."""
-    frames: list[bytes] = []
-    pos = 0
+    """Split a concatenated PNG byte stream into individual PNG files.
+
+    Split on the PNG signature, not on a literal ``IEND`` scan: the
+    bytes ``IEND`` occur by chance inside photographic IDAT data, which
+    truncated a frame and skipped every subsequent one. The 8-byte PNG
+    signature is collision-resistant by design and never appears in
+    chunk data, so frame boundaries are exactly the signature offsets.
+    """
     png_header = b"\x89PNG\r\n\x1a\n"
-    while pos < len(data):
-        start = data.find(png_header, pos)
-        if start == -1:
-            break
-        iend = data.find(b"IEND", start)
-        if iend == -1:
-            break
-        end = iend + 8  # IEND chunk = 4 len + 4 "IEND" + 4 crc
-        frames.append(data[start:end])
-        pos = end
-    return frames
+    starts: list[int] = []
+    pos = data.find(png_header)
+    while pos != -1:
+        starts.append(pos)
+        pos = data.find(png_header, pos + len(png_header))
+    return [
+        data[starts[i] : (starts[i + 1] if i + 1 < len(starts) else len(data))]
+        for i in range(len(starts))
+    ]
 
 
 class VisionFramesEnricher:
@@ -120,8 +132,14 @@ class VisionFramesEnricher:
 
     def _capture_frames(self, url: str) -> bytes:
         """Pipe yt-dlp video stream into ffmpeg and collect PNG bytes."""
+        # Prefer the smallest ≤540p rendition: overlay-text OCR needs no
+        # more, and a small h264/h265 stream keeps download + ffmpeg
+        # decode + the multi-frame vision call inside the timeout budget.
+        # `bv*` (video-bearing, may be muxed) before `b` (best overall);
+        # many TikTok videos serve only muxed mp4 so a strict `bv` errors.
+        fmt = "bv*[height<=540]/b[height<=540]/bv*/b"
         ytdlp_proc = subprocess.Popen(
-            [sys.executable, "-m", "yt_dlp", "-f", "bv", "-o", "-", url],
+            [sys.executable, "-m", "yt_dlp", "-f", fmt, "-o", "-", url],
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
         )

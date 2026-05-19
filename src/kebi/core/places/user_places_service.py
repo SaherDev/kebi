@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from collections.abc import Mapping
 from datetime import UTC, datetime
 
 from .models import PlaceCore, PlaceSource, SavedPlaceView, UserPlace
@@ -42,12 +43,19 @@ class UserPlacesService:
         places: list[PlaceCore],
         source: PlaceSource,
         source_url: str | None,
+        source_labels: Mapping[str, str | None] | None = None,
     ) -> list[UserPlace]:
         """Link `places` to `user_id` in user_places.
 
         Caller must have already persisted each `PlaceCore` via
         `PlaceUpsertService.upsert_and_embed` so every core carries an `id`.
         Cores without an `id` are rejected — there's nothing to link to.
+
+        `source_labels` maps `place.id` → the name the place was shown as
+        in the source post when it differs from the canonical name (the
+        product shows the user the name they know it by). Absent / None
+        entries store NULL — the default keeps existing callers and the
+        cache-hit path unchanged.
 
         Duplicate policy: if any incoming `place_id` is already in the
         user's saved list, raises `DuplicateUserPlaceError` and writes
@@ -72,6 +80,7 @@ class UserPlacesService:
             conflicts = [pid for pid in place_ids if pid in existing_ids]
             raise DuplicateUserPlaceError(conflicts=conflicts)
 
+        labels = source_labels or {}
         now = datetime.now(UTC)
         rows = [
             UserPlace(
@@ -81,6 +90,7 @@ class UserPlacesService:
                 approved=False,
                 source=source,
                 source_url=source_url,
+                source_label=labels.get(pid),
                 saved_at=now,
             )
             for pid in place_ids

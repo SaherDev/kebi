@@ -36,6 +36,14 @@ class TestAgentConfigDefaults:
         assert "agent" in cfg.prompts
         assert cfg.prompts["agent"].file == "agent.txt"
 
+    def test_app_yaml_registers_extraction_prompts(self) -> None:
+        """ADR-080: resolver + classifier prompts load from config."""
+        cfg = get_config()
+        assert cfg.prompts["place_resolver"].file == "place_resolver.txt"
+        assert cfg.prompts["place_classifier"].file == "place_classifier.txt"
+        assert cfg.prompts["place_resolver"].content.strip()
+        assert "search_candidates" in cfg.prompts["place_classifier"].content
+
 
 class TestAgentConfigValidators:
     def test_rejects_zero_max_steps(self) -> None:

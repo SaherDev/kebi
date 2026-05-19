@@ -18,7 +18,9 @@ from __future__ import annotations
 
 import logging
 import re
-from dataclasses import dataclass
+from collections.abc import Iterable
+from dataclasses import dataclass, field
+from typing import Protocol
 
 from kebi.core.config import ConfidenceConfig
 from kebi.core.extraction.confidence import calculate_confidence
@@ -35,7 +37,10 @@ from kebi.core.places import (
     LocationContext,
     PlaceCategory,
     PlaceCore,
+    PlaceNameAlias,
     PlaceObject,
+    PlaceTag,
+    TagType,
 )
 
 logger = logging.getLogger(__name__)
@@ -76,6 +81,16 @@ class AttributedSearchResult:
     query: str
     query_producer: Producer
     query_medium: Medium
+    # The string actually sent to the provider text search. Equals
+    # `query` for the raw-name path; differs when the resolver cleaned
+    # the name (ADR-080). `query` stays the raw KnownPlace name so the
+    # `_evidence_for_pick` normalize-join against `context.known_places`
+    # remains stable.
+    search_query: str = ""
+    # The clean human label the user saw in the post (resolver-LLM
+    # produced — ADR-081), distinct from both the canonical name and
+    # the search query. Empty ⇒ fall back to `query`.
+    display_label: str = ""
 
 
 def search_results_to_picker_input(
@@ -102,15 +117,22 @@ def search_results_to_picker_input(
     return rows
 
 
-def candidate_to_core(c: ValidatedCandidate) -> PlaceCore:
+def candidate_to_core(
+    c: ValidatedCandidate,
+    aliases: list[PlaceNameAlias] | None = None,
+) -> PlaceCore:
     """Build a v2 `PlaceCore` from a `ValidatedCandidate` for upsert.
 
     Called once per saved candidate at the persistence boundary inside
-    `ExtractionService.run`.
+    `ExtractionService.run`. `aliases` is the optional shared
+    `place_name_aliases` contribution — the caller owns the
+    confidence gate and source attribution (ADR-081), so this stays a
+    pure constructor. The upsert merge dedups by value / existing-wins.
     """
     return PlaceCore(
         provider_id=c.provider_id,
         place_name=c.place_name,
+        place_name_aliases=aliases or [],
         categories=c.categories,
         tags=c.tags,
         location=c.location,
@@ -192,6 +214,19 @@ def reconcile_picks(
             continue
 
         place = attributed.place
+        # The raw producer label the user saw in the post (e.g. a
+        # TikTok card title), kept only when it differs from the
+        # canonical name — that difference is the whole point of
+        # showing the user the name they know it by.
+        # Resolver-cleaned display label (ADR-081); fall back to the
+        # raw producer name only if the resolver produced none.
+        label = (attributed.display_label or attributed.query).strip()
+        source_label = (
+            label
+            if label
+            and normalize_query(label) != normalize_query(place.place_name)
+            else None
+        )
         out.append(
             ValidatedCandidate(
                 place_name=place.place_name,
@@ -202,6 +237,7 @@ def reconcile_picks(
                 evidence=evidence,
                 subcategory=pick.subcategory,
                 location=place.location,
+                source_label=source_label,
             )
         )
     return out
@@ -283,3 +319,88 @@ def _format_location(loc: LocationContext | None) -> str:
         return ""
     parts = [loc.neighborhood, loc.city, loc.country]
     return ", ".join(p for p in parts if p)
+
+
+@dataclass(frozen=True)
+class ResolverOutput:
+    """Pre-search resolver result (ADR-080).
+
+    `queries` maps `normalize_query(raw KnownPlace name)` → the cleaned
+    string to send to provider text search. A raw name absent from the
+    map was dropped as non-place noise and must not be searched.
+    `location` is the one shared location context inferred for the
+    whole post (location-biased search). `post_tags` are shared
+    post-level attribute tags merged into every pick.
+    """
+
+    queries: dict[str, str] = field(default_factory=dict)
+    # `normalize_query(raw KnownPlace name)` → the clean human label
+    # the user saw in the post (list numbering / decorations / emoji
+    # stripped by the resolver LLM, NOT swapped for the canonical or
+    # search name). Drives `user_places.source_label` + shared aliases
+    # (ADR-081). Absent ⇒ fall back to the raw name.
+    display_labels: dict[str, str] = field(default_factory=dict)
+    location: LocationContext | None = None
+    post_tags: list[PlaceTag] = field(default_factory=list)
+
+
+class _LLMTagLike(Protocol):
+    type: str
+    value: str
+
+
+def llm_tags_to_place_tags(tags: Iterable[_LLMTagLike]) -> list[PlaceTag]:
+    """Convert flat LLM-emitted tags → `PlaceTag` with `source="llm"`.
+
+    Shared by the resolver (post-level tags) and the classifier
+    (per-place tags). Type values outside `TagType` fall through as
+    plain strings — `PlaceTag.type` accepts `TagType | str`. Empty
+    type/value pairs are skipped.
+    """
+    out: list[PlaceTag] = []
+    for t in tags:
+        if not t.value or not t.type:
+            continue
+        try:
+            tag_type: TagType | str = TagType(t.type)
+        except ValueError:
+            tag_type = t.type
+        out.append(PlaceTag(type=tag_type, value=t.value, source="llm"))
+    return out
+
+
+def merge_tags(
+    per_place: list[PlaceTag], shared: list[PlaceTag]
+) -> list[PlaceTag]:
+    """Union per-place tags with shared post-level tags (ADR-080).
+
+    Dedupe by `(type, value)`; the per-place tag wins on conflict
+    (its evidence is venue-specific). Order: per-place first, then any
+    shared tag whose `(type, value)` is not already present.
+    """
+
+    def _key(tag: PlaceTag) -> tuple[str, str]:
+        type_str = tag.type.value if isinstance(tag.type, TagType) else tag.type
+        return (type_str, str(tag.value))
+
+    seen = {_key(t) for t in per_place}
+    out = list(per_place)
+    for t in shared:
+        if _key(t) not in seen:
+            seen.add(_key(t))
+            out.append(t)
+    return out
+
+
+def location_hint_from(context: ExtractionContext) -> LocationContext | None:
+    """Degraded location hint from the post's `location_tag`.
+
+    The resolver (ADR-080) normally supplies the shared location; this
+    is the fallback used when the resolver call fails or no resolver is
+    wired. The tag is unstructured ("Bangkok", "Sukhumvit", …) so it is
+    surfaced via `address` — the closest match for a free-text hint.
+    `None` means no hint (search runs unrestricted).
+    """
+    if not context.location_tag or not context.location_tag.strip():
+        return None
+    return LocationContext(address=context.location_tag.strip())
