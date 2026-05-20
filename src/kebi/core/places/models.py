@@ -200,7 +200,20 @@ class PlaceNameAlias(BaseModel):
 SortField = Literal["created_at", "refreshed_at", "place_name"]
 
 
-class PlaceQuery(BaseModel):
+class PlaceCatalogFilters(BaseModel):
+    """Shared catalog-side predicate fields.
+
+    Both `PlaceQuery` (search query) and `HybridSearchFilters` (hybrid search
+    predicate) constrain candidates by category + tag identically:
+      - `categories`: OR across values (place matches if its category is in the list)
+      - `tags`: AND across values (all listed tag values must be present)
+    """
+
+    categories: list[PlaceCategory] | None = None  # OR across values
+    tags: list[str] | None = None   # tag values; all must be present (AND)
+
+
+class PlaceQuery(PlaceCatalogFilters):
     """Structured search query. All fields optional, combined with AND.
 
     DB filters:  ids, provider_ids, place_names, categories, tags,
@@ -211,8 +224,8 @@ class PlaceQuery(BaseModel):
     batch lookup, e.g. resolving saved places through the source-of-truth
     service per ADR-070). `place_names` is OR across values (ILIKE any on DB);
     it also drives client/Google text search.
-    `categories` is OR across values (a place matches if its category is in the list).
-    `tags` is AND (all listed tag values must be present on the place).
+
+    `categories` / `tags` semantics inherited from `PlaceCatalogFilters`.
     """
 
     # DB filters — known-identity batch lookup (exact, OR across values)
@@ -220,8 +233,6 @@ class PlaceQuery(BaseModel):
     provider_ids: list[str] | None = None    # namespaced provider_id exact match
 
     place_names: list[str] | None = None  # ILIKE any (OR); also drives text search
-    categories: list[PlaceCategory] | None = None  # OR across values
-    tags: list[str] | None = None   # tag values; all must be present (AND)
     location: LocationContext | None = None
 
     # date range (DB)
@@ -357,7 +368,7 @@ class SavedPlaceView(BaseModel):
     user_data: UserPlace
 
 
-class HybridSearchFilters(BaseModel):
+class HybridSearchFilters(PlaceCatalogFilters):
     """Filters applied identically to both legs of hybrid search.
 
     All fields optional, combined with AND. The same filter set is joined
@@ -367,12 +378,11 @@ class HybridSearchFilters(BaseModel):
     Filters split across two tables:
       - place catalog (places): categories, tags, location, geo
       - user_places:  visited, liked, approved, saved_at range
+
+    `categories` / `tags` inherited from `PlaceCatalogFilters`.
     """
 
     # ---- place catalog filters --------------------------------------
-    categories: list[PlaceCategory] | None = None  # OR across values
-    tags: list[str] | None = None         # JSONB @>, AND across values
-
     city: str | None = None               # ILIKE
     neighborhood: str | None = None       # ILIKE
     country: str | None = None            # exact
