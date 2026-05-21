@@ -14,17 +14,26 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from typing import Any
 
-from langchain_core.messages import AIMessage, SystemMessage, ToolMessage
+from langchain_core.messages import (
+    AIMessage,
+    BaseMessage,
+    HumanMessage,
+    SystemMessage,
+    ToolMessage,
+)
 from langgraph.config import get_stream_writer
 from langgraph.graph import END, StateGraph
 from langgraph.prebuilt import ToolNode
 
+from kebi.core.agent.location import LocationResolution, WorkingLocation
 from kebi.core.agent.messages import extract_text_content
 from kebi.core.agent.reasoning import ReasoningStep
 from kebi.core.agent.state import AgentState
 from kebi.core.config import get_config
+from kebi.core.places.nominatim_geocoding_client import GeocodingError
 from kebi.providers.tracing import get_tracing_client
 
 logger = logging.getLogger(__name__)
@@ -67,6 +76,7 @@ async def _invoke_llm_with_retry(bound: Any, conversation: list[Any]) -> Any:
 _DIRECT_RESPONSE_FALLBACK = "responding directly"
 
 # Node names are re-used by tests asserting graph structure.
+NODE_RESOLVE_LOCATION = "resolve_location"
 NODE_AGENT = "agent"
 NODE_TOOLS = "tools"
 NODE_FALLBACK = "fallback"
@@ -251,15 +261,38 @@ def _compact_old_tool_results(
 
 
 def _render_location_context(state: AgentState) -> str:
-    loc = state.get("location")
-    if loc:
+    """Render the `{location_context}` slot from the resolved working location.
+
+    The `resolve_location` node has already run (or been gated out) by the
+    time this is called: it leaves either a resolved `working_location`, a
+    `location_clarification` reason, or neither.
+    """
+    working = state.get("working_location")
+    if working:
+        parts = [
+            working.get("neighborhood"),
+            working.get("city"),
+            working.get("country"),
+        ]
+        place = ", ".join(p for p in parts if p)
         return (
-            f"User's current GPS location: lat={loc['lat']}, lng={loc['lng']}. "
-            "Do NOT ask for their city — their coordinates are already available."
+            f"Working location for this turn: {place} "
+            f"(lat={working.get('lat')}, lng={working.get('lng')}). "
+            "Operate against this location for anything place-related. The "
+            "working location is resolved fresh each turn — if the user names "
+            "a new place it becomes the new working location; a follow-up "
+            'like "and what else" stays with the current one.'
+        )
+    clarification = state.get("location_clarification")
+    if clarification:
+        return (
+            "The location for this turn could not be determined: "
+            f"{clarification} Ask the user to clarify which place they mean "
+            "before giving any location-specific advice. Do not guess."
         )
     return (
-        "No location provided. If the user asks for nearby recommendations, "
-        "ask for their city or neighbourhood."
+        "No location resolved for this turn. If the user asks for anything "
+        "location-specific, ask which city or area they mean."
     )
 
 
@@ -414,6 +447,282 @@ def should_continue(state: AgentState) -> str:
     return "end"
 
 
+# --- Location resolution ---------------------------------------------------
+
+# Single-word signals that a turn is location-relevant. Kept deliberately
+# tight: the gate biases toward resolving, so this only needs to catch the
+# unambiguous cases — broad prepositions ("in", "to") would fire on nearly
+# every message and defeat the gate.
+_LOCATION_GATE_KEYWORDS = frozenset(
+    {
+        "near",
+        "nearby",
+        "around",
+        "here",
+        "where",
+        "neighborhood",
+        "neighbourhood",
+        "area",
+        "walk",
+        "walking",
+        "downtown",
+        "city",
+        "distance",
+        "local",
+        "locally",
+    }
+)
+# Phrases that often precede a location shift even with no capitalisation.
+_LOCATION_GATE_PHRASES = ("what about", "how about", "near me", "around here")
+
+
+def _last_human_text(messages: list[Any]) -> str:
+    """Return the text of the most recent HumanMessage, or ''."""
+    for msg in reversed(messages):
+        if isinstance(msg, HumanMessage):
+            return extract_text_content(msg.content).strip()
+    return ""
+
+
+def _needs_location_resolution(state: AgentState) -> str:
+    """Gate routing function — decide whether to run `resolve_location`.
+
+    Returns `"resolve"` or `"skip"`. Biased toward `"resolve"`: a false skip
+    misses a real location shift (the carried location goes stale), which is
+    worse than a wasted resolver call on a location-free turn. Only clearly
+    location-free turns — greetings, meta questions — are skipped.
+    """
+    text = _last_human_text(state.get("messages") or [])
+    if not text:
+        return "skip"
+    lowered = text.lower()
+    if any(phrase in lowered for phrase in _LOCATION_GATE_PHRASES):
+        return "resolve"
+    if any(word in _LOCATION_GATE_KEYWORDS for word in re.findall(r"[a-z]+", lowered)):
+        return "resolve"
+    # A capitalised token that is not the first word is likely a proper noun
+    # (a place name) — resolve to be safe.
+    tokens = text.split()
+    for token in tokens[1:]:
+        cleaned = token.strip(".,!?;:'\"()")
+        if len(cleaned) > 1 and cleaned[0].isupper() and not cleaned.isupper():
+            return "resolve"
+    return "skip"
+
+
+def _format_history_for_resolver(messages: list[BaseMessage]) -> str:
+    """Render recent turns as plain `role: text` lines for the resolver prompt.
+
+    Excludes the final HumanMessage (passed separately as the current
+    message) and caps at the last few exchanges.
+    """
+    relevant = [m for m in messages if isinstance(m, HumanMessage | AIMessage)]
+    history = relevant[:-1][-8:] if relevant else []
+    lines: list[str] = []
+    for msg in history:
+        role = "user" if isinstance(msg, HumanMessage) else "assistant"
+        text = extract_text_content(msg.content).strip()
+        if text:
+            lines.append(f"{role}: {text}")
+    return "\n".join(lines)
+
+
+def _render_resolver_prompt(state: AgentState) -> str:
+    """Format the location-resolver prompt with this turn's inputs."""
+    template = get_config().prompts["location_resolver"].content
+    messages = state.get("messages") or []
+    return template.format(
+        current_message=_last_human_text(messages) or "(empty)",
+        conversation_history=(
+            _format_history_for_resolver(messages) or "(no prior messages)"
+        ),
+        user_actual_location=json.dumps(state.get("user_location")),
+        previous_working_location=json.dumps(state.get("working_location")),
+    )
+
+
+def _coerce_coord(value: Any) -> float | None:
+    """Best-effort float for a lat/lng pulled from a state dict."""
+    if isinstance(value, int | float):
+        return float(value)
+    return None
+
+
+async def _build_working_location(
+    resolution: LocationResolution,
+    user_location: dict[str, Any] | None,
+    prior_working_location: dict[str, Any] | None,
+    geocoding_client: Any,
+) -> WorkingLocation | None:
+    """Turn a resolver decision into a complete `WorkingLocation`, or `None`.
+
+    Coordinates are derived deterministically — never transcribed by the LLM:
+      - `carried`        → reuse the prior turn's working location verbatim.
+      - `user_actual`    → take the user's actual GPS coords from the request
+                           and reverse-geocode them for the place names.
+      - `explicit_query` → forward-geocode the place the resolver named.
+
+    Returns `None` when the location cannot be completed; the caller maps
+    that to a clarification. Validation is source-dependent: an
+    `explicit_query` place must resolve all five fields (the user named a
+    place — hold the result to it), while a `user_actual` location only needs
+    country + city + coords, since neighbourhood from reverse geocoding is
+    unreliable and re-asking "where are you?" when GPS already answered is
+    poor UX.
+    """
+    source = resolution.source
+
+    if source == "carried":
+        if prior_working_location:
+            try:
+                return WorkingLocation(**prior_working_location)
+            except (TypeError, ValueError):
+                return None
+        # Resolver said "carry" but there is nothing carried (e.g. first
+        # turn) — fall back to the user's actual location.
+        source = "user_actual"
+
+    if source == "user_actual":
+        if not user_location:
+            return None
+        lat = _coerce_coord(user_location.get("lat"))
+        lng = _coerce_coord(user_location.get("lng"))
+        if lat is None or lng is None:
+            return None
+        rev = await geocoding_client.reverse(lat=lat, lng=lng)
+        if rev is None:
+            return None
+        return WorkingLocation(
+            country=rev["country"],
+            city=rev["city"],
+            neighborhood=rev.get("neighborhood"),
+            lat=lat,
+            lng=lng,
+        )
+
+    # explicit_query — a place the resolver named; geocode it.
+    country = resolution.country
+    city = resolution.city
+    neighborhood = resolution.neighborhood
+    if not country or not city or not neighborhood:
+        # A user-named place must resolve to all five fields.
+        return None
+    coords = await geocoding_client.forward(
+        country=country, city=city, neighborhood=neighborhood
+    )
+    if coords is None:
+        return None
+    lat, lng = coords
+    return WorkingLocation(
+        country=country,
+        city=city,
+        neighborhood=neighborhood,
+        lat=lat,
+        lng=lng,
+    )
+
+
+def _emit_step(step: ReasoningStep) -> None:
+    """Fan a reasoning step out to a streaming caller, if any."""
+    try:
+        writer = get_stream_writer()
+    except RuntimeError:
+        writer = None
+    if writer is not None:
+        writer({"step": step.step, "summary": step.summary})
+
+
+def _location_clarification_update(state: AgentState, reason: str) -> dict[str, Any]:
+    """State update that clears the working location and asks the user."""
+    step = ReasoningStep(
+        step="agent.location_clarify",
+        summary=f"Location needs clarification: {reason}",
+        source="agent",
+        visibility="user",
+        duration_ms=0.0,
+    )
+    _emit_step(step)
+    return {
+        "working_location": None,
+        "location_clarification": reason,
+        "reasoning_steps": (state.get("reasoning_steps") or []) + [step],
+    }
+
+
+def _location_resolved_update(
+    state: AgentState, working: WorkingLocation
+) -> dict[str, Any]:
+    """State update that records a fully resolved working location."""
+    parts = [working.neighborhood, working.city, working.country]
+    place = ", ".join(p for p in parts if p)
+    step = ReasoningStep(
+        step="agent.location_resolved",
+        summary=f"Working location: {place}",
+        source="agent",
+        visibility="user",
+        duration_ms=0.0,
+    )
+    _emit_step(step)
+    return {
+        "working_location": working.model_dump(),
+        "location_clarification": None,
+        "reasoning_steps": (state.get("reasoning_steps") or []) + [step],
+    }
+
+
+_LOCATION_ASK_CITY = (
+    "I couldn't work out which location you mean — which city or area is this about?"
+)
+_LOCATION_ASK_CONFIRM = (
+    "I couldn't pin down that location — could you confirm the city?"
+)
+
+
+def make_resolve_location_node(resolver_llm: Any, geocoding_client: Any) -> Any:
+    """Return the `resolve_location` node bound to its LLM + geocoding client.
+
+    The node resolves the turn's working location: one structured LLM call
+    (priority + shift detection + ambiguity), then silent geocoding. It writes
+    either a complete `working_location` or a `location_clarification` reason —
+    never a partial location. Geocoding or LLM failure fails toward asking the
+    user; it never crashes the turn or bumps `error_count`.
+    """
+    structured = resolver_llm.with_structured_output(LocationResolution)
+
+    async def resolve_location_node(state: AgentState) -> dict[str, Any]:
+        try:
+            resolution: LocationResolution = await _invoke_llm_with_retry(
+                structured, [HumanMessage(content=_render_resolver_prompt(state))]
+            )
+        except Exception as exc:
+            logger.warning("resolve_location LLM failed: %s", exc)
+            return _location_clarification_update(state, _LOCATION_ASK_CITY)
+
+        if resolution.needs_clarification or resolution.is_ambiguous:
+            reason = (
+                resolution.clarification_reason.strip()
+                or "the location you mean is ambiguous"
+            )
+            return _location_clarification_update(state, reason)
+
+        try:
+            working = await _build_working_location(
+                resolution,
+                state.get("user_location"),
+                state.get("working_location"),
+                geocoding_client,
+            )
+        except GeocodingError as exc:
+            logger.warning("resolve_location geocoding failed: %s", exc)
+            return _location_clarification_update(state, _LOCATION_ASK_CONFIRM)
+
+        if working is None:
+            return _location_clarification_update(state, _LOCATION_ASK_CONFIRM)
+        return _location_resolved_update(state, working)
+
+    return resolve_location_node
+
+
 def fallback_node(state: AgentState) -> dict[str, Any]:
     """Compose a graceful terminal message + reasoning steps.
 
@@ -494,20 +803,33 @@ def build_graph(
     llm: Any,
     tools: list[Any],
     checkpointer: Any,
+    resolver_llm: Any,
+    geocoding_client: Any,
 ) -> Any:
     """Construct and compile the agent StateGraph (FR-025).
 
-    Nodes: `agent`, `tools` (ToolNode), `fallback`.
+    Nodes: `resolve_location`, `agent`, `tools` (ToolNode), `fallback`.
+    The entry point is conditional (`_needs_location_resolution` gate): a
+    location-free turn routes straight to `agent` and pays no resolver LLM
+    call; otherwise `resolve_location` runs first, then `agent`.
     Conditional edges from `agent` via should_continue → {tools, fallback, end}.
-    Direct edge tools → agent. Direct edge fallback → END.
+    Direct edges resolve_location → agent, tools → agent, fallback → END.
     """
     graph: StateGraph = StateGraph(AgentState)
+    graph.add_node(
+        NODE_RESOLVE_LOCATION,
+        make_resolve_location_node(resolver_llm, geocoding_client),
+    )
     graph.add_node(NODE_AGENT, make_agent_node(llm, tools))
     graph.add_node(
         NODE_TOOLS, ToolNode(tools, handle_tool_errors=_handle_tool_node_error)
     )
     graph.add_node(NODE_FALLBACK, fallback_node)
-    graph.set_entry_point(NODE_AGENT)
+    graph.set_conditional_entry_point(
+        _needs_location_resolution,
+        {"resolve": NODE_RESOLVE_LOCATION, "skip": NODE_AGENT},
+    )
+    graph.add_edge(NODE_RESOLVE_LOCATION, NODE_AGENT)
     graph.add_conditional_edges(
         NODE_AGENT,
         should_continue,

@@ -6,7 +6,11 @@ from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, StateGraph
 
-from kebi.core.agent.state import AgentState
+from kebi.core.agent.state import (
+    LOCATION_INHERIT,
+    AgentState,
+    merge_working_location,
+)
 
 
 def test_agent_state_typed_dict_shape() -> None:
@@ -16,13 +20,30 @@ def test_agent_state_typed_dict_shape() -> None:
         "taste_profile_summary": "likes ramen",
         "memory_summary": "vegetarian",
         "user_id": "u1",
-        "location": {"lat": 13.7, "lng": 100.5},
+        "user_location": {"lat": 13.7, "lng": 100.5},
+        "working_location": None,
+        "location_clarification": None,
         "reasoning_steps": [],
         "steps_taken": 0,
         "error_count": 0,
+        "tool_calls_used": 0,
     }
     assert state["user_id"] == "u1"
     assert state["reasoning_steps"] == []
+
+
+def test_merge_working_location_inherit_keeps_carried_value() -> None:
+    """The reducer is the explicit carry-forward contract: LOCATION_INHERIT
+    preserves the prior turn's value; any other update replaces it.
+    """
+    carried = {"country": "Japan", "city": "Tokyo", "lat": 35.6, "lng": 139.7}
+    # Sentinel → keep what was carried by the checkpointer.
+    assert merge_working_location(carried, LOCATION_INHERIT) == carried
+    # A resolved location → replace.
+    resolved = {"country": "France", "city": "Lyon", "lat": 45.7, "lng": 4.8}
+    assert merge_working_location(carried, resolved) == resolved
+    # An explicit None → clear.
+    assert merge_working_location(carried, None) is None
 
 
 async def test_add_messages_reducer_appends_across_invocations() -> None:
@@ -48,7 +69,7 @@ async def test_add_messages_reducer_appends_across_invocations() -> None:
             "taste_profile_summary": "",
             "memory_summary": "",
             "user_id": "u1",
-            "location": None,
+            "user_location": None,
             "reasoning_steps": [],
             "steps_taken": 0,
             "error_count": 0,

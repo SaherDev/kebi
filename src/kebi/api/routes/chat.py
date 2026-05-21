@@ -86,7 +86,7 @@ async def chat_stream(
         user_id=body.user_id,
         taste_profile_summary=taste_summary,
         memory_summary=memory_summary,
-        location=(body.location.model_dump() if body.location else None),
+        user_location=(body.location.model_dump() if body.location else None),
     )
     graph_config = {
         "configurable": {"thread_id": body.user_id},

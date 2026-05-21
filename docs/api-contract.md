@@ -100,7 +100,7 @@ no retrieval and writes no data.
 | ---------- | ---------------------------- | -------- | ------------------------------------------------------------------------------------- |
 | `user_id`  | `string`                     | Yes      | Clerk-issued user ID; trusted, not validated here                                     |
 | `message`  | `string`                     | Yes      | Natural-language message from the user                                                |
-| `location` | `{ lat: float, lng: float }` | No       | Raw coords forwarded into the agent prompt. ADR-078 removed server-side city-label resolution; the field is still accepted for forward compatibility |
+| `location` | `{ lat: float, lng: float }` | No       | The user's **actual** location — where they physically are. ADR-083 makes this the anchor for per-turn working-location resolution: the agent resolves the location a turn operates against (a place named in the message, one carried from the conversation, or this actual location as fallback) and reverse-geocodes these coords when they are used. Shape unchanged |
 
 **Response:**
 

@@ -34,6 +34,7 @@ from kebi.core.places import (
     GooglePlacesClient,
     HybridSearchRepo,
     HybridSearchService,
+    NominatimGeocodingClient,
     PlacesRepo,
     PlacesSearchService,
     PlaceUpsertService,
@@ -365,6 +366,18 @@ def get_google_places_client() -> GooglePlacesClient:
     )
 
 
+def get_geocoding_client() -> NominatimGeocodingClient:
+    """FastAPI dependency providing NominatimGeocodingClient (OSM geocoding).
+
+    Free, no API key — the OSM usage policy only requires an identifying
+    User-Agent. Backed by the process-wide httpx.AsyncClient.
+    """
+    return NominatimGeocodingClient(
+        http=get_shared_http_client(),
+        user_agent=f"{get_config().app.name}/1.0 (location-resolver)",
+    )
+
+
 def get_embeddings_repo(
     db_session: AsyncSession = Depends(get_session),  # noqa: B008
 ) -> EmbeddingsRepo:
@@ -674,7 +687,14 @@ def get_agent_graph(
     from kebi.providers.llm import get_langchain_chat_model
 
     llm = get_langchain_chat_model("orchestrator")
-    return build_graph(llm, build_tools(), checkpointer)
+    resolver_llm = get_langchain_chat_model("location_resolver")
+    return build_graph(
+        llm,
+        build_tools(),
+        checkpointer,
+        resolver_llm,
+        get_geocoding_client(),
+    )
 
 
 async def get_chat_service(

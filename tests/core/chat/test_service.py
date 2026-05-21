@@ -125,13 +125,14 @@ async def test_run_returns_error_on_graph_exception() -> None:
 
 
 # ---------------------------------------------------------------------------
-# location passthrough (server-side label resolution removed — ADR-078)
+# location passthrough — the request location is the user's actual location
 # ---------------------------------------------------------------------------
 
 
-async def test_run_threads_raw_location_and_omits_label() -> None:
-    """Raw lat/lng is threaded into the agent payload; the removed
-    server-side `location_label` is no longer in the payload (ADR-078)."""
+async def test_run_threads_raw_user_location() -> None:
+    """Raw lat/lng is threaded into the agent payload as `user_location` —
+    the request location is the user's actual location, the resolution
+    anchor for the resolve_location node."""
     from kebi.api.schemas.chat import Location
 
     graph = AsyncMock()
@@ -150,12 +151,11 @@ async def test_run_threads_raw_location_and_omits_label() -> None:
     )
 
     payload = graph.ainvoke.call_args.args[0]
-    assert payload["location"] == {"lat": 52.12, "lng": 11.62}
-    assert "location_label" not in payload
+    assert payload["user_location"] == {"lat": 52.12, "lng": 11.62}
 
 
 async def test_run_no_location_threads_none() -> None:
-    """No location in request → payload location is None, no label key."""
+    """No location in request → payload user_location is None."""
     graph = AsyncMock()
     graph.ainvoke = AsyncMock(
         return_value={"messages": [AIMessage(content="ok")], "reasoning_steps": []}
@@ -166,5 +166,4 @@ async def test_run_no_location_threads_none() -> None:
     await service.run(ChatRequest(user_id="u", message="hi"))
 
     payload = graph.ainvoke.call_args.args[0]
-    assert payload["location"] is None
-    assert "location_label" not in payload
+    assert payload["user_location"] is None

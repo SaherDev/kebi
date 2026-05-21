@@ -98,6 +98,16 @@ models:
     max_tokens: 256
     temperature: 0
 
+  # Resolves the working location at the start of every agent turn that
+  # passes the location gate (core/agent/graph.py resolve_location node).
+  # Classification-like structured output — a small, cheap, deterministic
+  # model is the right fit.
+  location_resolver:
+    provider: openai
+    model: gpt-4o-mini
+    max_tokens: 256
+    temperature: 0
+
 # ---------------------------------------------------------------------------
 # Extraction pipeline — confidence weights and decision thresholds
 # ADR-018, ADR-034: confidence scoring and two-phase confirmation
@@ -254,6 +264,7 @@ prompts:
   agent: agent.txt
   place_resolver: place_resolver.txt
   place_classifier: place_classifier.txt
+  location_resolver: location_resolver.txt
 
 # ---------------------------------------------------------------------------
 # Agent Configuration (feature 027 M2, ADR-062)

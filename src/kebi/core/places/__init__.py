@@ -26,6 +26,7 @@ from .models import (
     SavedPlaceView,
     UserPlace,
 )
+from .nominatim_geocoding_client import GeocodingError, NominatimGeocodingClient
 from .place_wipe_service import PlaceWipeService
 from .places_repo import PlacesRepo
 from .protocols import (
@@ -111,6 +112,7 @@ __all__ = [
     "UserPlacesRepo",
     "RedisPlacesCache",
     "GooglePlacesClient",
+    "NominatimGeocodingClient",
     # services
     "EmbeddingService",
     "HybridSearchService",
@@ -120,6 +122,7 @@ __all__ = [
     "UserPlacesService",
     # errors
     "DuplicateUserPlaceError",
+    "GeocodingError",
     # constants
     "EMBEDDING_DIMENSIONS",
 ]
