@@ -77,7 +77,9 @@ class ChatService:
                 user_id=request.user_id,
                 taste_profile_summary=taste_summary,
                 memory_summary=memory_summary,
-                location=(request.location.model_dump() if request.location else None),
+                user_location=(
+                    request.location.model_dump() if request.location else None
+                ),
             )
 
             graph_config = {

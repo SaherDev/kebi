@@ -6,8 +6,15 @@ across turns but is bounded by `agent.state_message_cap` to keep the
 checkpointer blob from growing without limit. Every other field has
 plain-overwrite semantics (FR-021).
 
-`reasoning_steps` resets on every turn via `build_turn_payload` in
-invocation.py — see that module for the single construction site.
+`reasoning_steps` and `location_clarification` reset on every turn via
+`build_turn_payload` in invocation.py — see that module for the single
+construction site.
+
+`working_location` is the exception to plain-overwrite: it carries across
+turns. `build_turn_payload` passes the `LOCATION_INHERIT` sentinel and the
+`merge_working_location` reducer maps that to "keep the prior turn's value",
+so the location the agent resolved last turn survives unless the
+`resolve_location` node explicitly replaces it.
 """
 
 from __future__ import annotations
@@ -80,6 +87,27 @@ def add_messages_capped(left: Any, right: Any) -> list[BaseMessage]:
     return merged
 
 
+# Sentinel passed by `build_turn_payload` into `working_location`. The
+# `merge_working_location` reducer maps it to "keep the value carried from
+# the previous turn" — making carry-forward explicit instead of relying on
+# key omission, which a future editor could silently break.
+LOCATION_INHERIT = "__inherit__"
+
+
+def merge_working_location(current: Any, update: Any) -> dict[str, Any] | None:
+    """Reducer for `state["working_location"]`.
+
+    `build_turn_payload` passes `LOCATION_INHERIT` every turn, so the prior
+    turn's resolved value (restored by the checkpointer) survives untouched.
+    The `resolve_location` node passes a resolved location dict — or `None`
+    to clear it — and that replaces the carried value. The sentinel is
+    transient: the reducer consumes it, so it never lands in the checkpoint.
+    """
+    if update == LOCATION_INHERIT:
+        return cast("dict[str, Any] | None", current)
+    return cast("dict[str, Any] | None", update)
+
+
 class AgentState(TypedDict):
     """Per-turn state flowing through the LangGraph agent.
 
@@ -88,7 +116,14 @@ class AgentState(TypedDict):
       taste_profile_summary — behavior-derived preference bullets (per turn).
       memory_summary      — user-stated facts (per turn).
       user_id             — immutable per turn; used as the checkpointer thread_id.
-      location            — {lat, lng} or None.
+      user_location       — the user's actual location from the request,
+                            {lat, lng} or None; set every turn.
+      working_location    — the location this turn operates against, a
+                            `WorkingLocation.model_dump()` or None; carries
+                            across turns via `merge_working_location`.
+      location_clarification — reason string when the working location could
+                            not be resolved (ambiguous / insufficient); None
+                            otherwise. Reset to None each turn.
       reasoning_steps     — agent trace; reset to [] on every new user
                             message; no reducer (plain overwrite, FR-021).
       steps_taken         — incremented by agent_node; bounds should_continue.
@@ -102,7 +137,9 @@ class AgentState(TypedDict):
     taste_profile_summary: str
     memory_summary: str
     user_id: str
-    location: dict[str, float] | None
+    user_location: dict[str, Any] | None
+    working_location: Annotated[dict[str, Any] | None, merge_working_location]
+    location_clarification: str | None
     reasoning_steps: list[ReasoningStep]
     steps_taken: int
     error_count: int

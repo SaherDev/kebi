@@ -15,6 +15,16 @@ Format:
 
 ---
 
+## ADR-083: Working location — every turn resolves the place it operates against
+
+**Date:** 2026-05-21\
+**Status:** accepted\
+**Context:** A place-related request must operate against a specific location, and the location the user is asking about is not always where they physically are. The agent received only the user's raw coordinates and passed them straight into the prompt; ADR-078 had removed even the earlier "City, Country" hint as dead weight, because the agent had no retrieval that would use it. There was no model of the location a turn is about, no way to carry it across turns, and no way to resolve a place the user names in words rather than coordinates. As the agent grows back toward retrieval and recommendation, an unresolved or mixed-up location would send every downstream lookup to the wrong place.\
+**Decision:** Establish a working location — the single, fully-resolved location a turn operates against — and resolve it at the start of every turn before the agent reasons. The request still carries only the user's actual location; the working location is chosen per turn by priority: a location named explicitly in the message, else the one carried from earlier in the conversation, else the user's actual location. A continuation keeps the carried location; naming a new place shifts it. A location given only by name is geocoded silently, and the user's actual coordinates are reverse-geocoded to name them. The working location is never partial: when the user named a place it must resolve fully, and when it cannot — or the name is ambiguous — the agent asks the user rather than guessing. This resolution is deterministic per-turn preprocessing, not a tool the model chooses to call, so the agent stays zero-tool in the ADR-075 sense — it still emits no tool calls. It does reverse ADR-078's premise: the location hint was removed for being unused, and the working location is the opposite — load-bearing groundwork for the retrieval and recommendation surfaces to come. It costs one extra model call on turns that need it; a cheap keyword gate skips the turns that plainly do not. Geocoding uses a free, key-less source rather than a paid provider.\
+**Consequences:** Every turn that needs a location now has one authoritative, complete value, and the tools to follow can be built against it instead of each re-deriving location. The agent gains a graph step and a per-turn model call — a deliberate, bounded step back toward the graph complexity that ADR-075 and ADR-078 trimmed, justified because location cannot be resolved correctly or geocoded silently by a tool-less agent mid-turn, and accepted now rather than retrofitted later. The request contract is unchanged — the product repo still sends only coordinates — but that field's meaning is now "the user's actual location", the anchor the working location falls back to. Ambiguous or under-specified locations surface as an ordinary clarifying question, not a new response type. A user who travels carries a stale working location until they name a new place or a fresh actual-location turn re-resolves it.
+
+---
+
 ## ADR-082: Per-candidate location — a venue is biased by its own area, not the post's
 
 **Date:** 2026-05-21\

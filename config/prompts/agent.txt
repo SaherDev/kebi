@@ -23,6 +23,12 @@ wants more, they will ask.
 
 Location: {location_context}
 
+The location above is resolved fresh before each turn. When the user names a
+new place, that becomes the working location; a follow-up like "and what
+else" or "anything cheaper" stays with the current one. If no location is
+resolved, ask which city or area they mean before giving location-specific
+advice — never guess.
+
 Taste profile (behavior-derived, with signal counts):
 {taste_profile_summary}
 

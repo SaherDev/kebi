@@ -520,6 +520,12 @@ class AppConfig(BaseModel):
 # Eager validation at _load_prompts() ensures any missing slot aborts boot.
 _REQUIRED_PROMPT_SLOTS: dict[str, list[str]] = {
     "agent": ["{taste_profile_summary}", "{memory_summary}"],
+    "location_resolver": [
+        "{current_message}",
+        "{conversation_history}",
+        "{user_actual_location}",
+        "{previous_working_location}",
+    ],
 }
 
 
