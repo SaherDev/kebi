@@ -15,6 +15,16 @@ Format:
 
 ---
 
+## ADR-082: Per-candidate location — a venue is biased by its own area, not the post's
+
+**Date:** 2026-05-21\
+**Status:** accepted\
+**Context:** ADR-080 inferred one shared location for the whole post and biased every place search by it. That holds for a single-location post but fails for a multi-destination one — a travel listicle that spans several towns. Every venue is biased to the one inferred location, usually the broad region the post frames itself around, so a venue the post clearly places in one town resolves to a same-name venue in another. The single-location model also has nowhere to put a section header that is itself a town: in a sectioned listicle the header is the location of the venues beneath it, but a model that knows only one location per post cannot use it that way and instead either drops it or saves the town as if it were a venue.\
+**Decision:** Keep the shared post location as the default, but let each candidate carry its own area when the post places it somewhere other than the post-wide location — derived from an explicit mention, from its listicle section, or from the model's own knowledge of where a well-known venue is. Each venue's search is biased by its own area, falling back to the shared location when it has none. A section header that is itself an administrative area (a town, city, region, or country) is not saved as a place — it becomes the area for the venues listed under it; a header that is a specific venue or attraction is both saved and used as that area. The model's geographic knowledge may inform a venue's area but never resolves its identity — the provider remains the only source of place identity (ADR-070).\
+**Consequences:** Multi-destination posts resolve each venue to the correct town instead of collapsing the whole post onto one region. Single-location posts are unaffected — no candidate carries an area and the shared location applies exactly as before — so this is a strict superset of ADR-080, which it amends rather than supersedes. Towns and regions are no longer saved as venues: a listicle's saveable "places" become the specific venues it names, and a town-level headline item is consumed as location context, not surfaced as a recommendation. Same-name disambiguation at the pick step keys on the venue's own area too, so a post that lists a venue under a specific town no longer picks a same-name venue elsewhere.
+
+---
+
 ## ADR-081: Saved places carry the source label the user knows them by
 
 **Date:** 2026-05-19\

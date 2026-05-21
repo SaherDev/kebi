@@ -1,4 +1,4 @@
-"""Google Maps shared-list enricher (Apify-backed) — pure text producer.
+"""Google Maps shared-list enricher (Apify-backed) — pure name producer.
 
 Google Maps shared lists (`maps.app.goo.gl/<short>` that resolves to a
 URL with `!3e3` in its data parameter) cannot be scraped from plain
@@ -7,12 +7,12 @@ Apify `parseforge/google-maps-shared-list-scraper` actor, which runs
 the scrape and returns each list entry with its name, lat/lng,
 rating, and category.
 
-This enricher is a **pure text producer** — it appends each Apify
-item's name to `context.known_places` and stops. The pipeline's NER
-finalizer (`LLMNEREnricher`) reads that list as another text source
-and emits structured candidates with inferred categories and tags
-(places vocabulary). That's the same path subtitle/whisper text
-takes — one consolidator owns the "name → structured place" step.
+This enricher is a **pure name producer** — it appends each Apify
+item's name to `context.known_places` and stops. The pre-search
+resolver cleans those names, the pipeline searches each via
+`PlacesSearchService`, and the post-search `LLMPlacePicker` classifies
+the real hits into structured candidates with inferred categories and
+tags (places vocabulary).
 
 Notes:
 - Apify returns a Google Maps internal FID (`0x...:0x...`), not a

@@ -4,9 +4,12 @@ Search-first flow (one pass per `EnrichmentLevel`):
 
 1. **Producers** populate text fields (caption / transcript / title /
    hashtags / location_tag) and `KnownPlace`s (Google Maps shared
-   list, vision frames, vision images).
+   list, vision frames, vision images). The pre-search resolver
+   additionally appends `LLM_NER` `KnownPlace`s discovered in the
+   post's free text.
 2. **Cap** (`_enforce_candidate_limit`) drops the request when the
-   number of unique candidate names exceeds the configured ceiling.
+   number of unique candidate names exceeds the configured ceiling;
+   re-checked after the resolver's free-text discovery.
 3. **Search** — for each unique `KnownPlace` name (plus `location_tag`
    when present), call `PlacesSearchService.find()` and collect the
    results into a `search_set` keyed by `provider_id`. Geographic
@@ -50,6 +53,7 @@ from kebi.core.extraction.types import (
     ValidatedCandidate,
 )
 from kebi.core.places import (
+    LocationContext,
     PlaceObject,
     PlaceQuery,
     PlacesSearchServiceProtocol,
@@ -253,10 +257,16 @@ class ExtractionPipeline:
             _enforce_candidate_limit(context, limit, _emit)
 
             # Pre-search resolve (ADR-080): clean queries + shared
-            # post-level location/tags. Runs once per executed level
-            # (so deep-level vision names get their own pass) and never
-            # when an earlier level already short-circuited.
+            # post-level location/tags + free-text name discovery. Runs
+            # once per executed level (so deep-level vision names get
+            # their own pass) and never when an earlier level already
+            # short-circuited.
             resolver_output = await self._resolver.resolve(context)
+
+            # The resolver may have appended discovered `KnownPlace`s
+            # from free text — re-enforce the cap so discovery cannot
+            # push the request past the candidate ceiling.
+            _enforce_candidate_limit(context, limit, _emit)
 
             await self._extend_search_set(
                 context, search_set, searched_queries, resolver_output
@@ -299,7 +309,9 @@ class ExtractionPipeline:
         key (`AttributedSearchResult.query`) so the evidence
         normalize-join against `context.known_places` is unaffected. A
         name the resolver dropped as non-place noise is not searched.
-        Search is biased by the resolver's one shared location.
+        Each search is biased by that candidate's own location when the
+        resolver supplied one (ADR-082 — multi-destination posts),
+        otherwise by the shared post location.
 
         Cross-name dedup: when two different producers contributed the
         same name (normalized), one search call covers both. The result
@@ -333,18 +345,27 @@ class ExtractionPipeline:
             already_searched = q_norm in searched_queries or q_norm in seen_in_batch
             if q_norm and not already_searched:
                 seen_in_batch.add(q_norm)
-                queries.append(
-                    (tag, tag, Producer.VIDEO_METADATA, Medium.LOCATION_TAG)
-                )
+                queries.append((tag, tag, Producer.VIDEO_METADATA, Medium.LOCATION_TAG))
 
         if not queries:
             return
 
-        location_hint = resolver_output.location
+        # Shared post location is the default; a candidate with its own
+        # `area` (ADR-082 — multi-destination posts) is biased by that
+        # instead, so a venue listed under a different town resolves to
+        # the right town rather than the post-wide location.
+        shared_hint = resolver_output.location
+
+        def _location_for(raw: str) -> LocationContext | None:
+            return resolver_output.query_locations.get(
+                normalize_query(raw), shared_hint
+            )
 
         sem = asyncio.Semaphore(_SEARCH_CONCURRENCY)
 
-        async def _find(search_query: str) -> list[PlaceObject]:
+        async def _find(
+            search_query: str, location: LocationContext | None
+        ) -> list[PlaceObject]:
             """Run one name's search; best-effort — errors degrade to [].
 
             Each task acquires its own `PlacesSearchService` bound to a
@@ -356,9 +377,7 @@ class ExtractionPipeline:
             try:
                 async with sem, self._search_service_factory() as svc:
                     return await svc.find(
-                        PlaceQuery(
-                            place_names=[search_query], location=location_hint
-                        ),
+                        PlaceQuery(place_names=[search_query], location=location),
                         limit=_SEARCH_LIMIT_PER_QUERY,
                     )
             except Exception as exc:  # noqa: BLE001 — best-effort per query
@@ -369,7 +388,7 @@ class ExtractionPipeline:
                 return []
 
         batches = await asyncio.gather(
-            *[_find(sq) for _, sq, _, _ in queries]
+            *[_find(sq, _location_for(raw)) for raw, sq, _, _ in queries]
         )
 
         # Merge in `queries` order (not completion order) so cross-name dedup

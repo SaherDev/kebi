@@ -223,8 +223,7 @@ def reconcile_picks(
         label = (attributed.display_label or attributed.query).strip()
         source_label = (
             label
-            if label
-            and normalize_query(label) != normalize_query(place.place_name)
+            if label and normalize_query(label) != normalize_query(place.place_name)
             else None
         )
         out.append(
@@ -323,14 +322,18 @@ def _format_location(loc: LocationContext | None) -> str:
 
 @dataclass(frozen=True)
 class ResolverOutput:
-    """Pre-search resolver result (ADR-080).
+    """Pre-search resolver result (ADR-080, ADR-082).
 
     `queries` maps `normalize_query(raw KnownPlace name)` → the cleaned
     string to send to provider text search. A raw name absent from the
     map was dropped as non-place noise and must not be searched.
-    `location` is the one shared location context inferred for the
-    whole post (location-biased search). `post_tags` are shared
-    post-level attribute tags merged into every pick.
+    `location` is the shared location context inferred for the whole
+    post — the default search bias. `query_locations` (ADR-082) holds
+    per-candidate location overrides for multi-destination posts: a
+    candidate keyed there is searched with ITS own location instead of
+    the shared one; candidates absent from it fall back to `location`.
+    `post_tags` are shared post-level attribute tags merged into every
+    pick.
     """
 
     queries: dict[str, str] = field(default_factory=dict)
@@ -341,6 +344,10 @@ class ResolverOutput:
     # (ADR-081). Absent ⇒ fall back to the raw name.
     display_labels: dict[str, str] = field(default_factory=dict)
     location: LocationContext | None = None
+    # `normalize_query(raw KnownPlace name)` → that candidate's own
+    # location (ADR-082). Sparse — only multi-destination posts
+    # populate it; absent ⇒ the shared `location` is used.
+    query_locations: dict[str, LocationContext] = field(default_factory=dict)
     post_tags: list[PlaceTag] = field(default_factory=list)
 
 
@@ -369,9 +376,7 @@ def llm_tags_to_place_tags(tags: Iterable[_LLMTagLike]) -> list[PlaceTag]:
     return out
 
 
-def merge_tags(
-    per_place: list[PlaceTag], shared: list[PlaceTag]
-) -> list[PlaceTag]:
+def merge_tags(per_place: list[PlaceTag], shared: list[PlaceTag]) -> list[PlaceTag]:
     """Union per-place tags with shared post-level tags (ADR-080).
 
     Dedupe by `(type, value)`; the per-place tag wins on conflict

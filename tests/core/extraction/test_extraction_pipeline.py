@@ -83,18 +83,22 @@ class _StubLevel:
         seeds: list[KnownPlace] | None = None,
         executed: bool = True,
         requires_url: bool = False,
+        caption: str | None = None,
     ) -> None:
         self.name = name
         self.summary_fn = inline_summary
         self._seeds = seeds or []
         self._executed = executed
         self.requires_url = requires_url
+        self._caption = caption
 
     async def run(self, context: ExtractionContext) -> tuple[bool, list[str]]:
         if self.requires_url and context.url is None:
             return False, []
         if not self._executed:
             return False, []
+        if self._caption is not None:
+            context.caption = self._caption
         for kp in self._seeds:
             context.known_places.append(kp)
         return True, ["StubEnricher"]
@@ -142,9 +146,7 @@ def _make_pipeline(
         yield search_service
 
     extraction_config = ExtractionConfig(
-        confidence_weights=ConfidenceWeights(
-            base_scores={}, places_modifiers={}
-        ),
+        confidence_weights=ConfidenceWeights(base_scores={}, places_modifiers={}),
         thresholds=ExtractionThresholds(),
         confidence=ConfidenceConfig(),
     )
@@ -195,17 +197,13 @@ async def test_no_inline_picks_runs_deep_level() -> None:
     inline = _StubLevel(
         name="inline",
         seeds=[
-            KnownPlace(
-                name="A", producer=Producer.GOOGLE_MAPS_LIST, medium=Medium.LIST
-            )
+            KnownPlace(name="A", producer=Producer.GOOGLE_MAPS_LIST, medium=Medium.LIST)
         ],
     )
     deep = _StubLevel(
         name="deep",
         seeds=[
-            KnownPlace(
-                name="B", producer=Producer.VISION_FRAMES, medium=Medium.FRAME
-            )
+            KnownPlace(name="B", producer=Producer.VISION_FRAMES, medium=Medium.FRAME)
         ],
     )
     pipeline, picker, _ = _make_pipeline(
@@ -225,9 +223,7 @@ async def test_no_inline_picks_runs_deep_level() -> None:
 async def test_no_url_skips_deep_level() -> None:
     inline = _StubLevel(
         name="inline",
-        seeds=[
-            KnownPlace(name="A", producer=Producer.LLM_NER, medium=Medium.CAPTION)
-        ],
+        seeds=[KnownPlace(name="A", producer=Producer.LLM_NER, medium=Medium.CAPTION)],
     )
     deep = _StubLevel(name="deep", requires_url=True)
     pipeline, picker, _ = _make_pipeline(
@@ -297,9 +293,7 @@ async def test_resolver_cleans_queries_drops_noise_and_passes_shared_context() -
     )
     await pipeline.run(url="https://x.com", user_id="u1", limit=_TEST_LIMIT)
 
-    queries = [
-        c.args[0] for c in search_service.find.call_args_list
-    ]
+    queries = [c.args[0] for c in search_service.find.call_args_list]
     searched_names = [n for q in queries for n in (q.place_names or [])]
     assert searched_names == ["Keep Me Cleaned"]  # cleaned; "Drop Me" skipped
     assert queries[0].location is not None
@@ -396,9 +390,7 @@ async def test_concurrent_fanout_uses_per_task_session_no_shared_session() -> No
 async def test_dedup_collapses_same_provider_id() -> None:
     inline = _StubLevel(
         name="inline",
-        seeds=[
-            KnownPlace(name="A", producer=Producer.LLM_NER, medium=Medium.CAPTION)
-        ],
+        seeds=[KnownPlace(name="A", producer=Producer.LLM_NER, medium=Medium.CAPTION)],
     )
     picks = [
         _candidate(provider_id="google:dup"),
@@ -416,9 +408,7 @@ async def test_dedup_collapses_same_provider_id() -> None:
 @pytest.mark.asyncio
 async def test_cap_exceeded_raises_too_many_candidates() -> None:
     seeds = [
-        KnownPlace(
-            name=f"name_{i}", producer=Producer.LLM_NER, medium=Medium.CAPTION
-        )
+        KnownPlace(name=f"name_{i}", producer=Producer.LLM_NER, medium=Medium.CAPTION)
         for i in range(30)
     ]
     inline = _StubLevel(name="inline", seeds=seeds)
@@ -431,13 +421,90 @@ async def test_cap_exceeded_raises_too_many_candidates() -> None:
 
 
 @pytest.mark.asyncio
+async def test_caption_only_post_extracts_via_resolver_discovery() -> None:
+    """UC1: a venue named only in the caption (no list, no vision, no
+    pin) is discovered by the resolver, appended as an LLM_NER
+    KnownPlace, and flows through search -> pick like any other name."""
+    inline = _StubLevel(name="inline", caption="Best pad thai at Thip Samai")
+
+    class _DiscoveringResolver:
+        async def resolve(self, context: ExtractionContext) -> ResolverOutput:
+            context.known_places.append(
+                KnownPlace(
+                    name="Thip Samai",
+                    producer=Producer.LLM_NER,
+                    medium=Medium.CAPTION,
+                )
+            )
+            return ResolverOutput(
+                queries={normalize_query("Thip Samai"): "Thip Samai Bangkok"},
+                location=None,
+                post_tags=[],
+            )
+
+    pipeline, _, search_service = _make_pipeline(
+        levels=[inline],
+        picker_returns=[_candidate("Thip Samai", "google:thip")],
+        search_results_by_query={
+            "Thip Samai Bangkok": [_place_object("google:thip", "Thip Samai")]
+        },
+        resolver=_DiscoveringResolver(),
+    )
+    out = await pipeline.run(url="https://x.com", user_id="u1", limit=_TEST_LIMIT)
+
+    assert len(out) == 1
+    assert out[0].place_name == "Thip Samai"
+    # The discovered name was searched via its resolver-cleaned query.
+    searched = [
+        n
+        for c in search_service.find.call_args_list
+        for n in (c.args[0].place_names or [])
+    ]
+    assert searched == ["Thip Samai Bangkok"]
+
+
+@pytest.mark.asyncio
+async def test_resolver_discovery_re_enforces_candidate_cap() -> None:
+    """Names the resolver discovers in free text are appended after the
+    pre-resolve cap check, so the pipeline re-enforces the limit after
+    resolve() — discovery cannot blow past the candidate ceiling."""
+    seeds = [
+        KnownPlace(
+            name=f"seed_{i}", producer=Producer.VISION_IMAGES, medium=Medium.IMAGE
+        )
+        for i in range(20)
+    ]
+    inline = _StubLevel(name="inline", seeds=seeds)
+
+    class _DiscoveringResolver:
+        async def resolve(self, context: ExtractionContext) -> ResolverOutput:
+            for i in range(10):
+                context.known_places.append(
+                    KnownPlace(
+                        name=f"found_{i}",
+                        producer=Producer.LLM_NER,
+                        medium=Medium.CAPTION,
+                    )
+                )
+            return ResolverOutput(queries={}, location=None, post_tags=[])
+
+    pipeline, _, search_service = _make_pipeline(
+        levels=[inline], resolver=_DiscoveringResolver()
+    )
+    with pytest.raises(TooManyCandidatesError) as exc:
+        await pipeline.run(url="https://x.com", user_id="u1", limit=_TEST_LIMIT)
+    assert exc.value.found == 30
+    assert exc.value.limit == _TEST_LIMIT
+    # Re-check fires before the search fan-out.
+    search_service.find.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_geo_features_filtered_from_search_results() -> None:
     """Administrative-name results should be dropped before the picker."""
     inline = _StubLevel(
         name="inline",
-        seeds=[
-            KnownPlace(name="A", producer=Producer.LLM_NER, medium=Medium.CAPTION)
-        ],
+        seeds=[KnownPlace(name="A", producer=Producer.LLM_NER, medium=Medium.CAPTION)],
     )
     real_venue = _place_object("google:venue", "Joe Pizza")
     admin_result = PlaceObject(
@@ -455,3 +522,61 @@ async def test_geo_features_filtered_from_search_results() -> None:
     search_set = pick_args.args[1]
     assert "google:venue" in search_set
     assert "google:road1" not in search_set
+
+
+@pytest.mark.asyncio
+async def test_per_candidate_location_biases_each_search() -> None:
+    """ADR-082: each search is biased by that candidate's own location
+    when the resolver supplied one (multi-destination post), and by the
+    shared post location otherwise."""
+    inline = _StubLevel(
+        name="inline",
+        seeds=[
+            KnownPlace(
+                name="Inntel Hotel",
+                producer=Producer.LLM_NER,
+                medium=Medium.CAPTION,
+            ),
+            KnownPlace(
+                name="Rijksmuseum",
+                producer=Producer.LLM_NER,
+                medium=Medium.CAPTION,
+            ),
+        ],
+    )
+
+    class _MultiLocationResolver:
+        async def resolve(self, context: ExtractionContext) -> ResolverOutput:
+            return ResolverOutput(
+                queries={
+                    normalize_query("Inntel Hotel"): "Inntel Hotel Zaandam",
+                    normalize_query("Rijksmuseum"): "Rijksmuseum",
+                },
+                location=LocationContext(city="Amsterdam"),
+                query_locations={
+                    normalize_query("Inntel Hotel"): LocationContext(city="Zaandam"),
+                },
+                post_tags=[],
+            )
+
+    pipeline, _, search_service = _make_pipeline(
+        levels=[inline],
+        picker_returns=[],
+        search_results_by_query={
+            "Inntel Hotel Zaandam": [_place_object("g:i", "Inntel")],
+            "Rijksmuseum": [_place_object("g:r", "Rijksmuseum")],
+        },
+        resolver=_MultiLocationResolver(),
+    )
+    await pipeline.run(url="https://x.com", user_id="u1", limit=_TEST_LIMIT)
+
+    bias = {
+        (c.args[0].place_names or [""])[0]: c.args[0].location
+        for c in search_service.find.call_args_list
+    }
+    # Per-candidate override.
+    assert bias["Inntel Hotel Zaandam"] is not None
+    assert bias["Inntel Hotel Zaandam"].city == "Zaandam"
+    # No override → shared post location.
+    assert bias["Rijksmuseum"] is not None
+    assert bias["Rijksmuseum"].city == "Amsterdam"

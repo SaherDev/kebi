@@ -4,15 +4,16 @@ This is the join layer between the producer-by-producer pipeline and
 the per-candidate evidence list. Producers populate
 `ExtractionContext.text_evidence` (text producers — yt-dlp, Whisper,
 Subtitle, oEmbed, …) and `ExtractionContext.known_places` (name
-producers — vision frames, vision images, Google Maps list). When NER
-(or any future candidate emitter) wants to record what backed each name
-it just emitted, it calls `collect_evidence_for(name, context)` to
-walk the pipeline state and assemble every matching `Evidence` item.
+producers — vision frames, vision images, Google Maps list, plus the
+resolver's free-text discovery). When a candidate emitter wants to
+record what backed each name it just emitted, it calls
+`collect_evidence_for(name, context)` to walk the pipeline state and
+assemble every matching `Evidence` item.
 
-Kept separate from `LLMNEREnricher` because the join is not NER-specific
-— a regex-based extractor or any other emitter would need the same
-logic. Kept separate from `types.py` to keep that module focused on
-data shapes.
+Kept separate from the resolver/picker because the join is not
+emitter-specific — a regex-based extractor or any other emitter would
+need the same logic. Kept separate from `types.py` to keep that module
+focused on data shapes.
 """
 
 from __future__ import annotations

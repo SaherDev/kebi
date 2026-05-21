@@ -17,12 +17,18 @@ physical venues**, not aliases of one place.
 
 When two or more candidates share a name (exact or near-match like
 "Mezzaluna" / "Mezzaluna Pizza" / "Trattoria Mezza Luna"), pick **AT
-MOST ONE** — the one whose `location` best matches the post's
-location signal:
-1. `location_tag` if present
-2. City/region tokens in the hashtags (`#bangkok`, `#nyc`, `#tokyo`,
+MOST ONE** — the one whose `location` best matches where the POST
+places THAT venue:
+1. The venue's OWN section / area. In a multi-destination post — a
+   listicle with a different town per section — a venue belongs to ITS
+   section's town, not the post-wide location. If the post lists
+   "Inntel Hotel" under a "Zaandam" section, pick the candidate in
+   Zaandam and reject the one in Amsterdam. This per-venue signal
+   OVERRIDES the post-wide signals below.
+2. `location_tag` if present.
+3. City/region tokens in the hashtags (`#bangkok`, `#nyc`, `#tokyo`,
    `#paris`, …) — `#bangkok` means the venue MUST be in Thailand.
-3. City mentions in caption / transcript / title.
+4. City mentions in caption / transcript / title.
 
 Reject every other same-name candidate with
 `rejected=true` and `rejection_reason="same_name_different_location"`.

@@ -139,8 +139,10 @@ class ExtractionContext:
 
     `known_places` is a list of `KnownPlace` entries — confirmed venue
     names from name producers (Google Maps shared list, vision frames,
-    vision images). Each entry carries the `producer + medium + snippet`
-    so the picker can stamp matching picks with full provenance.
+    vision images) plus names the pre-search resolver discovers in the
+    post's free text (`LLM_NER`). Each entry carries the
+    `producer + medium + snippet` so the picker can stamp matching
+    picks with full provenance.
 
     `text_evidence` is a list of `Evidence` entries appended by text
     producers when they actually wrote pipeline state (caption,

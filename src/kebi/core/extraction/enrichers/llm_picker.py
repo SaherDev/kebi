@@ -154,7 +154,7 @@ class LLMPlacePicker:
                 "caption_length": len(context.caption or ""),
                 "transcript_length": len(context.transcript or ""),
             },
-            model="gpt-4o-mini",
+            model="gpt-4o",
         )
 
         try:
