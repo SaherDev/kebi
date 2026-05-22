@@ -71,6 +71,33 @@ class TestBuildTurnPayload:
         )
         assert p["user_location"] is None
 
+    def test_movement_profile_is_passed_through(self) -> None:
+        profile = {
+            "default_mode": "transit",
+            "available_modes": ["walking", "transit"],
+            "reach": "normal",
+        }
+        p = build_turn_payload(
+            message="hi",
+            user_id="u1",
+            taste_profile_summary="",
+            memory_summary="",
+            movement_profile=profile,
+        )
+        assert p["movement_profile"] == profile
+
+    def test_movement_profile_defaults_to_none(self) -> None:
+        """An omitted profile must reset state to None every turn — it is
+        plain-overwrite (no reducer), never carried (contrast working_location).
+        """
+        p = build_turn_payload(
+            message="hi",
+            user_id="u1",
+            taste_profile_summary="",
+            memory_summary="",
+        )
+        assert p["movement_profile"] is None
+
     def test_passes_inherit_sentinel_to_preserve_carried_working_location(
         self,
     ) -> None:

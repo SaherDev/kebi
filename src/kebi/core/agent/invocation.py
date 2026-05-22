@@ -21,6 +21,7 @@ def build_turn_payload(
     taste_profile_summary: str,
     memory_summary: str,
     user_location: dict[str, Any] | None = None,
+    movement_profile: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build the per-turn state update for `graph.ainvoke(...)`.
 
@@ -42,6 +43,9 @@ def build_turn_payload(
       taste_profile_summary: behavior-derived preference bullets.
       memory_summary: user-stated facts with confidence scores.
       user_location: the user's actual location, optional {lat, lng}.
+      movement_profile: the user's mobility profile, optional. Plain overwrite
+        — re-supplied every turn from the request, never carried (contrast
+        `working_location`); a turn that omits it resets state to None.
 
     Returns:
       dict payload suitable for `graph.ainvoke(payload, config=...)`.
@@ -55,6 +59,7 @@ def build_turn_payload(
         "user_location": user_location,
         "working_location": LOCATION_INHERIT,
         "location_clarification": None,
+        "movement_profile": movement_profile,
         "steps_taken": 0,
         "error_count": 0,
         "tool_calls_used": 0,

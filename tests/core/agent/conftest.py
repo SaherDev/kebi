@@ -70,8 +70,24 @@ def mock_resolver_llm() -> MagicMock:
 
 @pytest.fixture
 def mock_geocoding_client() -> MagicMock:
-    """Fake NominatimGeocodingClient — forward/reverse are AsyncMocks."""
+    """Fake NominatimGeocodingClient — forward/reverse/search are AsyncMocks
+    returning `GeocodeResult`s (ADR-084)."""
+    from kebi.core.places.nominatim_geocoding_client import GeocodeResult
+
     client = MagicMock()
-    client.forward = AsyncMock(return_value=(13.75, 100.5))
-    client.reverse = AsyncMock(return_value={"country": "Thailand", "city": "Bangkok"})
+    client.forward = AsyncMock(
+        return_value=GeocodeResult(lat=13.75, lng=100.5, place_type="city")
+    )
+    client.search = AsyncMock(
+        return_value=GeocodeResult(lat=13.75, lng=100.5, place_type="city")
+    )
+    client.reverse = AsyncMock(
+        return_value=GeocodeResult(
+            lat=13.75,
+            lng=100.5,
+            country="Thailand",
+            city="Bangkok",
+            place_type="city",
+        )
+    )
     return client

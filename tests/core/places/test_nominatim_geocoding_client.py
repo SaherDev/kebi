@@ -1,4 +1,4 @@
-"""Tests for NominatimGeocodingClient — forward + reverse geocoding."""
+"""Tests for NominatimGeocodingClient — forward + reverse + search geocoding."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ import httpx
 import pytest
 
 from kebi.core.places.nominatim_geocoding_client import (
+    GeocodeResult,
     GeocodingError,
     NominatimGeocodingClient,
 )
@@ -26,7 +27,9 @@ def _client(json_payload: Any) -> tuple[NominatimGeocodingClient, MagicMock]:
 
 async def test_forward_parses_lat_lon() -> None:
     client, _ = _client([{"lat": "13.75", "lon": "100.5"}])
-    assert await client.forward(country="Thailand", city="Bangkok") == (13.75, 100.5)
+    result = await client.forward(country="Thailand", city="Bangkok")
+    assert result is not None
+    assert (result.lat, result.lng) == (13.75, 100.5)
 
 
 async def test_forward_empty_result_returns_none() -> None:
@@ -41,22 +44,69 @@ async def test_forward_sends_identifying_user_agent() -> None:
     assert kwargs["headers"]["User-Agent"] == "kebi-test/1.0"
 
 
+async def test_requests_english_place_names() -> None:
+    """Every Nominatim call forces `accept-language=en` — otherwise names
+    come back in the local script ("กรุงเทพมหานคร" rather than "Bangkok")."""
+    client, http = _client([{"lat": "1", "lon": "2"}])
+    await client.search(query="Bangkok")
+    _, kwargs = http.get.call_args
+    assert kwargs["params"]["accept-language"] == "en"
+
+
+async def test_search_carries_place_type_and_bbox() -> None:
+    """A search result reuses the place type (density proxy) and bounding box
+    from the same Nominatim response — no extra call."""
+    client, _ = _client(
+        [
+            {
+                "lat": "13.75",
+                "lon": "100.5",
+                "addresstype": "city",
+                "boundingbox": ["13.5", "14.0", "100.3", "100.9"],
+            }
+        ]
+    )
+    result = await client.search(query="Bangkok, Thailand")
+    assert result == GeocodeResult(
+        lat=13.75,
+        lng=100.5,
+        place_type="city",
+        bbox=[13.5, 14.0, 100.3, 100.9],
+    )
+
+
+async def test_search_malformed_bbox_is_dropped() -> None:
+    client, _ = _client([{"lat": "1", "lon": "2", "boundingbox": ["bad"]}])
+    result = await client.search(query="x")
+    assert result is not None
+    assert result.bbox is None
+
+
 async def test_reverse_extracts_components_with_fallbacks() -> None:
     client, _ = _client(
         {"address": {"country": "Thailand", "town": "Pattaya", "suburb": "Jomtien"}}
     )
     result = await client.reverse(lat=12.9, lng=100.9)
-    assert result == {
-        "country": "Thailand",
-        "city": "Pattaya",
-        "neighborhood": "Jomtien",
-    }
+    assert result is not None
+    assert result.country == "Thailand"
+    assert result.city == "Pattaya"
+    assert result.neighborhood == "Jomtien"
+    # City name came from the `town` key → density proxy is "town".
+    assert result.place_type == "town"
+
+
+async def test_reverse_place_type_reflects_city_key() -> None:
+    client, _ = _client({"address": {"country": "Thailand", "city": "Bangkok"}})
+    result = await client.reverse(lat=13.7, lng=100.5)
+    assert result is not None
+    assert result.place_type == "city"
 
 
 async def test_reverse_neighborhood_may_be_absent() -> None:
     client, _ = _client({"address": {"country": "Thailand", "city": "Bangkok"}})
     result = await client.reverse(lat=13.7, lng=100.5)
-    assert result == {"country": "Thailand", "city": "Bangkok"}
+    assert result is not None
+    assert result.neighborhood is None
 
 
 async def test_reverse_missing_city_returns_none() -> None:

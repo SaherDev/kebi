@@ -23,6 +23,7 @@ def test_agent_state_typed_dict_shape() -> None:
         "user_location": {"lat": 13.7, "lng": 100.5},
         "working_location": None,
         "location_clarification": None,
+        "movement_profile": None,
         "reasoning_steps": [],
         "steps_taken": 0,
         "error_count": 0,
@@ -30,6 +31,43 @@ def test_agent_state_typed_dict_shape() -> None:
     }
     assert state["user_id"] == "u1"
     assert state["reasoning_steps"] == []
+
+
+async def test_movement_profile_does_not_persist_across_turns() -> None:
+    """`movement_profile` has no reducer — it is re-supplied every turn from
+    the request. A turn that omits it must overwrite to None, never inherit a
+    stale profile (contrast `working_location`, which carries on purpose).
+    """
+    checkpointer = InMemorySaver()
+
+    async def passthrough(state: AgentState) -> dict:
+        return {"messages": [AIMessage(content="ok")]}
+
+    graph: StateGraph = StateGraph(AgentState)
+    graph.add_node("passthrough", passthrough)
+    graph.set_entry_point("passthrough")
+    graph.add_edge("passthrough", END)
+    app = graph.compile(checkpointer=checkpointer)
+    config = {"configurable": {"thread_id": "u1"}}
+
+    state1 = await app.ainvoke(
+        {
+            "messages": [HumanMessage(content="one")],
+            "movement_profile": {"default_mode": "driving"},
+        },
+        config=config,
+    )
+    assert state1["movement_profile"] == {"default_mode": "driving"}
+
+    # Turn 2 omits movement_profile (frontend stopped sending it).
+    state2 = await app.ainvoke(
+        {
+            "messages": [HumanMessage(content="two")],
+            "movement_profile": None,
+        },
+        config=config,
+    )
+    assert state2["movement_profile"] is None
 
 
 def test_merge_working_location_inherit_keeps_carried_value() -> None:

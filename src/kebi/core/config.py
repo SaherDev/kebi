@@ -15,6 +15,8 @@ import yaml
 from pydantic import BaseModel, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from kebi.core.agent.location import MovementMode, Reach
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -463,8 +465,7 @@ class AgentConfig(BaseModel):
             )
         if self.tool_result_window < 0:
             raise ValueError(
-                "agent.tool_result_window must be >= 0 "
-                f"(got {self.tool_result_window})"
+                f"agent.tool_result_window must be >= 0 (got {self.tool_result_window})"
             )
         if self.state_message_floor < 1 or self.state_message_cap < 1:
             raise ValueError(
@@ -488,6 +489,56 @@ class AgentConfig(BaseModel):
         return self
 
 
+class MovementRadiusTiers(BaseModel):
+    """Base search radius in metres per scope tier, before mode/reach scaling."""
+
+    walkable: float = 1000.0
+    neighborhood: float = 2500.0
+    city: float = 7000.0
+    metro: float = 45000.0
+
+
+class MovementFallback(BaseModel):
+    """Neutral mobility profile applied when a `/v1/chat` request omits one.
+
+    Deliberately conservative — `transit`, not `driving` — so a missing
+    profile (an old client, a frontend bug) does not silently widen every
+    search radius in a walking-first city. Visible, committed config rather
+    than a value buried in code.
+    """
+
+    mode: MovementMode = "transit"
+    reach: Reach = "normal"
+    available_modes: list[MovementMode] = ["walking", "transit"]
+
+
+class MovementConfig(BaseModel):
+    """Movement / search-scope configuration (ADR-084).
+
+    `radius_tiers` × `mode_multiplier` produce the per-turn search radius;
+    `reach` shifts the tier first — see `core/agent/location.resolve_radius`.
+    """
+
+    radius_tiers: MovementRadiusTiers = MovementRadiusTiers()
+    mode_multiplier: dict[str, float] = {
+        "walking": 1.0,
+        "cycling": 1.5,
+        "transit": 2.0,
+        "rideshare": 2.2,
+        "motorbike": 2.4,
+        "driving": 2.6,
+    }
+    # Location-density scaling (ADR-084): "near me" reaches further in a
+    # sparse area than a dense one. The class is read from the geocoder's
+    # place type — never a static table.
+    density_factor: dict[str, float] = {
+        "dense": 0.7,
+        "medium": 1.0,
+        "sparse": 1.6,
+    }
+    fallback: MovementFallback = MovementFallback()
+
+
 class AppConfig(BaseModel):
     app: AppMeta
     models: dict[str, LLMRoleConfig]
@@ -499,6 +550,7 @@ class AppConfig(BaseModel):
     taste_model: TasteModelConfig = TasteModelConfig()
     memory: MemoryConfig = MemoryConfig()
     agent: AgentConfig = AgentConfig()
+    movement: MovementConfig = MovementConfig()
     prompts: dict[str, PromptConfig] = {}
 
     @model_validator(mode="before")
@@ -519,12 +571,18 @@ class AppConfig(BaseModel):
 # Per-prompt required template-slot registry (feature 027 FR-018a).
 # Eager validation at _load_prompts() ensures any missing slot aborts boot.
 _REQUIRED_PROMPT_SLOTS: dict[str, list[str]] = {
-    "agent": ["{taste_profile_summary}", "{memory_summary}"],
+    "agent": [
+        "{location_context}",
+        "{movement_context}",
+        "{taste_profile_summary}",
+        "{memory_summary}",
+    ],
     "location_resolver": [
         "{current_message}",
         "{conversation_history}",
         "{user_actual_location}",
         "{previous_working_location}",
+        "{mobility_profile}",
     ],
 }
 

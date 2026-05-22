@@ -6,6 +6,10 @@ country/city/neighbourhood (reverse). The OSM usage policy requires an
 identifying `User-Agent` header and limits the public instance to roughly
 one request per second — a single geocode per chat turn stays within that.
 A Redis cache in front of this is a sensible follow-up at scale.
+
+Every call returns a `GeocodeResult` — coordinates plus two signals reused
+from the *same* response (no extra call): the place type (a density proxy,
+ADR-084) and the feature's bounding box.
 """
 
 from __future__ import annotations
@@ -14,6 +18,7 @@ import logging
 from typing import Any
 
 import httpx
+from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +34,37 @@ class GeocodingError(RuntimeError):
     """
 
 
+class GeocodeResult(BaseModel):
+    """A geocoded place — coordinates plus signals reused from the response.
+
+    `place_type` is Nominatim's settlement type (city / town / village / …),
+    used as a density proxy: "near me" reaches further in a sparse town than
+    a dense city (ADR-084). `bbox` is the matched feature's bounding box,
+    `[min_lat, max_lat, min_lng, max_lng]` — recorded for a future
+    extent-aware refinement. Both come free in the geocode response.
+    """
+
+    lat: float
+    lng: float
+    country: str | None = None
+    city: str | None = None
+    neighborhood: str | None = None
+    place_type: str | None = None
+    bbox: list[float] | None = None
+
+
+def _parse_bbox(raw: Any) -> list[float] | None:
+    """Parse Nominatim's `boundingbox` (`[south, north, west, east]` strings)
+    into `[min_lat, max_lat, min_lng, max_lng]` floats, or `None`."""
+    if not isinstance(raw, list) or len(raw) != 4:
+        return None
+    try:
+        south, north, west, east = (float(x) for x in raw)
+    except (TypeError, ValueError):
+        return None
+    return [south, north, west, east]
+
+
 class NominatimGeocodingClient:
     """Geocoding adapter over the public OpenStreetMap Nominatim API."""
 
@@ -36,36 +72,55 @@ class NominatimGeocodingClient:
         self._http = http
         self._user_agent = user_agent
 
+    async def search(self, *, query: str) -> GeocodeResult | None:
+        """Resolve a free-text place query to a `GeocodeResult`.
+
+        Used both for structured place lookups (via `forward`) and for
+        corridor destinations (ADR-084), which the resolver names in free
+        text ("Suvarnabhumi Airport, Bangkok"). Returns `None` when Nominatim
+        finds no match.
+        """
+        data = await self._request(
+            "/search",
+            {"q": query, "format": "jsonv2", "limit": "1", "addressdetails": "1"},
+        )
+        if not isinstance(data, list) or not data:
+            return None
+        first = data[0]
+        try:
+            lat, lng = float(first["lat"]), float(first["lon"])
+        except (KeyError, TypeError, ValueError):
+            logger.warning("nominatim_search_unparseable", extra={"query": query})
+            return None
+        return GeocodeResult(
+            lat=lat,
+            lng=lng,
+            place_type=first.get("addresstype") or first.get("type"),
+            bbox=_parse_bbox(first.get("boundingbox")),
+        )
+
     async def forward(
         self,
         *,
         country: str,
         city: str,
         neighborhood: str | None = None,
-    ) -> tuple[float, float] | None:
-        """Resolve a named place to ``(lat, lng)``.
+    ) -> GeocodeResult | None:
+        """Resolve a named place to a `GeocodeResult`.
 
         Returns ``None`` when Nominatim finds no match.
         """
         query = ", ".join(p for p in (neighborhood, city, country) if p)
-        data = await self._request(
-            "/search", {"q": query, "format": "jsonv2", "limit": "1"}
-        )
-        if not isinstance(data, list) or not data:
-            return None
-        first = data[0]
-        try:
-            return float(first["lat"]), float(first["lon"])
-        except (KeyError, TypeError, ValueError):
-            logger.warning("nominatim_forward_unparseable", extra={"query": query})
-            return None
+        return await self.search(query=query)
 
-    async def reverse(self, *, lat: float, lng: float) -> dict[str, str] | None:
-        """Resolve a coordinate to country / city / neighborhood.
+    async def reverse(self, *, lat: float, lng: float) -> GeocodeResult | None:
+        """Resolve a coordinate to a `GeocodeResult` with place names.
 
-        Returns a dict with whatever components were found; ``neighborhood``
-        may be absent because Nominatim coverage varies by region. Returns
-        ``None`` when `country` or `city` could not be determined.
+        ``neighborhood`` may be absent because Nominatim coverage varies by
+        region. ``place_type`` is derived from which settlement key carried
+        the city name (city / town / village) — a density proxy. Returns
+        ``None`` when `country` or `city` could not be determined. The
+        returned `lat`/`lng` echo the input — the caller's GPS is canonical.
         """
         data = await self._request(
             "/reverse",
@@ -90,18 +145,36 @@ class NominatimGeocodingClient:
         )
         if not country or not city:
             return None
-        result: dict[str, str] = {"country": country, "city": city}
-        if neighborhood:
-            result["neighborhood"] = neighborhood
-        return result
+        # Density proxy: which settlement key the city name came from.
+        if address.get("city"):
+            place_type: str | None = "city"
+        elif address.get("town"):
+            place_type = "town"
+        elif address.get("village"):
+            place_type = "village"
+        else:
+            place_type = data.get("addresstype") or data.get("type")
+        return GeocodeResult(
+            lat=lat,
+            lng=lng,
+            country=country,
+            city=city,
+            neighborhood=neighborhood,
+            place_type=place_type,
+            bbox=_parse_bbox(data.get("boundingbox")),
+        )
 
     async def _request(
         self, path: str, params: dict[str, str]
     ) -> dict[str, Any] | list[Any]:
+        # Force English (Romanized) place names — Nominatim otherwise returns
+        # them in the local script ("กรุงเทพมหานคร" rather than "Bangkok"),
+        # which the English-speaking agent and the rest of the system expect.
+        request_params = {**params, "accept-language": "en"}
         try:
             response = await self._http.get(
                 f"{_NOMINATIM_API_BASE}{path}",
-                params=params,
+                params=request_params,
                 headers={"User-Agent": self._user_agent},
                 timeout=_TIMEOUT_SECONDS,
             )

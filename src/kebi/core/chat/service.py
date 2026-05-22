@@ -80,6 +80,11 @@ class ChatService:
                 user_location=(
                     request.location.model_dump() if request.location else None
                 ),
+                movement_profile=(
+                    request.movement_profile.model_dump()
+                    if request.movement_profile
+                    else None
+                ),
             )
 
             graph_config = {
