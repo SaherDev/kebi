@@ -300,6 +300,38 @@ agent:
   # nothing reads them while the agent is zero-tool.
 
 # ---------------------------------------------------------------------------
+# Movement / search-scope (ADR-084)
+# Every agent turn resolves an effective movement mode + scope tier into a
+# concrete search radius: radius = radius_tiers[shift(tier, reach)] ×
+# mode_multiplier[mode] × density_factor[density]. reach shifts the tier ±1
+# (compact -1, far +1); density comes from the geocoder's place type so
+# "near me" scales with how dense the area is.
+# `fallback` is the neutral mobility profile used when a /v1/chat request
+# omits movement_profile — deliberately transit, not driving.
+# ---------------------------------------------------------------------------
+movement:
+  radius_tiers:        # base metres per scope tier, before mode/reach scaling
+    walkable: 1000
+    neighborhood: 2500
+    city: 7000
+    metro: 45000
+  mode_multiplier:     # per-mode scale applied to the tier base
+    walking: 1.0
+    cycling: 1.5
+    transit: 2.0
+    rideshare: 2.2
+    motorbike: 2.4
+    driving: 2.6
+  density_factor:      # location-density scale (from the geocoder place type)
+    dense: 0.7
+    medium: 1.0
+    sparse: 1.6
+  fallback:            # used when the request carries no movement_profile
+    mode: transit
+    reach: normal
+    available_modes: [walking, transit]
+
+# ---------------------------------------------------------------------------
 # Taste Model Configuration
 # Signal-counts aggregation + LLM-generated taste_profile_summary
 # ADR-058: RankingService deleted, agent-driven ranking deferred

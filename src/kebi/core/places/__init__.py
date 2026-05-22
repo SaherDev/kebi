@@ -26,7 +26,11 @@ from .models import (
     SavedPlaceView,
     UserPlace,
 )
-from .nominatim_geocoding_client import GeocodingError, NominatimGeocodingClient
+from .nominatim_geocoding_client import (
+    GeocodeResult,
+    GeocodingError,
+    NominatimGeocodingClient,
+)
 from .place_wipe_service import PlaceWipeService
 from .places_repo import PlacesRepo
 from .protocols import (
@@ -120,6 +124,8 @@ __all__ = [
     "PlaceUpsertService",
     "PlaceWipeService",
     "UserPlacesService",
+    # geocoding
+    "GeocodeResult",
     # errors
     "DuplicateUserPlaceError",
     "GeocodingError",

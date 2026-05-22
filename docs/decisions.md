@@ -15,6 +15,16 @@ Format:
 
 ---
 
+## ADR-084: Search scope — every turn resolves how far the request reaches
+
+**Date:** 2026-05-22\
+**Status:** accepted\
+**Context:** ADR-083 gave every turn a working location — a point — but a point alone cannot ground a distance. "Near me" is half a kilometre on foot and several by car; a day trip is wider still; a different city is a different search entirely. The agent had no notion of how far a request reaches, so any distance reasoning was ungrounded and a future place search would have no radius to query. A single fixed reach would be wrong for most turns: the right distance depends on how the user moves, on per-request intent, and on how dense the place itself is — "near me" covers far more ground in a sparse town than in a dense city.\
+**Decision:** Resolve a search scope every turn alongside the working location: an effective movement mode, a scope tier (walkable, neighborhood, city, metro), a shape (a disc around the point, or a corridor toward a destination for "on my way" requests), and from those a concrete search radius. The user carries a mobility profile — a default mode, the modes actually available to them, and a personal reach — set in the product repo and sent on each request, the way the actual location already is; per-request context can resolve a different effective mode or tier for any single turn without changing the profile. The radius is derived deterministically from configuration — tier, mode, reach, and the location's density all scale it — never emitted by the model, mirroring ADR-083's rule that the resolver classifies but never transcribes numbers. Density is read from the place type the geocoder already returns, not a static table. This is folded into the existing working-location resolution rather than given its own resolver step: location and scope are one question — "what place, and how far around it" — and answering them in one model call keeps a single source of truth and one cost, at the price of a busier prompt; a separate resolver would isolate the concern but double the calls and split the truth, and the coupling won. A corridor destination is geocoded eagerly; when it cannot be — an implicit anchor like "home", which this repo has no address for — the agent asks rather than silently falling back to a plain radius.\
+**Consequences:** Distance reasoning is now grounded: the agent scales its answers to a real radius, and the place search to come has a radius to query. The request contract gains one optional field — the mobility profile — and a turn that omits it falls back to a neutral, conservative default rather than failing. The resolver prompt now carries five classifications in one structured call; it is load-bearing and must be maintained with worked examples. Scope and corridor shape are recorded on the working location for a search consumer that does not exist yet — ADR-075 removed recall — so in the current zero-tool agent they shape only the agent's prose reasoning; corridor-aware search geometry is left as follow-up. The radius is density-aware but coarsely so: density is a three-way class off the geocoder's place type, which corrects the worst city-versus-village mismatch but not finer variation within a city.
+
+---
+
 ## ADR-083: Working location — every turn resolves the place it operates against
 
 **Date:** 2026-05-21\

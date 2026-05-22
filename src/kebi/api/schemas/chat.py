@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+
+from kebi.core.agent.location import MovementMode, Reach
 
 ChatResponseType = Literal[
     "error",
@@ -19,12 +21,33 @@ class Location(BaseModel):
     lng: float
 
 
+class MovementProfile(BaseModel):
+    """The user's profile-level mobility setting (ADR-084).
+
+    Owned by the NestJS product repo's `user_settings` (Constitution VI — kebi
+    owns no user-settings table) and sent on every `/v1/chat` request, like
+    `location`. kebi consumes it; it is never stored here. It is the *default*
+    the per-turn resolver starts from — request context can resolve a
+    different effective mode/scope for any given turn without changing it.
+
+    `available_modes` constrains *inferred* mode picks (the resolver will not
+    infer `driving` for a user who lists only `[walking, transit]`); an
+    explicit per-turn mode word can still override it. `reach` shifts the
+    resolved scope tier ±1.
+    """
+
+    default_mode: MovementMode
+    available_modes: list[MovementMode] = Field(min_length=1)
+    reach: Reach = "normal"
+
+
 class ChatRequest(BaseModel):
     """Request body for POST /v1/chat endpoint."""
 
     user_id: str
     message: str
     location: Location | None = None
+    movement_profile: MovementProfile | None = None
 
 
 class ChatResponse(BaseModel):

@@ -124,6 +124,14 @@ class AgentState(TypedDict):
       location_clarification — reason string when the working location could
                             not be resolved (ambiguous / insufficient); None
                             otherwise. Reset to None each turn.
+      movement_profile    — the user's mobility profile from the request
+                            (`MovementProfile.model_dump()`) or None when the
+                            request omitted it. Plain overwrite, **no
+                            reducer**: it is re-supplied verbatim every turn
+                            from the request, so — unlike `working_location`,
+                            which carries via `merge_working_location` — it
+                            must NOT persist. A turn that omits it must see
+                            None, not a stale value from an earlier turn.
       reasoning_steps     — agent trace; reset to [] on every new user
                             message; no reducer (plain overwrite, FR-021).
       steps_taken         — incremented by agent_node; bounds should_continue.
@@ -140,6 +148,7 @@ class AgentState(TypedDict):
     user_location: dict[str, Any] | None
     working_location: Annotated[dict[str, Any] | None, merge_working_location]
     location_clarification: str | None
+    movement_profile: dict[str, Any] | None
     reasoning_steps: list[ReasoningStep]
     steps_taken: int
     error_count: int

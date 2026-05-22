@@ -1,11 +1,11 @@
-"""Tests for ChatResponse schema (ADR-065 updated Literal)."""
+"""Tests for ChatRequest / ChatResponse schemas (ADR-065, ADR-084)."""
 
 from __future__ import annotations
 
 import pytest
 from pydantic import ValidationError
 
-from kebi.api.schemas.chat import ChatResponse
+from kebi.api.schemas.chat import ChatRequest, ChatResponse, MovementProfile
 
 
 def test_chat_response_accepts_all_valid_types() -> None:
@@ -51,3 +51,46 @@ def test_chat_response_accepts_agent_type_value() -> None:
 def test_chat_response_rejects_unknown_type() -> None:
     with pytest.raises(ValidationError):
         ChatResponse(type="nonsense", message="m")  # type: ignore[arg-type]
+
+
+# --- ChatRequest.movement_profile (ADR-084) --------------------------------
+
+
+def test_chat_request_parses_valid_movement_profile() -> None:
+    req = ChatRequest.model_validate(
+        {
+            "user_id": "u1",
+            "message": "dinner nearby",
+            "movement_profile": {
+                "default_mode": "transit",
+                "available_modes": ["walking", "transit"],
+                "reach": "far",
+            },
+        }
+    )
+    assert req.movement_profile is not None
+    assert req.movement_profile.default_mode == "transit"
+    assert req.movement_profile.reach == "far"
+
+
+def test_chat_request_movement_profile_defaults_to_none() -> None:
+    req = ChatRequest(user_id="u1", message="hi")
+    assert req.movement_profile is None
+
+
+def test_movement_profile_reach_defaults_to_normal() -> None:
+    profile = MovementProfile(default_mode="walking", available_modes=["walking"])
+    assert profile.reach == "normal"
+
+
+def test_movement_profile_rejects_invalid_mode() -> None:
+    with pytest.raises(ValidationError):
+        MovementProfile(
+            default_mode="teleport",  # type: ignore[arg-type]
+            available_modes=["walking"],
+        )
+
+
+def test_movement_profile_rejects_empty_available_modes() -> None:
+    with pytest.raises(ValidationError):
+        MovementProfile(default_mode="walking", available_modes=[])

@@ -28,7 +28,13 @@ from langgraph.config import get_stream_writer
 from langgraph.graph import END, StateGraph
 from langgraph.prebuilt import ToolNode
 
-from kebi.core.agent.location import LocationResolution, WorkingLocation
+from kebi.core.agent.location import (
+    CorridorTarget,
+    LocationResolution,
+    WorkingLocation,
+    density_class,
+    resolve_radius,
+)
 from kebi.core.agent.messages import extract_text_content
 from kebi.core.agent.reasoning import ReasoningStep
 from kebi.core.agent.state import AgentState
@@ -296,15 +302,59 @@ def _render_location_context(state: AgentState) -> str:
     )
 
 
+def _render_movement_context(state: AgentState) -> str:
+    """Render the `{movement_context}` slot — the turn's resolved search scope.
+
+    Reads the scope the `resolve_location` node folded onto `working_location`
+    (ADR-084). When the request carried no `movement_profile`, a config
+    fallback kept the radius math working — but the slot flags that so the
+    agent asks / caveats rather than asserting a distance confidently.
+    """
+    _dm, _am, _reach, is_fallback = _mobility_profile(state.get("movement_profile"))
+    working = state.get("working_location")
+    if not working:
+        if is_fallback:
+            return (
+                "No movement profile for this turn. If distance is load-bearing "
+                "for the answer, ask the user how they will get around before "
+                "scaling any distance — do not assume."
+            )
+        return "No working location resolved this turn, so no search scope."
+
+    mode = working.get("effective_mode")
+    tier = working.get("scope_tier")
+    shape = working.get("scope_shape")
+    radius_km = (working.get("search_radius_m") or 0.0) / 1000.0
+    parts = [
+        f"Search scope for this turn: {shape}, about {radius_km:.1f} km, "
+        f"by {mode} ({tier} range). Scale any distance reasoning to this — a "
+        "per-turn signal overrides the user's default for this turn only."
+    ]
+    corridor = working.get("corridor")
+    if shape == "corridor" and corridor:
+        parts.append(
+            f"The user is looking along the route toward {corridor.get('name')} "
+            "— reason about places on the way, not a circle around one point."
+        )
+    if is_fallback:
+        parts.append(
+            "This used a neutral fallback, not the user's own profile — if "
+            "distance is load-bearing, ask how they will get around rather "
+            "than asserting it."
+        )
+    return " ".join(parts)
+
+
 def _render_system_prompt(state: AgentState) -> str:
     """Format the agent prompt with per-turn summaries substituted.
 
-    Both template slots are validated at `_load_prompts()` boot time
+    Every template slot is validated at `_load_prompts()` boot time
     (FR-018a), so `.format(...)` on the loaded content is safe.
     """
     template = get_config().prompts["agent"].content
     return template.format(
         location_context=_render_location_context(state),
+        movement_context=_render_movement_context(state),
         taste_profile_summary=state.get("taste_profile_summary") or "",
         memory_summary=state.get("memory_summary") or "",
     )
@@ -449,10 +499,12 @@ def should_continue(state: AgentState) -> str:
 
 # --- Location resolution ---------------------------------------------------
 
-# Single-word signals that a turn is location-relevant. Kept deliberately
-# tight: the gate biases toward resolving, so this only needs to catch the
-# unambiguous cases — broad prepositions ("in", "to") would fire on nearly
-# every message and defeat the gate.
+# Single-word signals that a turn is location- or movement-relevant. The gate
+# is a *performance optimization, not a correctness gate*: a false positive
+# (e.g. "guilt trip") costs only one extra resolver call, and the resolver
+# itself classifies by intent. So this errs toward over-triggering — do not
+# hand-tune it to suppress false positives. Only broad prepositions ("in",
+# "to"), which would fire on nearly every message, are deliberately excluded.
 _LOCATION_GATE_KEYWORDS = frozenset(
     {
         "near",
@@ -470,10 +522,32 @@ _LOCATION_GATE_KEYWORDS = frozenset(
         "distance",
         "local",
         "locally",
+        # Movement words (ADR-084) — a movement-only turn still needs scope.
+        "drive",
+        "driving",
+        "car",
+        "transit",
+        "bus",
+        "train",
+        "bike",
+        "biking",
+        "cycling",
+        "ride",
+        "rideshare",
+        "trip",
+        "commute",
     }
 )
-# Phrases that often precede a location shift even with no capitalisation.
-_LOCATION_GATE_PHRASES = ("what about", "how about", "near me", "around here")
+# Phrases that often precede a location shift or movement signal even with no
+# capitalisation.
+_LOCATION_GATE_PHRASES = (
+    "what about",
+    "how about",
+    "near me",
+    "around here",
+    "on my way",
+    "day trip",
+)
 
 
 def _last_human_text(messages: list[Any]) -> str:
@@ -527,6 +601,43 @@ def _format_history_for_resolver(messages: list[BaseMessage]) -> str:
     return "\n".join(lines)
 
 
+def _mobility_profile(
+    profile: dict[str, Any] | None,
+) -> tuple[str, list[str], str, bool]:
+    """Return ``(default_mode, available_modes, reach, is_fallback)``.
+
+    A request without a `movement_profile` uses the config fallback — the
+    radius math stays functional, but `is_fallback` lets the agent prompt know
+    movement is unresolved (it should ask / caveat rather than assert).
+    """
+    if profile:
+        return (
+            str(profile.get("default_mode") or ""),
+            [str(m) for m in (profile.get("available_modes") or [])],
+            str(profile.get("reach") or "normal"),
+            False,
+        )
+    fb = get_config().movement.fallback
+    return fb.mode, list(fb.available_modes), fb.reach, True
+
+
+def _render_mobility_profile(state: AgentState) -> str:
+    """Render the `{mobility_profile}` slot for the resolver prompt."""
+    default_mode, available, reach, is_fallback = _mobility_profile(
+        state.get("movement_profile")
+    )
+    note = (
+        " (the request carried no profile — these are neutral fallbacks)"
+        if is_fallback
+        else ""
+    )
+    return (
+        f"Default mode: {default_mode or 'unknown'}. "
+        f"Available modes: {', '.join(available) or 'unknown'}. "
+        f"Reach: {reach}.{note}"
+    )
+
+
 def _render_resolver_prompt(state: AgentState) -> str:
     """Format the location-resolver prompt with this turn's inputs."""
     template = get_config().prompts["location_resolver"].content
@@ -538,6 +649,7 @@ def _render_resolver_prompt(state: AgentState) -> str:
         ),
         user_actual_location=json.dumps(state.get("user_location")),
         previous_working_location=json.dumps(state.get("working_location")),
+        mobility_profile=_render_mobility_profile(state),
     )
 
 
@@ -563,12 +675,12 @@ async def _build_working_location(
       - `explicit_query` → forward-geocode the place the resolver named.
 
     Returns `None` when the location cannot be completed; the caller maps
-    that to a clarification. Validation is source-dependent: an
-    `explicit_query` place must resolve all five fields (the user named a
-    place — hold the result to it), while a `user_actual` location only needs
-    country + city + coords, since neighbourhood from reverse geocoding is
-    unreliable and re-asking "where are you?" when GPS already answered is
-    poor UX.
+    that to a clarification. Both `explicit_query` and `user_actual` need
+    country + city + coords; `neighborhood` is optional — a bare city the
+    user names ("what about Chiang Mai") is a complete working location, and
+    reverse geocoding often cannot name a neighbourhood anyway. Genuinely
+    ambiguous names (Cambridge UK vs MA) are caught upstream by the resolver,
+    not by demanding a neighbourhood here.
     """
     source = resolution.source
 
@@ -590,35 +702,106 @@ async def _build_working_location(
         if lat is None or lng is None:
             return None
         rev = await geocoding_client.reverse(lat=lat, lng=lng)
-        if rev is None:
+        if rev is None or not rev.country or not rev.city:
             return None
         return WorkingLocation(
-            country=rev["country"],
-            city=rev["city"],
-            neighborhood=rev.get("neighborhood"),
+            country=rev.country,
+            city=rev.city,
+            neighborhood=rev.neighborhood,
             lat=lat,
             lng=lng,
+            density=density_class(rev.place_type),
+            bbox=rev.bbox,
         )
 
     # explicit_query — a place the resolver named; geocode it.
     country = resolution.country
     city = resolution.city
     neighborhood = resolution.neighborhood
-    if not country or not city or not neighborhood:
-        # A user-named place must resolve to all five fields.
+    if not country or not city:
+        # A user-named place must at least resolve to a city; neighborhood
+        # is optional (a bare city is a complete working location).
         return None
-    coords = await geocoding_client.forward(
+    geo = await geocoding_client.forward(
         country=country, city=city, neighborhood=neighborhood
     )
-    if coords is None:
+    if geo is None:
         return None
-    lat, lng = coords
     return WorkingLocation(
         country=country,
         city=city,
         neighborhood=neighborhood,
-        lat=lat,
-        lng=lng,
+        lat=geo.lat,
+        lng=geo.lng,
+        density=density_class(geo.place_type),
+        bbox=geo.bbox,
+    )
+
+
+async def _resolve_corridor(
+    destination: str | None,
+    working: WorkingLocation,
+    geocoding_client: Any,
+) -> CorridorTarget | None:
+    """Eagerly geocode a corridor destination, scoped to the working city.
+
+    Returns `None` when there is no destination name or it cannot be
+    geocoded. The resolver is instructed to flag implicit anchors ("home",
+    "work" — kebi stores no user addresses) as needing clarification before
+    they ever reach here; this is the second line of defence for a named
+    place that simply does not geocode. The caller maps `None` to a
+    clarification ask — never a silent fallback to an area search.
+    """
+    name = (destination or "").strip()
+    if not name:
+        return None
+    query = ", ".join(p for p in (name, working.city, working.country) if p)
+    geo = await geocoding_client.search(query=query)
+    if geo is None:
+        return None
+    return CorridorTarget(name=name, lat=geo.lat, lng=geo.lng)
+
+
+async def _resolve_search_scope(
+    working: WorkingLocation,
+    resolution: LocationResolution,
+    movement_profile: dict[str, Any] | None,
+    geocoding_client: Any,
+) -> WorkingLocation | None:
+    """Fold the resolved movement scope onto a working location (ADR-084).
+
+    Picks the effective mode (resolver classification, else the profile
+    default), derives `search_radius_m` deterministically from config, and —
+    for a corridor — eagerly geocodes the destination. Returns `None` only
+    when the turn is a corridor whose destination cannot be resolved; the
+    caller maps that to a clarification ask.
+    """
+    default_mode, _available, reach, _is_fallback = _mobility_profile(movement_profile)
+    effective_mode = resolution.effective_mode or default_mode or "transit"
+
+    corridor: CorridorTarget | None = None
+    if resolution.scope_shape == "corridor":
+        corridor = await _resolve_corridor(
+            resolution.corridor_destination, working, geocoding_client
+        )
+        if corridor is None:
+            return None
+
+    radius = resolve_radius(
+        effective_mode,
+        resolution.scope_tier,
+        reach,
+        working.density,
+        get_config().movement,
+    )
+    return working.model_copy(
+        update={
+            "effective_mode": effective_mode,
+            "scope_tier": resolution.scope_tier,
+            "scope_shape": resolution.scope_shape,
+            "search_radius_m": radius,
+            "corridor": corridor,
+        }
     )
 
 
@@ -676,6 +859,7 @@ _LOCATION_ASK_CITY = (
 _LOCATION_ASK_CONFIRM = (
     "I couldn't pin down that location — could you confirm the city?"
 )
+_CORRIDOR_ASK = "I couldn't work out where your route ends — where are you headed?"
 
 
 def make_resolve_location_node(resolver_llm: Any, geocoding_client: Any) -> Any:
@@ -712,12 +896,24 @@ def make_resolve_location_node(resolver_llm: Any, geocoding_client: Any) -> Any:
                 state.get("working_location"),
                 geocoding_client,
             )
+            if working is None:
+                return _location_clarification_update(state, _LOCATION_ASK_CONFIRM)
+            # Fold in the movement scope (effective mode + tier → radius, and
+            # for a corridor, the eagerly geocoded destination).
+            working = await _resolve_search_scope(
+                working,
+                resolution,
+                state.get("movement_profile"),
+                geocoding_client,
+            )
         except GeocodingError as exc:
             logger.warning("resolve_location geocoding failed: %s", exc)
             return _location_clarification_update(state, _LOCATION_ASK_CONFIRM)
 
         if working is None:
-            return _location_clarification_update(state, _LOCATION_ASK_CONFIRM)
+            # The point resolved, but a corridor destination did not — ask
+            # rather than silently degrading to an area search.
+            return _location_clarification_update(state, _CORRIDOR_ASK)
         return _location_resolved_update(state, working)
 
     return resolve_location_node

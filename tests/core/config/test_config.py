@@ -130,11 +130,18 @@ class TestAgentPromptSlotValidation:
         finally:
             config_module.find_project_root = original  # type: ignore[assignment]
 
-    def test_both_slots_present_loads_successfully(self, tmp_path: Path) -> None:
+    def test_all_required_slots_present_loads_successfully(
+        self, tmp_path: Path
+    ) -> None:
         prompts_dir = tmp_path / "config" / "prompts"
         prompts_dir.mkdir(parents=True)
+        # ADR-084 added {location_context} and {movement_context} to the
+        # agent prompt's required slots.
         (prompts_dir / "agent.txt").write_text(
-            "Taste: {taste_profile_summary}\nMemory: {memory_summary}"
+            "Location: {location_context}\n"
+            "Movement: {movement_context}\n"
+            "Taste: {taste_profile_summary}\n"
+            "Memory: {memory_summary}"
         )
 
         import kebi.core.config as config_module
@@ -146,6 +153,7 @@ class TestAgentPromptSlotValidation:
             assert "agent" in loaded
             assert "{taste_profile_summary}" in loaded["agent"].content
             assert "{memory_summary}" in loaded["agent"].content
+            assert "{movement_context}" in loaded["agent"].content
         finally:
             config_module.find_project_root = original  # type: ignore[assignment]
 
