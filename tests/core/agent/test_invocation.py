@@ -73,7 +73,6 @@ class TestBuildTurnPayload:
 
     def test_movement_profile_is_passed_through(self) -> None:
         profile = {
-            "default_mode": "transit",
             "available_modes": ["walking", "transit"],
             "reach": "normal",
         }

@@ -41,8 +41,7 @@ _AREA_WL = {
     "corridor": None,
 }
 _PROFILE = {
-    "default_mode": "driving",
-    "available_modes": ["walking", "driving"],
+    "available_modes": ["driving", "walking"],
     "reach": "normal",
 }
 

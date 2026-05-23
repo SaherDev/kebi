@@ -53,11 +53,11 @@ async def test_movement_profile_does_not_persist_across_turns() -> None:
     state1 = await app.ainvoke(
         {
             "messages": [HumanMessage(content="one")],
-            "movement_profile": {"default_mode": "driving"},
+            "movement_profile": {"available_modes": ["driving"]},
         },
         config=config,
     )
-    assert state1["movement_profile"] == {"default_mode": "driving"}
+    assert state1["movement_profile"] == {"available_modes": ["driving"]}
 
     # Turn 2 omits movement_profile (frontend stopped sending it).
     state2 = await app.ainvoke(

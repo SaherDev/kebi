@@ -354,7 +354,6 @@ async def test_resolver_effective_mode_is_honored() -> None:
         _state(
             message="what if I drive there",
             movement_profile={
-                "default_mode": "walking",
                 "available_modes": ["walking", "transit"],
                 "reach": "normal",
             },
@@ -363,9 +362,10 @@ async def test_resolver_effective_mode_is_honored() -> None:
     assert update["working_location"]["effective_mode"] == "driving"
 
 
-async def test_no_resolver_mode_falls_back_to_profile_default() -> None:
-    """When the resolver names no mode (no explicit signal — e.g. "tired of
-    walking" is scope language, not a mode word), the profile default holds."""
+async def test_no_resolver_mode_falls_back_to_first_capability() -> None:
+    """When the resolver leaves effective_mode empty (no explicit signal —
+    e.g. "tired of walking" is scope language, not a mode word), the system
+    falls back to the first listed capability (ADR-085)."""
     resolution = LocationResolution(
         source="explicit_query",
         country="Thailand",
@@ -380,17 +380,16 @@ async def test_no_resolver_mode_falls_back_to_profile_default() -> None:
         _state(
             message="somewhere further, I'm tired of walking",
             movement_profile={
-                "default_mode": "transit",
-                "available_modes": ["walking", "transit"],
+                "available_modes": ["transit", "walking"],
                 "reach": "normal",
             },
         )
     )
-    # No driving override — the walking-only-ish profile default stands.
+    # First capability in the list wins as the deterministic fallback.
     assert update["working_location"]["effective_mode"] == "transit"
 
 
-async def test_no_profile_uses_config_fallback_mode() -> None:
+async def test_no_profile_uses_config_fallback_first_capability() -> None:
     resolution = LocationResolution(
         source="explicit_query",
         country="Thailand",
@@ -404,7 +403,7 @@ async def test_no_profile_uses_config_fallback_mode() -> None:
     update = await node(_state(movement_profile=None))
     assert (
         update["working_location"]["effective_mode"]
-        == get_config().movement.fallback.mode
+        == get_config().movement.fallback.available_modes[0]
     )
 
 

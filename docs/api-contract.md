@@ -94,7 +94,6 @@ no retrieval and writes no data.
   "message": "somewhere for cheap dinner near me",
   "location": { "lat": 13.7563, "lng": 100.5018 },
   "movement_profile": {
-    "default_mode": "transit",
     "available_modes": ["walking", "transit", "motorbike"],
     "reach": "normal"
   }
@@ -106,7 +105,7 @@ no retrieval and writes no data.
 | `user_id`          | `string`                     | Yes      | Clerk-issued user ID; trusted, not validated here                                     |
 | `message`          | `string`                     | Yes      | Natural-language message from the user                                                |
 | `location`         | `{ lat: float, lng: float }` | No       | The user's **actual** location — where they physically are. ADR-083 makes this the anchor for per-turn working-location resolution: the agent resolves the location a turn operates against (a place named in the message, one carried from the conversation, or this actual location as fallback) and reverse-geocodes these coords when they are used. Shape unchanged |
-| `movement_profile` | `MovementProfile \| null`    | No       | The user's mobility profile (ADR-084) — owned by the product repo's `user_settings`, sent each turn like `location`. `{ default_mode, available_modes, reach }`. `default_mode` / `available_modes` items ∈ `walking \| cycling \| motorbike \| driving \| transit \| rideshare`; `available_modes` is non-empty. `reach` ∈ `compact \| normal \| far`, default `normal`. Omitted → kebi applies a neutral fallback. The agent resolves an effective mode + search scope per turn from this default plus request context; it never mutates the profile |
+| `movement_profile` | `MovementProfile \| null`    | No       | The user's mobility capability (ADR-084 + ADR-085) — owned by the product repo's `user_settings`, sent each turn like `location`. `{ available_modes, reach }`. `available_modes` items ∈ `walking \| cycling \| motorbike \| driving \| transit \| rideshare`; list is non-empty and represents modes the user *can* use (licence, owned vehicles, comfort) — NOT per-city availability. `reach` ∈ `compact \| normal \| far`, default `normal`. Omitted → kebi applies a neutral fallback. The agent resolves an effective mode per turn by pairing this capability with the working location's city + density; an explicit mode word in the message still overrides. It never mutates the profile. A stray `default_mode` key (from a pre-ADR-085 client) is silently ignored |
 
 **Response:**
 

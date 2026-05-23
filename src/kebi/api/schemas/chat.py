@@ -22,21 +22,28 @@ class Location(BaseModel):
 
 
 class MovementProfile(BaseModel):
-    """The user's profile-level mobility setting (ADR-084).
+    """The user's mobility capability (ADR-085, amending ADR-084).
 
     Owned by the NestJS product repo's `user_settings` (Constitution VI — kebi
     owns no user-settings table) and sent on every `/v1/chat` request, like
-    `location`. kebi consumes it; it is never stored here. It is the *default*
-    the per-turn resolver starts from — request context can resolve a
-    different effective mode/scope for any given turn without changing it.
+    `location`. kebi consumes it; it is never stored here.
 
-    `available_modes` constrains *inferred* mode picks (the resolver will not
-    infer `driving` for a user who lists only `[walking, transit]`); an
-    explicit per-turn mode word can still override it. `reach` shifts the
-    resolved scope tier ±1.
+    `available_modes` is the set of modes the user has access to and is
+    willing to use — driving requires a licence, motorbike requires comfort
+    and (often) a licence, cycling requires owning a bike. This is a stable
+    per-user capability, NOT a per-city availability list.
+
+    The resolver pairs this capability with the working location's city and
+    density each turn to pick an `effective_mode`. A user capable of
+    `[walking, driving, transit]` will likely resolve to `transit` in
+    Manhattan and to `driving` in Koh Samui — same capability, different
+    city. An explicit per-turn mode word in the message still overrides the
+    inference, even if the named mode is not in `available_modes` (the user
+    knows their situation this turn — e.g., a rental).
+
+    `reach` shifts the resolved scope tier ±1 (compact / normal / far).
     """
 
-    default_mode: MovementMode
     available_modes: list[MovementMode] = Field(min_length=1)
     reach: Reach = "normal"
 

@@ -14,10 +14,12 @@ in a sparse town than a dense city.
 
 ## What shipped
 
-- `MovementProfile` request field on `POST /v1/chat` — `{ default_mode,
-  available_modes, reach }`, owned by the product repo's `user_settings`, sent
-  each turn like `location`. Modes: `walking | cycling | motorbike | driving |
-  transit | rideshare`. kebi consumes, never stores it.
+- `MovementProfile` request field on `POST /v1/chat` — `{ available_modes,
+  reach }`, owned by the product repo's `user_settings`, sent each turn like
+  `location`. Modes: `walking | cycling | motorbike | driving | transit |
+  rideshare`. `available_modes` is the user's **capability** (modes they can
+  use), not per-city availability — see ADR-086. kebi consumes, never stores
+  it.
 - `WorkingLocation` gains `effective_mode`, `scope_tier`, `scope_shape`,
   `search_radius_m`, `corridor`, `density`, `bbox` — carried across turns.
 - `LocationResolution` gains `scope_tier`, `scope_shape`, `effective_mode`,
@@ -39,8 +41,10 @@ in a sparse town than a dense city.
 ## Resolution rules
 
 - Effective mode: an explicit per-turn mode word ("if I drive") wins, even
-  outside `available_modes`; otherwise the resolver infers within
-  `available_modes`, falling back to `default_mode`.
+  outside `available_modes`; otherwise the resolver picks from
+  `available_modes` using the working location's city and density (ADR-086 —
+  Manhattan → transit, Koh Samui → motorbike/driving). If the resolver
+  leaves it empty, the system falls back to `available_modes[0]`.
 - Scope tier: walkable / neighborhood / city / metro, classified from request
   context; `reach` shifts it ±1.
 - A different city/country is a location *shift* (ADR-083), not a wider tier —

@@ -1,4 +1,4 @@
-"""Tests for ChatRequest / ChatResponse schemas (ADR-065, ADR-084)."""
+"""Tests for ChatRequest / ChatResponse schemas (ADR-065, ADR-084, ADR-085)."""
 
 from __future__ import annotations
 
@@ -53,7 +53,7 @@ def test_chat_response_rejects_unknown_type() -> None:
         ChatResponse(type="nonsense", message="m")  # type: ignore[arg-type]
 
 
-# --- ChatRequest.movement_profile (ADR-084) --------------------------------
+# --- ChatRequest.movement_profile (ADR-084 / ADR-085) ----------------------
 
 
 def test_chat_request_parses_valid_movement_profile() -> None:
@@ -62,14 +62,13 @@ def test_chat_request_parses_valid_movement_profile() -> None:
             "user_id": "u1",
             "message": "dinner nearby",
             "movement_profile": {
-                "default_mode": "transit",
                 "available_modes": ["walking", "transit"],
                 "reach": "far",
             },
         }
     )
     assert req.movement_profile is not None
-    assert req.movement_profile.default_mode == "transit"
+    assert req.movement_profile.available_modes == ["walking", "transit"]
     assert req.movement_profile.reach == "far"
 
 
@@ -79,18 +78,27 @@ def test_chat_request_movement_profile_defaults_to_none() -> None:
 
 
 def test_movement_profile_reach_defaults_to_normal() -> None:
-    profile = MovementProfile(default_mode="walking", available_modes=["walking"])
+    profile = MovementProfile(available_modes=["walking"])
     assert profile.reach == "normal"
 
 
 def test_movement_profile_rejects_invalid_mode() -> None:
     with pytest.raises(ValidationError):
         MovementProfile(
-            default_mode="teleport",  # type: ignore[arg-type]
-            available_modes=["walking"],
+            available_modes=["teleport"],  # type: ignore[list-item]
         )
 
 
 def test_movement_profile_rejects_empty_available_modes() -> None:
     with pytest.raises(ValidationError):
-        MovementProfile(default_mode="walking", available_modes=[])
+        MovementProfile(available_modes=[])
+
+
+def test_movement_profile_ignores_stray_default_mode_key() -> None:
+    """A product client that still sends `default_mode` should parse cleanly
+    (Pydantic drops unknown keys). Keeps the cutover backwards-tolerant."""
+    profile = MovementProfile.model_validate(
+        {"default_mode": "transit", "available_modes": ["walking", "transit"]}
+    )
+    assert profile.available_modes == ["walking", "transit"]
+    assert not hasattr(profile, "default_mode")
