@@ -63,6 +63,8 @@ See `.claude/workflows.md` for the complete 5-step token-efficient workflow (ADR
 
 **IMPORTANT: Read `docs/decisions.md` FIRST — before planning, before implementing, before any architectural discussion.** Every ADR is a binding constraint. If your approach contradicts a decision, stop and flag it. This is the first thing you do, not a later verification step.
 
+**IMPORTANT: After each completed task or important architectural change, write a new ADR in `docs/decisions.md`.** Append a new numbered ADR (next free ADR-NNN) capturing the decision, context, and consequences. No task is "done" until its ADR is recorded.
+
 **Constitution Check:** Verify plan aligns with `docs/decisions.md` (see `.claude/constitution.md`).
 
 **Agent Skills Integration:** If agent skills are installed for this repo, they auto-activate based on code domain and workflow stage, not user prompts. Python/FastAPI-focused skills (if any) guide implementation of intent parsing, embeddings, ranking, and agent orchestration. All skill guidance defers to project standards — if a skill recommendation conflicts with `CLAUDE.md`, `architecture.md`, or ADRs, project standards take precedence. Skills are helpers for exploration and implementation, never overrides for project constraints. In particular: provider abstraction patterns, Pydantic schemas, type safety (`mypy --strict`), and LangGraph workflows are binding — no skill bypasses these.
