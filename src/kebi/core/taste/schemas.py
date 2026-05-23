@@ -46,7 +46,6 @@ class InteractionRow(BaseModel):
     atmosphere: list[str] = Field(default_factory=list)
     service: list[str] = Field(default_factory=list)
     price: str | None = None  # last price tag wins (single-value semantics)
-    accessibility: list[str] = Field(default_factory=list)
     time: list[str] = Field(default_factory=list)
     season: list[str] = Field(default_factory=list)
     neighborhood: str | None = None

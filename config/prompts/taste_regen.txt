@@ -13,7 +13,6 @@ Input is JSON following this shape:
     "atmosphere": {"<value>": count},
     "service": {"<value>": count},
     "price": {"<value>": count},
-    "accessibility": {"<value>": count},
     "time": {"<value>": count},
     "season": {"<value>": count}
   },

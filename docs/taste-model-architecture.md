@@ -76,7 +76,6 @@ interactions (PostgreSQL, append-only):
     "atmosphere": {"cozy": N, ...},
     "service": {"serves_brunch": N, ...},
     "price": {"moderate": N, ...},
-    "accessibility": {"wheelchair_entrance": N, ...},
     "time": {"late_night": N, ...},
     "season": {"summer": N, ...}
   },

@@ -42,7 +42,6 @@ class TagCounts(BaseModel):
     atmosphere: dict[str, int] = Field(default_factory=dict)
     service: dict[str, int] = Field(default_factory=dict)
     price: dict[str, int] = Field(default_factory=dict)
-    accessibility: dict[str, int] = Field(default_factory=dict)
     time: dict[str, int] = Field(default_factory=dict)
     season: dict[str, int] = Field(default_factory=dict)
 
@@ -89,8 +88,6 @@ def _add_tags(target: TagCounts, row: InteractionRow) -> None:
     for v in row.service:
         _increment(target.service, v)
     _increment(target.price, row.price)
-    for v in row.accessibility:
-        _increment(target.accessibility, v)
     for v in row.time:
         _increment(target.time, v)
     for v in row.season:

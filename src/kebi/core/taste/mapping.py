@@ -22,7 +22,6 @@ _LIST_DIMENSIONS: dict[TagType, str] = {
     TagType.feature: "feature",
     TagType.atmosphere: "atmosphere",
     TagType.service: "service",
-    TagType.accessibility: "accessibility",
     TagType.time: "time",
     TagType.season: "season",
 }
@@ -61,7 +60,6 @@ def place_to_interaction_row(
         atmosphere=dims["atmosphere"],
         service=dims["service"],
         price=price,
-        accessibility=dims["accessibility"],
         time=dims["time"],
         season=dims["season"],
         neighborhood=loc.neighborhood if loc else None,
