@@ -165,6 +165,30 @@ class TestFilterConditions:
         assert "cafe" in sql.lower()
         assert "bar" in sql.lower()
 
+    def test_categories_cast_renders_as_text_array(self) -> None:
+        """Regression guard for the ARRAY(String)→ARRAY(Text) cast (ADR-086).
+
+        `places.categories` is `text[]` in the schema. Casting the filter
+        value as `ARRAY(String)` rendered as `character varying[]`, which
+        Postgres rejects: `operator does not exist: text[] && character
+        varying[]`. The fix is `ARRAY(Text)` so the rendered cast is
+        `TEXT[]` and the && operator resolves cleanly.
+        """
+        cond = _filter_conditions(
+            HybridSearchFilters(categories=[PlaceCategory.bar])
+        )
+        sql = str(
+            cond[0].compile(
+                dialect=pg_dialect.dialect(),
+                compile_kwargs={"literal_binds": True},
+            )
+        )
+        assert "TEXT[]" in sql, f"expected TEXT[] cast in rendered SQL, got: {sql}"
+        assert "VARCHAR" not in sql.upper(), (
+            f"VARCHAR / character varying must not appear — would re-introduce "
+            f"the type mismatch. SQL: {sql}"
+        )
+
     def test_single_tag_uses_jsonb_containment(self) -> None:
         cond = _filter_conditions(
             HybridSearchFilters(tags=["italian"])

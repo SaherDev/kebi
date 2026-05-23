@@ -269,9 +269,7 @@ prompts:
 # ---------------------------------------------------------------------------
 # Agent Configuration (feature 027 M2, ADR-062)
 # enabled is controlled by AGENT_ENABLED env var (EnvConfig), default true.
-# max_steps / max_errors bound the graph's should_continue loop (M3).
-# ADR-075: the agent has no tools — tool_timeouts_seconds /
-# tool_result_window are dormant scaffolding kept for a future tool.
+# max_steps / max_errors bound the graph's should_continue loop.
 # checkpointer_ttl_seconds reserved for a future cleanup job (Postgres has
 # no native TTL; periodic cleanup is deferred).
 # ---------------------------------------------------------------------------
@@ -279,10 +277,12 @@ agent:
   max_steps: 10
   max_errors: 3
   max_history_messages: 40
-  # Older ToolMessage payloads (recall/consult JSON, ~2-5KB each) get
-  # replaced by a one-line breadcrumb on the way to the LLM. The most recent
-  # `tool_result_window` payloads stay full. State is untouched — this only
-  # rewrites the per-call conversation list. 0 disables compaction.
+  # Older ToolMessage payloads (~2-5KB each) get replaced by a one-line
+  # breadcrumb on the way to the LLM. The most recent `tool_result_window`
+  # payloads stay full. State is untouched — this only rewrites the per-call
+  # conversation list. 0 disables compaction. (Also relevant: tool results
+  # are stripped from state entirely at the finalize node before checkpoint,
+  # so this compaction only matters for in-turn rebuild from history.)
   tool_result_window: 2
   # Cap unbounded growth of state["messages"] in long-lived threads. When the
   # list exceeds `state_message_cap`, the reducer trims it down toward
@@ -295,9 +295,15 @@ agent:
   state_message_floor: 150
   checkpointer_ttl_seconds: 86400
   prompt_caching_enabled: false  # ADR-067: Anthropic-only (ephemeral cache_control). Re-enable when orchestrator returns to Anthropic.
-  # tool_timeouts_seconds intentionally omitted — ADR-075 removed all
-  # agent tools (recall + consult). ToolTimeoutsConfig defaults apply;
-  # nothing reads them while the agent is zero-tool.
+  # Per-tool asyncio budgets. One key per live tool.
+  tool_timeouts_seconds:
+    find_saved: 8
+  # find_saved-specific knobs. `default_limit` is what the tool uses when
+  # the agent omits the `limit` arg. `max_limit` caps any agent-supplied
+  # value so the LLM cannot ask for an unbounded result set.
+  find_saved:
+    default_limit: 10
+    max_limit: 25
 
 # ---------------------------------------------------------------------------
 # Movement / search-scope (ADR-084)
@@ -306,8 +312,9 @@ agent:
 # mode_multiplier[mode] × density_factor[density]. reach shifts the tier ±1
 # (compact -1, far +1); density comes from the geocoder's place type so
 # "near me" scales with how dense the area is.
-# `fallback` is the neutral mobility profile used when a /v1/chat request
-# omits movement_profile — deliberately transit, not driving.
+# `fallback` is the neutral mobility capability used when a /v1/chat
+# request omits movement_profile (ADR-086) — walking listed first so the
+# deterministic fallback mode is walking (most conservative radius).
 # ---------------------------------------------------------------------------
 movement:
   radius_tiers:        # base metres per scope tier, before mode/reach scaling
@@ -327,7 +334,6 @@ movement:
     medium: 1.0
     sparse: 1.6
   fallback:            # used when the request carries no movement_profile
-    mode: transit
     reach: normal
     available_modes: [walking, transit]
 

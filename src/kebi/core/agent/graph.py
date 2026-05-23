@@ -21,6 +21,7 @@ from langchain_core.messages import (
     AIMessage,
     BaseMessage,
     HumanMessage,
+    RemoveMessage,
     SystemMessage,
     ToolMessage,
 )
@@ -40,6 +41,7 @@ from kebi.core.agent.reasoning import ReasoningStep
 from kebi.core.agent.state import AgentState
 from kebi.core.config import get_config
 from kebi.core.places.nominatim_geocoding_client import GeocodingError
+from kebi.core.utils.geo import haversine_m
 from kebi.providers.tracing import get_tracing_client
 
 logger = logging.getLogger(__name__)
@@ -86,6 +88,7 @@ NODE_RESOLVE_LOCATION = "resolve_location"
 NODE_AGENT = "agent"
 NODE_TOOLS = "tools"
 NODE_FALLBACK = "fallback"
+NODE_FINALIZE = "finalize"
 
 # Fallback message shown to the user when the graph terminates early.
 _FALLBACK_MESSAGE = (
@@ -310,7 +313,7 @@ def _render_movement_context(state: AgentState) -> str:
     fallback kept the radius math working — but the slot flags that so the
     agent asks / caveats rather than asserting a distance confidently.
     """
-    _dm, _am, _reach, is_fallback = _mobility_profile(state.get("movement_profile"))
+    _am, _reach, is_fallback = _mobility_profile(state.get("movement_profile"))
     working = state.get("working_location")
     if not working:
         if is_fallback:
@@ -464,7 +467,8 @@ def make_agent_node(llm: Any, tools: list[Any]) -> Any:
         return {
             "messages": [ai_msg],
             "steps_taken": state.get("steps_taken", 0) + 1,
-            # Agent has no tools (ADR-075) — stays 0; retained for shape stability.
+            # Tool nodes own incrementing tool_calls_used — the agent node
+            # just preserves whatever they wrote.
             "tool_calls_used": state.get("tool_calls_used", 0),
             "reasoning_steps": existing_steps + [step],
         }
@@ -603,8 +607,8 @@ def _format_history_for_resolver(messages: list[BaseMessage]) -> str:
 
 def _mobility_profile(
     profile: dict[str, Any] | None,
-) -> tuple[str, list[str], str, bool]:
-    """Return ``(default_mode, available_modes, reach, is_fallback)``.
+) -> tuple[list[str], str, bool]:
+    """Return ``(available_modes, reach, is_fallback)``.
 
     A request without a `movement_profile` uses the config fallback — the
     radius math stays functional, but `is_fallback` lets the agent prompt know
@@ -612,30 +616,71 @@ def _mobility_profile(
     """
     if profile:
         return (
-            str(profile.get("default_mode") or ""),
             [str(m) for m in (profile.get("available_modes") or [])],
             str(profile.get("reach") or "normal"),
             False,
         )
     fb = get_config().movement.fallback
-    return fb.mode, list(fb.available_modes), fb.reach, True
+    return list(fb.available_modes), fb.reach, True
 
 
 def _render_mobility_profile(state: AgentState) -> str:
     """Render the `{mobility_profile}` slot for the resolver prompt."""
-    default_mode, available, reach, is_fallback = _mobility_profile(
-        state.get("movement_profile")
-    )
+    available, reach, is_fallback = _mobility_profile(state.get("movement_profile"))
     note = (
         " (the request carried no profile — these are neutral fallbacks)"
         if is_fallback
         else ""
     )
     return (
-        f"Default mode: {default_mode or 'unknown'}. "
-        f"Available modes: {', '.join(available) or 'unknown'}. "
-        f"Reach: {reach}.{note}"
+        f"Capabilities: {', '.join(available) or 'unknown'}. Reach: {reach}.{note}"
     )
+
+
+def _distance_from_previous_km(state: AgentState) -> float | None:
+    """Distance between user_actual and previous working location, in km.
+
+    `None` when either side is missing (first turn, request without
+    coords, prior turn produced no working location). The resolver
+    prompt's **traveled** branch uses this to decide whether a generic
+    follow-up message ("what's around here?") should keep carrying the
+    prior place or re-anchor to the user's new actual location.
+    """
+    user_loc = state.get("user_location") or {}
+    prev = state.get("working_location") or {}
+    user_lat = _coerce_coord(user_loc.get("lat"))
+    user_lng = _coerce_coord(user_loc.get("lng"))
+    prev_lat = _coerce_coord(prev.get("lat"))
+    prev_lng = _coerce_coord(prev.get("lng"))
+    if None in (user_lat, user_lng, prev_lat, prev_lng):
+        return None
+    # mypy: the None-check above narrows all four to float
+    metres = haversine_m(
+        user_lat,  # type: ignore[arg-type]
+        user_lng,  # type: ignore[arg-type]
+        prev_lat,  # type: ignore[arg-type]
+        prev_lng,  # type: ignore[arg-type]
+    )
+    return metres / 1000.0
+
+
+def _render_distance_from_previous(state: AgentState) -> str:
+    """Human-readable rendering of the {distance_from_previous} slot."""
+    prev = state.get("working_location") or {}
+    user_loc = state.get("user_location") or {}
+    if not prev:
+        return "first turn — no previous working location"
+    if not user_loc:
+        return "actual location is unknown this turn"
+    km = _distance_from_previous_km(state)
+    if km is None:
+        return "actual location is unknown this turn"
+    # Round to a sensible precision — exact metres are noise to the LLM.
+    if km < 1:
+        return "actual location is at (or essentially at) the previous working location"
+    if km < 10:
+        return f"actual location is ~{km:.1f} km from the previous working location"
+    return f"actual location is ~{int(round(km))} km from the previous working location"
 
 
 def _render_resolver_prompt(state: AgentState) -> str:
@@ -649,6 +694,7 @@ def _render_resolver_prompt(state: AgentState) -> str:
         ),
         user_actual_location=json.dumps(state.get("user_location")),
         previous_working_location=json.dumps(state.get("working_location")),
+        distance_from_previous=_render_distance_from_previous(state),
         mobility_profile=_render_mobility_profile(state),
     )
 
@@ -768,16 +814,18 @@ async def _resolve_search_scope(
     movement_profile: dict[str, Any] | None,
     geocoding_client: Any,
 ) -> WorkingLocation | None:
-    """Fold the resolved movement scope onto a working location (ADR-084).
+    """Fold the resolved movement scope onto a working location (ADR-084 /
+    ADR-085).
 
-    Picks the effective mode (resolver classification, else the profile
-    default), derives `search_radius_m` deterministically from config, and —
-    for a corridor — eagerly geocodes the destination. Returns `None` only
-    when the turn is a corridor whose destination cannot be resolved; the
-    caller maps that to a clarification ask.
+    Picks the effective mode (resolver classification, else a deterministic
+    fallback to the first listed capability), derives `search_radius_m` from
+    config, and — for a corridor — eagerly geocodes the destination. Returns
+    `None` only when the turn is a corridor whose destination cannot be
+    resolved; the caller maps that to a clarification ask.
     """
-    default_mode, _available, reach, _is_fallback = _mobility_profile(movement_profile)
-    effective_mode = resolution.effective_mode or default_mode or "transit"
+    available, reach, _is_fallback = _mobility_profile(movement_profile)
+    fallback_mode = available[0] if available else "transit"
+    effective_mode = resolution.effective_mode or fallback_mode
 
     corridor: CorridorTarget | None = None
     if resolution.scope_shape == "corridor":
@@ -981,9 +1029,8 @@ def _handle_tool_node_error(exc: Exception) -> str:
     ToolNode's default handler stringifies the exception into plain text,
     which (a) hides the stack trace from the server log and (b) produces
     non-JSON ToolMessage content that the SSE `tool_result` frame cannot
-    parse. The agent has no tools since ADR-075, so this is dormant
-    scaffolding kept for a future tool; logging here captures the real
-    cause and returning JSON keeps the client payload structured.
+    parse. Logging here captures the real cause and returning JSON keeps
+    the client payload structured.
     """
     logger.exception("ToolNode caught exception: %s", exc)
     return json.dumps(
@@ -995,6 +1042,47 @@ def _handle_tool_node_error(exc: Exception) -> str:
     )
 
 
+def finalize_node(state: AgentState) -> dict[str, Any]:
+    """Strip tool messages and tool-only AIMessages before checkpoint.
+
+    Tool results must not persist in agent history — they bloat every
+    future turn with stale per-call JSON the user already received a
+    prose summary of. The LangGraph tool_use ↔ tool_result contract
+    requires them in-turn, so they live in `state["messages"]` during
+    the agent/tools loop and are removed here at the terminal step.
+
+    Emits `RemoveMessage(id=...)` for every `ToolMessage` and every
+    `AIMessage` that carried only tool_use blocks (no user-facing
+    text). `add_messages_capped` wraps `add_messages`, which natively
+    interprets `RemoveMessage` as a delete.
+
+    The agent's final prose `AIMessage` (the one that routed via
+    should_continue → "end") survives. Future turns see clean
+    human/agent pairs and no tool noise.
+    """
+    to_remove: list[str] = []
+    for msg in state.get("messages") or []:
+        msg_id = getattr(msg, "id", None)
+        if msg_id is None:
+            continue
+        if isinstance(msg, ToolMessage):
+            to_remove.append(msg_id)
+            continue
+        if isinstance(msg, AIMessage):
+            tool_calls = getattr(msg, "tool_calls", None) or []
+            text = extract_text_content(getattr(msg, "content", None)).strip()
+            if tool_calls and not text:
+                to_remove.append(msg_id)
+
+    if not to_remove:
+        return {}
+
+    logger.debug("finalize_node stripping %d tool-related messages", len(to_remove))
+    return {
+        "messages": [RemoveMessage(id=mid) for mid in to_remove],
+    }
+
+
 def build_graph(
     llm: Any,
     tools: list[Any],
@@ -1004,12 +1092,18 @@ def build_graph(
 ) -> Any:
     """Construct and compile the agent StateGraph (FR-025).
 
-    Nodes: `resolve_location`, `agent`, `tools` (ToolNode), `fallback`.
-    The entry point is conditional (`_needs_location_resolution` gate): a
-    location-free turn routes straight to `agent` and pays no resolver LLM
-    call; otherwise `resolve_location` runs first, then `agent`.
-    Conditional edges from `agent` via should_continue → {tools, fallback, end}.
-    Direct edges resolve_location → agent, tools → agent, fallback → END.
+    Nodes: `resolve_location`, `agent`, `tools` (ToolNode), `fallback`,
+    `finalize`. The entry point is conditional
+    (`_needs_location_resolution` gate): a location-free turn routes
+    straight to `agent` and pays no resolver LLM call; otherwise
+    `resolve_location` runs first, then `agent`. Conditional edges from
+    `agent` via should_continue → {tools, fallback, finalize}. Direct
+    edges resolve_location → agent, tools → agent, fallback → finalize,
+    finalize → END.
+
+    `finalize` strips ToolMessages and tool-only AIMessages before the
+    state hits the checkpointer so tool results never persist into
+    future turns — only the agent's final prose AIMessage survives.
     """
     graph: StateGraph = StateGraph(AgentState)
     graph.add_node(
@@ -1021,6 +1115,7 @@ def build_graph(
         NODE_TOOLS, ToolNode(tools, handle_tool_errors=_handle_tool_node_error)
     )
     graph.add_node(NODE_FALLBACK, fallback_node)
+    graph.add_node(NODE_FINALIZE, finalize_node)
     graph.set_conditional_entry_point(
         _needs_location_resolution,
         {"resolve": NODE_RESOLVE_LOCATION, "skip": NODE_AGENT},
@@ -1032,9 +1127,10 @@ def build_graph(
         {
             NODE_TOOLS: NODE_TOOLS,
             NODE_FALLBACK: NODE_FALLBACK,
-            "end": END,
+            "end": NODE_FINALIZE,
         },
     )
     graph.add_edge(NODE_TOOLS, NODE_AGENT)
-    graph.add_edge(NODE_FALLBACK, END)
+    graph.add_edge(NODE_FALLBACK, NODE_FINALIZE)
+    graph.add_edge(NODE_FINALIZE, END)
     return graph.compile(checkpointer=checkpointer)

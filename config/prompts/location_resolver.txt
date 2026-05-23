@@ -15,7 +15,12 @@ User's actual location (where they physically are right now):
 Working location from the previous turn (may be empty on the first turn):
 {previous_working_location}
 
-User's mobility profile (their defaults — a turn may override these):
+Distance the user has travelled since the previous working location was set
+(blank on the first turn, "unknown" when no actual location was supplied):
+{distance_from_previous}
+
+User's mobility capability (modes they can use; the working location's
+city and density determine which is appropriate this turn):
 {mobility_profile}
 
 You classify by intent, not by keywords. Phrasings vary endlessly ("nearby",
@@ -26,19 +31,37 @@ You classify by intent, not by keywords. Phrasings vary endlessly ("nearby",
 Apply this priority, top to bottom:
 
 1. A location named explicitly in the current message → source "explicit_query".
-2. Otherwise, carry the previous turn's working location → source "carried".
-3. Otherwise, fall back to the user's actual location → source "user_actual".
+2. The user has clearly travelled since the previous working location
+   (distance ≥ 50 km) and the message does not continue the prior place →
+   source "user_actual". See the "travelled" branch below.
+3. Otherwise, carry the previous turn's working location → source "carried".
+4. Otherwise, fall back to the user's actual location → source "user_actual".
 
-## Shift vs continuation
+## Shift vs continuation vs travelled
 
-The previous working location carries forward only on a continuation:
+The previous working location carries forward only on a continuation. The
+new "travelled" category sits between continuation and shift — the user has
+moved, but said nothing about a new place, so the system re-anchors to where
+they physically are now.
 
-- Continuation — builds on the same place. "and what else is there",
-  "anything cheaper", "what about for dinner". Carry it unchanged. is_shift
-  false.
+- Continuation — builds on the same place with no signal of moving. "and
+  what else is there", "anything cheaper", "what about for dinner". Carry
+  it unchanged. is_shift false.
 - Shift — names or asks about a different place. "actually, what about Tel
   Aviv", "and in Kyoto?", "I'm visiting my parents in Lyon next week".
   Re-resolve to the new place. is_shift true.
+- Travelled — the user's actual location is far from the previous working
+  location (the "Distance" input is ≥ 50 km), AND the message is generic
+  ("what's nearby?", "any good spot around here?", "what to do") with no
+  reference to the prior place. Most likely they have flown / driven /
+  moved on. Re-resolve to user_actual. is_shift true. Examples:
+    - Previous: Bangkok. Actual: ~9000 km away. Message: "any rooftop
+      bar nearby?" → travelled, source "user_actual".
+    - Previous: Tokyo. Actual: ~5 km away. Message: "what's nearby?"
+      → NOT travelled (same city), source "carried".
+    - Previous: Phuket. Actual: ~500 km away. Message: "anything else
+      worth seeing in Phuket?" → NOT travelled (explicitly continues
+      Phuket), source "carried".
 
 A message that names a place is almost always a shift. A different city or
 country is a shift, not a wider scope — re-resolve the point there.
@@ -118,24 +141,38 @@ headed?".
 
 One of walking, cycling, motorbike, driving, transit, rideshare, or empty.
 
+The capability list says what the user CAN use; the city says what's
+actually sensible. Pair them.
+
 - If the user explicitly names a mode this turn — "if I drive", "by car",
   "taking the train", "on the motorbike", "biking there", "in a Grab" — set
-  effective_mode to that mode, even if it is not in their available modes
-  (they know their situation this turn).
-  Example: profile available modes [walking, transit], message "what if I
-  take the motorbike" → effective_mode motorbike.
-- If the user does NOT name a mode, infer from their profile: prefer the
-  default mode; never pick a mode outside their available modes.
-  Example: profile default transit, available [walking, transit], message
-  "dinner nearby" → effective_mode transit.
+  effective_mode to that mode, even if it is not in their capabilities
+  (they know their situation this turn — a rental, a friend's car).
+  Example: capabilities [walking, transit], message "what if I take the
+  motorbike" → effective_mode motorbike.
+- Otherwise, pick the mode most natural for the working location, drawn
+  from the user's capabilities:
+  - Dense transit-rich cities (Manhattan, central London, Tokyo, Paris,
+    Berlin) with transit in capabilities → transit. Walking if the scope
+    is walkable.
+  - Island / resort / small-town Southeast Asia (Koh Samui, Bali, Phuket,
+    Krabi) with motorbike or driving in capabilities → motorbike, else
+    driving. Transit is usually not viable here even if listed.
+  - Sprawl cities (most of the US South and West — LA, Houston, Phoenix,
+    Dallas, Atlanta) with driving in capabilities → driving. Walking if
+    the scope is walkable.
+  - Walkable dense centres at walkable scope, when walking is a
+    capability → walking.
+  - Cities you're unsure about → prefer the slower, more conservative
+    capability (walking > transit > cycling > rideshare > motorbike >
+    driving).
 - Implicit scope language is NOT a mode signal. "I'm tired of walking",
-  "somewhere further", "a bit of a trek" change the scope, not the mode — do
-  not override available modes from these.
-  Example: profile available [walking, transit], message "I'm tired of
-  walking, somewhere further" → effective_mode stays transit (NOT driving);
-  scope_tier may widen.
-- If you cannot tell, leave effective_mode empty — the system uses the
-  profile default.
+  "somewhere further", "a bit of a trek" change the scope, not the mode.
+  Example: capabilities [walking, transit] in NYC, message "I'm tired of
+  walking, somewhere further" → effective_mode stays transit (NOT
+  driving); scope_tier may widen.
+- If you genuinely cannot tell, leave effective_mode empty — the system
+  picks the first listed capability deterministically.
 
 A continuation that carries the previous working location, or a fallback to a
 known user actual location, never needs clarification on its own — scope and

@@ -671,14 +671,17 @@ def get_extraction_service(
 
 def get_agent_graph(
     checkpointer: Any = Depends(get_agent_checkpointer),  # noqa: B008
+    hybrid_search: HybridSearchService = Depends(get_hybrid_search_service),  # noqa: B008
 ) -> Any:
     """Build the agent StateGraph per-request.
 
     Compiling per-request reuses the process-scoped checkpointer that
-    owns its own psycopg pool. The agent has no tools since ADR-075
-    (recall + consult removed; save was removed earlier by ADR-073), so
-    `build_tools()` returns `[]` — the graph is a zero-tool
-    conversational Q&A surface.
+    owns its own psycopg pool, and binds request-scoped tool services
+    (the `HybridSearchService` held by `find_saved` closes over a
+    per-request DB session — ADR-072 makes it non-cacheable).
+    `build_tools(hybrid_search)` returns the live tool list — currently
+    just `find_saved`, with `search_suggested` / `discover_others` to
+    follow.
     """
     if checkpointer is None:
         return None
@@ -690,7 +693,7 @@ def get_agent_graph(
     resolver_llm = get_langchain_chat_model("location_resolver")
     return build_graph(
         llm,
-        build_tools(),
+        build_tools(hybrid_search),
         checkpointer,
         resolver_llm,
         get_geocoding_client(),

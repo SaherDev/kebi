@@ -373,9 +373,12 @@ def _filter_conditions(
     if filters.categories:
         # Array overlap: a place matches if its categories list shares any
         # element with the filter's category set (OR semantics).
+        # NB: cast as ARRAY(Text), not ARRAY(String) — Postgres column is
+        # text[]; varchar[] mismatches and triggers
+        # "operator does not exist: text[] && character varying[]".
         conditions.append(
             _p.categories.op("&&")(
-                cast([c.value for c in filters.categories], ARRAY(String))
+                cast([c.value for c in filters.categories], ARRAY(Text))
             )
         )
 

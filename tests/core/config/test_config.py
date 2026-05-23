@@ -21,15 +21,15 @@ class TestAgentConfigDefaults:
         assert c.max_steps == 10
         assert c.max_errors == 3
         assert c.checkpointer_ttl_seconds == 86400
-        assert c.tool_timeouts_seconds.recall == 5
-        assert c.tool_timeouts_seconds.consult == 10
-        assert c.tool_timeouts_seconds.save == 60
+        assert c.tool_timeouts_seconds.find_saved == 8
+        assert c.find_saved.default_limit == 10
+        assert c.find_saved.max_limit == 25
 
     def test_app_config_exposes_agent_with_defaults(self) -> None:
         cfg = get_config()
         assert cfg.agent.max_steps == 10
         assert cfg.agent.max_errors == 3
-        assert cfg.agent.tool_timeouts_seconds.recall == 5
+        assert cfg.agent.tool_timeouts_seconds.find_saved == 8
 
     def test_app_yaml_registers_agent_prompt(self) -> None:
         cfg = get_config()
@@ -62,21 +62,11 @@ class TestAgentConfigValidators:
 class TestToolTimeoutsConfigValidators:
     def test_defaults(self) -> None:
         t = ToolTimeoutsConfig()
-        assert t.recall == 5
-        assert t.consult == 10
-        assert t.save == 60
+        assert t.find_saved == 8
 
-    def test_rejects_zero_recall(self) -> None:
+    def test_rejects_zero_find_saved(self) -> None:
         with pytest.raises(ValidationError):
-            ToolTimeoutsConfig(recall=0)
-
-    def test_rejects_zero_consult(self) -> None:
-        with pytest.raises(ValidationError):
-            ToolTimeoutsConfig(consult=0)
-
-    def test_rejects_zero_save(self) -> None:
-        with pytest.raises(ValidationError):
-            ToolTimeoutsConfig(save=0)
+            ToolTimeoutsConfig(find_saved=0)
 
 
 class TestAgentPromptLoading:

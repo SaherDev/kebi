@@ -408,22 +408,49 @@ class PromptConfig(BaseModel):
 
 
 class ToolTimeoutsConfig(BaseModel):
-    """Per-tool asyncio.wait_for budgets in seconds (feature 027 M2, M9).
+    """Per-tool asyncio.wait_for budgets in seconds.
 
-    Consumed by the agent tool wrappers (M5) and the timeout guard (M9).
-    Not read in this feature — presence + type is the only requirement.
+    Consumed by the timeout guard in `core/agent/tools/_with_timeout.py`.
+    One field per live tool — extended as new consult-family tools land
+    (`search_suggested`, `discover_others`).
     """
 
-    recall: int = 5
-    consult: int = 10
-    save: int = 60  # accommodates Apify-backed Google Maps list scrapes
+    find_saved: int = 8
 
     @model_validator(mode="after")
     def _positive_integers(self) -> "ToolTimeoutsConfig":
-        if self.recall < 1 or self.consult < 1 or self.save < 1:
+        if self.find_saved < 1:
             raise ValueError(
                 "agent.tool_timeouts_seconds fields must be >= 1 "
-                f"(got recall={self.recall}, consult={self.consult}, save={self.save})"
+                f"(got find_saved={self.find_saved})"
+            )
+        return self
+
+
+class FindSavedConfig(BaseModel):
+    """Per-tool knobs for `find_saved`.
+
+    `default_limit` is what the tool uses when the agent omits the LLM
+    `limit` arg. `max_limit` caps any agent-supplied value so the LLM
+    cannot ask for an unbounded result set.
+    """
+
+    default_limit: int = 10
+    max_limit: int = 25
+
+    @model_validator(mode="after")
+    def _positive_integers(self) -> "FindSavedConfig":
+        if self.default_limit < 1 or self.max_limit < 1:
+            raise ValueError(
+                "agent.find_saved.default_limit / max_limit must be >= 1 "
+                f"(got default_limit={self.default_limit}, "
+                f"max_limit={self.max_limit})"
+            )
+        if self.default_limit > self.max_limit:
+            raise ValueError(
+                "agent.find_saved.default_limit must be <= max_limit "
+                f"(got default_limit={self.default_limit}, "
+                f"max_limit={self.max_limit})"
             )
         return self
 
@@ -446,6 +473,7 @@ class AgentConfig(BaseModel):
     state_message_floor: int = 150
     checkpointer_ttl_seconds: int = 86400
     tool_timeouts_seconds: ToolTimeoutsConfig = ToolTimeoutsConfig()
+    find_saved: FindSavedConfig = FindSavedConfig()
     prompt_caching_enabled: bool = True
 
     @model_validator(mode="after")
@@ -499,15 +527,16 @@ class MovementRadiusTiers(BaseModel):
 
 
 class MovementFallback(BaseModel):
-    """Neutral mobility profile applied when a `/v1/chat` request omits one.
+    """Neutral mobility capability applied when a `/v1/chat` request omits
+    `movement_profile` (ADR-085 / ADR-086).
 
-    Deliberately conservative — `transit`, not `driving` — so a missing
-    profile (an old client, a frontend bug) does not silently widen every
-    search radius in a walking-first city. Visible, committed config rather
-    than a value buried in code.
+    Deliberately conservative: walking is listed first so the system's
+    deterministic mode pick — `available_modes[0]` when the resolver leaves
+    `effective_mode` empty — is walking rather than something that silently
+    widens every search radius. The resolver may still pick transit per turn
+    based on the working location and the message.
     """
 
-    mode: MovementMode = "transit"
     reach: Reach = "normal"
     available_modes: list[MovementMode] = ["walking", "transit"]
 
@@ -582,6 +611,7 @@ _REQUIRED_PROMPT_SLOTS: dict[str, list[str]] = {
         "{conversation_history}",
         "{user_actual_location}",
         "{previous_working_location}",
+        "{distance_from_previous}",
         "{mobility_profile}",
     ],
 }
