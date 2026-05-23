@@ -70,7 +70,9 @@
       "Bash(cat)",
       "Bash(chmod +x /tmp/count_refs.sh)",
       "Bash(bash /tmp/count_refs.sh)",
-      "Read(//private/tmp/**)"
+      "Read(//private/tmp/**)",
+      "Read(//Users/saher/dev/repos/kebi-dev/kebi-config/bruno/environments/**)",
+      "Bash(grep -E \"\\\\.py$\")"
     ]
   }
 }

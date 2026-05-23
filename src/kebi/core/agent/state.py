@@ -150,6 +150,12 @@ class AgentState(TypedDict):
     location_clarification: str | None
     movement_profile: dict[str, Any] | None
     reasoning_steps: list[ReasoningStep]
+    # Structured tool-result payloads produced during the current turn.
+    # Populated by `finalize_node` from the about-to-be-stripped
+    # `ToolMessage`s, so the client can render the consult-family
+    # candidates without re-parsing the prose. Reset to [] each turn via
+    # `build_turn_payload` (plain overwrite, no reducer).
+    tool_results: list[dict[str, Any]]
     steps_taken: int
     error_count: int
     tool_calls_used: int

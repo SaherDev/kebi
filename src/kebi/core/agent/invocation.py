@@ -53,6 +53,7 @@ def build_turn_payload(
     return {
         "messages": [HumanMessage(content=message)],
         "reasoning_steps": [],
+        "tool_results": [],
         "taste_profile_summary": taste_profile_summary,
         "memory_summary": memory_summary,
         "user_id": user_id,

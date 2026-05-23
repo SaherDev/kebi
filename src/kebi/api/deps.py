@@ -9,6 +9,7 @@ from typing import Any
 from fastapi import BackgroundTasks, Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from kebi.core.agent.tools.candidate_namer import CandidateNamerService
 from kebi.core.chat.service import ChatService
 from kebi.core.config import AppConfig, ExtractionConfig, get_config, get_env
 from kebi.core.events.dispatcher import EventDispatcher
@@ -669,19 +670,38 @@ def get_extraction_service(
 # ---------------------------------------------------------------------------
 
 
+def get_candidate_namer_service() -> CandidateNamerService:
+    """FastAPI dependency providing CandidateNamerService.
+
+    Wraps the process-wide `get_instructor_client("candidate_namer")`
+    Instructor client. Safe to construct per request — the underlying
+    OpenAI/Instructor client is cached at the provider layer.
+    """
+    return CandidateNamerService(
+        instructor_client=get_instructor_client("candidate_namer"),
+    )
+
+
 def get_agent_graph(
     checkpointer: Any = Depends(get_agent_checkpointer),  # noqa: B008
     hybrid_search: HybridSearchService = Depends(get_hybrid_search_service),  # noqa: B008
+    places_search_factory: SearchServiceFactory = Depends(  # noqa: B008
+        get_search_service_factory
+    ),
+    candidate_namer: CandidateNamerService = Depends(  # noqa: B008
+        get_candidate_namer_service
+    ),
 ) -> Any:
     """Build the agent StateGraph per-request.
 
     Compiling per-request reuses the process-scoped checkpointer that
     owns its own psycopg pool, and binds request-scoped tool services
-    (the `HybridSearchService` held by `find_saved` closes over a
-    per-request DB session — ADR-072 makes it non-cacheable).
-    `build_tools(hybrid_search)` returns the live tool list — currently
-    just `find_saved`, with `search_suggested` / `discover_others` to
-    follow.
+    (`HybridSearchService` for `find_saved`; `places_search_factory`
+    for `suggest_places` — the fan-out runs N parallel provider
+    lookups so each one must open its own session, mirroring the
+    extraction pipeline pattern, ADR-072). `CandidateNamerService` is
+    process-safe but is still resolved through `Depends()` so the
+    wiring stays in one place.
     """
     if checkpointer is None:
         return None
@@ -693,7 +713,7 @@ def get_agent_graph(
     resolver_llm = get_langchain_chat_model("location_resolver")
     return build_graph(
         llm,
-        build_tools(hybrid_search),
+        build_tools(hybrid_search, candidate_namer, places_search_factory),
         checkpointer,
         resolver_llm,
         get_geocoding_client(),

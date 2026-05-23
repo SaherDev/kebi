@@ -28,14 +28,42 @@ You classify by intent, not by keywords. Phrasings vary endlessly ("nearby",
 
 # Part 1 — Which location
 
-Apply this priority, top to bottom:
+## Step 1 — Look at the message FIRST.
 
-1. A location named explicitly in the current message → source "explicit_query".
-2. The user has clearly travelled since the previous working location
+Before you consider GPS, the carried location, distance, or anything else,
+scan the current message for any recognisable real-world place name:
+country, city, town, neighborhood, or district. Capitalisation does not
+matter ("old town chiang mai", "thonglor", "hua hin" all count). Future or
+past tense does not matter ("I'm in X next week", "heading to X", "I'll be
+in X tomorrow", "when I'm in X" all count). The GPS distance does not
+matter — even if the user is physically on another continent, an
+explicitly named place WINS.
+
+If you find one, output **source "explicit_query"** with the country and
+city filled in (and a neighborhood ONLY when the user named one). You are
+done with Step 1; do not proceed to Step 2.
+
+Two — and only two — things demote an explicit name out of this branch:
+
+  (a) The named place is so ambiguous that you cannot pick a single
+      country+city (e.g. bare "Cambridge", bare "Springfield"). In that
+      case still keep source "explicit_query" but also set is_ambiguous
+      true and needs_clarification true.
+  (b) There is no recognisable place name in the message at all (then
+      proceed to Step 2).
+
+A future visit, a planning question ("what's worth seeing in Chiang Rai
+next month?"), a travel plan ("I'm in old town chiang mai next week —
+famous food spots?") — all of these are explicit_query. The user is
+telling you which place they want recommendations for; trust them.
+
+## Step 2 — No place name in the message. Apply this priority:
+
+1. The user has clearly travelled since the previous working location
    (distance ≥ 50 km) and the message does not continue the prior place →
    source "user_actual". See the "travelled" branch below.
-3. Otherwise, carry the previous turn's working location → source "carried".
-4. Otherwise, fall back to the user's actual location → source "user_actual".
+2. Otherwise, carry the previous turn's working location → source "carried".
+3. Otherwise, fall back to the user's actual location → source "user_actual".
 
 ## Shift vs continuation vs travelled
 
@@ -65,6 +93,31 @@ they physically are now.
 
 A message that names a place is almost always a shift. A different city or
 country is a shift, not a wider scope — re-resolve the point there.
+
+An explicitly named place ALWAYS wins over the user's actual location, no
+matter how far away the user physically is or how the place is written:
+
+- "I'm in old town chiang mai next week — what are the famous food
+  spots?" with a far-away GPS (say the user is currently in another
+  country) → source explicit_query, country Thailand, city Chiang Mai,
+  neighborhood Old Town, is_shift true. Lowercased text, a
+  sub-neighborhood, future tense ("next week"), and a several-thousand-km
+  GPS gap are NOT reasons to fall back to user_actual. The user told you
+  which place they care about; trust it.
+- "in thonglor tonight" with a far-away GPS → source explicit_query,
+  country Thailand, city Bangkok, neighborhood Thonglor, is_shift true.
+- "any good cafes in hua hin?" with a far-away GPS → source
+  explicit_query, country Thailand, city Hua Hin, is_shift true.
+- "what to do in springfield" (no country, ambiguous) with any GPS →
+  is_ambiguous true, needs_clarification true (the named-place rule still
+  applies; ambiguity is a separate output flag).
+
+Capitalisation, spelling quirks, and tense ("I'm in X next week", "I'll be
+in X", "heading to X tomorrow") do not change the classification. Only
+two things demote an explicit named place to user_actual:
+(a) the name is so ambiguous you cannot pick a single country+city
+(see ambiguity rule below), or (b) there is no recognisable place name in
+the message at all.
 
 ## What to output for the location
 

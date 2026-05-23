@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 from langchain_core.messages import AIMessage
@@ -9,6 +11,32 @@ from langchain_core.messages import AIMessage
 from kebi.api.schemas.chat import ChatRequest
 from kebi.core.agent.reasoning import ReasoningStep
 from kebi.core.chat.service import ChatService
+
+
+def _mock_astream(
+    values: list[dict[str, Any]] | None = None,
+    *,
+    raises: Exception | None = None,
+) -> MagicMock:
+    """Build a MagicMock standing in for `graph.astream(...)`.
+
+    The service calls `graph.astream(payload, config=..., stream_mode="values")`
+    and consumes the async iterator. Each test passes a list of state
+    snapshots to yield; a raising stream is supported via `raises` to
+    exercise the error path.
+    """
+    snapshots = values or [{"messages": [], "reasoning_steps": []}]
+
+    def _factory(*_args: Any, **_kwargs: Any) -> AsyncIterator[dict[str, Any]]:
+        async def _gen() -> AsyncIterator[dict[str, Any]]:
+            if raises is not None:
+                raise raises
+            for v in snapshots:
+                yield v
+
+        return _gen()
+
+    return MagicMock(side_effect=_factory)
 
 
 def _make_service(
@@ -30,11 +58,13 @@ def _make_service(
         memory_service.load_memories = AsyncMock(return_value=[])
     if agent_graph is None:
         graph = AsyncMock()
-        graph.ainvoke = AsyncMock(
-            return_value={
-                "messages": [AIMessage(content="default response")],
-                "reasoning_steps": [],
-            }
+        graph.astream = _mock_astream(
+            [
+                {
+                    "messages": [AIMessage(content="default response")],
+                    "reasoning_steps": [],
+                }
+            ]
         )
         agent_graph = graph
 
@@ -53,11 +83,13 @@ def _make_service(
 async def test_run_invokes_agent_graph_and_returns_agent_type() -> None:
     """ChatService.run() invokes the agent graph and returns type='agent'."""
     graph = AsyncMock()
-    graph.ainvoke = AsyncMock(
-        return_value={
-            "messages": [AIMessage(content="here's what I found")],
-            "reasoning_steps": [],
-        }
+    graph.astream = _mock_astream(
+        [
+            {
+                "messages": [AIMessage(content="here's what I found")],
+                "reasoning_steps": [],
+            }
+        ]
     )
     service = _make_service(agent_graph=graph)
 
@@ -65,7 +97,7 @@ async def test_run_invokes_agent_graph_and_returns_agent_type() -> None:
 
     assert result.type == "agent"
     assert result.message == "here's what I found"
-    graph.ainvoke.assert_awaited_once()
+    graph.astream.assert_called_once()
 
 
 async def test_run_filters_reasoning_steps_to_user_visible() -> None:
@@ -84,11 +116,13 @@ async def test_run_filters_reasoning_steps_to_user_visible() -> None:
     )
 
     graph = AsyncMock()
-    graph.ainvoke = AsyncMock(
-        return_value={
-            "messages": [AIMessage(content="response")],
-            "reasoning_steps": [user_step, debug_step],
-        }
+    graph.astream = _mock_astream(
+        [
+            {
+                "messages": [AIMessage(content="response")],
+                "reasoning_steps": [user_step, debug_step],
+            }
+        ]
     )
     service = _make_service(agent_graph=graph)
 
@@ -100,23 +134,23 @@ async def test_run_filters_reasoning_steps_to_user_visible() -> None:
 
 
 async def test_run_passes_user_id_as_thread_id() -> None:
-    """graph.ainvoke is called with configurable.thread_id == request.user_id."""
+    """graph.astream is called with configurable.thread_id == request.user_id."""
     graph = AsyncMock()
-    graph.ainvoke = AsyncMock(
-        return_value={"messages": [AIMessage(content="ok")], "reasoning_steps": []}
+    graph.astream = _mock_astream(
+        [{"messages": [AIMessage(content="ok")], "reasoning_steps": []}]
     )
     service = _make_service(agent_graph=graph)
 
     await service.run(ChatRequest(user_id="u-agent", message="test"))
 
-    call = graph.ainvoke.call_args
+    call = graph.astream.call_args
     assert call.kwargs["config"]["configurable"]["thread_id"] == "u-agent"
 
 
 async def test_run_returns_error_on_graph_exception() -> None:
-    """Unexpected exception during ainvoke surfaces as type='error'."""
+    """Unexpected exception during astream surfaces as type='error'."""
     graph = AsyncMock()
-    graph.ainvoke = AsyncMock(side_effect=RuntimeError("boom"))
+    graph.astream = _mock_astream(raises=RuntimeError("boom"))
 
     service = _make_service(agent_graph=graph)
     result = await service.run(ChatRequest(user_id="u", message="hi"))
@@ -136,8 +170,8 @@ async def test_run_threads_raw_user_location() -> None:
     from kebi.api.schemas.chat import Location
 
     graph = AsyncMock()
-    graph.ainvoke = AsyncMock(
-        return_value={"messages": [AIMessage(content="ok")], "reasoning_steps": []}
+    graph.astream = _mock_astream(
+        [{"messages": [AIMessage(content="ok")], "reasoning_steps": []}]
     )
 
     service = _make_service(agent_graph=graph)
@@ -150,20 +184,20 @@ async def test_run_threads_raw_user_location() -> None:
         )
     )
 
-    payload = graph.ainvoke.call_args.args[0]
+    payload = graph.astream.call_args.args[0]
     assert payload["user_location"] == {"lat": 52.12, "lng": 11.62}
 
 
 async def test_run_no_location_threads_none() -> None:
     """No location in request → payload user_location is None."""
     graph = AsyncMock()
-    graph.ainvoke = AsyncMock(
-        return_value={"messages": [AIMessage(content="ok")], "reasoning_steps": []}
+    graph.astream = _mock_astream(
+        [{"messages": [AIMessage(content="ok")], "reasoning_steps": []}]
     )
 
     service = _make_service(agent_graph=graph)
 
     await service.run(ChatRequest(user_id="u", message="hi"))
 
-    payload = graph.ainvoke.call_args.args[0]
+    payload = graph.astream.call_args.args[0]
     assert payload["user_location"] is None

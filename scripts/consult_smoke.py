@@ -1,26 +1,32 @@
-"""Smoke-test `find_saved` end-to-end through `POST /v1/chat`.
+"""Smoke-test `find_saved` + `suggest_places` end-to-end through `POST /v1/chat`.
 
 Hits a running local kebi server with a curated set of consult prompts
-spanning the dimensions of the `find_saved` tool: geofence, named
-neighborhood, named city, alternate location, movement profile (walking
-vs driving, normal vs far reach), limit, multi-category OR, category-only
-browse, feature/atmosphere tags, empty-result, no-location.
+spanning both tools:
+
+- `find_saved` — geofence, named neighborhood, named city, alternate
+  location, movement profile, limit, multi-category OR, category-only
+  browse, feature/atmosphere tags, empty-result, no-location.
+- `suggest_places` — public-knowledge picks (famous spots, "I've never
+  been here"), both-tools open-ended intents, constraint-aware suggest
+  (the agent must pass dietary `tags` to both tools).
 
 For each scenario:
 - POSTs `/v1/chat`.
-- Prints scenario name, HTTP status, response type, the `find_saved`
-  reasoning step (if the agent called the tool), and a truncated prose
-  preview.
-- Tags PASS / WARN / FAIL based on response shape.
+- Prints scenario name, HTTP status, response type, every tool
+  reasoning step (multi-step user-fluent narration for suggest_places),
+  per-source candidate counts, and a truncated prose preview.
+- Tags PASS / WARN / FAIL based on response shape and which tools the
+  agent actually called vs the scenario's expectations.
 
 This is a manual debugging tool, not a CI test. The agent's behaviour
 is non-deterministic; the assertions only check structural sanity
-(`type=="agent"`, 200 response, etc.). Read the prose to judge whether
-the agent picked the right tool args.
+(`type=="agent"`, 200 response, expected tool(s) called). Read the
+prose to judge whether the agent picked the right tool args.
 
 Usage:
     poetry run python scripts/consult_smoke.py            # all scenarios
     poetry run python scripts/consult_smoke.py rooftop    # filter by name
+    poetry run python scripts/consult_smoke.py suggest    # only suggest_places
     poetry run python scripts/consult_smoke.py --list     # list scenario names
 """
 
@@ -61,7 +67,12 @@ class Scenario:
             "reach": "normal",
         }
     )
-    expects_tool_call: bool = True
+    # Which tool(s) the agent should call this turn. {"find_saved"} is
+    # the default — preserves existing find_saved-only scenarios.
+    # {"suggest_places"} for new-name discovery; {"find_saved",
+    # "suggest_places"} for open-ended turns. Empty set means "no tool"
+    # (clarification path).
+    expects_tools: set[str] = field(default_factory=lambda: {"find_saved"})
 
 
 # Geographic anchors used by tests:
@@ -130,7 +141,6 @@ SCENARIOS: list[Scenario] = [
         "any museums worth visiting?",
         movement_profile=TRANSIT_NORMAL,
     ),
-
     # ----- Multi-category / OR semantics -----
     Scenario(
         "food-or-drink",
@@ -142,7 +152,6 @@ SCENARIOS: list[Scenario] = [
         "multi-category OR (park / beach / garden)",
         "somewhere outdoors for the afternoon, I don't care if it's a park or garden",
     ),
-
     # ----- Named neighborhood -----
     Scenario(
         "chinatown",
@@ -154,7 +163,6 @@ SCENARIOS: list[Scenario] = [
         "named neighborhood (smaller)",
         "any parks in Sathon you'd recommend?",
     ),
-
     # ----- Named city, agent should drop geofence -----
     Scenario(
         "amsterdam-from-bangkok",
@@ -170,9 +178,8 @@ SCENARIOS: list[Scenario] = [
         "phuket-empty-city",
         "named city not in saves (empty path)",
         "what should I do in Phuket?",
-        expects_tool_call=True,  # tool still called, just returns empty
+        expects_tools={"find_saved"},  # tool still called, just returns empty
     ),
-
     # ----- Alternate physical location -----
     Scenario(
         "samui-beach",
@@ -195,7 +202,6 @@ SCENARIOS: list[Scenario] = [
         location=AMSTERDAM,
         movement_profile=WALKING_NORMAL,
     ),
-
     # ----- Movement profile variations -----
     Scenario(
         "day-trip-driving-far",
@@ -209,7 +215,6 @@ SCENARIOS: list[Scenario] = [
         "right around the corner — any chill spot to sit?",
         movement_profile=WALKING_COMPACT,
     ),
-
     # ----- Limit picking -----
     Scenario(
         "single-pick-rooftop",
@@ -221,7 +226,6 @@ SCENARIOS: list[Scenario] = [
         "small limit (a few options)",
         "give me two or three options for evening drinks",
     ),
-
     # ----- Atmosphere / vibe tags -----
     Scenario(
         "trendy-vibe",
@@ -233,7 +237,6 @@ SCENARIOS: list[Scenario] = [
         "atmosphere tag (luxurious)",
         "somewhere fancy and luxurious for a treat?",
     ),
-
     # ----- Specific cuisine likely empty -----
     Scenario(
         "italian-empty",
@@ -250,7 +253,6 @@ SCENARIOS: list[Scenario] = [
         "cuisine likely empty",
         "what about somewhere Moroccan?",
     ),
-
     # ----- No location supplied -----
     Scenario(
         "no-location-explicit-city",
@@ -258,7 +260,7 @@ SCENARIOS: list[Scenario] = [
         "any cafes you'd recommend in Bangkok?",
         location=None,
         movement_profile=None,
-        expects_tool_call=True,
+        expects_tools={"find_saved"},
     ),
     Scenario(
         "no-location-no-city",
@@ -266,7 +268,65 @@ SCENARIOS: list[Scenario] = [
         "what's a good place for dinner?",
         location=None,
         movement_profile=None,
-        expects_tool_call=False,  # agent should ask, not call the tool
+        expects_tools=set(),  # agent should ask, not call any tool
+    ),
+    # ----- suggest_places only -----
+    Scenario(
+        "suggest-famous-omakase-tokyo",
+        "suggest_places — named city, public knowledge",
+        "I'm in Tokyo next week — what are the famous omakase spots?",
+        location=None,
+        movement_profile=None,
+        expects_tools={"suggest_places"},
+    ),
+    Scenario(
+        "suggest-coffee-around-here",
+        "suggest_places — open intent on public-knowledge picks",
+        "I've never tried any cafes around here — any well-known ones?",
+        expects_tools={"suggest_places"},
+    ),
+    Scenario(
+        "suggest-italian-neighborhood",
+        "suggest_places — haven't tried + named cuisine",
+        "haven't tried Italian in this neighborhood — anything worth going to?",
+        expects_tools={"suggest_places"},
+    ),
+    Scenario(
+        "suggest-lisbon-lunch",
+        "suggest_places — visiting another city",
+        "what are people loving for lunch in Lisbon these days?",
+        location=None,
+        movement_profile=None,
+        expects_tools={"suggest_places"},
+    ),
+    # ----- both tools in one turn -----
+    Scenario(
+        "both-dinner-tonight",
+        "open intent — saves first, suggest tail",
+        "where should I eat dinner tonight? open to anything mine or new",
+        expects_tools={"find_saved", "suggest_places"},
+    ),
+    Scenario(
+        "both-chill-afternoon",
+        "open intent — afternoon mood",
+        "somewhere chill for the afternoon, mine or famous",
+        expects_tools={"find_saved", "suggest_places"},
+    ),
+    # ----- suggest_places + hard constraint awareness -----
+    # NOTE: assumes the user has memory like "I'm vegetarian" pre-seeded.
+    # Without that, the constraint won't bind. The scenario name is a hint
+    # to the operator running the smoke; assertions remain structural.
+    Scenario(
+        "suggest-veg-famous-spots",
+        "suggest_places — vegetarian constraint must be passed through",
+        "famous spots for lunch around here?",
+        expects_tools={"suggest_places"},
+    ),
+    Scenario(
+        "suggest-out-of-scope-name-bait",
+        "suggest_places — 'best anywhere' must stay in-radius",
+        "best ramen anywhere — I'm flexible",
+        expects_tools={"suggest_places"},
     ),
 ]
 
@@ -287,11 +347,35 @@ def _post_chat(scenario: Scenario, client: httpx.Client) -> tuple[int, dict[str,
         return r.status_code, {"raw": r.text}
 
 
-def _find_step(steps: list[dict[str, Any]], prefix: str) -> dict[str, Any] | None:
-    for s in steps:
-        if (s.get("step") or "").startswith(prefix):
-            return s
-    return None
+_KNOWN_TOOLS: tuple[str, ...] = ("find_saved", "suggest_places")
+
+
+def _steps_for_tool(steps: list[dict[str, Any]], tool: str) -> list[dict[str, Any]]:
+    """Return every reasoning step emitted by `tool`, in order."""
+    prefix = f"{tool}."
+    return [s for s in steps if (s.get("step") or "").startswith(prefix)]
+
+
+def _tools_called(steps: list[dict[str, Any]]) -> set[str]:
+    """Set of tools that emitted at least one reasoning step this turn."""
+    return {tool for tool in _KNOWN_TOOLS if _steps_for_tool(steps, tool)}
+
+
+def _candidate_source_counts(body: dict[str, Any]) -> dict[str, int]:
+    """Tally returned candidates by their `source` discriminator.
+
+    The agent's prose response carries a structured `places` list (when
+    one is exposed) — we read the per-source breakdown from there if it
+    exists, otherwise we count namer/find summary steps as a fallback
+    hint. Reads tolerantly; structural smoke only.
+    """
+    data = body.get("data") or {}
+    places = data.get("places") or data.get("candidates") or []
+    counts: dict[str, int] = {}
+    for p in places:
+        src = p.get("source") or ((p.get("user_data") and "saved") or "unknown")
+        counts[src] = counts.get(src, 0) + 1
+    return counts
 
 
 def _truncate(text: str, n: int = 200) -> str:
@@ -311,16 +395,29 @@ def _evaluate(
     rtype = body.get("type")
     if rtype != "agent":
         return "FAIL", [f"type={rtype!r}"]
+
     steps = (body.get("data") or {}).get("reasoning_steps") or []
-    find_step = _find_step(steps, "find_saved")
-    if scenario.expects_tool_call:
-        if find_step is None:
-            return "WARN", ["expected find_saved step, agent didn't call the tool"]
-    else:
-        if find_step is not None:
-            reasons.append("agent called tool but scenario expected clarification path")
-    if find_step and find_step.get("step", "").endswith(".failure"):
-        return "WARN", ["find_saved.failure (timeout / exception)"]
+    called = _tools_called(steps)
+    expected = scenario.expects_tools
+
+    # Tool-routing assertion: which tools fired vs which were expected.
+    if expected and not (expected & called):
+        return "WARN", [
+            f"expected one of {sorted(expected)} to fire, "
+            f"agent called {sorted(called) or 'none'}"
+        ]
+    if not expected and called:
+        reasons.append(
+            f"agent called {sorted(called)} but scenario expected "
+            "no tool (clarification path)"
+        )
+
+    # Per-tool failure breadcrumbs.
+    for tool in called:
+        last = _steps_for_tool(steps, tool)[-1]
+        if (last.get("step") or "").endswith(".failure"):
+            return "WARN", [f"{tool}.failure (timeout / exception)"]
+
     return "PASS", reasons
 
 
@@ -335,8 +432,7 @@ def _print_result(
     verdict, reasons = _evaluate(scenario, status, body)
     color = {"PASS": GREEN, "WARN": YELLOW, "FAIL": RED}[verdict]
     header = (
-        f"{BOLD}[{idx}/{n}] {scenario.name}{RESET}  "
-        f"{DIM}({scenario.dimension}){RESET}"
+        f"{BOLD}[{idx}/{n}] {scenario.name}{RESET}  {DIM}({scenario.dimension}){RESET}"
     )
     print(header)
     print(f"  message: {scenario.message!r}")
@@ -345,9 +441,18 @@ def _print_result(
         for r in reasons:
             print(f"  {YELLOW}note: {r}{RESET}")
     steps = (body.get("data") or {}).get("reasoning_steps") or []
-    find_step = _find_step(steps, "find_saved")
-    if find_step:
-        print(f"  {CYAN}find_saved: {find_step.get('summary')}{RESET}")
+    for tool in _KNOWN_TOOLS:
+        tool_steps = _steps_for_tool(steps, tool)
+        if not tool_steps:
+            continue
+        print(f"  {CYAN}{tool}:{RESET}")
+        for ts in tool_steps:
+            step_id = (ts.get("step") or "").rsplit(".", 1)[-1] or "?"
+            print(f"    {DIM}[{step_id}]{RESET} {CYAN}{ts.get('summary')}{RESET}")
+    source_counts = _candidate_source_counts(body)
+    if source_counts:
+        breakdown = ", ".join(f"{src}={n}" for src, n in sorted(source_counts.items()))
+        print(f"  {DIM}sources: {breakdown}{RESET}")
     prose = body.get("message") or ""
     if prose:
         print(f"  prose: {_truncate(prose, 240)}")
@@ -360,13 +465,8 @@ def _print_result(
 
 def main(argv: list[str]) -> int:
     list_only = "--list" in argv
-    name_filter = next(
-        (a for a in argv[1:] if not a.startswith("--")), None
-    )
-    selected = [
-        s for s in SCENARIOS
-        if name_filter is None or name_filter in s.name
-    ]
+    name_filter = next((a for a in argv[1:] if not a.startswith("--")), None)
+    selected = [s for s in SCENARIOS if name_filter is None or name_filter in s.name]
     if list_only:
         for s in SCENARIOS:
             print(f"  {s.name}  {DIM}({s.dimension}){RESET}")
@@ -376,8 +476,7 @@ def main(argv: list[str]) -> int:
         return 2
 
     print(
-        f"{BOLD}Running {len(selected)} consult scenario(s) against "
-        f"{BASE_URL}{RESET}\n"
+        f"{BOLD}Running {len(selected)} consult scenario(s) against {BASE_URL}{RESET}\n"
     )
     pass_n = warn_n = fail_n = 0
     with httpx.Client() as client:
@@ -387,8 +486,10 @@ def main(argv: list[str]) -> int:
                 status, body = _post_chat(scenario, client)
             except httpx.HTTPError as exc:
                 elapsed_ms = int((time.monotonic() - t0) * 1000)
-                print(f"{RED}[{i}/{len(selected)}] {scenario.name}  "
-                      f"transport error: {exc}{RESET}\n")
+                print(
+                    f"{RED}[{i}/{len(selected)}] {scenario.name}  "
+                    f"transport error: {exc}{RESET}\n"
+                )
                 fail_n += 1
                 continue
             elapsed_ms = int((time.monotonic() - t0) * 1000)

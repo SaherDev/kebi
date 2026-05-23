@@ -60,17 +60,21 @@ class ChatRequest(BaseModel):
 class ChatResponse(BaseModel):
     """Response body for POST /v1/chat endpoint.
 
-    type: One of "agent", "error". ADR-075 removed the recall and
-          consult tools — the agent is now a zero-tool conversational
-          Q&A surface, so "consult" and "recall" response types no
-          longer exist (ADR-073 had already removed "extract-place" and
-          "clarification"). The agent is the only dispatch path (ADR-065).
+    type: One of "agent", "error". The agent is the only dispatch path
+          (ADR-065); "consult" / "recall" / "extract-place" /
+          "clarification" types were removed by ADR-073/075.
     message: Human-readable response text.
-    data: Structured payload; null for error; on the "agent" path
-          carries `{"reasoning_steps": [<ReasoningStep.model_dump>, ...]}`
-          — only user-visible steps survive the serialization filter.
-    tool_calls_used: Always 0 — the agent has no tools (ADR-075).
-                     Retained for response-shape stability.
+    data: Structured payload; null for error. On the "agent" path:
+          - `reasoning_steps`: list of user-visible `ReasoningStep`
+            dumps (debug-visibility steps are filtered out).
+          - `tool_results`: list of `{tool, tool_call_id, payload}`
+            entries — one per tool call this turn. `payload` is the
+            parsed `ConsultResult` (`candidates` with place + `source`
+            + optional `reason` + `empty_reason`) so clients can render
+            the structured list without re-parsing the prose.
+    tool_calls_used: Number of tool calls the agent made this turn
+                     (find_saved + suggest_places), surfaced for
+                     rate-limit accounting on the NestJS side.
     """
 
     type: ChatResponseType

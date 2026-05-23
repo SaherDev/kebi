@@ -166,6 +166,44 @@ async def test_shift_resolves_the_new_place() -> None:
     assert update["working_location"]["city"] == "Bangkok"
 
 
+async def test_explicit_query_wins_over_far_user_actual() -> None:
+    """Far-away GPS does not override an explicitly named place.
+
+    Regression for a real bug where a lowercased named neighborhood +
+    far GPS resolved to user_actual instead of shifting: the resolver's
+    classification must win over the user's current physical
+    coordinates regardless of the distance gap. The travelled-branch
+    is only for messages that name no place.
+    """
+    resolution = LocationResolution(
+        source="explicit_query",
+        country="Thailand",
+        city="Chiang Mai",
+        neighborhood="Old Town",
+        is_shift=True,
+    )
+    node = make_resolve_location_node(
+        _resolver_llm(resolution), _geocoder(forward=(18.79, 98.99))
+    )
+    update = await node(
+        _state(
+            message="I'm in old town chiang mai next week — famous food spots?",
+            # ~5000 km away from Chiang Mai — simulates the GPS-mismatch.
+            user_location={"lat": 35.6762, "lng": 139.6503},
+        )
+    )
+    wl = update["working_location"]
+    assert wl["country"] == "Thailand"
+    assert wl["city"] == "Chiang Mai"
+    assert wl["neighborhood"] == "Old Town"
+    # Coords come from the forward-geocode of the named place, NOT from
+    # the user's actual location — locking the rule that explicit_query
+    # never falls back to GPS.
+    assert wl["lat"] == 18.79
+    assert wl["lng"] == 98.99
+    assert update["location_clarification"] is None
+
+
 async def test_ambiguous_triggers_clarification() -> None:
     resolution = LocationResolution(
         source="explicit_query",

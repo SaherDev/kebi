@@ -8,11 +8,10 @@ Feature 028 M11 (ADR-065): the legacy intent-router dispatch path
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 from typing import TYPE_CHECKING, Any
 
-from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langchain_core.messages import AIMessage
 
 from kebi.api.schemas.chat import ChatRequest, ChatResponse
 from kebi.core.agent.invocation import build_turn_payload
@@ -95,13 +94,26 @@ class ChatService:
             # needs_review branch (ADR-063). ADR-071 removed that branch
             # and ADR-073 removed the save tool entirely, so the agent
             # can no longer raise GraphInterrupt — no handler needed.
-            final_state = await self._agent_graph.ainvoke(payload, config=graph_config)
+            #
+            # Stream values instead of ainvoke so we can capture
+            # `tool_results` from the snapshot emitted between
+            # `finalize` and `scrub_tool_results`. The final state we
+            # checkpoint has `tool_results=[]` — only `reasoning_steps`
+            # (human-readable summaries) persist as agent history.
+            final_state: dict[str, Any] = {}
+            tool_results: list[dict[str, Any]] = []
+            async for snapshot in self._agent_graph.astream(
+                payload, config=graph_config, stream_mode="values"
+            ):
+                final_state = snapshot
+                snap_tool_results = snapshot.get("tool_results") or []
+                if snap_tool_results:
+                    tool_results = snap_tool_results
 
             messages = final_state.get("messages", [])
             ai_message = _last_ai_message(messages)
             all_steps = final_state.get("reasoning_steps", [])
             user_steps = [s for s in all_steps if s.visibility == "user"]
-            tool_results = _collect_current_turn_tool_results(messages)
 
             message_text = (
                 extract_text_content(ai_message.content) if ai_message else ""
@@ -152,57 +164,3 @@ def _last_ai_message(messages: list[Any]) -> AIMessage | None:
     return None
 
 
-def _parse_tool_message_payload(m: ToolMessage) -> dict[str, Any] | None:
-    """Return a dict payload for the tool_result SSE frame.
-
-    The agent has no tools since ADR-075, so no ToolMessages are
-    produced today; this stays as scaffolding for a future tool. When a
-    ToolMessage does carry a JSON string in `content`, parse it;
-    LangGraph's `ToolNode` returns a plain error-string ToolMessage with
-    `status="error"` on argument-schema validation failure, which is
-    surfaced as a structured error payload instead of a bare `null`.
-    """
-    content = m.content if isinstance(m.content, str) else ""
-    if getattr(m, "status", None) == "error":
-        return {"error": "tool_call_failed", "message": content or "tool error"}
-    if not content:
-        return None
-    try:
-        parsed = json.loads(content)
-    except json.JSONDecodeError:
-        return {"error": "non_json_content", "message": content[:500]}
-    return parsed if isinstance(parsed, dict) else {"value": parsed}
-
-
-def _collect_current_turn_tool_results(messages: list[Any]) -> list[dict[str, Any]]:
-    """Extract structured tool-result payloads produced during the current turn.
-
-    The checkpointer preserves conversation history across turns, so
-    `messages` contains prior turns too. We walk from the end and stop at
-    the most recent `HumanMessage` — everything after it belongs to this
-    turn. `ToolMessage.content` carries the tool's `response.model_dump_json()`
-    string, which we parse back into a dict for the client.
-
-    The agent has no tools since ADR-075, so this returns `[]` today; it
-    stays as scaffolding so a future tool repopulates it without rewiring.
-    """
-    current_turn: list[Any] = []
-    for m in reversed(messages):
-        if isinstance(m, HumanMessage):
-            break
-        current_turn.append(m)
-    current_turn.reverse()
-
-    raw: list[dict[str, Any]] = []
-    for m in current_turn:
-        if not isinstance(m, ToolMessage):
-            continue
-        raw.append(
-            {
-                "tool": getattr(m, "name", None),
-                "tool_call_id": getattr(m, "tool_call_id", None),
-                "payload": _parse_tool_message_payload(m),
-            }
-        )
-
-    return raw

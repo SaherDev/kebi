@@ -24,8 +24,13 @@ class ConsultCandidate(BaseModel):
     """One candidate returned by a consult tool.
 
     `user_data` is populated for `find_saved` (the user's own row exists)
-    and `None` for `search_suggested` / `discover_others` (no save row
+    and `None` for `suggest_places` / `discover_others` (no save row
     yet — the user has never linked the place).
+
+    `reason` is the namer LLM's one-line rationale for proposing this
+    place. Populated for `source="suggested"` and left `None` for
+    `source="saved"` / `source="discovered"`, which surface places the
+    LLM did not name.
     """
 
     place: PlaceCore
@@ -34,6 +39,7 @@ class ConsultCandidate(BaseModel):
     rrf_score: float
     vector_rank: int | None = None
     text_rank: int | None = None
+    reason: str | None = None
 
 
 class ConsultResult(BaseModel):

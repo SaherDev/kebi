@@ -411,18 +411,19 @@ class ToolTimeoutsConfig(BaseModel):
     """Per-tool asyncio.wait_for budgets in seconds.
 
     Consumed by the timeout guard in `core/agent/tools/_with_timeout.py`.
-    One field per live tool — extended as new consult-family tools land
-    (`search_suggested`, `discover_others`).
+    One field per live tool — extended as new consult-family tools land.
     """
 
     find_saved: int = 8
+    suggest_places: int = 18
 
     @model_validator(mode="after")
     def _positive_integers(self) -> "ToolTimeoutsConfig":
-        if self.find_saved < 1:
+        if self.find_saved < 1 or self.suggest_places < 1:
             raise ValueError(
                 "agent.tool_timeouts_seconds fields must be >= 1 "
-                f"(got find_saved={self.find_saved})"
+                f"(got find_saved={self.find_saved}, "
+                f"suggest_places={self.suggest_places})"
             )
         return self
 
@@ -455,6 +456,54 @@ class FindSavedConfig(BaseModel):
         return self
 
 
+class SuggestPlacesConfig(BaseModel):
+    """Per-tool knobs for `suggest_places`.
+
+    `default_limit` / `max_limit` mirror `FindSavedConfig` — agent-facing
+    caps on returned candidates. `name_count` is how many candidate names
+    the namer LLM is asked to produce per call — kept higher than the
+    typical limit so the provider-validation + constraint-filter steps
+    have headroom to drop misses. `provider_concurrency` bounds the
+    fan-out into `PlacesSearchService.find()` so a noisy namer can't
+    overwhelm Google's quota.
+    """
+
+    default_limit: int = 5
+    max_limit: int = 15
+    name_count: int = 8
+    provider_concurrency: int = 5
+
+    @model_validator(mode="after")
+    def _positive_integers(self) -> "SuggestPlacesConfig":
+        if (
+            self.default_limit < 1
+            or self.max_limit < 1
+            or self.name_count < 1
+            or self.provider_concurrency < 1
+        ):
+            raise ValueError(
+                "agent.suggest_places fields must be >= 1 "
+                f"(got default_limit={self.default_limit}, "
+                f"max_limit={self.max_limit}, name_count={self.name_count}, "
+                f"provider_concurrency={self.provider_concurrency})"
+            )
+        if self.default_limit > self.max_limit:
+            raise ValueError(
+                "agent.suggest_places.default_limit must be <= max_limit "
+                f"(got default_limit={self.default_limit}, "
+                f"max_limit={self.max_limit})"
+            )
+        if self.name_count < self.default_limit:
+            raise ValueError(
+                "agent.suggest_places.name_count must be >= default_limit "
+                "(namer must produce enough candidates to survive provider "
+                "misses and constraint filtering) "
+                f"(got name_count={self.name_count}, "
+                f"default_limit={self.default_limit})"
+            )
+        return self
+
+
 class AgentConfig(BaseModel):
     """Typed configuration for the agent path (feature 027 M2, ADR-062).
 
@@ -474,6 +523,7 @@ class AgentConfig(BaseModel):
     checkpointer_ttl_seconds: int = 86400
     tool_timeouts_seconds: ToolTimeoutsConfig = ToolTimeoutsConfig()
     find_saved: FindSavedConfig = FindSavedConfig()
+    suggest_places: SuggestPlacesConfig = SuggestPlacesConfig()
     prompt_caching_enabled: bool = True
 
     @model_validator(mode="after")
@@ -613,6 +663,15 @@ _REQUIRED_PROMPT_SLOTS: dict[str, list[str]] = {
         "{previous_working_location}",
         "{distance_from_previous}",
         "{mobility_profile}",
+    ],
+    "candidate_namer": [
+        "{intent}",
+        "{location_block}",
+        "{mobility_block}",
+        "{categories_block}",
+        "{hard_constraints_block}",
+        "{taste_block}",
+        "{count}",
     ],
 }
 

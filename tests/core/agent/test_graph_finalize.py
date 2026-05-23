@@ -12,9 +12,11 @@ from langgraph.checkpoint.memory import InMemorySaver
 from kebi.core.agent.graph import (
     NODE_FINALIZE,
     NODE_RESOLVE_LOCATION,
+    NODE_SCRUB_TOOL_RESULTS,
     NODE_TOOLS,
     build_graph,
     finalize_node,
+    scrub_tool_results_node,
 )
 
 
@@ -82,13 +84,22 @@ def test_keeps_ai_message_with_mixed_text_and_tool_calls() -> None:
 
 
 def test_skips_messages_without_ids() -> None:
-    """RemoveMessage needs an id; messages without one are left alone."""
+    """RemoveMessage needs an id; messages without one cannot be stripped.
+
+    Tool result capture is independent of `id` — payloads are still
+    surfaced into `tool_results` so the response layer can render
+    them even when the underlying ToolMessage lacks an id. The strip
+    half (`messages` key in the update) is what skips here.
+    """
     messages = [
         HumanMessage(content="hi"),  # no id
         ToolMessage(content="{}", tool_call_id="tc1"),  # no id
     ]
     update = finalize_node(_state(messages))
-    assert update == {}
+    assert "messages" not in update
+    assert update["tool_results"] == [
+        {"tool": None, "tool_call_id": "tc1", "payload": {}},
+    ]
 
 
 def test_multiple_tool_calls_in_one_turn() -> None:
@@ -171,7 +182,8 @@ async def test_finalize_runs_and_strips_in_compiled_graph(
         if isinstance(m, AIMessage):
             tcs = getattr(m, "tool_calls", None) or []
             text = (
-                m.content if isinstance(m.content, str)
+                m.content
+                if isinstance(m.content, str)
                 else "".join(
                     c.get("text", "") if isinstance(c, dict) else str(c)
                     for c in m.content
@@ -185,3 +197,106 @@ def test_graph_unused_imports_check() -> None:
     """Import sanity — keeps the imports above non-dormant."""
     assert NODE_RESOLVE_LOCATION
     assert NODE_TOOLS
+    assert NODE_SCRUB_TOOL_RESULTS
+
+
+# ---------------------------------------------------------------------------
+# tool_results capture + scrub
+# ---------------------------------------------------------------------------
+
+
+def test_finalize_captures_tool_result_payloads() -> None:
+    """ToolMessage JSON is parsed into the `tool_results` update key."""
+    payload_json = (
+        '{"candidates": [{"place": {"place_name": "Gaa"},'
+        ' "source": "suggested", "reason": "veg", "rrf_score": 0.0}],'
+        ' "empty_reason": null}'
+    )
+    messages = [
+        HumanMessage(content="anything good?", id="h1"),
+        AIMessage(
+            content="",
+            tool_calls=[{"id": "tc1", "name": "suggest_places", "args": {}}],
+            id="a1",
+        ),
+        ToolMessage(
+            content=payload_json, tool_call_id="tc1", name="suggest_places", id="t1"
+        ),
+        AIMessage(content="here you go", id="a2"),
+    ]
+    update = finalize_node(_state(messages))
+    assert update["tool_results"] == [
+        {
+            "tool": "suggest_places",
+            "tool_call_id": "tc1",
+            "payload": {
+                "candidates": [
+                    {
+                        "place": {"place_name": "Gaa"},
+                        "source": "suggested",
+                        "reason": "veg",
+                        "rrf_score": 0.0,
+                    }
+                ],
+                "empty_reason": None,
+            },
+        }
+    ]
+    # And the ToolMessage was still scheduled for removal so it doesn't
+    # land in the checkpointer.
+    removed = {m.id for m in update["messages"] if isinstance(m, RemoveMessage)}
+    assert "t1" in removed
+
+
+def test_finalize_captures_payload_for_each_tool_call() -> None:
+    """Both-tools turns produce one tool_results entry per tool call."""
+    messages = [
+        HumanMessage(content="open ended", id="h1"),
+        AIMessage(
+            content="",
+            tool_calls=[
+                {"id": "tc1", "name": "find_saved", "args": {}},
+                {"id": "tc2", "name": "suggest_places", "args": {}},
+            ],
+            id="a1",
+        ),
+        ToolMessage(
+            content='{"candidates": [], "empty_reason": "no_saves"}',
+            tool_call_id="tc1",
+            name="find_saved",
+            id="t1",
+        ),
+        ToolMessage(
+            content='{"candidates": [], "empty_reason": null}',
+            tool_call_id="tc2",
+            name="suggest_places",
+            id="t2",
+        ),
+        AIMessage(content="prose answer", id="a2"),
+    ]
+    update = finalize_node(_state(messages))
+    tools = [r["tool"] for r in update["tool_results"]]
+    assert tools == ["find_saved", "suggest_places"]
+
+
+def test_finalize_handles_tool_message_error_status() -> None:
+    """LangGraph's tool-validation error path yields a structured payload."""
+    err_msg = ToolMessage(
+        content="missing arg foo",
+        tool_call_id="tc1",
+        name="suggest_places",
+        id="t1",
+        status="error",
+    )
+    update = finalize_node(_state([HumanMessage(content="hi", id="h1"), err_msg]))
+    assert update["tool_results"][0]["payload"] == {
+        "error": "tool_call_failed",
+        "message": "missing arg foo",
+    }
+
+
+def test_scrub_tool_results_node_clears_field() -> None:
+    """The scrub node returns an empty list to keep the checkpoint clean."""
+    state = _state([])
+    state["tool_results"] = [{"tool": "x", "tool_call_id": "y", "payload": {}}]
+    assert scrub_tool_results_node(state) == {"tool_results": []}

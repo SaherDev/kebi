@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 from langchain_core.messages import AIMessage
@@ -9,6 +11,26 @@ from langchain_core.messages import AIMessage
 from kebi.api.schemas.chat import ChatRequest
 from kebi.core.chat.service import ChatService
 from kebi.core.events.events import TurnCompleted
+
+
+def _mock_astream(
+    values: list[dict[str, Any]] | None = None,
+    *,
+    raises: Exception | None = None,
+) -> MagicMock:
+    """Same shape as the helper in test_service.py — stub `graph.astream`."""
+    snapshots = values or [{"messages": [], "reasoning_steps": []}]
+
+    def _factory(*_args: Any, **_kwargs: Any) -> AsyncIterator[dict[str, Any]]:
+        async def _gen() -> AsyncIterator[dict[str, Any]]:
+            if raises is not None:
+                raise raises
+            for v in snapshots:
+                yield v
+
+        return _gen()
+
+    return MagicMock(side_effect=_factory)
 
 
 def _make_service(agent_graph: MagicMock, dispatcher: MagicMock) -> ChatService:
@@ -38,11 +60,13 @@ def _make_dispatcher() -> MagicMock:
 
 async def test_run_dispatches_turn_completed_on_success() -> None:
     graph = AsyncMock()
-    graph.ainvoke = AsyncMock(
-        return_value={
-            "messages": [AIMessage(content="here you go")],
-            "reasoning_steps": [],
-        }
+    graph.astream = _mock_astream(
+        [
+            {
+                "messages": [AIMessage(content="here you go")],
+                "reasoning_steps": [],
+            }
+        ]
     )
     dispatcher = _make_dispatcher()
     service = _make_service(agent_graph=graph, dispatcher=dispatcher)
@@ -59,7 +83,7 @@ async def test_run_dispatches_turn_completed_on_success() -> None:
 
 async def test_run_dispatches_turn_completed_on_outer_error() -> None:
     graph = AsyncMock()
-    graph.ainvoke = AsyncMock(side_effect=RuntimeError("boom"))
+    graph.astream = _mock_astream(raises=RuntimeError("boom"))
     dispatcher = _make_dispatcher()
     service = _make_service(agent_graph=graph, dispatcher=dispatcher)
 

@@ -89,6 +89,7 @@ NODE_AGENT = "agent"
 NODE_TOOLS = "tools"
 NODE_FALLBACK = "fallback"
 NODE_FINALIZE = "finalize"
+NODE_SCRUB_TOOL_RESULTS = "scrub_tool_results"
 
 # Fallback message shown to the user when the graph terminates early.
 _FALLBACK_MESSAGE = (
@@ -275,9 +276,15 @@ def _render_location_context(state: AgentState) -> str:
     The `resolve_location` node has already run (or been gated out) by the
     time this is called: it leaves either a resolved `working_location`, a
     `location_clarification` reason, or neither.
+
+    Defensive: when the gate skips `resolve_location` and no prior working
+    location is carried, the `working_location` slot can still hold the
+    `LOCATION_INHERIT` sentinel string (a truthy non-dict). Treat
+    anything that is not a real dict as "no location resolved" so the
+    renderer never crashes on `.get()` against a string.
     """
     working = state.get("working_location")
-    if working:
+    if isinstance(working, dict) and working:
         parts = [
             working.get("neighborhood"),
             working.get("city"),
@@ -315,7 +322,10 @@ def _render_movement_context(state: AgentState) -> str:
     """
     _am, _reach, is_fallback = _mobility_profile(state.get("movement_profile"))
     working = state.get("working_location")
-    if not working:
+    # Same defensive coercion as `_render_location_context`: the gate
+    # may skip the resolver and leave the inherit sentinel string in
+    # state, which is truthy but not a dict.
+    if not isinstance(working, dict) or not working:
         if is_fallback:
             return (
                 "No movement profile for this turn. If distance is load-bearing "
@@ -526,6 +536,21 @@ _LOCATION_GATE_KEYWORDS = frozenset(
         "distance",
         "local",
         "locally",
+        # Travel-intent words — "visiting X", "trip to X", "on vacation in
+        # X". A lowercased place name (e.g. "hadar haifa") does not trip the
+        # proper-noun heuristic; these keywords give the gate a second
+        # chance to send the turn through the resolver. Note: time-only
+        # words ("week", "tomorrow", "tonight") are deliberately NOT here
+        # — they fire on saved-history questions like "what did I save
+        # last week". Future-tense travel intent is matched via the
+        # bigram phrases below instead ("next week", "going to", ...).
+        "visit",
+        "visiting",
+        "trip",
+        "travelling",
+        "traveling",
+        "vacation",
+        "holiday",
         # Movement words (ADR-084) — a movement-only turn still needs scope.
         "drive",
         "driving",
@@ -538,7 +563,6 @@ _LOCATION_GATE_KEYWORDS = frozenset(
         "cycling",
         "ride",
         "rideshare",
-        "trip",
         "commute",
     }
 )
@@ -551,6 +575,16 @@ _LOCATION_GATE_PHRASES = (
     "around here",
     "on my way",
     "day trip",
+    # "I'm in <place>", "I am in <place>", "going to", "heading to" — common
+    # travel-intent phrasings that don't otherwise capitalise their place
+    # name. Cheap heuristic; the resolver still has the final say.
+    "i'm in ",
+    "i am in ",
+    "going to ",
+    "heading to ",
+    "off to ",
+    "next week",
+    "next month",
 )
 
 
@@ -1042,14 +1076,42 @@ def _handle_tool_node_error(exc: Exception) -> str:
     )
 
 
+def _parse_tool_message_payload(m: ToolMessage) -> dict[str, Any] | None:
+    """Parse a ToolMessage's JSON content into a renderable dict.
+
+    Consult-family tools serialise their `ConsultResult` to the
+    `ToolMessage.content` JSON string. LangGraph's `ToolNode` returns a
+    plain error-string ToolMessage with `status="error"` on argument-
+    schema validation failure; that path is surfaced as a structured
+    error payload instead of a bare `null`.
+    """
+    content = m.content if isinstance(m.content, str) else ""
+    if getattr(m, "status", None) == "error":
+        return {"error": "tool_call_failed", "message": content or "tool error"}
+    if not content:
+        return None
+    try:
+        parsed = json.loads(content)
+    except json.JSONDecodeError:
+        return {"error": "non_json_content", "message": content[:500]}
+    return parsed if isinstance(parsed, dict) else {"value": parsed}
+
+
 def finalize_node(state: AgentState) -> dict[str, Any]:
-    """Strip tool messages and tool-only AIMessages before checkpoint.
+    """Capture tool results and strip tool messages before checkpoint.
 
     Tool results must not persist in agent history — they bloat every
     future turn with stale per-call JSON the user already received a
     prose summary of. The LangGraph tool_use ↔ tool_result contract
     requires them in-turn, so they live in `state["messages"]` during
     the agent/tools loop and are removed here at the terminal step.
+
+    Before stripping, every `ToolMessage` is parsed into a renderable
+    dict (`{tool, tool_call_id, payload}`) and written to
+    `state["tool_results"]`. This is what `ChatService` / the SSE
+    stream return to the client — the structured place list the user
+    expects alongside the prose. Without this capture step those
+    payloads would vanish with the RemoveMessage deletes.
 
     Emits `RemoveMessage(id=...)` for every `ToolMessage` and every
     `AIMessage` that carried only tool_use blocks (no user-facing
@@ -1061,26 +1123,52 @@ def finalize_node(state: AgentState) -> dict[str, Any]:
     human/agent pairs and no tool noise.
     """
     to_remove: list[str] = []
+    tool_results: list[dict[str, Any]] = []
     for msg in state.get("messages") or []:
         msg_id = getattr(msg, "id", None)
-        if msg_id is None:
-            continue
         if isinstance(msg, ToolMessage):
-            to_remove.append(msg_id)
+            tool_results.append(
+                {
+                    "tool": getattr(msg, "name", None),
+                    "tool_call_id": getattr(msg, "tool_call_id", None),
+                    "payload": _parse_tool_message_payload(msg),
+                }
+            )
+            if msg_id is not None:
+                to_remove.append(msg_id)
             continue
-        if isinstance(msg, AIMessage):
+        if isinstance(msg, AIMessage) and msg_id is not None:
             tool_calls = getattr(msg, "tool_calls", None) or []
             text = extract_text_content(getattr(msg, "content", None)).strip()
             if tool_calls and not text:
                 to_remove.append(msg_id)
 
-    if not to_remove:
-        return {}
+    update: dict[str, Any] = {}
+    if tool_results:
+        update["tool_results"] = tool_results
+    if to_remove:
+        logger.debug(
+            "finalize_node stripping %d tool-related messages", len(to_remove)
+        )
+        update["messages"] = [RemoveMessage(id=mid) for mid in to_remove]
+    return update
 
-    logger.debug("finalize_node stripping %d tool-related messages", len(to_remove))
-    return {
-        "messages": [RemoveMessage(id=mid) for mid in to_remove],
-    }
+
+def scrub_tool_results_node(state: AgentState) -> dict[str, Any]:  # noqa: ARG001
+    """Clear `tool_results` from state so it never lands in the checkpoint.
+
+    `finalize_node` populates `tool_results` so the response layer can
+    surface the structured payloads, but those payloads must not bloat
+    the per-thread checkpointer DB — only the human-readable
+    `reasoning_steps` summaries should persist as agent history.
+
+    This node runs as a separate superstep AFTER `finalize`. Callers
+    that need the populated `tool_results` consume `astream(
+    stream_mode="values")` and capture the snapshot emitted between
+    `finalize` and this node; the final checkpointed state has
+    `tool_results=[]`.
+    """
+    return {"tool_results": []}
 
 
 def build_graph(
@@ -1116,6 +1204,7 @@ def build_graph(
     )
     graph.add_node(NODE_FALLBACK, fallback_node)
     graph.add_node(NODE_FINALIZE, finalize_node)
+    graph.add_node(NODE_SCRUB_TOOL_RESULTS, scrub_tool_results_node)
     graph.set_conditional_entry_point(
         _needs_location_resolution,
         {"resolve": NODE_RESOLVE_LOCATION, "skip": NODE_AGENT},
@@ -1132,5 +1221,6 @@ def build_graph(
     )
     graph.add_edge(NODE_TOOLS, NODE_AGENT)
     graph.add_edge(NODE_FALLBACK, NODE_FINALIZE)
-    graph.add_edge(NODE_FINALIZE, END)
+    graph.add_edge(NODE_FINALIZE, NODE_SCRUB_TOOL_RESULTS)
+    graph.add_edge(NODE_SCRUB_TOOL_RESULTS, END)
     return graph.compile(checkpointer=checkpointer)

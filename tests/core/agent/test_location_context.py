@@ -70,3 +70,21 @@ def test_renders_clarification_reason() -> None:
 def test_no_location_prompts_agent_to_ask() -> None:
     text = _render_location_context(_state())
     assert "No location resolved" in text
+
+
+def test_inherit_sentinel_treated_as_no_location() -> None:
+    """When the gate skips `resolve_location`, `working_location` can still
+    hold the `LOCATION_INHERIT` sentinel string. The renderer must not
+    crash on `.get(...)` against a string — treat any non-dict as no
+    location and degrade to the ask-for-area branch."""
+    from kebi.core.agent.state import LOCATION_INHERIT
+
+    state = cast(
+        Any,
+        {
+            "working_location": LOCATION_INHERIT,
+            "location_clarification": None,
+        },
+    )
+    text = _render_location_context(state)
+    assert "No location resolved" in text

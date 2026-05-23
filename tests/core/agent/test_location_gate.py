@@ -38,6 +38,13 @@ def test_location_free_turns_skip(message: str) -> None:
         "what about tel aviv",
         "where should i go",
         "I'm headed to Lyon tomorrow",
+        # Lowercased place names + travel-intent phrasings — the
+        # proper-noun heuristic doesn't catch these on its own; the
+        # keyword/phrase fallback has to.
+        "I'm in old town chiang mai next week — what are the famous food spots?",
+        "i'll be visiting chiang rai next month",
+        "going to hua hin for the weekend, any tips?",
+        "on vacation in koh lipe, where should i eat?",
     ],
 )
 def test_location_relevant_turns_resolve(message: str) -> None:

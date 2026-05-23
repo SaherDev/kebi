@@ -100,13 +100,27 @@ models:
 
   # Resolves the working location at the start of every agent turn that
   # passes the location gate (core/agent/graph.py resolve_location node).
-  # Classification-like structured output — a small, cheap, deterministic
-  # model is the right fit.
+  # Classification-like structured output — keep it cheap and
+  # deterministic, but the prompt has nuanced rules (future tense,
+  # lowercase place names, GPS-vs-explicit-name precedence) that the
+  # mini-tier OpenAI model was missing on real traffic, so we run this
+  # on Claude Haiku 4.5 instead.
   location_resolver:
+    provider: anthropic
+    model: claude-haiku-4-5-20251001
+    max_tokens: 512
+    temperature: 0
+
+  # Proposes well-known place names that fit the user's intent, scoped to
+  # the turn's working location and movement capabilities. Output feeds
+  # the `suggest_places` agent tool, which then validates each candidate
+  # against the place provider. Cheap structured-output role — model
+  # knowledge of local landmarks matters more than reasoning depth.
+  candidate_namer:
     provider: openai
     model: gpt-4o-mini
-    max_tokens: 256
-    temperature: 0
+    max_tokens: 700
+    temperature: 0.3
 
 # ---------------------------------------------------------------------------
 # Extraction pipeline — confidence weights and decision thresholds
@@ -265,6 +279,7 @@ prompts:
   place_resolver: place_resolver.txt
   place_classifier: place_classifier.txt
   location_resolver: location_resolver.txt
+  candidate_namer: candidate_namer.txt
 
 # ---------------------------------------------------------------------------
 # Agent Configuration (feature 027 M2, ADR-062)
@@ -298,12 +313,28 @@ agent:
   # Per-tool asyncio budgets. One key per live tool.
   tool_timeouts_seconds:
     find_saved: 8
+    # suggest_places fans out: 1 namer LLM call + up to `name_count` parallel
+    # provider lookups (bounded by a semaphore inside the tool). The budget
+    # covers both phases — pad over find_saved's pure-DB timeout.
+    suggest_places: 18
   # find_saved-specific knobs. `default_limit` is what the tool uses when
   # the agent omits the `limit` arg. `max_limit` caps any agent-supplied
   # value so the LLM cannot ask for an unbounded result set.
   find_saved:
     default_limit: 10
     max_limit: 25
+  # suggest_places — knobs for the candidate-naming + provider-validation
+  # flow. `default_limit` / `max_limit` cap what the agent can ask back
+  # (same role as in `find_saved`). `name_count` is how many candidate
+  # names the namer LLM is asked to produce — kept higher than the typical
+  # limit so the provider-validation and constraint-filter steps have
+  # headroom to drop misses without going empty. `provider_concurrency`
+  # bounds the per-tool fan-out into PlacesSearchService.find().
+  suggest_places:
+    default_limit: 5
+    max_limit: 15
+    name_count: 8
+    provider_concurrency: 5
 
 # ---------------------------------------------------------------------------
 # Movement / search-scope (ADR-084)

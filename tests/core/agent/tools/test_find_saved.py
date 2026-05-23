@@ -106,12 +106,18 @@ def _bangkok_working_location() -> dict[str, Any]:
 class TestAssembleFilters:
     def test_geofence_used_when_no_named_area(self) -> None:
         working = WorkingLocation(
-            country="Thailand", city="Bangkok",
-            lat=13.7, lng=100.5, search_radius_m=1500.0,
+            country="Thailand",
+            city="Bangkok",
+            lat=13.7,
+            lng=100.5,
+            search_radius_m=1500.0,
         )
         f = _assemble_filters(
-            categories=None, tags=None,
-            neighborhood=None, city=None, country=None,
+            categories=None,
+            tags=None,
+            neighborhood=None,
+            city=None,
+            country=None,
             working=working,
         )
         assert f.lat == 13.7
@@ -121,12 +127,18 @@ class TestAssembleFilters:
 
     def test_named_area_drops_geofence(self) -> None:
         working = WorkingLocation(
-            country="Thailand", city="Bangkok",
-            lat=13.7, lng=100.5, search_radius_m=1500.0,
+            country="Thailand",
+            city="Bangkok",
+            lat=13.7,
+            lng=100.5,
+            search_radius_m=1500.0,
         )
         f = _assemble_filters(
-            categories=None, tags=None,
-            neighborhood=None, city="Chiang Mai", country=None,
+            categories=None,
+            tags=None,
+            neighborhood=None,
+            city="Chiang Mai",
+            country=None,
             working=working,
         )
         assert f.lat is None
@@ -136,8 +148,11 @@ class TestAssembleFilters:
 
     def test_no_working_no_named_area(self) -> None:
         f = _assemble_filters(
-            categories=None, tags=None,
-            neighborhood=None, city=None, country=None,
+            categories=None,
+            tags=None,
+            neighborhood=None,
+            city=None,
+            country=None,
             working=None,
         )
         assert f.lat is None and f.lng is None and f.radius_m is None
@@ -147,21 +162,97 @@ class TestAssembleFilters:
         f = _assemble_filters(
             categories=[PlaceCategory.restaurant, PlaceCategory.cafe],
             tags=["Thai", "outdoor_seating"],
-            neighborhood=None, city=None, country=None,
+            neighborhood=None,
+            city=None,
+            country=None,
             working=None,
         )
         assert f.categories == [PlaceCategory.restaurant, PlaceCategory.cafe]
         assert f.tags == ["Thai", "outdoor_seating"]
 
+    def test_redundant_city_is_stripped_and_geofence_kept(self) -> None:
+        """An agent that re-passes the working_location's own city must not
+        suppress the geofence. Saves with NULL `places.city` (a Google
+        quirk for island/rural Thailand addresses) would otherwise be
+        unreachable — the geofence is what makes them findable."""
+        working = WorkingLocation(
+            country="Thailand",
+            city="Koh Samui",
+            lat=9.55,
+            lng=100.04,
+            search_radius_m=14000.0,
+        )
+        f = _assemble_filters(
+            categories=None,
+            tags=None,
+            neighborhood=None,
+            city="koh samui",  # lowercased + same as working — redundant
+            country=None,
+            working=working,
+        )
+        assert f.city is None
+        assert f.lat == 9.55
+        assert f.lng == 100.04
+        assert f.radius_m == 14000
+
+    def test_redundant_country_is_stripped(self) -> None:
+        """Same logic for country — a redundant Thailand on a Thailand turn."""
+        working = WorkingLocation(
+            country="Thailand",
+            city="Koh Samui",
+            lat=9.55,
+            lng=100.04,
+            search_radius_m=14000.0,
+        )
+        f = _assemble_filters(
+            categories=None,
+            tags=None,
+            neighborhood=None,
+            city=None,
+            country="Thailand",
+            working=working,
+        )
+        assert f.country is None
+        assert f.lat == 9.55
+
+    def test_different_city_still_drops_geofence(self) -> None:
+        """The redundancy stripper must NOT affect actual shifts — Chiang Mai
+        from a Koh Samui working location is a real area override, not a
+        redundancy. Geofence stays dropped; named filter stays applied."""
+        working = WorkingLocation(
+            country="Thailand",
+            city="Koh Samui",
+            lat=9.55,
+            lng=100.04,
+            search_radius_m=14000.0,
+        )
+        f = _assemble_filters(
+            categories=None,
+            tags=None,
+            neighborhood=None,
+            city="Chiang Mai",
+            country=None,
+            working=working,
+        )
+        assert f.city == "Chiang Mai"
+        assert f.lat is None
+        assert f.radius_m is None
+
     def test_zero_radius_is_dropped(self) -> None:
         """search_radius_m of 0.0 means resolver couldn't compute one."""
         working = WorkingLocation(
-            country="Thailand", city="Bangkok",
-            lat=13.7, lng=100.5, search_radius_m=0.0,
+            country="Thailand",
+            city="Bangkok",
+            lat=13.7,
+            lng=100.5,
+            search_radius_m=0.0,
         )
         f = _assemble_filters(
-            categories=None, tags=None,
-            neighborhood=None, city=None, country=None,
+            categories=None,
+            tags=None,
+            neighborhood=None,
+            city=None,
+            country=None,
             working=working,
         )
         # lat/lng set without radius would be rejected by HybridSearchFilters
@@ -223,8 +314,11 @@ async def test_empty_results_with_location_returns_no_match() -> None:
         state=_state(working_location=_bangkok_working_location()),
         tool_call_id="tc-1",
         query="moroccan",
-        categories=None, tags=None,
-        neighborhood=None, city=None, country=None,
+        categories=None,
+        tags=None,
+        neighborhood=None,
+        city=None,
+        country=None,
         limit=10,
     )
     payload = ConsultResult.model_validate_json(cmd.update["messages"][0].content)
@@ -242,8 +336,11 @@ async def test_empty_results_no_location_no_named_area() -> None:
         state=_state(working_location=None),
         tool_call_id="tc-1",
         query="anything",
-        categories=None, tags=None,
-        neighborhood=None, city=None, country=None,
+        categories=None,
+        tags=None,
+        neighborhood=None,
+        city=None,
+        country=None,
         limit=10,
     )
     payload = ConsultResult.model_validate_json(cmd.update["messages"][0].content)
@@ -260,8 +357,11 @@ async def test_empty_results_no_location_with_named_area_is_no_match() -> None:
         state=_state(working_location=None),
         tool_call_id="tc-1",
         query="brunch",
-        categories=None, tags=None,
-        neighborhood=None, city="Chiang Mai", country=None,
+        categories=None,
+        tags=None,
+        neighborhood=None,
+        city="Chiang Mai",
+        country=None,
         limit=10,
     )
     payload = ConsultResult.model_validate_json(cmd.update["messages"][0].content)
@@ -281,7 +381,9 @@ async def test_agent_tags_pass_through_to_filter() -> None:
         query="dinner",
         categories=[PlaceCategory.restaurant],
         tags=["Thai", "vegetarian", "outdoor_seating"],
-        neighborhood=None, city=None, country=None,
+        neighborhood=None,
+        city=None,
+        country=None,
         limit=10,
     )
     filters = hybrid.search.await_args.kwargs["filters"]
@@ -298,8 +400,11 @@ async def test_reasoning_step_summary_emitted() -> None:
         state=_state(working_location=_bangkok_working_location()),
         tool_call_id="tc-1",
         query="ramen",
-        categories=None, tags=None,
-        neighborhood=None, city=None, country=None,
+        categories=None,
+        tags=None,
+        neighborhood=None,
+        city=None,
+        country=None,
         limit=10,
     )
     steps = cmd.update["reasoning_steps"]
@@ -308,6 +413,50 @@ async def test_reasoning_step_summary_emitted() -> None:
     assert steps[0].source == "agent"
     assert "ramen" in steps[0].summary
     assert "1 saved match" in steps[0].summary
+    # Singular: no "es" suffix, just "match".
+    assert "matches" not in steps[0].summary
+    # Names of the matched places are surfaced in the summary.
+    assert "X" in steps[0].summary
+
+
+@pytest.mark.asyncio
+async def test_reasoning_step_summary_lists_names_with_correct_plural() -> None:
+    """Multi-result summary previews up to 3 names and uses 'matches' plural.
+
+    Regression for the user-visible step which used to read "3 saved matchs"
+    (wrong plural) and didn't surface names — so users had to dig into
+    `tool_results` to see what was actually returned.
+    """
+    hybrid = MagicMock()
+    hybrid.search = AsyncMock(
+        return_value=[
+            _make_hit("Wat Phra Yai", "p1"),
+            _make_hit("Samui Elephant Sanctuary", "p2"),
+            _make_hit("Silver Beach", "p3"),
+            _make_hit("Na Muang Waterfall 1", "p4"),
+        ]
+    )
+    cmd = await _run_find_saved(
+        hybrid_search=hybrid,
+        state=_state(working_location=_bangkok_working_location()),
+        tool_call_id="tc-1",
+        query="famous places koh samui",
+        categories=None,
+        tags=None,
+        neighborhood=None,
+        city=None,
+        country=None,
+        limit=10,
+    )
+    summary = cmd.update["reasoning_steps"][0].summary
+    assert "4 saved matches" in summary
+    assert "matchs" not in summary
+    # First 3 names previewed, 4th hinted at via "and a few more".
+    assert "Wat Phra Yai" in summary
+    assert "Samui Elephant Sanctuary" in summary
+    assert "Silver Beach" in summary
+    assert "Na Muang Waterfall 1" not in summary
+    assert "and a few more" in summary
 
 
 # ---------------------------------------------------------------------------
@@ -333,8 +482,13 @@ def test_tool_factory_constructs_with_expected_schema() -> None:
     # underlying `args_schema` (LangChain handles injection at runtime).
     schema_fields = set(tool.tool_call_schema.model_fields.keys())
     assert schema_fields == {
-        "query", "categories", "tags",
-        "neighborhood", "city", "country", "limit",
+        "query",
+        "categories",
+        "tags",
+        "neighborhood",
+        "city",
+        "country",
+        "limit",
     }
 
 
