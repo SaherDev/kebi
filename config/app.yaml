@@ -317,6 +317,10 @@ agent:
     # provider lookups (bounded by a semaphore inside the tool). The budget
     # covers both phases — pad over find_saved's pure-DB timeout.
     suggest_places: 18
+    # discover_places makes exactly one PlacesSearchService.find() call (DB
+    # first, then Google fallback when empty). Same pure-DB / single-provider
+    # budget as find_saved.
+    discover_places: 8
   # find_saved-specific knobs. `default_limit` is what the tool uses when
   # the agent omits the `limit` arg. `max_limit` caps any agent-supplied
   # value so the LLM cannot ask for an unbounded result set.
@@ -335,6 +339,12 @@ agent:
     max_limit: 15
     name_count: 8
     provider_concurrency: 5
+  # discover_places — provider-driven nearby search (no LLM, no saved-collection
+  # lookup). Wider defaults than suggest_places since results come straight from
+  # the provider's ranked list, not a small LLM-named shortlist.
+  discover_places:
+    default_limit: 10
+    max_limit: 25
 
 # ---------------------------------------------------------------------------
 # Movement / search-scope (ADR-084)

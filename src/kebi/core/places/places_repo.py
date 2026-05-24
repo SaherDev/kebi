@@ -15,6 +15,7 @@ from sqlalchemy import (
     MetaData,
     String,
     Table,
+    Text,
     and_,
     cast,
     func,
@@ -115,9 +116,13 @@ class PlacesRepo:
         if query.categories:
             # Array overlap: a place matches if its categories list shares
             # any element with the query's category set (OR semantics).
+            # Cast as ARRAY(Text) so the rendered SQL is `CAST(... AS TEXT[])`
+            # — the `places.categories` column is `text[]` in Postgres, and the
+            # `&&` operator refuses to apply across `text[]` and `varchar[]`
+            # (same fix as ADR-087 for hybrid_search_repo).
             conditions.append(
                 _t.categories.op("&&")(
-                    cast([c.value for c in query.categories], ARRAY(String))
+                    cast([c.value for c in query.categories], ARRAY(Text))
                 )
             )
 

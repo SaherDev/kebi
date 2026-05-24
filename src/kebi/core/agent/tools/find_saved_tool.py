@@ -14,8 +14,8 @@ Mai" should not also require "within 2km of Bangkok".
 
 The shape of this tool — one structured payload, no LLM-supplied
 location coordinates, single `ConsultResult` JSON output — is the
-template for `search_suggested` and `discover_others` that land in
-follow-ups.
+template for `suggest_places` (landed) and `discover_places` (landed)
+that complete the consult-family trio.
 """
 
 from __future__ import annotations

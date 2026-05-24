@@ -234,6 +234,33 @@ class TestFind:
         compiled = str(stmt.compile(compile_kwargs={"literal_binds": True}))
         assert "cafe" in compiled.lower()
 
+    async def test_categories_cast_renders_as_text_array(self) -> None:
+        """Regression guard for the ARRAY(String)→ARRAY(Text) cast (ADR-090).
+
+        `places.categories` is `text[]` in the schema. Casting the filter
+        value as `ARRAY(String)` rendered as `character varying[]`, which
+        Postgres rejects: `operator does not exist: text[] && character
+        varying[]`. The fix is `ARRAY(Text)` so the rendered cast is
+        `TEXT[]` and the && operator resolves cleanly. Sibling fix to
+        ADR-087 (same bug, different repo) — surfaced by `discover_places`,
+        which is the first agent tool to hit places_repo.find() with a
+        category filter.
+        """
+        repo, session = _make_repo([])
+        await repo.find(PlaceQuery(categories=[PlaceCategory.bar]))
+        stmt = session.execute.call_args.args[0]
+        sql = str(
+            stmt.compile(
+                dialect=pg_dialect.dialect(),
+                compile_kwargs={"literal_binds": True},
+            )
+        )
+        assert "TEXT[]" in sql, f"expected TEXT[] cast in rendered SQL, got: {sql}"
+        assert "VARCHAR[]" not in sql.upper(), (
+            f"VARCHAR[] / character varying[] must not appear — would "
+            f"re-introduce the type mismatch. SQL: {sql}"
+        )
+
     async def test_tag_filter_applied(self) -> None:
         repo, session = _make_repo([])
         await repo.find(PlaceQuery(tags=[CuisineTag.thai]))

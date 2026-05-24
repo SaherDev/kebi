@@ -24,10 +24,10 @@ from langchain_core.messages import ToolMessage
 from langgraph.types import Command
 
 from kebi.core.agent.location import WorkingLocation
+from kebi.core.agent.tools._hard_constraints import hard_constraints_satisfied
 from kebi.core.agent.tools.candidate_namer import CandidateName, CandidateNames
 from kebi.core.agent.tools.consult_models import ConsultResult
 from kebi.core.agent.tools.suggest_places_tool import (
-    _hard_constraints_satisfied,
     _run_suggest_places,
     build_suggest_places_tool,
 )
@@ -152,26 +152,26 @@ def _make_search_factory(
 
 
 # ---------------------------------------------------------------------------
-# _hard_constraints_satisfied
+# hard_constraints_satisfied
 # ---------------------------------------------------------------------------
 
 
 class TestHardConstraintFilter:
     def test_empty_required_always_passes(self) -> None:
         place = _place("X", place_id="p1")
-        assert _hard_constraints_satisfied(place, []) is True
+        assert hard_constraints_satisfied(place, []) is True
 
     def test_all_required_present_passes(self) -> None:
         place = _place("X", place_id="p1", tags=[_veg_tag()])
-        assert _hard_constraints_satisfied(place, ["vegetarian"]) is True
+        assert hard_constraints_satisfied(place, ["vegetarian"]) is True
 
     def test_missing_one_required_fails(self) -> None:
         place = _place("X", place_id="p1", tags=[_veg_tag()])
-        assert _hard_constraints_satisfied(place, ["vegetarian", "halal"]) is False
+        assert hard_constraints_satisfied(place, ["vegetarian", "halal"]) is False
 
     def test_case_insensitive(self) -> None:
         place = _place("X", place_id="p1", tags=[_veg_tag()])
-        assert _hard_constraints_satisfied(place, ["VEGETARIAN"]) is True
+        assert hard_constraints_satisfied(place, ["VEGETARIAN"]) is True
 
 
 # ---------------------------------------------------------------------------

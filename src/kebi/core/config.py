@@ -416,14 +416,20 @@ class ToolTimeoutsConfig(BaseModel):
 
     find_saved: int = 8
     suggest_places: int = 18
+    discover_places: int = 8
 
     @model_validator(mode="after")
     def _positive_integers(self) -> "ToolTimeoutsConfig":
-        if self.find_saved < 1 or self.suggest_places < 1:
+        if (
+            self.find_saved < 1
+            or self.suggest_places < 1
+            or self.discover_places < 1
+        ):
             raise ValueError(
                 "agent.tool_timeouts_seconds fields must be >= 1 "
                 f"(got find_saved={self.find_saved}, "
-                f"suggest_places={self.suggest_places})"
+                f"suggest_places={self.suggest_places}, "
+                f"discover_places={self.discover_places})"
             )
         return self
 
@@ -504,6 +510,34 @@ class SuggestPlacesConfig(BaseModel):
         return self
 
 
+class DiscoverPlacesConfig(BaseModel):
+    """Per-tool knobs for `discover_places`.
+
+    `default_limit` / `max_limit` mirror the other consult-family tools.
+    No `name_count` / `provider_concurrency` — the tool issues exactly
+    one `PlacesSearchService.find()` call (no fan-out, no namer).
+    """
+
+    default_limit: int = 10
+    max_limit: int = 25
+
+    @model_validator(mode="after")
+    def _positive_integers(self) -> "DiscoverPlacesConfig":
+        if self.default_limit < 1 or self.max_limit < 1:
+            raise ValueError(
+                "agent.discover_places.default_limit / max_limit must be >= 1 "
+                f"(got default_limit={self.default_limit}, "
+                f"max_limit={self.max_limit})"
+            )
+        if self.default_limit > self.max_limit:
+            raise ValueError(
+                "agent.discover_places.default_limit must be <= max_limit "
+                f"(got default_limit={self.default_limit}, "
+                f"max_limit={self.max_limit})"
+            )
+        return self
+
+
 class AgentConfig(BaseModel):
     """Typed configuration for the agent path (feature 027 M2, ADR-062).
 
@@ -524,6 +558,7 @@ class AgentConfig(BaseModel):
     tool_timeouts_seconds: ToolTimeoutsConfig = ToolTimeoutsConfig()
     find_saved: FindSavedConfig = FindSavedConfig()
     suggest_places: SuggestPlacesConfig = SuggestPlacesConfig()
+    discover_places: DiscoverPlacesConfig = DiscoverPlacesConfig()
     prompt_caching_enabled: bool = True
 
     @model_validator(mode="after")

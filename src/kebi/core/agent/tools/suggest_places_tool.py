@@ -50,6 +50,7 @@ from pydantic import Field
 from kebi.core.agent.location import WorkingLocation
 from kebi.core.agent.reasoning import ReasoningStep
 from kebi.core.agent.state import AgentState
+from kebi.core.agent.tools._hard_constraints import hard_constraints_satisfied
 from kebi.core.agent.tools._search_args import (
     CATEGORIES_DESC,
     CITY_DESC,
@@ -111,23 +112,6 @@ def _is_anchored(working: WorkingLocation | None) -> bool:
     if working is None:
         return False
     return working.search_radius_m > 0
-
-
-def _hard_constraints_satisfied(place: PlaceCore, required: list[str]) -> bool:
-    """True iff every required tag value is present in `place.tags`.
-
-    AND across required tags. Comparison is case-insensitive on the tag
-    `.value`, with enum members normalized to their `.value` string.
-    Returns True when `required` is empty (no constraint → no filter).
-    """
-    if not required:
-        return True
-    present: set[str] = set()
-    for tag in place.tags:
-        raw = tag.value
-        value = raw.value if hasattr(raw, "value") else str(raw)
-        present.add(value.strip().lower())
-    return all(req.strip().lower() in present for req in required)
 
 
 def _build_location_context(working: WorkingLocation) -> LocationContext:
@@ -373,7 +357,7 @@ async def _run_suggest_places(
 
     filtered: list[tuple[PlaceCore, str]] = []
     for place, reason in validated:
-        if _hard_constraints_satisfied(place, tags or []):
+        if hard_constraints_satisfied(place, tags or []):
             filtered.append((place, reason))
     dropped = len(validated) - len(filtered)
 
