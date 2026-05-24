@@ -36,6 +36,7 @@ class TracingSpan(Protocol):
         level: str = "DEFAULT",
         usage: dict[str, int] | None = None,
         metadata: dict[str, Any] | None = None,
+        cost_details: dict[str, float] | None = None,
     ) -> None: ...
 
 
@@ -90,6 +91,7 @@ class _NullSpan:
         level: str = "DEFAULT",
         usage: dict[str, int] | None = None,
         metadata: dict[str, Any] | None = None,
+        cost_details: dict[str, float] | None = None,
     ) -> None:
         pass
 
@@ -162,6 +164,7 @@ class _LangfuseSpan:
         level: str = "DEFAULT",
         usage: dict[str, int] | None = None,
         metadata: dict[str, Any] | None = None,
+        cost_details: dict[str, float] | None = None,
     ) -> None:
         update_kwargs: dict[str, Any] = {"level": level}
         if output is not None:
@@ -173,6 +176,11 @@ class _LangfuseSpan:
             update_kwargs["usage_details"] = usage
         if metadata is not None:
             update_kwargs["metadata"] = metadata
+        if cost_details is not None:
+            # Caller-supplied USD cost for providers Langfuse's catalog
+            # doesn't price (Voyage, Whisper, Google Places, Apify).
+            # Overrides server-side pricing when both are set.
+            update_kwargs["cost_details"] = cost_details
         self._observation.update(**update_kwargs)
         # Exiting the context manager auto-ends the observation AND pops
         # it from the OTel contextvar stack, restoring the prior parent.

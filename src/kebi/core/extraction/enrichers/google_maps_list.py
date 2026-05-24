@@ -30,7 +30,8 @@ from typing import Any
 
 import httpx
 
-from kebi.core.config import get_env
+from kebi.core.agent._trace_context import traced_call
+from kebi.core.config import get_config, get_env
 from kebi.core.extraction.source_filtered_enricher import SourceFilteredEnricher
 from kebi.core.extraction.types import (
     ExtractionContext,
@@ -87,7 +88,7 @@ class GoogleMapsListEnricher(SourceFilteredEnricher):
             )
             return
 
-        items = await self._fetch_list(context.url, token)  # type: ignore[arg-type]
+        items = await self._fetch_list(context.url, token, context.user_id)  # type: ignore[arg-type]
         for item in items:
             name = item.get("name") or item.get("title")
             if name:
@@ -101,7 +102,9 @@ class GoogleMapsListEnricher(SourceFilteredEnricher):
                     )
                 )
 
-    async def _fetch_list(self, url: str, token: str) -> list[dict[str, Any]]:
+    async def _fetch_list(
+        self, url: str, token: str, user_id: str | None = None
+    ) -> list[dict[str, Any]]:
         body = {
             "listUrls": [url],
             "outputFormat": "json",
@@ -111,14 +114,32 @@ class GoogleMapsListEnricher(SourceFilteredEnricher):
             # without it.
             "proxyConfiguration": {"useApifyProxy": False},
         }
-        response = await self._http.post(
-            _APIFY_ENDPOINT,
-            params={"token": token},
-            json=body,
-            timeout=self._timeout_seconds,
-        )
-        response.raise_for_status()
-        data = response.json()
-        if not isinstance(data, list):
-            return []
-        return data
+        async with traced_call(
+            "apify.google_maps_list",
+            "extraction",
+            user_id=user_id,
+            extra={
+                "actor": "parseforge/google-maps-shared-list-scraper",
+                "input_url": url,
+            },
+        ) as t:
+            response = await self._http.post(
+                _APIFY_ENDPOINT,
+                params={"token": token},
+                json=body,
+                timeout=self._timeout_seconds,
+            )
+            response.raise_for_status()
+            data = response.json()
+            items: list[dict[str, Any]] = data if isinstance(data, list) else []
+            # Apify sync endpoint returns no run-id header; item count comes
+            # from x-apify-pagination-total (verified 2026-05-24). Cost =
+            # per_result × count from config.
+            item_count = int(
+                response.headers.get("x-apify-pagination-total", len(items))
+            )
+            t.cost_usd = get_config().pricing.external.apify.cost_for(
+                "google_maps_list", item_count
+            )
+            t.output = {"item_count": item_count}
+            return items

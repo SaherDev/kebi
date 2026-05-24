@@ -663,6 +663,78 @@ class MovementConfig(BaseModel):
     fallback: MovementFallback = MovementFallback()
 
 
+class VoyagePricing(BaseModel):
+    """Per-1M-token rate for Voyage embeddings (not in Langfuse catalog)."""
+
+    input_per_1m: float
+
+    def cost_for(self, total_tokens: int) -> float:
+        return self.input_per_1m * (total_tokens / 1_000_000)
+
+
+class WhisperPricing(BaseModel):
+    """Per-second audio rate for Groq Whisper (not in Langfuse catalog)."""
+
+    per_audio_second: float
+
+    def cost_for(self, duration_seconds: float) -> float:
+        return self.per_audio_second * duration_seconds
+
+
+class GooglePlacesPricing(BaseModel):
+    """Per-call USD by endpoint path. SKU tier inferred from field mask;
+    today every path is Enterprise (the production `_FIELD_MASK` includes
+    Enterprise-tier fields). If we ever drop atmosphere fields back to
+    Essentials, swap the numbers — the helper signature stays the same.
+    """
+
+    per_endpoint: dict[str, float]
+
+    def cost_for(self, endpoint: str) -> float:
+        return self.per_endpoint.get(endpoint, 0.0)
+
+
+class ApifyActorPricing(BaseModel):
+    """Per-result rate for one Apify actor. Multiplied by the
+    `x-apify-pagination-total` header at the call site — no follow-up
+    HTTP request to the run object.
+    """
+
+    per_result: float
+
+
+class ApifyPricing(BaseModel):
+    google_maps_list: ApifyActorPricing
+    instagram_post: ApifyActorPricing
+
+    def cost_for(self, actor_key: str, item_count: int) -> float:
+        actor: ApifyActorPricing | None = getattr(self, actor_key, None)
+        if actor is None:
+            return 0.0
+        return actor.per_result * item_count
+
+
+class ExternalProviderPricing(BaseModel):
+    google_places: GooglePlacesPricing
+    apify: ApifyPricing
+
+
+class PricingConfig(BaseModel):
+    """Provider rates for cost attribution in Langfuse traces.
+
+    LLM completions and embeddings priced by Langfuse's catalog are
+    listed under `llm` for human reconciliation only — code never reads
+    those values. The fields that ARE read by code: `embeddings`,
+    `transcription`, and `external`.
+    """
+
+    currency: str = "USD"
+    llm: dict[str, dict[str, float]] = {}
+    embeddings: dict[str, VoyagePricing] = {}
+    transcription: dict[str, WhisperPricing] = {}
+    external: ExternalProviderPricing
+
+
 class AppConfig(BaseModel):
     app: AppMeta
     models: dict[str, LLMRoleConfig]
@@ -675,6 +747,7 @@ class AppConfig(BaseModel):
     memory: MemoryConfig = MemoryConfig()
     agent: AgentConfig = AgentConfig()
     movement: MovementConfig = MovementConfig()
+    pricing: PricingConfig
     prompts: dict[str, PromptConfig] = {}
 
     @model_validator(mode="before")

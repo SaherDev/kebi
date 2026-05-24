@@ -150,15 +150,21 @@ class TracedCall:
     / `t.output` inside the block; to mark a swallowed error use
     `t.fail(exc)`. An exception that escapes the block is auto-marked
     ERROR and re-raised.
+
+    `cost_usd` is for providers Langfuse's catalog doesn't price
+    (Voyage, Whisper, Google Places, Apify). When set, it's sent as
+    `cost_details={"total": cost_usd}` on span end. Leave None for
+    token-priced LLMs — Langfuse will price those from model + usage.
     """
 
-    __slots__ = ("span", "output", "usage", "level")
+    __slots__ = ("span", "output", "usage", "level", "cost_usd")
 
     def __init__(self, span: TracingSpan) -> None:
         self.span = span
         self.output: dict[str, Any] | None = None
         self.usage: dict[str, int] | None = None
         self.level: str = "DEFAULT"
+        self.cost_usd: float | None = None
 
     def fail(self, exc: object) -> None:
         self.level = "ERROR"
@@ -242,6 +248,19 @@ async def _traced_span(
     except Exception as exc:
         if call.level == "DEFAULT":
             call.fail(exc)
-        span.end(level=call.level, output=call.output, usage=call.usage)
+        _end_span(call)
         raise
-    span.end(level=call.level, output=call.output, usage=call.usage)
+    _end_span(call)
+
+
+def _end_span(call: TracedCall) -> None:
+    """End the span with whatever fields the caller mutated."""
+    cost = (
+        {"total": call.cost_usd} if call.cost_usd is not None else None
+    )
+    call.span.end(
+        level=call.level,
+        output=call.output,
+        usage=call.usage,
+        cost_details=cost,
+    )

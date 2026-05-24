@@ -144,6 +144,11 @@ class VoyageEmbedder:
                 total = int(getattr(result, "total_tokens", 0) or 0)
                 if total:
                     t.usage = {"input": total, "output": 0, "total": total}
+                    rate = get_config().pricing.embeddings.get(
+                        self._model.replace("-", "_")
+                    )
+                    if rate is not None:
+                        t.cost_usd = rate.cost_for(total)
                 return cast(list[list[float]], result.embeddings)
         except TimeoutError as e:
             _VOYAGE_COOLDOWN_UNTIL = time.monotonic() + cooldown

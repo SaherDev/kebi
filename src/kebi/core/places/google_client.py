@@ -235,42 +235,73 @@ class GooglePlacesClient:
         ``list[PlaceObject]`` here. Returns ``[]`` on transport/HTTP errors so
         callers degrade gracefully instead of bubbling exceptions to the agent.
         """
-        try:
-            response = await self._http.request(
-                method,
-                f"{_PLACES_API_BASE}{path}",
-                json=body,
-                headers={
-                    "X-Goog-Api-Key": self._api_key,
-                    "X-Goog-FieldMask": field_mask,
-                },
-                timeout=10.0,
-            )
-            response.raise_for_status()
-            data: dict[str, Any] = response.json()
-        except httpx.HTTPStatusError as exc:
-            # Google returns the actual cause (bad field name, quota, etc.) in
-            # the response body — log it so 4xx/5xx are diagnosable from logs
-            # without a repro.
-            logger.error(
-                "google_places_http_error",
-                extra={
-                    "method": method,
-                    "path": path,
-                    "status": exc.response.status_code,
-                    "body": exc.response.text[:1000],
-                },
-            )
-            return []
-        except Exception:
-            logger.exception(
-                "google_places_request_error",
-                extra={"method": method, "path": path},
-            )
-            return []
-        raws = data.get("places") if "places" in data else [data]
-        now = datetime.now(UTC)
-        return [obj for raw in (raws or []) if (obj := map_place(raw, now)) is not None]
+        # Per-call cost lookup. Place Details paths are dynamic ("/{id}");
+        # normalize to "/{place_id}" so the config key is stable across
+        # every Place Details call. TODO: differentiate cost by field_mask
+        # SKU tier (Essentials / Pro / Enterprise) — today every path is
+        # Enterprise (rating, regularOpeningHours, priceLevel, atmosphere
+        # fields in _FIELD_MASK).
+        from kebi.core.agent._trace_context import (  # noqa: PLC0415
+            current_tool,
+            traced_call,
+        )
+        from kebi.core.config import get_config  # noqa: PLC0415
+
+        endpoint_key = path if path.startswith(":") else "/{place_id}"
+        feature = "agent" if current_tool.get() is not None else "extraction"
+        pricing = get_config().pricing.external.google_places
+        async with traced_call(
+            "google_places",
+            feature,
+            extra={
+                "endpoint": endpoint_key,
+                "method": method,
+                "field_mask_len": len(field_mask),
+            },
+        ) as t:
+            try:
+                response = await self._http.request(
+                    method,
+                    f"{_PLACES_API_BASE}{path}",
+                    json=body,
+                    headers={
+                        "X-Goog-Api-Key": self._api_key,
+                        "X-Goog-FieldMask": field_mask,
+                    },
+                    timeout=10.0,
+                )
+                response.raise_for_status()
+                data: dict[str, Any] = response.json()
+            except httpx.HTTPStatusError as exc:
+                logger.error(
+                    "google_places_http_error",
+                    extra={
+                        "method": method,
+                        "path": path,
+                        "status": exc.response.status_code,
+                        "body": exc.response.text[:1000],
+                    },
+                )
+                t.output = {"status": exc.response.status_code, "places": 0}
+                return []
+            except Exception as exc:
+                logger.exception(
+                    "google_places_request_error",
+                    extra={"method": method, "path": path},
+                )
+                t.fail(exc)
+                return []
+            raws = data.get("places") if "places" in data else [data]
+            now = datetime.now(UTC)
+            results = [
+                obj for raw in (raws or [])
+                if (obj := map_place(raw, now)) is not None
+            ]
+            # Google bills per request regardless of result count, so cost
+            # lands on the call even when results is [] (no-match still cost).
+            t.cost_usd = pricing.cost_for(endpoint_key)
+            t.output = {"places": len(results)}
+            return results
 
 
 def _apply_common_filters(body: dict[str, Any], query: PlaceQuery) -> None:

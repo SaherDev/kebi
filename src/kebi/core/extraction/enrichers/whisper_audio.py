@@ -7,7 +7,7 @@ import logging
 import subprocess
 
 from kebi.core.agent._trace_context import traced_call
-from kebi.core.config import ExtractionWhisperConfig
+from kebi.core.config import ExtractionWhisperConfig, get_config
 from kebi.core.extraction.types import (
     Evidence,
     ExtractionContext,
@@ -17,6 +17,15 @@ from kebi.core.extraction.types import (
 from kebi.providers.transcription import TranscriptionProtocol
 
 logger = logging.getLogger(__name__)
+
+
+def _whisper_cost_for(duration_seconds: float) -> float | None:
+    """Compute Whisper cost from config × audio duration. None if the
+    configured model name isn't priced (defensive — production has it)."""
+    rate = get_config().pricing.transcription.get("whisper_large_v3_turbo")
+    if rate is None:
+        return None
+    return rate.cost_for(duration_seconds)
 
 _DEFAULT_WHISPER_CONFIG = ExtractionWhisperConfig()
 
@@ -99,6 +108,8 @@ class WhisperAudioEnricher:
                     "duration_seconds": duration,
                     "text_chars": len(text),
                 }
+                if duration is not None:
+                    t.cost_usd = _whisper_cost_for(duration)
                 return text
         except Exception as tier1_exc:
             logger.debug("Whisper Tier 1 failed (%s), trying Tier 2", tier1_exc)
@@ -132,6 +143,8 @@ class WhisperAudioEnricher:
                     "duration_seconds": duration,
                     "text_chars": len(text),
                 }
+                if duration is not None:
+                    t.cost_usd = _whisper_cost_for(duration)
                 return text
         except Exception as tier2_exc:
             logger.warning("Whisper Tier 2 also failed: %s", tier2_exc)

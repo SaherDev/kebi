@@ -26,7 +26,8 @@ from typing import Any
 
 import httpx
 
-from kebi.core.config import get_env
+from kebi.core.agent._trace_context import traced_call
+from kebi.core.config import get_config, get_env
 from kebi.core.extraction.source_filtered_enricher import SourceFilteredEnricher
 from kebi.core.extraction.types import (
     Evidence,
@@ -87,7 +88,7 @@ class InstagramPostEnricher(SourceFilteredEnricher):
             )
             return
 
-        post = await self._fetch_post(context.url, token)  # type: ignore[arg-type]
+        post = await self._fetch_post(context.url, token, context.user_id)  # type: ignore[arg-type]
         if post is None:
             return
 
@@ -141,22 +142,41 @@ class InstagramPostEnricher(SourceFilteredEnricher):
                     )
                 )
 
-    async def _fetch_post(self, url: str, token: str) -> dict[str, Any] | None:
+    async def _fetch_post(
+        self, url: str, token: str, user_id: str | None = None
+    ) -> dict[str, Any] | None:
         body = {"username": [url], "resultsLimit": 1}
-        response = await self._http.post(
-            _APIFY_ENDPOINT,
-            params={"token": token},
-            json=body,
-            timeout=self._timeout_seconds,
-        )
-        response.raise_for_status()
-        data = response.json()
-        if not isinstance(data, list) or not data:
-            return None
-        first = data[0]
-        if not isinstance(first, dict):
-            return None
-        return first
+        async with traced_call(
+            "apify.instagram_post",
+            "extraction",
+            user_id=user_id,
+            extra={
+                "actor": "apify/instagram-post-scraper",
+                "input_url": url,
+            },
+        ) as t:
+            response = await self._http.post(
+                _APIFY_ENDPOINT,
+                params={"token": token},
+                json=body,
+                timeout=self._timeout_seconds,
+            )
+            response.raise_for_status()
+            data = response.json()
+            items: list[dict[str, Any]] = (
+                data if isinstance(data, list) else []
+            )
+            item_count = int(
+                response.headers.get("x-apify-pagination-total", len(items))
+            )
+            t.cost_usd = get_config().pricing.external.apify.cost_for(
+                "instagram_post", item_count
+            )
+            t.output = {"item_count": item_count}
+            if not items:
+                return None
+            first = items[0]
+            return first if isinstance(first, dict) else None
 
 
 def _extract_image_urls(post: dict[str, Any]) -> list[str]:

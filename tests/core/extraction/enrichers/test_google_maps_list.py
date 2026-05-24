@@ -22,6 +22,10 @@ def _mock_response(payload: object, status: int = 200) -> MagicMock:
     response.status_code = status
     response.json.return_value = payload
     response.raise_for_status = MagicMock()
+    # Apify sync endpoint returns no run-id; pagination header is the
+    # only available item-count signal — wrap reads it to compute cost.
+    count = len(payload) if isinstance(payload, list) else 0
+    response.headers = {"x-apify-pagination-total": str(count)}
     return response
 
 
