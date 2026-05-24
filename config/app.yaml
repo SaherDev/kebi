@@ -443,6 +443,13 @@ pricing:
       cache_write_5m_per_1m: 3.75
       cache_write_1h_per_1m: 6.00
       output_per_1m: 15.00
+    # Anthropic Haiku 4.5 — used by location_resolver and as orchestrator alternative.
+    haiku_4_5:
+      input_per_1m: 1.00
+      cache_read_per_1m: 0.10
+      cache_write_5m_per_1m: 1.25
+      cache_write_1h_per_1m: 2.00
+      output_per_1m: 5.00
   embeddings:
     # Voyage — verified 2026-05-24 — source: docs.voyageai.com/docs/pricing
     voyage_4_lite:
