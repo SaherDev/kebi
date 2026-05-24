@@ -11,8 +11,10 @@ from kebi.core.extraction.types import ExtractionContext, Medium, Producer
 
 @pytest.fixture
 def vision_extractor() -> AsyncMock:
+    # `(names, usage_dict | None)` tuple — matches the post-Phase-4.5
+    # `VisionExtractorProtocol`. Tests override `return_value` per case.
     extractor = AsyncMock()
-    extractor.extract_place_names = AsyncMock(return_value=[])
+    extractor.extract_place_names = AsyncMock(return_value=([], None))
     return extractor
 
 
@@ -90,10 +92,10 @@ class TestVisionImagesEnricher:
         self,
         vision_extractor: AsyncMock,
     ) -> None:
-        vision_extractor.extract_place_names.return_value = [
-            "Fuji Ramen",
-            "Pizza Place",
-        ]
+        vision_extractor.extract_place_names.return_value = (
+            ["Fuji Ramen", "Pizza Place"],
+            {"input": 100, "output": 10, "total": 110},
+        )
         ctx = ExtractionContext(
             url="https://tiktok.com/v/photo",
             user_id="u1",
@@ -136,7 +138,7 @@ class TestVisionImagesEnricher:
         self,
         vision_extractor: AsyncMock,
     ) -> None:
-        vision_extractor.extract_place_names.return_value = ["Cafe X"]
+        vision_extractor.extract_place_names.return_value = (["Cafe X"], None)
         ctx = ExtractionContext(
             url="https://instagram.com/p/abc",
             user_id="u1",

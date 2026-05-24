@@ -44,8 +44,10 @@ def test_build_ffmpeg_vf_has_no_crop_and_downscales() -> None:
 
 @pytest.fixture
 def vision_extractor() -> AsyncMock:
+    # Vision extractor now returns `(names, usage_dict | None)` so the
+    # enricher can attach token counts to its own tracing span.
     e = AsyncMock()
-    e.extract_place_names = AsyncMock(return_value=[])
+    e.extract_place_names = AsyncMock(return_value=([], None))
     return e
 
 
@@ -60,10 +62,10 @@ class TestVisionFramesEnricher:
         enricher: VisionFramesEnricher,
         vision_extractor: AsyncMock,
     ) -> None:
-        vision_extractor.extract_place_names.return_value = [
-            "Fuji Ramen",
-            "Pizza Place",
-        ]
+        vision_extractor.extract_place_names.return_value = (
+            ["Fuji Ramen", "Pizza Place"],
+            {"input": 100, "output": 10, "total": 110},
+        )
         # Mock the synchronous _capture_frames so _run reaches
         # the vision extractor with non-empty PNG bytes.
         png_header = b"\x89PNG\r\n\x1a\n"

@@ -35,6 +35,7 @@ from kebi.api.schemas.extract_place import (
     ExtractPlaceResponse,
     FailureReason,
 )
+from kebi.core.agent._trace_context import feature_trace
 from kebi.core.config import get_config
 from kebi.core.events.dispatcher import EventDispatcherProtocol
 from kebi.core.events.events import PlaceSaved
@@ -56,6 +57,7 @@ from kebi.core.places import (
     PlaceUpsertServiceProtocol,
     UserPlacesServiceProtocol,
 )
+from kebi.providers.tracing import get_tracing_client
 
 logger = logging.getLogger(__name__)
 
@@ -172,49 +174,73 @@ class ExtractionService:
         source = source_from_url(parsed.url)
         rid = request_id or uuid4().hex
 
-        if parsed.url is not None and source is None:
-            response = _failed_response(
-                raw_input,
-                rid,
-                reason="unsupported_url",
-                message=_unsupported_url_message(parsed.url),
-            )
-            await self._status_repo.write(rid, response.model_dump(mode="json"))
-            return response
+        # Phase 4.5 subtask 2: open one Langfuse trace per extraction.
+        # Every paid call inside (LLM resolver, picker, vision, Whisper,
+        # save-time Voyage embed) nests under this parent via Langfuse's
+        # OTel contextvar — no per-span plumbing needed. Trace opens
+        # AFTER `parse_input` (so `parsed.url` is on the trace) but
+        # BEFORE the unsupported-URL and cache-hit branches so both
+        # outcomes are also visible (unsupported URLs land as a 0-span
+        # trace, cache hits land with a single `extraction_cache_hit`
+        # event marker).
+        async with feature_trace(
+            "extraction",
+            user_id,
+            name="extraction_run",
+            extra={
+                "source_url": parsed.url,
+                "source": source.value if source else "manual",
+                "request_id": rid,
+            },
+        ):
+            if parsed.url is not None and source is None:
+                response = _failed_response(
+                    raw_input,
+                    rid,
+                    reason="unsupported_url",
+                    message=_unsupported_url_message(parsed.url),
+                )
+                await self._status_repo.write(
+                    rid, response.model_dump(mode="json")
+                )
+                return response
 
-        # ADR-074 cache lookup — short-circuits pipeline + upsert.
-        if parsed.url is not None:
-            cached = await self._try_cache_hit(
-                canonical_url=parsed.url,
+            # ADR-074 cache lookup — short-circuits pipeline + upsert.
+            if parsed.url is not None:
+                cached = await self._try_cache_hit(
+                    canonical_url=parsed.url,
+                    raw_input=raw_input,
+                    user_id=user_id,
+                    request_id=rid,
+                    source=source,
+                )
+                if cached is not None:
+                    await self._status_repo.write(
+                        rid, cached.model_dump(mode="json")
+                    )
+                    return cached
+
+            response = await self._run_pipeline_and_persist(
                 raw_input=raw_input,
                 user_id=user_id,
-                request_id=rid,
+                rid=rid,
                 source=source,
+                parsed=parsed,
+                limit=limit,
             )
-            if cached is not None:
-                await self._status_repo.write(rid, cached.model_dump(mode="json"))
-                return cached
 
-        response = await self._run_pipeline_and_persist(
-            raw_input=raw_input,
-            user_id=user_id,
-            rid=rid,
-            source=source,
-            parsed=parsed,
-            limit=limit,
-        )
+            # ADR-074 cache write — only completed responses with at
+            # least one place; failed/empty outcomes aren't worth
+            # re-serving.
+            if (
+                parsed.url is not None
+                and response.status == "completed"
+                and response.results
+            ):
+                await self._result_cache.set(parsed.url, response.results)
 
-        # ADR-074 cache write — only completed responses with at least
-        # one place; failed/empty outcomes aren't worth re-serving.
-        if (
-            parsed.url is not None
-            and response.status == "completed"
-            and response.results
-        ):
-            await self._result_cache.set(parsed.url, response.results)
-
-        await self._status_repo.write(rid, response.model_dump(mode="json"))
-        return response
+            await self._status_repo.write(rid, response.model_dump(mode="json"))
+            return response
 
     async def _try_cache_hit(
         self,
@@ -495,6 +521,20 @@ class ExtractionService:
             for item in cached_items
             if item.place.id is not None
         ]
+        # Phase 4.5 subtask 2: leaves a filterable marker on the
+        # extraction trace. The trace itself has 0 LLM/embed spans on a
+        # cache hit (no paid work runs); this event is how we tell a
+        # cache hit apart from an empty / failed extraction in Langfuse.
+        get_tracing_client().capture_message(
+            "extraction_cache_hit",
+            level="info",
+            metadata={
+                "source_url": canonical_url,
+                "place_count": len(cached_items),
+            },
+            user_id=user_id,
+            session_id=user_id,
+        )
         await self._link_to_user(
             user_id=user_id,
             request_id=request_id,

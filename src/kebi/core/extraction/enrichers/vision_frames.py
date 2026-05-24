@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import sys
 
+from kebi.core.agent._trace_context import traced_call
 from kebi.core.config import ExtractionVisionConfig
 from kebi.core.extraction.types import (
     ExtractionContext,
@@ -118,7 +119,22 @@ class VisionFramesEnricher:
         if not frames:
             return
 
-        names = await self._vision_extractor.extract_place_names(frames)
+        # Phase 4.5 subtask 2: per-enricher span so vision_frames cost
+        # is distinct from vision_images in Langfuse views. The vision
+        # client returns usage; we attach it here at the enricher
+        # boundary where `context.user_id` is in scope.
+        async with traced_call(
+            "extraction.vision_frames",
+            "extraction",
+            role="vision_frames",
+            user_id=context.user_id,
+            extra={"frame_count": len(frames)},
+        ) as t:
+            names, usage = await self._vision_extractor.extract_place_names(frames)
+            if usage is not None:
+                t.usage = usage
+            t.output = {"name_count": len(names)}
+
         for name in names:
             if name:
                 context.known_places.append(

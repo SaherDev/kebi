@@ -96,10 +96,13 @@ class TestWhisperAudioEnricher:
             side_effect=RuntimeError("tier 1 failed")
         )
         transcription_client.transcribe_bytes = AsyncMock()
+        ctx = ExtractionContext(
+            url="https://tiktok.com/v/abc", user_id="u1"
+        )
         with (
             patch.object(enricher, "_get_cdn_url", return_value="cdn"),
             patch.object(enricher, "_download_audio_bytes", return_value=b""),
         ):
-            result = await enricher._transcribe("https://tiktok.com/v/abc")
+            result = await enricher._transcribe(ctx)
         assert result is None
         transcription_client.transcribe_bytes.assert_not_called()

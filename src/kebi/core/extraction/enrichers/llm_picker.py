@@ -23,6 +23,7 @@ from typing import cast
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from kebi.core.agent._trace_context import traced_call
 from kebi.core.config import ConfidenceConfig, get_prompt
 from kebi.core.extraction.candidate_mapper import (
     AttributedSearchResult,
@@ -41,7 +42,6 @@ from kebi.core.extraction.types import (
 )
 from kebi.core.places import PlaceCategory, PlaceTag
 from kebi.providers.llm import InstructorClient
-from kebi.providers.tracing import get_tracing_client
 
 logger = logging.getLogger(__name__)
 
@@ -146,67 +146,71 @@ class LLMPlacePicker:
             return []
 
         user_content = self._build_prompt(context, search_set)
-        tracer = get_tracing_client()
-        span = tracer.generation(
-            name="llm_place_picker",
-            input={
+        # Phase 4.5 subtask 2: nests under the extraction_run trace.
+        # Same shape as `LLMResolver` — Instructor doesn't expose token
+        # counts, so usage is left for Langfuse to approximate from the
+        # input/output payloads.
+        async with traced_call(
+            "extraction.llm_picker",
+            "extraction",
+            role="extractor",
+            user_id=context.user_id,
+            extra={
                 "search_candidate_count": len(search_set),
                 "caption_length": len(context.caption or ""),
                 "transcript_length": len(context.transcript or ""),
             },
-            model="gpt-4o",
-        )
+        ) as t:
+            try:
+                response = cast(
+                    _PickerResponse,
+                    await self._instructor_client.extract(
+                        response_model=_PickerResponse,
+                        messages=[
+                            {
+                                "role": "system",
+                                "content": get_prompt("place_classifier"),
+                            },
+                            {"role": "user", "content": user_content},
+                        ],
+                    ),
+                )
+            except Exception as exc:
+                t.fail(exc)
+                logger.warning(
+                    "LLMPlacePicker failed: %s", exc, exc_info=True
+                )
+                return []
 
-        try:
-            response = cast(
-                _PickerResponse,
-                await self._instructor_client.extract(
-                    response_model=_PickerResponse,
-                    messages=[
-                        {
-                            "role": "system",
-                            "content": get_prompt("place_classifier"),
-                        },
-                        {"role": "user", "content": user_content},
-                    ],
-                ),
-            )
-        except Exception as exc:
-            span.end(output={"error": str(exc)})
-            logger.warning("LLMPlacePicker failed: %s", exc, exc_info=True)
-            return []
-
-        kept = [p for p in response.picks if not p.rejected]
-        rejected = [p for p in response.picks if p.rejected]
-        span.end(
-            output={
+            kept = [p for p in response.picks if not p.rejected]
+            rejected = [p for p in response.picks if p.rejected]
+            t.output = {
                 "picked_count": len(kept),
                 "rejected_count": len(rejected),
             }
-        )
-        for r in rejected:
-            logger.info(
-                "place_picker_rejected",
-                extra={
-                    "provider_id": r.provider_id,
-                    "reason": r.rejection_reason,
-                },
-            )
+            for r in rejected:
+                logger.info(
+                    "place_picker_rejected",
+                    extra={
+                        "provider_id": r.provider_id,
+                        "reason": r.rejection_reason,
+                    },
+                )
 
-        intermediate: list[ValidatedCandidate] = [
-            c
-            for c in (self._to_intermediate(p, search_set) for p in kept)
-            if c is not None
-        ]
-        if shared_tags:
-            for c in intermediate:
-                c.tags = merge_tags(c.tags, shared_tags)
-        return reconcile_picks(
-            picks=intermediate,
-            search_set=search_set,
-            confidence_config=self._confidence_config,
-            context=context,
-        )
+            intermediate: list[ValidatedCandidate] = [
+                c
+                for c in (self._to_intermediate(p, search_set) for p in kept)
+                if c is not None
+            ]
+            if shared_tags:
+                for c in intermediate:
+                    c.tags = merge_tags(c.tags, shared_tags)
+            return reconcile_picks(
+                picks=intermediate,
+                search_set=search_set,
+                confidence_config=self._confidence_config,
+                context=context,
+            )
 
     @staticmethod
     def _to_intermediate(

@@ -6,6 +6,7 @@ import asyncio
 import logging
 import subprocess
 
+from kebi.core.agent._trace_context import traced_call
 from kebi.core.config import ExtractionWhisperConfig
 from kebi.core.extraction.types import (
     Evidence,
@@ -57,7 +58,7 @@ class WhisperAudioEnricher:
             )
 
     async def _run(self, context: ExtractionContext) -> None:
-        transcript = await self._transcribe(context.url)  # type: ignore[arg-type]
+        transcript = await self._transcribe(context)
         if transcript:
             context.transcript = transcript
             context.text_evidence.append(
@@ -68,12 +69,37 @@ class WhisperAudioEnricher:
                 )
             )
 
-    async def _transcribe(self, url: str) -> str | None:
+    async def _transcribe(self, context: ExtractionContext) -> str | None:
+        """Two-tier Whisper attempt with per-tier Langfuse spans.
+
+        Phase 4.5 subtask 2: each tier opens its own
+        `extraction.whisper` span so a tier-1 failure followed by a
+        tier-2 success shows as two distinct spans in Langfuse — same
+        per-attempt convention used by the agent orchestrator. Usage
+        stays empty (Groq doesn't surface token counts); `duration_seconds`
+        on span output is what subtask 4 prices per second.
+        """
+        url = context.url
+        assert url is not None  # guarded by `enrich`
         try:
             cdn_url = await asyncio.get_event_loop().run_in_executor(
                 None, self._get_cdn_url, url
             )
-            return await self._transcription_client.transcribe_url(cdn_url)
+            async with traced_call(
+                "extraction.whisper",
+                "extraction",
+                role="transcriber",
+                user_id=context.user_id,
+                extra={"tier": "cdn_url"},
+            ) as t:
+                text, duration = await self._transcription_client.transcribe_url(
+                    cdn_url
+                )
+                t.output = {
+                    "duration_seconds": duration,
+                    "text_chars": len(text),
+                }
+                return text
         except Exception as tier1_exc:
             logger.debug("Whisper Tier 1 failed (%s), trying Tier 2", tier1_exc)
 
@@ -92,9 +118,21 @@ class WhisperAudioEnricher:
                 )
                 return None
             filename = f"audio.{self._config.audio_format}"
-            return await self._transcription_client.transcribe_bytes(
-                audio_bytes, filename
-            )
+            async with traced_call(
+                "extraction.whisper",
+                "extraction",
+                role="transcriber",
+                user_id=context.user_id,
+                extra={"tier": "audio_bytes"},
+            ) as t:
+                text, duration = await self._transcription_client.transcribe_bytes(
+                    audio_bytes, filename
+                )
+                t.output = {
+                    "duration_seconds": duration,
+                    "text_chars": len(text),
+                }
+                return text
         except Exception as tier2_exc:
             logger.warning("Whisper Tier 2 also failed: %s", tier2_exc)
             return None

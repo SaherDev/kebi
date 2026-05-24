@@ -7,6 +7,7 @@ import logging
 
 import httpx
 
+from kebi.core.agent._trace_context import traced_call
 from kebi.core.extraction.source_filtered_enricher import SourceFilteredEnricher
 from kebi.core.extraction.types import (
     ExtractionContext,
@@ -81,7 +82,20 @@ class VisionImagesEnricher(SourceFilteredEnricher):
         if not images:
             return
 
-        names = await self._vision_extractor.extract_place_names(images)
+        # Phase 4.5 subtask 2: per-enricher span so vision_images cost
+        # is distinct from vision_frames in Langfuse views.
+        async with traced_call(
+            "extraction.vision_images",
+            "extraction",
+            role="vision_frames",
+            user_id=context.user_id,
+            extra={"image_count": len(images)},
+        ) as t:
+            names, usage = await self._vision_extractor.extract_place_names(images)
+            if usage is not None:
+                t.usage = usage
+            t.output = {"name_count": len(names)}
+
         for name in names:
             if name:
                 context.known_places.append(

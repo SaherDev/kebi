@@ -519,3 +519,106 @@ async def test_source_label_per_user_ungated_global_alias_gated() -> None:
     # lives only on the per-user save (read with saved places).
     assert resp.status == "completed" and len(resp.results) == 3
     assert not any(hasattr(i, "source_label") for i in resp.results)
+
+
+# ---------------------------------------------------------------------------
+# Phase 4.5 subtask 2 — Langfuse tracing: extraction_run trace + cache-hit
+# event marker. Verifies one parent trace per request and the cache-hit
+# observability event so subtask 4's reconciliation script can derive
+# hit-rate from Langfuse alone.
+# ---------------------------------------------------------------------------
+
+
+def _recording_tracer() -> MagicMock:
+    """A `TracingClient` stand-in that records `trace` and
+    `capture_message` calls. `trace()` returns an async context manager
+    so callers can `async with tracer.trace(...): ...`."""
+    tracer = MagicMock()
+
+    class _AsyncCM:
+        async def __aenter__(self) -> None:
+            return None
+
+        async def __aexit__(self, *args: object) -> None:
+            return None
+
+    tracer.trace = MagicMock(return_value=_AsyncCM())
+    tracer.capture_message = MagicMock()
+    tracer.flush = MagicMock()
+    return tracer
+
+
+@pytest.mark.asyncio
+async def test_run_opens_extraction_trace_with_user_and_source(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Every `ExtractionService.run` call opens one `extraction_run`
+    Langfuse trace tagged with user_id, session_id (=user_id today),
+    source URL, source platform, and request_id. Children — LLM
+    resolver/picker, vision, Whisper, the save-time Voyage embed — nest
+    under it via Langfuse's OTel contextvar without per-span plumbing."""
+    tracer = _recording_tracer()
+    monkeypatch.setattr(
+        "kebi.core.agent._trace_context.get_tracing_client",
+        lambda: tracer,
+    )
+
+    service, _ = _build_service(
+        pipeline_result=[_candidate()],
+        upsert_result=[_persisted_core()],
+    )
+    await service.run(
+        raw_input="https://www.tiktok.com/@x/video/1",
+        user_id="u-1",
+    )
+
+    tracer.trace.assert_called_once()
+    kwargs = tracer.trace.call_args.kwargs
+    assert kwargs["name"] == "extraction_run"
+    assert kwargs["user_id"] == "u-1"
+    assert kwargs["session_id"] == "u-1"
+    assert kwargs["tags"] == ["feature:extraction"]
+    assert kwargs["metadata"]["feature"] == "extraction"
+    assert kwargs["metadata"]["source_url"] == "https://www.tiktok.com/@x/video/1"
+    assert kwargs["metadata"]["source"] == "tiktok"
+
+
+@pytest.mark.asyncio
+async def test_cache_hit_emits_extraction_cache_hit_marker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A cache hit short-circuits every paid call. The extraction_run
+    trace stays open (so subtask 4 can count hits) and exactly one
+    `extraction_cache_hit` event observation lands inside it."""
+    tracer = _recording_tracer()
+    monkeypatch.setattr(
+        "kebi.core.agent._trace_context.get_tracing_client",
+        lambda: tracer,
+    )
+    # The cache-hit event is emitted via the top-level get_tracing_client
+    # in `core/extraction/service.py`, so monkeypatch that import too.
+    monkeypatch.setattr(
+        "kebi.core.extraction.service.get_tracing_client",
+        lambda: tracer,
+    )
+
+    cached = [_cached_item()]
+    service, _ = _build_service(cache_hit_items=cached)
+    await service.run(
+        raw_input="https://www.tiktok.com/@x/video/1",
+        user_id="u-second",
+    )
+
+    tracer.capture_message.assert_called_once()
+    args, kwargs = (
+        tracer.capture_message.call_args.args,
+        tracer.capture_message.call_args.kwargs,
+    )
+    assert args[0] == "extraction_cache_hit"
+    assert kwargs["user_id"] == "u-second"
+    assert kwargs["session_id"] == "u-second"
+    assert (
+        kwargs["metadata"]["source_url"]
+        == "https://www.tiktok.com/@x/video/1"
+    )
+    assert kwargs["metadata"]["place_count"] == 1

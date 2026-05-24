@@ -35,6 +35,7 @@ from typing import cast
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from kebi.core.agent._trace_context import traced_call
 from kebi.core.config import get_prompt
 from kebi.core.extraction.candidate_mapper import (
     ResolverOutput,
@@ -51,7 +52,6 @@ from kebi.core.extraction.types import (
 )
 from kebi.core.places import LocationContext
 from kebi.providers.llm import InstructorClient
-from kebi.providers.tracing import get_tracing_client
 
 logger = logging.getLogger(__name__)
 
@@ -200,107 +200,122 @@ class LLMResolver:
             )
 
         user_content = self._build_prompt(context, names)
-        tracer = get_tracing_client()
-        span = tracer.generation(
-            name="llm_place_resolver",
-            input={"candidate_count": len(names)},
-            model="gpt-4o",
-        )
-        try:
-            response = cast(
-                _ResolverResponse,
-                await self._instructor_client.extract(
-                    response_model=_ResolverResponse,
-                    messages=[
-                        {"role": "system", "content": get_prompt("place_resolver")},
-                        {"role": "user", "content": user_content},
-                    ],
-                ),
-            )
-        except Exception as exc:
-            span.end(output={"error": str(exc)})
-            logger.warning("LLMResolver failed: %s", exc, exc_info=True)
-            return self._degraded(context, names)
-
-        # Shared post-level location (ADR-080) — the default bias for
-        # any candidate without its own `area`.
-        shared_location = self._to_location(response.location, context)
-
-        queries: dict[str, str] = {}
-        display_labels: dict[str, str] = {}
-        # Per-candidate location bias (ADR-082) — only candidates whose
-        # `area` differs from the shared post location land here; the
-        # pipeline falls back to `shared_location` for the rest.
-        query_locations: dict[str, LocationContext] = {}
-        for c in response.candidates:
-            q = c.search_query.strip() or c.raw_name.strip()
-            if not q:
-                continue
-            key = normalize_query(c.raw_name)
-            queries[key] = q
-            # Clean human label the user saw; fall back to the raw name
-            # if the model left it blank (never the search query — that
-            # may be the swapped-in real name).
-            display_labels[key] = c.display_label.strip() or c.raw_name.strip()
-            loc = self._area_location(c.area, shared_location)
-            if loc is not None:
-                query_locations[key] = loc
-
-        # Free-text discovery: venue names the producers never surfaced.
-        # Each becomes an `LLM_NER` `KnownPlace` appended to the shared
-        # context so the pipeline's search fan-out (which iterates
-        # `context.known_places`) searches it like any other name.
-        existing = {normalize_query(n) for n in names}
-        # Spray-tagged posts: drop hashtag-sourced discovery wholesale —
-        # a venue hashtag buried among dozens is not a trustworthy
-        # signal. The prompt's relevance test is the per-tag filter;
-        # this is the deterministic backstop. Location inference
-        # (section 2 of the prompt) still sees every hashtag.
-        hashtags_too_noisy = len(context.hashtags) > _MAX_HASHTAGS_FOR_DISCOVERY
-        discovered_count = 0
-        for d in response.discovered:
-            if hashtags_too_noisy and d.found_in == EvidenceField.HASHTAG:
-                continue
-            name = d.name.strip()
-            key = normalize_query(name)
-            # Skip empties, names already echoed as a candidate, and
-            # names a producer already contributed (dedup vs the LLM
-            # re-discovering a known_places entry across levels).
-            if not key or key in queries or key in existing:
-                continue
-            existing.add(key)
-            context.known_places.append(
-                KnownPlace(
-                    name=name,
-                    producer=Producer.LLM_NER,
-                    medium=evidence_field_to_medium(d.found_in),
-                    snippet=name,
+        # Phase 4.5 subtask 2: nests under the extraction_run trace
+        # opened in `ExtractionService.run`. `role="extractor"` resolves
+        # the model from `config/app.yaml` (Instructor → OpenAI), so the
+        # span carries the right model string for Langfuse's pricing
+        # catalog without the call site hardcoding it.
+        async with traced_call(
+            "extraction.llm_resolver",
+            "extraction",
+            role="extractor",
+            user_id=context.user_id,
+            extra={"candidate_count": len(names)},
+            input={"candidates": names},
+        ) as t:
+            try:
+                response = cast(
+                    _ResolverResponse,
+                    await self._instructor_client.extract(
+                        response_model=_ResolverResponse,
+                        messages=[
+                            {"role": "system", "content": get_prompt("place_resolver")},
+                            {"role": "user", "content": user_content},
+                        ],
+                    ),
                 )
-            )
-            queries[key] = d.search_query.strip() or name
-            display_labels[key] = d.display_label.strip() or name
-            loc = self._area_location(d.area, shared_location)
-            if loc is not None:
-                query_locations[key] = loc
-            discovered_count += 1
+            except Exception as exc:
+                t.fail(exc)
+                logger.warning("LLMResolver failed: %s", exc, exc_info=True)
+                return self._degraded(context, names)
 
-        span.end(
-            output={
+            # Shared post-level location (ADR-080) — the default bias
+            # for any candidate without its own `area`.
+            shared_location = self._to_location(response.location, context)
+
+            queries: dict[str, str] = {}
+            display_labels: dict[str, str] = {}
+            # Per-candidate location bias (ADR-082) — only candidates
+            # whose `area` differs from the shared post location land
+            # here; the pipeline falls back to `shared_location` for the
+            # rest.
+            query_locations: dict[str, LocationContext] = {}
+            for c in response.candidates:
+                q = c.search_query.strip() or c.raw_name.strip()
+                if not q:
+                    continue
+                key = normalize_query(c.raw_name)
+                queries[key] = q
+                # Clean human label the user saw; fall back to the raw
+                # name if the model left it blank (never the search
+                # query — that may be the swapped-in real name).
+                display_labels[key] = (
+                    c.display_label.strip() or c.raw_name.strip()
+                )
+                loc = self._area_location(c.area, shared_location)
+                if loc is not None:
+                    query_locations[key] = loc
+
+            # Free-text discovery: venue names the producers never
+            # surfaced. Each becomes an `LLM_NER` `KnownPlace` appended
+            # to the shared context so the pipeline's search fan-out
+            # (which iterates `context.known_places`) searches it like
+            # any other name.
+            existing = {normalize_query(n) for n in names}
+            # Spray-tagged posts: drop hashtag-sourced discovery
+            # wholesale — a venue hashtag buried among dozens is not a
+            # trustworthy signal. The prompt's relevance test is the
+            # per-tag filter; this is the deterministic backstop.
+            # Location inference (section 2 of the prompt) still sees
+            # every hashtag.
+            hashtags_too_noisy = (
+                len(context.hashtags) > _MAX_HASHTAGS_FOR_DISCOVERY
+            )
+            discovered_count = 0
+            for d in response.discovered:
+                if hashtags_too_noisy and d.found_in == EvidenceField.HASHTAG:
+                    continue
+                name = d.name.strip()
+                key = normalize_query(name)
+                # Skip empties, names already echoed as a candidate,
+                # and names a producer already contributed (dedup vs
+                # the LLM re-discovering a known_places entry across
+                # levels).
+                if not key or key in queries or key in existing:
+                    continue
+                existing.add(key)
+                context.known_places.append(
+                    KnownPlace(
+                        name=name,
+                        producer=Producer.LLM_NER,
+                        medium=evidence_field_to_medium(d.found_in),
+                        snippet=name,
+                    )
+                )
+                queries[key] = d.search_query.strip() or name
+                display_labels[key] = d.display_label.strip() or name
+                loc = self._area_location(d.area, shared_location)
+                if loc is not None:
+                    query_locations[key] = loc
+                discovered_count += 1
+
+            t.output = {
                 "resolved_count": len(queries),
-                "dropped_count": len(names) - (len(queries) - discovered_count),
+                "dropped_count": (
+                    len(names) - (len(queries) - discovered_count)
+                ),
                 "discovered_count": discovered_count,
                 "hashtag_discovery_gated": hashtags_too_noisy,
                 "per_candidate_area_count": len(query_locations),
                 "post_tag_count": len(response.post_tags),
             }
-        )
-        return ResolverOutput(
-            queries=queries,
-            display_labels=display_labels,
-            query_locations=query_locations,
-            location=shared_location,
-            post_tags=llm_tags_to_place_tags(response.post_tags),
-        )
+            return ResolverOutput(
+                queries=queries,
+                display_labels=display_labels,
+                query_locations=query_locations,
+                location=shared_location,
+                post_tags=llm_tags_to_place_tags(response.post_tags),
+            )
 
     @staticmethod
     def _area_location(
