@@ -291,6 +291,10 @@ prompts:
 agent:
   max_steps: 10
   max_errors: 3
+  # Per-turn ceiling on tool invocations. Must be <= max_steps. When hit,
+  # the graph routes to fallback_node with a "give me more detail" message
+  # rather than letting the agent keep firing tools speculatively.
+  max_tool_calls: 5
   max_history_messages: 40
   # Older ToolMessage payloads (~2-5KB each) get replaced by a one-line
   # breadcrumb on the way to the LLM. The most recent `tool_result_window`

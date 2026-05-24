@@ -302,7 +302,11 @@ async def test_happy_path_returns_discovered_candidates() -> None:
     for c in payload.candidates:
         assert c.source == "discovered"
         assert c.user_data is None
-        assert c.reason is None  # no namer LLM here
+        # `reason` stays None at the tool layer — the agent composes
+        # the per-pick reason in its prose answer from place fields +
+        # taste + memory + working-location context (not a generic
+        # template pre-baked in code).
+        assert c.reason is None
         assert c.rrf_score == 0.0
     names = [c.place.place_name for c in payload.candidates]
     assert names == ["Boots Pharmacy", "Watson's"]
@@ -465,3 +469,33 @@ async def test_tool_degrades_on_runtime_exception_via_with_timeout() -> None:
     assert cmd.update["error_count"] == 1
     assert cmd.update["tool_calls_used"] == 1
     assert cmd.update["reasoning_steps"][-1].step == "discover_places.failure"
+
+
+@pytest.mark.asyncio
+async def test_discovered_candidate_reason_left_for_agent_to_compose() -> None:
+    """Discovered candidates carry `reason=None` from the tool layer.
+
+    The per-pick reason the user sees is the agent's decision, composed
+    in prose from `place.location` (for distance) + `place.tags` +
+    `place.categories` + taste profile + memory + working-location
+    context. Pre-computing a generic reason here would short-circuit
+    that decision.
+    """
+    near = _place("Near Pharmacy", place_id="p1")
+    near.location = LocationContext(lat=13.7600, lng=100.5040, radius_m=None)
+    far = _place("Other Pharmacy", place_id="p2")
+    factory, _ = _make_search_factory(hits=[near, far])
+
+    cmd = await _run_discover_places(
+        places_search_factory=factory,
+        state=_state(working_location=_bangkok_working()),
+        tool_call_id="tc-1",
+        query="pharmacy",
+        categories=[PlaceCategory.pharmacy],
+        tags=None,
+        limit=10,
+    )
+
+    payload = ConsultResult.model_validate_json(cmd.update["messages"][0].content)
+    assert len(payload.candidates) == 2
+    assert all(c.reason is None for c in payload.candidates)

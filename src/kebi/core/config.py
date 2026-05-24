@@ -550,6 +550,7 @@ class AgentConfig(BaseModel):
 
     max_steps: int = 10
     max_errors: int = 3
+    max_tool_calls: int = 5
     max_history_messages: int = 40
     tool_result_window: int = 2
     state_message_cap: int = 200
@@ -566,15 +567,24 @@ class AgentConfig(BaseModel):
         if (
             self.max_steps < 1
             or self.max_errors < 1
+            or self.max_tool_calls < 1
             or self.max_history_messages < 1
             or self.checkpointer_ttl_seconds < 1
         ):
             raise ValueError(
-                "agent.max_steps / max_errors / max_history_messages / "
-                "checkpointer_ttl_seconds must be >= 1 "
+                "agent.max_steps / max_errors / max_tool_calls / "
+                "max_history_messages / checkpointer_ttl_seconds must be >= 1 "
                 f"(got max_steps={self.max_steps}, max_errors={self.max_errors}, "
+                f"max_tool_calls={self.max_tool_calls}, "
                 f"max_history_messages={self.max_history_messages}, "
                 f"checkpointer_ttl_seconds={self.checkpointer_ttl_seconds})"
+            )
+        if self.max_tool_calls > self.max_steps:
+            raise ValueError(
+                "agent.max_tool_calls must be <= max_steps "
+                "(the LLM-round ceiling must accommodate the tool budget) "
+                f"(got max_tool_calls={self.max_tool_calls}, "
+                f"max_steps={self.max_steps})"
             )
         if self.tool_result_window < 0:
             raise ValueError(

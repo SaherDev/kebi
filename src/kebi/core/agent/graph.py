@@ -95,6 +95,14 @@ NODE_SCRUB_TOOL_RESULTS = "scrub_tool_results"
 _FALLBACK_MESSAGE = (
     "Something went wrong on my side — try again with a bit more detail?"
 )
+# Distinct terminal message for the tool-call-cap branch — the agent burned
+# its tool budget without putting together a useful list. The cause is
+# almost always an under-specified intent, not a system fault, so the
+# wording asks for more detail rather than apologising for a failure.
+_TOOL_CAP_MESSAGE = (
+    "I tried a few angles and couldn't put together a useful list — "
+    "give me a bit more detail and I'll try again."
+)
 
 
 def _strip_orphaned_tool_results(messages: list[Any]) -> tuple[list[Any], int]:
@@ -490,12 +498,19 @@ def should_continue(state: AgentState) -> str:
     """Route from the agent node.
 
     Precedence (FR-026):
-      error_count  >= max_errors  → "fallback"
-      steps_taken  >= max_steps   → "fallback"
-      last message has tool_calls → "tools"
-      otherwise                    → "end"
+      tool_calls_used >= max_tool_calls → "fallback"  (own message branch)
+      error_count     >= max_errors     → "fallback"
+      steps_taken     >= max_steps      → "fallback"
+      last message has tool_calls       → "tools"
+      otherwise                          → "end"
+
+    The tool-call cap is checked first so the cap-hit case owns its
+    branch in `fallback_node` rather than degrading to the generic
+    "something went wrong" message that `max_errors` / `max_steps` use.
     """
     cfg = get_config().agent
+    if state.get("tool_calls_used", 0) >= cfg.max_tool_calls:
+        return NODE_FALLBACK
     if state.get("error_count", 0) >= cfg.max_errors:
         return NODE_FALLBACK
     if state.get("steps_taken", 0) >= cfg.max_steps:
@@ -1005,14 +1020,36 @@ def fallback_node(state: AgentState) -> dict[str, Any]:
     """Compose a graceful terminal message + reasoning steps.
 
     Emits one user-visible ReasoningStep (FR-027) plus one debug diagnostic
-    step (M9) when applicable (max_steps_detail / max_errors_detail).
+    step (M9) when applicable (max_tool_calls_detail / max_steps_detail /
+    max_errors_detail).
+
+    Precedence matches `should_continue`: the tool-call cap is checked
+    first so a cap-hit turn surfaces the dedicated "too vague" message
+    rather than the generic apology used for `max_steps`/`max_errors`.
     """
     cfg = get_config().agent
     steps_taken = state.get("steps_taken", 0)
     error_count = state.get("error_count", 0)
+    tool_calls_used = state.get("tool_calls_used", 0)
 
     debug_steps: list[ReasoningStep] = []
-    if steps_taken >= cfg.max_steps:
+    user_message = _FALLBACK_MESSAGE
+    if tool_calls_used >= cfg.max_tool_calls:
+        error_type = "max_tool_calls"
+        summary = (
+            f"Couldn't get there in {cfg.max_tool_calls} tool calls — "
+            "the query needs more detail to narrow things down"
+        )
+        user_message = _TOOL_CAP_MESSAGE
+        debug_steps.append(
+            ReasoningStep(
+                step="max_tool_calls_detail",
+                summary=f"exceeded max_tool_calls={cfg.max_tool_calls}",
+                source="fallback",
+                visibility="debug",
+            )
+        )
+    elif steps_taken >= cfg.max_steps:
         error_type = "max_steps"
         summary = (
             f"Got stuck after {cfg.max_steps} steps, something went wrong on my end"
@@ -1052,7 +1089,7 @@ def fallback_node(state: AgentState) -> dict[str, Any]:
     )
     existing_steps = state.get("reasoning_steps") or []
     return {
-        "messages": [AIMessage(content=_FALLBACK_MESSAGE)],
+        "messages": [AIMessage(content=user_message)],
         "reasoning_steps": existing_steps + debug_steps + [user_step],
     }
 

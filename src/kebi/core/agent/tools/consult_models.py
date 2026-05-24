@@ -1,10 +1,9 @@
 """Shared output shape for the consult-family agent tools.
 
-`find_saved`, `search_suggested`, and `discover_others` (the last two
-land in follow-ups) all return the same `ConsultResult` so the agent
-can reason over candidates uniformly. The only thing that varies is
-the `source` discriminator on each candidate — which corpus it came
-from.
+`find_saved`, `suggest_places`, and `discover_places` all return the same
+`ConsultResult` so the agent can reason over candidates uniformly. The
+only thing that varies is the `source` discriminator on each candidate —
+which corpus it came from (`"saved"` / `"suggested"` / `"discovered"`).
 
 The agent reads this in-turn from a `ToolMessage.content` JSON; the
 finalize-strip node removes the message before the next checkpoint,
@@ -24,13 +23,19 @@ class ConsultCandidate(BaseModel):
     """One candidate returned by a consult tool.
 
     `user_data` is populated for `find_saved` (the user's own row exists)
-    and `None` for `suggest_places` / `discover_others` (no save row
+    and `None` for `suggest_places` / `discover_places` (no save row
     yet — the user has never linked the place).
 
     `reason` is the namer LLM's one-line rationale for proposing this
-    place. Populated for `source="suggested"` and left `None` for
-    `source="saved"` / `source="discovered"`, which surface places the
-    LLM did not name.
+    place. Populated only for `source="suggested"`. For
+    `source="saved"` and `source="discovered"` it is left `None` on
+    purpose — the per-pick reason the user sees comes from the AGENT,
+    not the tool layer. The agent synthesises that reason in its prose
+    answer from the candidate's structured signals (`user_data` for
+    saves, `place.location` + `place.tags` + `place.categories` for
+    discovered) combined with the user's taste profile, memory, and
+    working-location context. Pre-computing a reason here would
+    short-circuit that agent decision with a generic template.
     """
 
     place: PlaceCore

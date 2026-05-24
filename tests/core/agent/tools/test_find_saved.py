@@ -492,6 +492,49 @@ def test_tool_factory_constructs_with_expected_schema() -> None:
     }
 
 
+# ---------------------------------------------------------------------------
+# Per-candidate reason population
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_saved_candidate_reason_left_for_agent_to_compose() -> None:
+    """Saved candidates carry `reason=None` from the tool layer.
+
+    The per-pick reason the user sees is the agent's decision, composed
+    in prose from the candidate's structured signals (`user_data`,
+    place fields) plus taste profile + memory + working-location
+    context. Pre-computing a generic reason here would short-circuit
+    that decision.
+    """
+    hybrid = MagicMock()
+    hybrid.search = AsyncMock(return_value=[_make_hit("X"), _make_hit("Y", "p2")])
+
+    cmd = await _run_find_saved(
+        hybrid_search=hybrid,
+        state=_state(working_location=_bangkok_working_location()),
+        tool_call_id="tc-1",
+        query="cafe",
+        categories=None,
+        tags=None,
+        neighborhood=None,
+        city=None,
+        country=None,
+        limit=5,
+    )
+    payload = ConsultResult.model_validate_json(cmd.update["messages"][0].content)
+    assert len(payload.candidates) == 2
+    assert all(c.reason is None for c in payload.candidates)
+    # `user_data` (which the agent will read to compose a reason) IS
+    # populated — it's the raw signal, not the finished reason.
+    assert all(c.user_data is not None for c in payload.candidates)
+
+
+# ---------------------------------------------------------------------------
+# build_find_saved_tool + with_timeout integration
+# ---------------------------------------------------------------------------
+
+
 @pytest.mark.asyncio
 async def test_tool_degrades_on_exception() -> None:
     """A raising hybrid_search yields a degraded Command via with_timeout."""
