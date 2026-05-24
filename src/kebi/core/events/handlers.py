@@ -70,7 +70,9 @@ class EventHandlers:
             self._tracer.capture_message(
                 message=f"{event.event_type} handled",
                 level="info",
-                metadata={"event_id": event.event_id, "user_id": event.user_id},
+                metadata={"event_id": event.event_id},
+                user_id=event.user_id,
+                session_id=event.user_id,
             )
         except Exception as exc:
             logger.error(
@@ -83,7 +85,9 @@ class EventHandlers:
             self._tracer.capture_message(
                 message=f"{event.event_type} handler error: {exc}",
                 level="error",
-                metadata={"event_id": event.event_id, "user_id": event.user_id},
+                metadata={"event_id": event.event_id},
+                user_id=event.user_id,
+                session_id=event.user_id,
             )
             self._tracer.flush()
 
@@ -102,7 +106,9 @@ class EventHandlers:
             self._tracer.capture_message(
                 message="TurnCompleted event handled",
                 level="info",
-                metadata={"event_id": event.event_id, "user_id": event.user_id},
+                metadata={"event_id": event.event_id},
+                user_id=event.user_id,
+                session_id=event.user_id,
             )
         except Exception as exc:
             logger.error(
@@ -114,6 +120,8 @@ class EventHandlers:
             self._tracer.capture_message(
                 message=f"TurnCompleted handler error: {exc}",
                 level="error",
-                metadata={"event_id": event.event_id, "user_id": event.user_id},
+                metadata={"event_id": event.event_id},
+                user_id=event.user_id,
+                session_id=event.user_id,
             )
             self._tracer.flush()

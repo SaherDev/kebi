@@ -24,9 +24,9 @@ from typing import TYPE_CHECKING, cast
 
 from pydantic import BaseModel, Field
 
+from kebi.core.agent._trace_context import traced_call
 from kebi.core.config import get_prompt
 from kebi.core.places.models import PlaceCategory
-from kebi.providers.tracing import TracingClient, get_tracing_client
 
 if TYPE_CHECKING:
     from kebi.core.agent.location import WorkingLocation
@@ -92,13 +92,8 @@ def _render_taste_block(taste_summary: str | None) -> str:
 class CandidateNamerService:
     """Single LLM call → list of named place candidates with reasons."""
 
-    def __init__(
-        self,
-        instructor_client: InstructorClient,
-        tracer: TracingClient | None = None,
-    ) -> None:
+    def __init__(self, instructor_client: InstructorClient) -> None:
         self._client = instructor_client
-        self._tracer = tracer or get_tracing_client()
 
     async def generate(
         self,
@@ -112,11 +107,6 @@ class CandidateNamerService:
         user_id: str | None = None,
     ) -> CandidateNames:
         """Ask the namer LLM for up to `count` candidate place names.
-
-        `working` is required — the prompt is built against its city /
-        radius / mode. The caller (the `suggest_places` tool) must
-        already have refused to call this method when working_location
-        was absent (see the tool's no_location guard).
 
         Returns an empty `CandidateNames(candidates=[])` on any LLM /
         validation failure — the tool maps that to `empty_reason="no_match"`.
@@ -136,8 +126,11 @@ class CandidateNamerService:
             count=count,
         )
 
-        span = self._tracer.generation(
-            name="candidate_namer",
+        async with traced_call(
+            "candidate_namer",
+            "agent_tool",
+            role="candidate_namer",
+            user_id=user_id,
             input={
                 "intent": intent,
                 "city": working.city,
@@ -146,17 +139,16 @@ class CandidateNamerService:
                 "search_radius_m": int(working.search_radius_m),
                 "count": count,
             },
-            user_id=user_id,
-        )
-        try:
-            response = await self._client.extract(
-                response_model=CandidateNames,
-                messages=[{"role": "user", "content": prompt_text}],
-            )
+        ) as t:
+            try:
+                response = await self._client.extract(
+                    response_model=CandidateNames,
+                    messages=[{"role": "user", "content": prompt_text}],
+                )
+            except Exception as exc:
+                logger.warning("candidate naming failed: %s", exc, exc_info=True)
+                t.fail(exc)
+                return CandidateNames(candidates=[])
             result = cast(CandidateNames, response)
-            span.end(output={"count": len(result.candidates)})
+            t.output = {"count": len(result.candidates)}
             return result
-        except Exception as exc:
-            logger.warning("candidate naming failed: %s", exc, exc_info=True)
-            span.end(output={"error": str(exc)}, level="ERROR")
-            return CandidateNames(candidates=[])

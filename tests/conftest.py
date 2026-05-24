@@ -22,6 +22,23 @@ def setup_test_env() -> None:
     )
 
 
+@pytest.fixture(scope="session", autouse=True)
+def disable_langfuse_in_tests() -> None:
+    """Force the no-op tracing client for the whole test session.
+
+    Without this, tests that exercise instrumented code paths ship spans
+    to the developer's real Langfuse project whenever `LANGFUSE_*` env
+    vars happen to be loaded via `.env`. Forcing the no-op client at
+    session start runs before any test imports the instrumented modules.
+    Tests that DO want to verify the Langfuse adapter shape (in
+    `test_tracing.py`) use their own function-scoped `reset_tracing_cache`
+    fixture to clear and re-resolve the singleton with mocked imports.
+    """
+    from kebi.providers import tracing
+
+    tracing._client = tracing._NullTracingClient()
+
+
 @pytest.fixture
 def mock_session() -> AsyncMock:
     """Provide a mocked AsyncSession for dependency injection."""

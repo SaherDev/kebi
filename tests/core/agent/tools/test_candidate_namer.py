@@ -162,13 +162,24 @@ async def test_response_passed_through_verbatim() -> None:
 
 
 @pytest.mark.asyncio
-async def test_tracer_receives_anchor_metadata() -> None:
+async def test_tracer_receives_anchor_metadata(monkeypatch) -> None:
     """Tracing span gets the location + radius — useful for Langfuse debugging."""
+    captured: dict[str, Any] = {}
+
+    class _FakeTracer:
+        def generation(self, **kwargs):  # type: ignore[no-untyped-def]
+            captured.update(kwargs)
+            from kebi.providers.tracing import _NullSpan
+
+            return _NullSpan()
+
+    fake = _FakeTracer()
+    monkeypatch.setattr(
+        "kebi.core.agent._trace_context.get_tracing_client", lambda: fake
+    )
+
     client = _stub_client(response=CandidateNames(candidates=[]))
-    span = MagicMock()
-    tracer = MagicMock()
-    tracer.generation = MagicMock(return_value=span)
-    namer = CandidateNamerService(instructor_client=client, tracer=tracer)
+    namer = CandidateNamerService(instructor_client=client)
 
     await namer.generate(
         intent="ramen",
@@ -179,10 +190,8 @@ async def test_tracer_receives_anchor_metadata() -> None:
         count=8,
         user_id="u-99",
     )
-    tracer.generation.assert_called_once()
-    call: dict[str, Any] = tracer.generation.call_args.kwargs
-    assert call["name"] == "candidate_namer"
-    assert call["user_id"] == "u-99"
-    assert call["input"]["city"] == "Bangkok"
-    assert call["input"]["search_radius_m"] == 1200
-    assert call["input"]["effective_mode"] == "walking"
+    assert captured["name"] == "candidate_namer"
+    assert captured["user_id"] == "u-99"
+    assert captured["input"]["city"] == "Bangkok"
+    assert captured["input"]["search_radius_m"] == 1200
+    assert captured["input"]["effective_mode"] == "walking"

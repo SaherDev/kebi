@@ -47,6 +47,7 @@ from langgraph.prebuilt import InjectedState
 from langgraph.types import Command
 from pydantic import Field
 
+from kebi.core.agent._trace_context import set_tool
 from kebi.core.agent.location import WorkingLocation
 from kebi.core.agent.reasoning import ReasoningStep
 from kebi.core.agent.state import AgentState
@@ -259,6 +260,41 @@ async def _run_suggest_places(
     query: str,
     categories: list[PlaceCategory] | None,
     tags: list[str] | None,
+    neighborhood_override: str | None,
+    city_override: str | None,
+    country_override: str | None,
+    limit: int,
+    name_count: int,
+    concurrency: int,
+) -> Command[Any]:
+    """Inner body — runs the namer + provider phases. Wrapped by with_timeout."""
+    with set_tool(_TOOL_NAME):
+        return await _run_suggest_places_impl(
+            namer=namer,
+            places_search_factory=places_search_factory,
+            state=state,
+            tool_call_id=tool_call_id,
+            query=query,
+            categories=categories,
+            tags=tags,
+            neighborhood_override=neighborhood_override,
+            city_override=city_override,
+            country_override=country_override,
+            limit=limit,
+            name_count=name_count,
+            concurrency=concurrency,
+        )
+
+
+async def _run_suggest_places_impl(
+    *,
+    namer: CandidateNamerService,
+    places_search_factory: SearchServiceFactory,
+    state: AgentState,
+    tool_call_id: str,
+    query: str,
+    categories: list[PlaceCategory] | None,
+    tags: list[str] | None,
     neighborhood_override: str | None,  # noqa: ARG001 - reserved; see docstring
     city_override: str | None,  # noqa: ARG001 - reserved; see docstring
     country_override: str | None,  # noqa: ARG001 - reserved; see docstring
@@ -266,9 +302,7 @@ async def _run_suggest_places(
     name_count: int,
     concurrency: int,
 ) -> Command[Any]:
-    """Inner body — runs the namer + provider phases. Wrapped by with_timeout.
-
-    The agent-supplied area overrides (neighborhood / city / country)
+    """The agent-supplied area overrides (neighborhood / city / country)
     are accepted to keep the arg schema byte-identical to `find_saved`,
     but `suggest_places` enforces a strict lat/lng + radius anchor —
     overrides without coordinates don't bypass that gate. They are

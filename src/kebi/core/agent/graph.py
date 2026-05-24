@@ -15,6 +15,7 @@ import asyncio
 import json
 import logging
 import re
+from collections.abc import Callable
 from typing import Any
 
 from langchain_core.messages import (
@@ -29,6 +30,7 @@ from langgraph.config import get_stream_writer
 from langgraph.graph import END, StateGraph
 from langgraph.prebuilt import ToolNode
 
+from kebi.core.agent._trace_context import feature_span
 from kebi.core.agent.location import (
     CorridorTarget,
     LocationResolution,
@@ -42,7 +44,7 @@ from kebi.core.agent.state import AgentState
 from kebi.core.config import get_config
 from kebi.core.places.nominatim_geocoding_client import GeocodingError
 from kebi.core.utils.geo import haversine_m
-from kebi.providers.tracing import get_tracing_client
+from kebi.providers.tracing import TracingSpan, get_tracing_client
 
 logger = logging.getLogger(__name__)
 
@@ -54,18 +56,37 @@ _LLM_MAX_ATTEMPTS = 3
 _LLM_BACKOFF_BASE_SECONDS = 0.5
 
 
-async def _invoke_llm_with_retry(bound: Any, conversation: list[Any]) -> Any:
+async def _invoke_llm_with_retry(
+    bound: Any,
+    conversation: list[Any],
+    *,
+    make_span: Callable[[], TracingSpan] | None = None,
+    extract_usage: Callable[[Any], dict[str, int]] | None = None,
+) -> Any:
     """Call `bound.ainvoke(conversation)` with bounded retry.
 
     Retries any Exception up to `_LLM_MAX_ATTEMPTS` total attempts with
     exponential backoff. Re-raises the last exception on final failure.
+
+    When `make_span` is supplied, opens a fresh Langfuse generation per
+    attempt so a turn that succeeds after N retries surfaces as N
+    observations (N-1 ERROR + 1 OK) rather than one cheap-looking span.
+    `extract_usage` pulls token counts off the successful result so the
+    span carries usage; pass None when the underlying call has no usage
+    metadata.
     """
     last_exc: Exception | None = None
     for attempt in range(_LLM_MAX_ATTEMPTS):
+        span = make_span() if make_span is not None else None
         try:
-            return await bound.ainvoke(conversation)
+            result = await bound.ainvoke(conversation)
         except Exception as exc:
             last_exc = exc
+            if span is not None:
+                span.end(
+                    level="ERROR",
+                    output={"error": str(exc), "attempt": attempt + 1},
+                )
             logger.warning(
                 "LLM attempt %d/%d failed: %s",
                 attempt + 1,
@@ -74,8 +95,46 @@ async def _invoke_llm_with_retry(bound: Any, conversation: list[Any]) -> Any:
             )
             if attempt < _LLM_MAX_ATTEMPTS - 1:
                 await asyncio.sleep(_LLM_BACKOFF_BASE_SECONDS * (2**attempt))
+            continue
+        if span is not None:
+            usage = extract_usage(result) if extract_usage is not None else {}
+            span.end(usage=usage, output={"attempt": attempt + 1})
+        return result
     assert last_exc is not None
     raise last_exc
+
+
+def _ai_message_usage(msg: Any) -> dict[str, int]:
+    """Pull Langfuse-shaped usage off a LangChain `AIMessage`.
+
+    LangChain Anthropic / OpenAI populate `usage_metadata` with
+    `{"input_tokens", "output_tokens", "total_tokens"}` (and optionally
+    a `cache_*` breakdown we don't propagate yet). Returns `{}` when
+    the metadata is missing so callers can pass the result straight to
+    `span.end(usage=...)`.
+    """
+    meta = getattr(msg, "usage_metadata", None)
+    if not isinstance(meta, dict):
+        return {}
+    input_t = int(meta.get("input_tokens", 0) or 0)
+    output_t = int(meta.get("output_tokens", 0) or 0)
+    total_t = int(meta.get("total_tokens", 0) or 0) or (input_t + output_t)
+    return {"input": input_t, "output": output_t, "total": total_t}
+
+
+def _structured_usage(result: Any) -> dict[str, int]:
+    """Pull usage off a structured-output result `{"raw", "parsed", ...}`.
+
+    LangChain's `with_structured_output(..., include_raw=True)` returns
+    a dict whose `"raw"` slot is the original `AIMessage`. Falls back
+    to `{}` when the shape diverges (cached `with_structured_output`
+    without `include_raw`, etc.).
+    """
+    if isinstance(result, dict):
+        raw = result.get("raw")
+        if raw is not None:
+            return _ai_message_usage(raw)
+    return _ai_message_usage(result)
 
 
 # Shown for the user-visible `agent.tool_decision` step when the LLM
@@ -430,19 +489,32 @@ def make_agent_node(llm: Any, tools: list[Any]) -> Any:
         if compacted:
             logger.info("Compacted %d older ToolMessage payload(s)", compacted)
         conversation = [system, *compacted_msgs]
+
+        user_id = state.get("user_id")
+
+        def _orchestrator_span() -> TracingSpan:
+            return feature_span(
+                "agent.orchestrator",
+                "agent",
+                user_id=user_id,
+                role="orchestrator",
+            )
+
         try:
-            ai_msg = await _invoke_llm_with_retry(bound, conversation)
+            ai_msg = await _invoke_llm_with_retry(
+                bound,
+                conversation,
+                make_span=_orchestrator_span,
+                extract_usage=_ai_message_usage,
+            )
         except Exception as exc:
             logger.exception("agent_node failed after retries: %s", exc)
-            tracer = get_tracing_client()
-            span = tracer.generation(
-                "agent_node",
-                user_id=state.get("user_id"),
-            )
-            span.end(
-                output={"error_type": "llm_retry_exhausted"},
-                level="ERROR",
-            )
+            # Summary marker — the per-attempt spans above already carry
+            # the failed attempts; this one records that the retry budget
+            # was exhausted (distinct event in Langfuse views).
+            feature_span(
+                "agent.orchestrator.exhausted", "agent", user_id=user_id
+            ).end(output={"error_type": "llm_retry_exhausted"}, level="ERROR")
             error_msg = AIMessage(
                 content=(
                     "I hit a temporary connection issue talking to my language "
@@ -968,16 +1040,50 @@ def make_resolve_location_node(resolver_llm: Any, geocoding_client: Any) -> Any:
     never a partial location. Geocoding or LLM failure fails toward asking the
     user; it never crashes the turn or bumps `error_count`.
     """
-    structured = resolver_llm.with_structured_output(LocationResolution)
+    # `include_raw=True` returns a dict {"raw", "parsed", "parsing_error"}
+    # so we can pull `usage_metadata` off the raw AIMessage for the
+    # Langfuse generation span. The parsed `LocationResolution` is read
+    # exactly like before.
+    structured = resolver_llm.with_structured_output(
+        LocationResolution, include_raw=True
+    )
 
     async def resolve_location_node(state: AgentState) -> dict[str, Any]:
+        user_id = state.get("user_id")
+
+        def _resolver_span() -> TracingSpan:
+            return feature_span(
+                "agent.location_resolver",
+                "agent",
+                user_id=user_id,
+                role="location_resolver",
+            )
+
         try:
-            resolution: LocationResolution = await _invoke_llm_with_retry(
-                structured, [HumanMessage(content=_render_resolver_prompt(state))]
+            result = await _invoke_llm_with_retry(
+                structured,
+                [HumanMessage(content=_render_resolver_prompt(state))],
+                make_span=_resolver_span,
+                extract_usage=_structured_usage,
             )
         except Exception as exc:
             logger.warning("resolve_location LLM failed: %s", exc)
             return _location_clarification_update(state, _LOCATION_ASK_CITY)
+
+        # Defensive: include_raw=True can return a dict with parsing_error
+        # set when the model output failed schema validation. Treat that
+        # the same as an LLM failure → ask the user.
+        if isinstance(result, dict):
+            parse_err = result.get("parsing_error")
+            parsed = result.get("parsed")
+            if parse_err is not None or parsed is None:
+                logger.warning("resolve_location parsing_error: %s", parse_err)
+                return _location_clarification_update(state, _LOCATION_ASK_CITY)
+            resolution: LocationResolution = parsed
+        else:
+            # Older / cached `with_structured_output` without include_raw —
+            # treat the result as the parsed model directly.
+            resolution = result
 
         if resolution.needs_clarification or resolution.is_ambiguous:
             reason = (

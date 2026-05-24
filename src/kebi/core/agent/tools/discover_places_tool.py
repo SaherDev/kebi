@@ -51,6 +51,7 @@ from langgraph.prebuilt import InjectedState
 from langgraph.types import Command
 from pydantic import Field
 
+from kebi.core.agent._trace_context import set_tool
 from kebi.core.agent.location import WorkingLocation
 from kebi.core.agent.reasoning import ReasoningStep
 from kebi.core.agent.state import AgentState
@@ -233,9 +234,33 @@ async def _run_discover_places(
     tags: list[str] | None,
     limit: int,
 ) -> Command[Any]:
-    """Inner body — issues the single provider call. Wrapped by with_timeout.
+    """Inner body — issues the single provider call. Wrapped by with_timeout."""
+    # ContextVar set here so Google Places spans inherit tool=discover_places
+    # once subtask 3 instruments them. discover_places has no in-scope paid
+    # calls in subtask 1 — this is intentional dead state, not unused code.
+    with set_tool(_TOOL_NAME):
+        return await _run_discover_places_impl(
+            places_search_factory=places_search_factory,
+            state=state,
+            tool_call_id=tool_call_id,
+            query=query,
+            categories=categories,
+            tags=tags,
+            limit=limit,
+        )
 
-    The agent-supplied area overrides (neighborhood / city / country)
+
+async def _run_discover_places_impl(
+    *,
+    places_search_factory: SearchServiceFactory,
+    state: AgentState,
+    tool_call_id: str,
+    query: str,
+    categories: list[PlaceCategory] | None,
+    tags: list[str] | None,
+    limit: int,
+) -> Command[Any]:
+    """The agent-supplied area overrides (neighborhood / city / country)
     are accepted on the outer `@tool` signature for arg-schema parity
     with `find_saved` / `suggest_places`, but the provider phase needs
     coords. Location shifts (travel intent, named city/neighborhood)

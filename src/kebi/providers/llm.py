@@ -267,7 +267,6 @@ class InstructorClient:
         except ValidationError:
             raise
 
-
 # --- Factory ---
 
 

@@ -15,6 +15,7 @@ from typing import Any
 from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from kebi.core.agent._trace_context import feature_trace, traced_call
 from kebi.core.config import get_config
 from kebi.core.places.protocols import (
     PlacesSearchServiceProtocol,
@@ -161,7 +162,7 @@ class TasteModelService:
             signal_counts,
             self._config.taste_model.regen.early_signal_threshold,
         )
-        artifacts = await self._call_llm_with_retry(messages)
+        artifacts = await self._call_llm_with_retry(messages, user_id)
         if artifacts is None:
             logger.warning("Regen skipped for user %s: LLM parse failure", user_id)
             return
@@ -201,20 +202,39 @@ class TasteModelService:
         )
 
     async def _call_llm_with_retry(
-        self, messages: list[dict[str, str]]
+        self, messages: list[dict[str, str]], user_id: str
     ) -> TasteArtifacts | None:
-        """Call LLM and parse into TasteArtifacts. Retry once on failure."""
-        llm = get_llm("taste_regen")
+        """Call LLM and parse into TasteArtifacts. Retry once on failure.
 
-        for attempt in range(2):
-            try:
-                raw = await llm.complete(messages)
-                parsed = json.loads(raw)
-                return TasteArtifacts.model_validate(parsed)
-            except (json.JSONDecodeError, ValidationError) as exc:
-                if attempt == 0:
-                    logger.warning("LLM parse attempt 1 failed, retrying: %s", exc)
-                else:
-                    logger.error("LLM parse attempt 2 failed, skipping: %s", exc)
-                    return None
-        return None
+        Standalone Langfuse trace (debounced background work — triggering
+        turn is arbitrary). Per-attempt spans so a regen that succeeded on
+        the second try shows as ERROR + OK, not a single cheap call.
+        """
+        llm = get_llm("taste_regen")
+        async with feature_trace("taste_regen", user_id):
+            for attempt in range(2):
+                async with traced_call(
+                    "taste_regen.llm",
+                    "taste_regen",
+                    role="taste_regen",
+                    user_id=user_id,
+                    extra={"attempt": attempt + 1},
+                ) as t:
+                    raw = await llm.complete(messages)
+                    try:
+                        artifacts = TasteArtifacts.model_validate(json.loads(raw))
+                    except (json.JSONDecodeError, ValidationError) as exc:
+                        t.fail(exc)
+                        if attempt == 0:
+                            logger.warning(
+                                "LLM parse attempt 1 failed, retrying: %s", exc
+                            )
+                        else:
+                            logger.error(
+                                "LLM parse attempt 2 failed, skipping: %s", exc
+                            )
+                            return None
+                        continue
+                    t.output = {"text": raw}
+                    return artifacts
+            return None

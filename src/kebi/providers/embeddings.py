@@ -10,7 +10,6 @@ import time
 from typing import Protocol, cast, runtime_checkable
 
 from kebi.core.config import get_config, get_env
-from kebi.providers.tracing import get_tracing_client
 
 logger = logging.getLogger(__name__)
 
@@ -119,24 +118,35 @@ class VoyageEmbedder:
                 f"cooling down for {cools_in:.1f}s. Skipping embed call."
             )
 
-        tracer = get_tracing_client()
-        span = tracer.generation(name="voyage_embed", model=self._model, input=texts)
+        # `current_tool` is set by the agent tool that ultimately triggered
+        # this embed (find_saved → query, extraction → document). The
+        # feature dimension follows from whether a tool is in scope.
+        from kebi.core.agent._trace_context import current_tool, traced_call
 
+        tool = current_tool.get()
+        feature = "agent_tool" if tool else "extraction"
         try:
-            # 2. Hard timeout so the SDK's tenacity retry chain can't eat
-            #    15s of latency on rate-limit responses. `hard_timeout` is
-            #    enough for a normal embed call + one TCP retry; anything
-            #    past that is the retry-backoff loop and not worth waiting
-            #    for.
-            result = await asyncio.wait_for(
-                self._client.embed(texts, model=self._model, input_type=input_type),
-                timeout=hard_timeout,
-            )
-            span.end()
-            return cast(list[list[float]], result.embeddings)
+            async with traced_call(
+                "voyage_embed",
+                feature,
+                role="embedder",
+                input=texts,
+                extra={"input_type": input_type, "batch_size": len(texts)},
+            ) as t:
+                # 2. Hard timeout so the SDK's tenacity retry chain can't eat
+                #    15s of latency on rate-limit responses.
+                result = await asyncio.wait_for(
+                    self._client.embed(
+                        texts, model=self._model, input_type=input_type
+                    ),
+                    timeout=hard_timeout,
+                )
+                total = int(getattr(result, "total_tokens", 0) or 0)
+                if total:
+                    t.usage = {"input": total, "output": 0, "total": total}
+                return cast(list[list[float]], result.embeddings)
         except TimeoutError as e:
             _VOYAGE_COOLDOWN_UNTIL = time.monotonic() + cooldown
-            span.end(output={"error": "timeout"}, level="ERROR")
             logger.warning(
                 "Voyage embed timed out after %.1fs; tripping circuit "
                 "breaker for %.0fs. Place rows will save without embeddings.",
@@ -153,7 +163,6 @@ class VoyageEmbedder:
                     "Voyage rate-limit detected; tripping circuit breaker for %.0fs.",
                     cooldown,
                 )
-            span.end(output={"error": str(e)}, level="ERROR")
             logger.error("Embedding failed: %s", e)
             raise RuntimeError(f"Failed to embed texts: {e}") from e
 

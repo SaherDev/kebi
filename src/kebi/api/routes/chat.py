@@ -13,6 +13,7 @@ from langchain_core.messages import AIMessage
 
 from kebi.api.deps import get_agent_graph, get_chat_service
 from kebi.api.schemas.chat import ChatRequest, ChatResponse
+from kebi.core.agent._trace_context import feature_trace
 from kebi.core.agent.invocation import build_turn_payload
 from kebi.core.agent.messages import extract_text_content
 from kebi.core.chat.service import ChatService
@@ -97,60 +98,69 @@ async def chat_stream(
     }
 
     async def generate() -> AsyncGenerator[str, None]:
-        final_state: dict[str, Any] = {}
-        # Tool result payloads live on state for one superstep — between
-        # `finalize` (which populates them) and `scrub_tool_results`
-        # (which clears them so they never reach the checkpointer DB).
-        # Capture the populated snapshot here; the final `final_state`
-        # we read after the loop has `tool_results=[]` by design.
-        tool_results: list[dict[str, Any]] = []
-        try:
+        async with feature_trace(
+            "chat",
+            body.user_id,
+            name="chat_turn",
+            extra={"endpoint": "/v1/chat/stream"},
+        ):
+            tracer = get_tracing_client()
+            final_state: dict[str, Any] = {}
+            # Tool result payloads live on state for one superstep — between
+            # `finalize` (which populates them) and `scrub_tool_results`
+            # (which clears them so they never reach the checkpointer DB).
+            # Capture the populated snapshot here; the final `final_state`
+            # we read after the loop has `tool_results=[]` by design.
+            tool_results: list[dict[str, Any]] = []
             try:
-                async for stream_mode, chunk in agent_graph.astream(
-                    payload, config=graph_config, stream_mode=["custom", "values"]
-                ):
-                    if await request.is_disconnected():
-                        get_tracing_client().capture_message(
-                            message="chat_stream client disconnected",
-                            level="info",
-                            metadata={"user_id": body.user_id},
-                            user_id=body.user_id,
-                        )
-                        return
-                    if stream_mode == "custom":
-                        data = json.dumps(chunk, default=str)
-                        yield f"event: reasoning_step\ndata: {data}\n\n"
-                    elif stream_mode == "values":
-                        final_state = chunk
-                        snap_tool_results = chunk.get("tool_results") or []
-                        if snap_tool_results:
-                            tool_results = snap_tool_results
-            except Exception as exc:
-                logger.exception("chat_stream graph error: %s", exc)
-                yield f"event: error\ndata: {json.dumps({'detail': str(exc)})}\n\n"
-                return
+                try:
+                    async for stream_mode, chunk in agent_graph.astream(
+                        payload,
+                        config=graph_config,
+                        stream_mode=["custom", "values"],
+                    ):
+                        if await request.is_disconnected():
+                            tracer.capture_message(
+                                message="chat_stream client disconnected",
+                                level="info",
+                                metadata={"user_id": body.user_id},
+                                user_id=body.user_id,
+                            )
+                            return
+                        if stream_mode == "custom":
+                            data = json.dumps(chunk, default=str)
+                            yield f"event: reasoning_step\ndata: {data}\n\n"
+                        elif stream_mode == "values":
+                            final_state = chunk
+                            snap_tool_results = chunk.get("tool_results") or []
+                            if snap_tool_results:
+                                tool_results = snap_tool_results
+                except Exception as exc:
+                    logger.exception("chat_stream graph error: %s", exc)
+                    yield f"event: error\ndata: {json.dumps({'detail': str(exc)})}\n\n"
+                    return
 
-            messages: list[Any] = final_state.get("messages") or []
-            tool_calls_used: int = final_state.get("tool_calls_used") or 0
+                messages: list[Any] = final_state.get("messages") or []
+                tool_calls_used: int = final_state.get("tool_calls_used") or 0
 
-            final_message = ""
-            for m in reversed(messages):
-                if isinstance(m, AIMessage):
-                    text = extract_text_content(m.content)
-                    if text:
-                        final_message = text
-                        break
+                final_message = ""
+                for m in reversed(messages):
+                    if isinstance(m, AIMessage):
+                        text = extract_text_content(m.content)
+                        if text:
+                            final_message = text
+                            break
 
-            for tool_result in tool_results:
-                yield f"event: tool_result\ndata: {json.dumps(tool_result)}\n\n"
-            if final_message:
-                msg_payload = json.dumps({"content": final_message})
-                yield f"event: message\ndata: {msg_payload}\n\n"
-            done_payload = json.dumps({"tool_calls_used": tool_calls_used})
-            yield f"event: done\ndata: {done_payload}\n\n"
-        finally:
-            await service._dispatcher.dispatch(
-                TurnCompleted(user_id=body.user_id, user_message=body.message)
-            )
+                for tool_result in tool_results:
+                    yield f"event: tool_result\ndata: {json.dumps(tool_result)}\n\n"
+                if final_message:
+                    msg_payload = json.dumps({"content": final_message})
+                    yield f"event: message\ndata: {msg_payload}\n\n"
+                done_payload = json.dumps({"tool_calls_used": tool_calls_used})
+                yield f"event: done\ndata: {done_payload}\n\n"
+            finally:
+                await service._dispatcher.dispatch(
+                    TurnCompleted(user_id=body.user_id, user_message=body.message)
+                )
 
     return StreamingResponse(generate(), media_type="text/event-stream")

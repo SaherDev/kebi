@@ -29,6 +29,7 @@ from langgraph.prebuilt import InjectedState
 from langgraph.types import Command
 from pydantic import Field
 
+from kebi.core.agent._trace_context import set_tool
 from kebi.core.agent.location import WorkingLocation
 from kebi.core.agent.reasoning import ReasoningStep
 from kebi.core.agent.state import AgentState
@@ -234,6 +235,34 @@ async def _run_find_saved(
     limit: int,
 ) -> Command[Any]:
     """Inner body — runs the search, packs the result. Wrapped by with_timeout."""
+    with set_tool(_TOOL_NAME):
+        return await _run_find_saved_impl(
+            hybrid_search=hybrid_search,
+            state=state,
+            tool_call_id=tool_call_id,
+            query=query,
+            categories=categories,
+            tags=tags,
+            neighborhood=neighborhood,
+            city=city,
+            country=country,
+            limit=limit,
+        )
+
+
+async def _run_find_saved_impl(
+    *,
+    hybrid_search: HybridSearchService,
+    state: AgentState,
+    tool_call_id: str,
+    query: str,
+    categories: list[PlaceCategory] | None,
+    tags: list[str] | None,
+    neighborhood: str | None,
+    city: str | None,
+    country: str | None,
+    limit: int,
+) -> Command[Any]:
     user_id = state["user_id"]
     working = _maybe_working_location(state)
     has_named_area = bool(neighborhood or city or country)
