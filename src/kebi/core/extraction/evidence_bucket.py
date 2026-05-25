@@ -58,7 +58,7 @@ class EvidenceBucketWriter:
         evidence: list[Evidence],
         user_id: str,
         request_id: str,
-        source_url: str | None,
+        source_ref: str | None,
     ) -> None:
         """Write one event to the bucket. Silently no-ops if `place.id` is
         unset (place wasn't persisted) or `evidence` is empty.
@@ -75,7 +75,7 @@ class EvidenceBucketWriter:
             "place_name": place.place_name,
             "user_id": user_id,
             "request_id": request_id,
-            "source_url": source_url,
+            "source_ref": source_ref,
             "recorded_at": when.isoformat().replace("+00:00", "Z"),
             "evidence": [_evidence_to_json(e) for e in evidence],
         }

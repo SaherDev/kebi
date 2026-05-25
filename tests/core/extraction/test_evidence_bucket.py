@@ -36,7 +36,7 @@ async def test_write_puts_one_json_object_per_event() -> None:
         evidence=[Evidence(Producer.LLM_NER, Medium.CAPTION, snippet="ate here")],
         user_id="u-1",
         request_id="req-abc",
-        source_url="https://tiktok.com/@x/video/1",
+        source_ref="https://tiktok.com/@x/video/1",
     )
     storage.put_json.assert_awaited_once()
     key, payload = storage.put_json.await_args.args
@@ -45,7 +45,7 @@ async def test_write_puts_one_json_object_per_event() -> None:
     assert payload["place_id"] == "place-1"
     assert payload["user_id"] == "u-1"
     assert payload["request_id"] == "req-abc"
-    assert payload["source_url"] == "https://tiktok.com/@x/video/1"
+    assert payload["source_ref"] == "https://tiktok.com/@x/video/1"
     assert payload["evidence"] == [
         {
             "producer": "llm_ner",
@@ -67,7 +67,7 @@ async def test_write_skips_when_place_has_no_id() -> None:
         evidence=[Evidence(Producer.LLM_NER, Medium.CAPTION)],
         user_id="u-1",
         request_id="req-x",
-        source_url=None,
+        source_ref=None,
     )
     storage.put_json.assert_not_awaited()
 
@@ -80,7 +80,7 @@ async def test_write_skips_when_evidence_empty() -> None:
         evidence=[],
         user_id="u-1",
         request_id="req-x",
-        source_url=None,
+        source_ref=None,
     )
     storage.put_json.assert_not_awaited()
 
@@ -97,7 +97,7 @@ async def test_write_swallows_storage_errors() -> None:
         evidence=[Evidence(Producer.LLM_NER, Medium.CAPTION)],
         user_id="u-1",
         request_id="req-x",
-        source_url=None,
+        source_ref=None,
     )
 
 
@@ -173,14 +173,14 @@ async def test_two_writes_for_same_place_use_distinct_keys() -> None:
         evidence=[Evidence(Producer.LLM_NER, Medium.CAPTION)],
         user_id="u-1",
         request_id="req-A",
-        source_url=None,
+        source_ref=None,
     )
     await writer.write(
         place=_place(),
         evidence=[Evidence(Producer.VISION_FRAMES, Medium.FRAME)],
         user_id="u-2",
         request_id="req-B",
-        source_url=None,
+        source_ref=None,
     )
     assert storage.put_json.await_count == 2
     key_a = storage.put_json.await_args_list[0].args[0]

@@ -14,7 +14,7 @@ class ParsedInput:
     query/fragment strip on recognized hosts (see `canonicalize_url`).
     Two shares of the same TikTok with different `web_id` tracking
     params collapse to the same value — used as the cache key in
-    ADR-074 and the `source_url` value written to `user_places`.
+    ADR-074 and the `source_ref` value written to `user_places`.
     """
 
     url: str | None  # Extracted, canonicalized URL or None

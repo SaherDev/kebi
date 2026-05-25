@@ -237,7 +237,7 @@ class ExtractionConfig(BaseModel):
         "price_range",
         "lat",
         "lng",
-        "source_url",
+        "source_ref",
         "validated_at",
         "confidence",
         "source",

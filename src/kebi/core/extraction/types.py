@@ -7,7 +7,7 @@ the actual content snippet when available. `Producer` identifies *who*
 contributed; `Medium` identifies *where* in pipeline state the evidence
 lived. Together they form `Evidence(producer, medium, snippet, metadata)`.
 
-Pipeline-context fields (`user_id`, `source_url`, `source`) and
+Pipeline-context fields (`user_id`, `source_ref`, `source`) and
 persistence concerns are NOT on these types — they live on
 `ExtractionContext` and are stamped onto a v2 `PlaceCore` at the
 persistence boundary in `ExtractionService.run` (per ADR-070, ADR-071).

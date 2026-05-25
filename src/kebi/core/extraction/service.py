@@ -181,7 +181,7 @@ class ExtractionService:
             user_id,
             name="extraction_run",
             extra={
-                "source_url": parsed.url,
+                "source_ref": parsed.url,
                 "source": source.value if source else "manual",
                 "request_id": rid,
             },
@@ -348,7 +348,7 @@ class ExtractionService:
         request_id: str,
         cores: list[PlaceCore],
         source: PlaceSource | None,
-        source_url: str | None,
+        source_ref: str | None,
         source_labels: Mapping[str, str | None] | None = None,
     ) -> set[str]:
         """Link `cores` to `user_places` and fire `PlaceSaved` for the
@@ -375,7 +375,7 @@ class ExtractionService:
                 user_id=user_id,
                 places=cores,
                 source=save_source,
-                source_url=source_url,
+                source_ref=source_ref,
                 source_labels=source_labels,
             )
         except DuplicateUserPlaceError as exc:
@@ -388,7 +388,7 @@ class ExtractionService:
                     user_id=user_id,
                     places=non_duplicates,
                     source=save_source,
-                    source_url=source_url,
+                    source_ref=source_ref,
                     source_labels=source_labels,
                 )
 
@@ -412,7 +412,7 @@ class ExtractionService:
         user_id: str,
         request_id: str,
         source: PlaceSource | None,
-        source_url: str | None,
+        source_ref: str | None,
     ) -> list[ExtractPlaceItem]:
         """Inline v2 persistence flow (ADR-070, ADR-071).
 
@@ -468,7 +468,7 @@ class ExtractionService:
             request_id=request_id,
             cores=eligible_cores,
             source=source,
-            source_url=source_url,
+            source_ref=source_ref,
             source_labels=source_labels,
         )
 
@@ -486,7 +486,7 @@ class ExtractionService:
                 evidence=list(c.evidence),
                 user_id=user_id,
                 request_id=request_id,
-                source_url=source_url,
+                source_ref=source_ref,
             )
             items.append(ExtractPlaceItem(**_candidate_to_item_dict(c, persisted_core)))
         return items
@@ -521,7 +521,7 @@ class ExtractionService:
             "extraction_cache_hit",
             level="info",
             metadata={
-                "source_url": canonical_url,
+                "source_ref": canonical_url,
                 "place_count": len(cached_items),
             },
             user_id=user_id,
@@ -532,7 +532,7 @@ class ExtractionService:
             request_id=request_id,
             cores=eligible_cores,
             source=source,
-            source_url=canonical_url,
+            source_ref=canonical_url,
         )
         return ExtractPlaceResponse(
             status="completed",

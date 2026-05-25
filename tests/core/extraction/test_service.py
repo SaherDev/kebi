@@ -293,7 +293,7 @@ async def test_save_places_called_with_v2_source() -> None:
     c.user_places.save_places.assert_awaited_once()
     kwargs = c.user_places.save_places.await_args.kwargs
     assert kwargs["source"] == PlaceSource.tiktok
-    assert kwargs["source_url"] == "https://www.tiktok.com/@x/video/1"
+    assert kwargs["source_ref"] == "https://www.tiktok.com/@x/video/1"
 
 
 # ---------------------------------------------------------------------------
@@ -354,7 +354,7 @@ async def test_cache_hit_skips_pipeline_and_calls_save_places() -> None:
     c.user_places.save_places.assert_awaited_once()
     kwargs = c.user_places.save_places.await_args.kwargs
     assert kwargs["user_id"] == "u-second"
-    assert kwargs["source_url"] == "https://www.tiktok.com/@x/video/1"
+    assert kwargs["source_ref"] == "https://www.tiktok.com/@x/video/1"
     assert [p.id for p in kwargs["places"]] == ["place-uuid-1"]
     # PlaceSaved fired once for the newly-linked place.
     c.event_dispatcher.dispatch.assert_awaited_once()
@@ -560,7 +560,7 @@ async def test_run_opens_extraction_trace_with_user_and_source(
     assert kwargs["session_id"] == "u-1"
     assert kwargs["tags"] == ["feature:extraction"]
     assert kwargs["metadata"]["feature"] == "extraction"
-    assert kwargs["metadata"]["source_url"] == "https://www.tiktok.com/@x/video/1"
+    assert kwargs["metadata"]["source_ref"] == "https://www.tiktok.com/@x/video/1"
     assert kwargs["metadata"]["source"] == "tiktok"
 
 
@@ -599,7 +599,7 @@ async def test_cache_hit_emits_extraction_cache_hit_marker(
     assert kwargs["user_id"] == "u-second"
     assert kwargs["session_id"] == "u-second"
     assert (
-        kwargs["metadata"]["source_url"]
+        kwargs["metadata"]["source_ref"]
         == "https://www.tiktok.com/@x/video/1"
     )
     assert kwargs["metadata"]["place_count"] == 1

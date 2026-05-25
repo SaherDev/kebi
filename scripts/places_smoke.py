@@ -573,7 +573,7 @@ async def main() -> None:
 
                 # Build varied UserPlace rows: mix of sources, visited/liked
                 # combinations, and saved_at dates. The validator on UserPlace
-                # forbids source_url for manual/kebi and requires it
+                # forbids source_ref for manual/kebi and requires it
                 # otherwise — distribution respects that.
                 base_time = datetime.now(UTC)
                 user_places_in: list[UserPlace] = []
@@ -591,7 +591,7 @@ async def main() -> None:
                             liked=(True if i % 3 == 0 else False if i % 3 == 1 else None),
                             note=f"smoke note {i}" if i % 4 == 0 else None,
                             source=PlaceSource.manual if is_manual else PlaceSource.tiktok,
-                            source_url=None if is_manual else f"https://tiktok.com/@u/video/{i}",
+                            source_ref=None if is_manual else f"https://tiktok.com/@u/video/{i}",
                             saved_at=base_time - timedelta(days=i * 3),
                             visited_at=base_time - timedelta(days=i) if i % 2 == 0 else None,
                         )

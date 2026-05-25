@@ -42,7 +42,7 @@ class UserPlacesService:
         user_id: str,
         places: list[PlaceCore],
         source: PlaceSource,
-        source_url: str | None,
+        source_ref: str | None,
         source_labels: Mapping[str, str | None] | None = None,
     ) -> list[UserPlace]:
         """Link `places` to `user_id` in user_places.
@@ -89,7 +89,7 @@ class UserPlacesService:
                 place_id=pid,
                 approved=False,
                 source=source,
-                source_url=source_url,
+                source_ref=source_ref,
                 source_label=labels.get(pid),
                 saved_at=now,
             )

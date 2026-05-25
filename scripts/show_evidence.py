@@ -66,7 +66,7 @@ async def main(place_id: str, raw: bool) -> int:
     producer_counts: Counter[str] = Counter()
     for ev in events:
         recorded = ev.get("recorded_at", "?")
-        url = ev.get("source_url") or "(no url)"
+        url = ev.get("source_ref") or "(no url)"
         user = ev.get("user_id", "?")
         evidence_items = ev.get("evidence", [])
         producers = [e.get("producer", "?") for e in evidence_items]

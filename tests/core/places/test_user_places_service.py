@@ -133,7 +133,7 @@ class TestSavePlaces:
             user_id="u1",
             places=[],
             source=PlaceSource.tiktok,
-            source_url="https://tiktok.com/x",
+            source_ref="https://tiktok.com/x",
         )
         assert result == []
         user_places_repo.get_existing_place_ids.assert_not_called()
@@ -154,7 +154,7 @@ class TestSavePlaces:
             user_id="u1",
             places=cores,
             source=PlaceSource.tiktok,
-            source_url="https://tiktok.com/x",
+            source_ref="https://tiktok.com/x",
         )
 
         user_places_repo.get_existing_place_ids.assert_awaited_once_with(
@@ -168,7 +168,7 @@ class TestSavePlaces:
         assert all(r.liked is None for r in result)
         assert all(r.note is None for r in result)
         assert all(r.source == PlaceSource.tiktok for r in result)
-        assert all(r.source_url == "https://tiktok.com/x" for r in result)
+        assert all(r.source_ref == "https://tiktok.com/x" for r in result)
         # user_place_id is fresh per row
         assert len({r.user_place_id for r in result}) == 2
 
@@ -187,7 +187,7 @@ class TestSavePlaces:
                 user_id="u1",
                 places=[bad],
                 source=PlaceSource.manual,
-                source_url=None,
+                source_ref=None,
             )
         user_places_repo.save_user_places.assert_not_called()
 
@@ -206,7 +206,7 @@ class TestSavePlaces:
             user_id="u1",
             places=cores,
             source=PlaceSource.tiktok,
-            source_url="https://tiktok.com/x",
+            source_ref="https://tiktok.com/x",
             source_labels={"p1": "Mirror Temple"},
         )
 
@@ -229,7 +229,7 @@ class TestSavePlaces:
             user_id="u1",
             places=cores,
             source=PlaceSource.tiktok,
-            source_url="https://tiktok.com/x",
+            source_ref="https://tiktok.com/x",
         )
         assert result[0].source_label is None
 
@@ -248,7 +248,7 @@ class TestSavePlaces:
                 user_id="u1",
                 places=[_core("p1"), _core("p2")],
                 source=PlaceSource.tiktok,
-                source_url="https://tiktok.com/x",
+                source_ref="https://tiktok.com/x",
             )
 
         assert exc_info.value.conflicts == ["p1"]

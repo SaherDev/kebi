@@ -124,7 +124,7 @@ _UserPlacesTable = Table(
     Column("liked", Boolean),
     Column("note", Text),
     Column("source", String),
-    Column("source_url", Text),
+    Column("source_ref", Text),
     Column("saved_at", DateTime(timezone=True)),
     Column("visited_at", DateTime(timezone=True)),
 )
@@ -230,7 +230,7 @@ class HybridSearchRepo:
                 filtered.c.liked,
                 filtered.c.note,
                 filtered.c.source,
-                filtered.c.source_url,
+                filtered.c.source_ref,
                 filtered.c.saved_at,
                 filtered.c.visited_at,
                 fused.c.rrf_score,
@@ -284,7 +284,7 @@ class HybridSearchRepo:
                 _up.liked,
                 _up.note,
                 _up.source,
-                _up.source_url,
+                _up.source_ref,
                 _up.saved_at,
                 _up.visited_at,
             )
@@ -318,7 +318,7 @@ class HybridSearchRepo:
                 null().label("liked"),
                 null().label("note"),
                 null().label("source"),
-                null().label("source_url"),
+                null().label("source_ref"),
                 null().label("saved_at"),
                 null().label("visited_at"),
             )
@@ -482,7 +482,7 @@ def _row_to_hit(row: Mapping[str, Any]) -> HybridSearchHit:
             liked=row.get("liked"),
             note=row.get("note"),
             source=PlaceSource(row["source"]),
-            source_url=row.get("source_url"),
+            source_ref=row.get("source_ref"),
             saved_at=row["saved_at"],
             visited_at=_to_datetime(row.get("visited_at")),
         )

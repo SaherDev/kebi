@@ -8,8 +8,9 @@ states live on the envelope only. ADR-063 documents the split.
 
 `raw_input` carries the original user-supplied string verbatim (no trimming,
 no URL canonicalization, no case-folding). Replaces the pre-M0.5 `source_url`
-field on this envelope. Note: `PlaceObject.source_url` (the URL the place was
-extracted from, a per-place field) is unrelated and unchanged.
+field on this envelope. Note: `UserPlace.source_ref` (the per-row pointer to
+the place's origin) is a separate column on a different table and unrelated
+to this envelope-level rename.
 """
 
 from typing import Literal

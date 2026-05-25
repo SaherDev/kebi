@@ -15,6 +15,16 @@ Format:
 
 ---
 
+## ADR-095: Rename `UserPlace.source_url` to `source_ref`
+
+**Date:** 2026-05-25\
+**Status:** accepted\
+**Context:** The per-row column on `user_places` that holds a pointer to where a place came from was named `source_url`, but only four of the six `PlaceSource` values (tiktok / instagram / youtube / google_maps_list) actually populate it with a URL. For `manual` and `kebi` the validator already required the field to be NULL — there is no URL to record. The name described the dominant case rather than the column's actual contract ("opaque pointer to the place's origin, present iff the source has an external one") and would have grown more misleading as new non-URL save paths come online, each of which would need to either misuse a URL-typed column or be carved out as a special case.\
+**Decision:** Rename the column, the Pydantic field, the service / protocol parameter, and the evidence-ledger JSON key from `source_url` to `source_ref` across the AI-owned surface — `user_places` is wholly owned by this repo so no cross-repo coordination is needed. The two-bucket validator stays: `{manual, kebi}` requires `source_ref is None`, every other `PlaceSource` value requires a non-None ref. No new `PlaceSource` values are added in this change — only sources with a live consumer exist in the enum. Already-written evidence files in object storage with the old `source_url` JSON key are dropped (no back-compat read, no rewrite, no transition window) — the ledger is an audit trail, not a source of truth, and there is no live consumer that would notice the discontinuity. The historical envelope-level `raw_input` rename from ADR-063 is a separate concern and unchanged.\
+**Consequences:** The column name now matches its contract — a future contributor reading `source_ref` is no longer led to assume "always a URL." Adding a new non-URL save path later (a friend share, a voice note, an uploaded photo) becomes a single-line addition to `PlaceSource` plus a presence rule, with no per-source field carve-out. The DB migration is a single `ALTER COLUMN ... RENAME` (round-trip-verified) — no data movement, fully reversible. Code, tests, and the evidence reader speak only one name (`source_ref`); pre-rename evidence files become unreadable to the reader, accepted as the price of avoiding dual-name complexity in a single-consumer audit trail. Constraints we explicitly did not change: the validator's shape stays binary (ref-required vs ref-forbidden) rather than per-source-table, so every future source falls into one bucket or the other by default; and `source_from_url()` keeps rejecting unknown URL hosts, so this rename does not silently widen the set of accepted inputs to `POST /v1/extract`.
+
+---
+
 ## ADR-094: Drop the extraction status repository and the dormant polling route
 
 **Date:** 2026-05-25\

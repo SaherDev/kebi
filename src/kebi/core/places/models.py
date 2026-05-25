@@ -330,12 +330,14 @@ class UserPlace(BaseModel):
     note: str | None = None
 
     source: PlaceSource
-    source_url: str | None = None
+    # Opaque pointer to the place's origin. URL for
+    # tiktok/instagram/youtube/google_maps_list; None for manual/kebi.
+    source_ref: str | None = None
     # The name this place was shown as in the source post (e.g. a TikTok
     # card label "Mirror Temple"), when it differs from the canonical
     # provider name. Lets the product show the user the name they know
     # it by. None when the source used the canonical name. Set once at
-    # save; never rewritten on re-save (mirrors source/source_url).
+    # save; never rewritten on re-save (mirrors source/source_ref).
     source_label: str | None = None
 
     saved_at: datetime
@@ -344,14 +346,14 @@ class UserPlace(BaseModel):
     @model_validator(mode="after")
     def _validate_source(self) -> UserPlace:
         if self.source in (PlaceSource.manual, PlaceSource.kebi):
-            if self.source_url is not None:
+            if self.source_ref is not None:
                 raise ValueError(
-                    f"source_url must be None when source is {self.source.value}"
+                    f"source_ref must be None when source is {self.source.value}"
                 )
         else:
-            if self.source_url is None:
+            if self.source_ref is None:
                 raise ValueError(
-                    f"source_url is required when source is {self.source.value}"
+                    f"source_ref is required when source is {self.source.value}"
                 )
         return self
 

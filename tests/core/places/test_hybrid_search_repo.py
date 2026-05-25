@@ -69,7 +69,7 @@ def _hit_row(
     approved: bool = True,
     note: str | None = None,
     source: str = "manual",
-    source_url: str | None = None,
+    source_ref: str | None = None,
 ) -> dict[str, Any]:
     saved_at = datetime.now(UTC)
     return {
@@ -91,7 +91,7 @@ def _hit_row(
         "liked": liked,
         "note": note,
         "source": source,
-        "source_url": source_url,
+        "source_ref": source_ref,
         "saved_at": saved_at,
         "visited_at": None,
         # scores
@@ -389,7 +389,7 @@ class TestRowToHit:
             liked=True,
             note="best for first dates",
             source="tiktok",
-            source_url="https://tiktok.com/@x/video/1",
+            source_ref="https://tiktok.com/@x/video/1",
         )
         hit = _row_to_hit(row)
         assert hit.user_data.user_id == "u-42"
@@ -399,7 +399,7 @@ class TestRowToHit:
         assert hit.user_data.liked is True
         assert hit.user_data.note == "best for first dates"
         assert hit.user_data.source.value == "tiktok"
-        assert hit.user_data.source_url == "https://tiktok.com/@x/video/1"
+        assert hit.user_data.source_ref == "https://tiktok.com/@x/video/1"
 
     def test_user_data_liked_none_preserved(self) -> None:
         # Tri-state liked: NULL means "no opinion" and must not become False.
@@ -633,7 +633,7 @@ def _unscoped_row(**overrides: Any) -> dict[str, Any]:
     row = _hit_row(**overrides)
     for key in (
         "user_place_id", "user_id", "approved", "visited", "liked",
-        "note", "source", "source_url", "saved_at", "visited_at",
+        "note", "source", "source_ref", "saved_at", "visited_at",
     ):
         row[key] = None
     return row

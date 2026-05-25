@@ -22,35 +22,35 @@ from kebi.core.places.models import (
 
 class TestUserPlaceValidation:
     def test_url_required_for_tiktok(self) -> None:
-        with pytest.raises(ValidationError, match="source_url is required"):
+        with pytest.raises(ValidationError, match="source_ref is required"):
             UserPlace(
                 user_place_id="up1",
                 user_id="u1",
                 place_id="p1",
                 source=PlaceSource.tiktok,
-                source_url=None,
+                source_ref=None,
                 saved_at=datetime.now(UTC),
             )
 
     def test_url_forbidden_for_manual(self) -> None:
-        with pytest.raises(ValidationError, match="source_url must be None"):
+        with pytest.raises(ValidationError, match="source_ref must be None"):
             UserPlace(
                 user_place_id="up1",
                 user_id="u1",
                 place_id="p1",
                 source=PlaceSource.manual,
-                source_url="https://example.com",
+                source_ref="https://example.com",
                 saved_at=datetime.now(UTC),
             )
 
     def test_url_forbidden_for_kebi(self) -> None:
-        with pytest.raises(ValidationError, match="source_url must be None"):
+        with pytest.raises(ValidationError, match="source_ref must be None"):
             UserPlace(
                 user_place_id="up1",
                 user_id="u1",
                 place_id="p1",
                 source=PlaceSource.kebi,
-                source_url="https://example.com",
+                source_ref="https://example.com",
                 saved_at=datetime.now(UTC),
             )
 
@@ -60,11 +60,11 @@ class TestUserPlaceValidation:
             user_id="u1",
             place_id="p1",
             source=PlaceSource.manual,
-            source_url=None,
+            source_ref=None,
             saved_at=datetime.now(UTC),
         )
         assert up.source == PlaceSource.manual
-        assert up.source_url is None
+        assert up.source_ref is None
 
     def test_valid_tiktok_source(self) -> None:
         up = UserPlace(
@@ -72,10 +72,10 @@ class TestUserPlaceValidation:
             user_id="u1",
             place_id="p1",
             source=PlaceSource.tiktok,
-            source_url="https://tiktok.com/v/123",
+            source_ref="https://tiktok.com/v/123",
             saved_at=datetime.now(UTC),
         )
-        assert up.source_url == "https://tiktok.com/v/123"
+        assert up.source_ref == "https://tiktok.com/v/123"
 
     def test_defaults(self) -> None:
         up = UserPlace(

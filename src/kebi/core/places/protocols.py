@@ -105,7 +105,7 @@ class UserPlacesServiceProtocol(Protocol):
         user_id: str,
         places: list[PlaceCore],
         source: PlaceSource,
-        source_url: str | None,
+        source_ref: str | None,
         source_labels: Mapping[str, str | None] | None = None,
     ) -> list[UserPlace]: ...
 
