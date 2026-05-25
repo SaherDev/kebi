@@ -19,23 +19,6 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from kebi.core.places import PlaceCore
 
 
-class EvidenceDTO(BaseModel):
-    """One piece of evidence in a candidate's audit trail.
-
-    `producer` identifies which enricher contributed (`llm_ner`,
-    `vision_frames`, `video_metadata`, `whisper_audio`, ...).
-    `medium` identifies where in pipeline state the evidence lived
-    (`caption`, `transcript`, `frame`, `image`, `list`, ...).
-    `snippet` is the actual content (truncated to 200 chars) when
-    available; `metadata` carries producer-specific extras.
-    """
-
-    producer: str
-    medium: str
-    snippet: str | None = None
-    metadata: dict[str, str | int | float | bool] = Field(default_factory=dict)
-
-
 class ExtractPlaceItem(BaseModel):
     """One row in the extract response.
 
@@ -49,20 +32,21 @@ class ExtractPlaceItem(BaseModel):
     Pipeline-level states (`pending`, `failed`) live on the response
     envelope, never on items (ADR-063).
 
-    `evidence` is the audit trail — every producer/medium pair that
-    contributed to this candidate, in extraction order.
-
     `place` is a `PlaceCore` (identity + static fields), not a
     `PlaceObject`. Extraction does not populate live fields (rating,
     hours, popularity, business_status) — those are filled in later by
     the places read/enrichment path. Returning `PlaceCore` here is
     the honest shape; pretending to be `PlaceObject` just padded the
     response with always-null fields.
+
+    Evidence (the audit trail of producers/media that contributed to
+    each candidate) used to ride this item. It now writes to an
+    object-storage ledger so the product repo never sees it — see
+    `core/extraction/evidence_bucket.py`.
     """
 
     place: PlaceCore
     confidence: float
-    evidence: list[EvidenceDTO] = Field(default_factory=list)
 
     @field_validator("confidence")
     @classmethod

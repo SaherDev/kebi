@@ -15,6 +15,7 @@ from kebi.core.config import AppConfig, ExtractionConfig, get_config, get_env
 from kebi.core.events.dispatcher import EventDispatcher
 from kebi.core.events.handlers import EventHandlers
 from kebi.core.extraction.enrichment_level import EnrichmentLevel
+from kebi.core.extraction.evidence_bucket import EvidenceBucketWriter
 from kebi.core.extraction.extraction_pipeline import (
     ExtractionPipeline,
     SearchServiceFactory,
@@ -23,7 +24,6 @@ from kebi.core.extraction.extraction_pipeline import (
 )
 from kebi.core.extraction.result_cache import ExtractionResultCache
 from kebi.core.extraction.service import ExtractionService
-from kebi.core.extraction.status_repository import ExtractionStatusRepository
 from kebi.core.memory.buffer import MessageBuffer
 from kebi.core.memory.extractor import MemoryExtractor
 from kebi.core.memory.repository import SQLAlchemyUserMemoryRepository
@@ -53,6 +53,11 @@ from kebi.providers.cache import CacheBackend
 from kebi.providers.embeddings import EmbedderProtocol, get_embedder
 from kebi.providers.http_client import get_shared_http_client
 from kebi.providers.llm import get_transcription_client, get_vision_extractor
+from kebi.providers.object_storage import (
+    NullObjectStorage,
+    ObjectStorageProtocol,
+    S3ObjectStorage,
+)
 from kebi.providers.redis_cache import RedisCacheBackend, get_redis_client
 
 
@@ -76,13 +81,6 @@ def get_taste_service() -> TasteModelService:
 def get_cache_backend() -> CacheBackend:
     """FastAPI dependency providing CacheBackend (RedisCacheBackend by default)."""
     return RedisCacheBackend(client=get_redis_client(get_env().REDIS_URL))
-
-
-def get_status_repo(
-    cache: CacheBackend = Depends(get_cache_backend),  # noqa: B008
-) -> ExtractionStatusRepository:
-    """FastAPI dependency providing ExtractionStatusRepository."""
-    return ExtractionStatusRepository(cache=cache)
 
 
 def _build_message_buffer() -> MessageBuffer:
@@ -612,6 +610,55 @@ def get_extraction_pipeline(
     )
 
 
+# Process-wide singleton: the aioboto3 Session caches credentials and is
+# safe to reuse across requests. Built lazily so unset env vars short-circuit
+# to NullObjectStorage without trying to instantiate boto3.
+_object_storage: ObjectStorageProtocol | None = None
+
+
+def _build_object_storage() -> ObjectStorageProtocol:
+    env = get_env()
+    if not (
+        env.BUCKET_NAME
+        and env.BUCKET_ACCESS_KEY_ID
+        and env.BUCKET_SECRET_ACCESS_KEY
+    ):
+        return NullObjectStorage()
+    return S3ObjectStorage(
+        bucket=env.BUCKET_NAME,
+        endpoint_url=env.BUCKET_ENDPOINT_URL,
+        access_key_id=env.BUCKET_ACCESS_KEY_ID,
+        secret_access_key=env.BUCKET_SECRET_ACCESS_KEY,
+        region=env.BUCKET_REGION,
+    )
+
+
+def get_object_storage() -> ObjectStorageProtocol:
+    """Return the process-wide ObjectStorageProtocol implementation.
+
+    Returns `S3ObjectStorage` (Railway / AWS / R2 / MinIO — anything
+    speaking the S3 wire protocol) when bucket env vars are set;
+    otherwise `NullObjectStorage` so local dev runs without a real
+    bucket. Swapping providers is endpoint-URL-only — no code change.
+    """
+    global _object_storage
+    if _object_storage is None:
+        _object_storage = _build_object_storage()
+    return _object_storage
+
+
+def get_evidence_bucket_writer(
+    storage: ObjectStorageProtocol = Depends(get_object_storage),  # noqa: B008
+) -> EvidenceBucketWriter:
+    """FastAPI dependency providing the EvidenceBucketWriter.
+
+    Writes the per-extraction evidence audit trail to object storage
+    instead of stuffing it into the `/v1/extract` response. Storage is
+    pluggable via `ObjectStorageProtocol`.
+    """
+    return EvidenceBucketWriter(storage=storage)
+
+
 def get_extraction_result_cache(
     config: AppConfig = Depends(get_config),  # noqa: B008
 ) -> ExtractionResultCache:
@@ -638,10 +685,12 @@ def get_extraction_service(
     user_places_service: UserPlacesService = Depends(  # noqa: B008
         get_user_places_service
     ),
-    status_repo: ExtractionStatusRepository = Depends(get_status_repo),  # noqa: B008
     event_dispatcher: EventDispatcher = Depends(get_event_dispatcher),  # noqa: B008
     result_cache: ExtractionResultCache = Depends(  # noqa: B008
         get_extraction_result_cache
+    ),
+    evidence_writer: EvidenceBucketWriter = Depends(  # noqa: B008
+        get_evidence_bucket_writer
     ),
 ) -> ExtractionService:
     """FastAPI dependency providing ExtractionService (ADR-070, ADR-071, ADR-074).
@@ -653,14 +702,16 @@ def get_extraction_service(
     place. v2 services are the single seam — extraction never reaches
     the UserPlacesRepo directly. `result_cache` (ADR-074) lets the
     second-and-later users who share the same URL skip the pipeline.
+    `evidence_writer` ships the per-place audit trail to object storage
+    instead of returning it in the HTTP response.
     """
     return ExtractionService(
         pipeline=pipeline,
         upsert_service=upsert_service,
         user_places_service=user_places_service,
-        status_repo=status_repo,
         event_dispatcher=event_dispatcher,
         result_cache=result_cache,
+        evidence_writer=evidence_writer,
     )
 
 

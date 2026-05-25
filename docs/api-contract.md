@@ -221,10 +221,7 @@ Canonical product-facing extraction endpoint (ADR-073). The product repo calls t
   "results": [
     {
       "place": { /* PlaceCore */ },
-      "confidence": 0.82,
-      "evidence": [
-        { "producer": "tiktok_caption", "medium": "text", "snippet": "best ramen in Ari", "metadata": {} }
-      ]
+      "confidence": 0.82
     }
   ],
   "raw_input": "https://www.tiktok.com/@user/video/123",
@@ -237,13 +234,11 @@ Canonical product-facing extraction endpoint (ADR-073). The product repo calls t
 | Field             | Type                                            | Notes                                                                                  |
 | ----------------- | ----------------------------------------------- | -------------------------------------------------------------------------------------- |
 | `status`          | `"pending" \| "completed" \| "failed"`          | Envelope-level only. `results` is non-empty **iff** `status == "completed"`             |
-| `results`         | `ExtractPlaceItem[]`                            | `{ place: PlaceCore, confidence: float (0–1), evidence: EvidenceDTO[] }`. **No per-item `status`** — ADR-071 saves every picker candidate with `approved=False`; the user curates later in the product UI |
+| `results`         | `ExtractPlaceItem[]`                            | `{ place: PlaceCore, confidence: float (0–1) }`. **No per-item `status`** — ADR-071 saves every picker candidate with `approved=False`; the user curates later in the product UI. **No `evidence`** — ADR-093 moved the audit trail to an object-storage ledger so it no longer rides the response |
 | `raw_input`       | `string \| null`                                | The original user-supplied string, verbatim                                            |
 | `request_id`      | `string \| null`                                | Correlation id                                                                          |
 | `failure_reason`  | `string \| null`                                | Populated only when `status == "failed"` (e.g. `unsupported_url`)                       |
 | `failure_message` | `string \| null`                                | Human-readable diagnostic, only when `status == "failed"`                               |
-
-`EvidenceDTO`: `{ producer: string, medium: string, snippet: string|null, metadata: object }`.
 
 ADR-081: the extract response is unchanged. The name the place was shown as in the source post (e.g. a TikTok card title "Mirror Temple", resolver-cleaned of list numbering) is **not** returned here — it is persisted per save on `user_places.source_label` and surfaced when the user's saved places are read. Independently, a confidently-matched source label is added to the shared `place.place_name_aliases` (which feeds search); low-confidence labels stay per-user-only and never enter shared search.
 
@@ -256,14 +251,6 @@ ADR-074: results are cached by canonical URL — a repeat submission of the same
 | `200` | Extraction completed or failed — inspect `status` / `failure_reason` in the response     |
 | `400` | Malformed request (missing `raw_input` / `user_id`, or `raw_input` exceeds the size cap) |
 | `500` | Unhandled pipeline failure                                                               |
-
----
-
-## GET /v1/extraction/{request_id}
-
-**Reserved for future async use.** No product flow writes status keys today — the canonical extraction path is synchronous `POST /v1/extract`. This route remains so a future async/background variant can plug in without API churn.
-
-**Response (200):** `ExtractPlaceResponse` — same shape as `POST /v1/extract`. `404` when the key is not found (still running, or TTL expired). Would be cached under `extraction:v2:{request_id}`.
 
 ---
 

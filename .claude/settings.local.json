@@ -72,7 +72,9 @@
       "Bash(bash /tmp/count_refs.sh)",
       "Read(//private/tmp/**)",
       "Read(//Users/saher/dev/repos/kebi-dev/kebi-config/bruno/environments/**)",
-      "Bash(grep -E \"\\\\.py$\")"
+      "Bash(grep -E \"\\\\.py$\")",
+      "Bash(poetry -C /Users/saher/dev/repos/kebi-dev/kebi run python -c \"import langfuse; print\\(langfuse.__version__\\); from langfuse.langchain import CallbackHandler as H1; print\\('langchain.CallbackHandler OK'\\)\")",
+      "Bash(poetry -C /Users/saher/dev/repos/kebi-dev/kebi run python -c \"import langfuse, importlib.metadata as m; print\\('version', m.version\\('langfuse'\\)\\); from langfuse.langchain import CallbackHandler; print\\('CallbackHandler init signature:', CallbackHandler.__init__.__doc__ or 'no doc'\\); import inspect; print\\(inspect.signature\\(CallbackHandler.__init__\\)\\)\")"
     ]
   }
 }

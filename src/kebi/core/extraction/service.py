@@ -40,13 +40,13 @@ from kebi.core.config import get_config
 from kebi.core.events.dispatcher import EventDispatcherProtocol
 from kebi.core.events.events import PlaceSaved
 from kebi.core.extraction.candidate_mapper import candidate_to_core
+from kebi.core.extraction.evidence_bucket import EvidenceBucketWriter
 from kebi.core.extraction.extraction_pipeline import (
     ExtractionPipeline,
     TooManyCandidatesError,
 )
 from kebi.core.extraction.input_parser import ParsedInput, parse_input
 from kebi.core.extraction.result_cache import ExtractionResultCache
-from kebi.core.extraction.status_repository import ExtractionStatusRepository
 from kebi.core.extraction.types import ValidatedCandidate
 from kebi.core.extraction.url_source import source_from_url
 from kebi.core.places import (
@@ -106,19 +106,14 @@ def _candidate_to_item_dict(
     already saved is internal). `place` is a `PlaceCore`: identity +
     static fields only, no live signals (rating/hours/popularity are
     enriched later by the places read path, not by extraction).
+
+    Evidence (the producer/medium audit trail) is intentionally absent:
+    it ships to the object-storage ledger out-of-band, not back to the
+    product repo. See `EvidenceBucketWriter`.
     """
     return {
         "place": place.model_dump(mode="json"),
         "confidence": candidate.confidence,
-        "evidence": [
-            {
-                "producer": e.producer.value,
-                "medium": e.medium.value,
-                "snippet": e.snippet,
-                "metadata": dict(e.metadata),
-            }
-            for e in candidate.evidence
-        ],
     }
 
 
@@ -137,16 +132,16 @@ class ExtractionService:
         pipeline: ExtractionPipeline,
         upsert_service: PlaceUpsertServiceProtocol,
         user_places_service: UserPlacesServiceProtocol,
-        status_repo: ExtractionStatusRepository,
         event_dispatcher: EventDispatcherProtocol,
         result_cache: ExtractionResultCache,
+        evidence_writer: EvidenceBucketWriter,
     ) -> None:
         self._pipeline = pipeline
         self._upsert = upsert_service
         self._user_places = user_places_service
-        self._status_repo = status_repo
         self._event_dispatcher = event_dispatcher
         self._result_cache = result_cache
+        self._evidence_writer = evidence_writer
 
     async def run(
         self,
@@ -157,9 +152,7 @@ class ExtractionService:
     ) -> ExtractPlaceResponse:
         """Run the extraction pipeline inline and return a terminal envelope.
 
-        Returns `status ∈ {completed, failed}` — never `pending`. Writes
-        the final envelope to the Redis status store under
-        `extraction:v2:{request_id}`.
+        Returns `status ∈ {completed, failed}` — never `pending`.
 
         ADR-074: before running the pipeline, look up a Redis cache
         keyed by canonical URL (the same form `parse_input` produces).
@@ -194,16 +187,12 @@ class ExtractionService:
             },
         ):
             if parsed.url is not None and source is None:
-                response = _failed_response(
+                return _failed_response(
                     raw_input,
                     rid,
                     reason="unsupported_url",
                     message=_unsupported_url_message(parsed.url),
                 )
-                await self._status_repo.write(
-                    rid, response.model_dump(mode="json")
-                )
-                return response
 
             # ADR-074 cache lookup — short-circuits pipeline + upsert.
             if parsed.url is not None:
@@ -215,9 +204,6 @@ class ExtractionService:
                     source=source,
                 )
                 if cached is not None:
-                    await self._status_repo.write(
-                        rid, cached.model_dump(mode="json")
-                    )
                     return cached
 
             response = await self._run_pipeline_and_persist(
@@ -239,7 +225,6 @@ class ExtractionService:
             ):
                 await self._result_cache.set(parsed.url, response.results)
 
-            await self._status_repo.write(rid, response.model_dump(mode="json"))
             return response
 
     async def _try_cache_hit(
@@ -496,6 +481,13 @@ class ExtractionService:
                     extra={"provider_id": c.provider_id},
                 )
                 continue
+            await self._evidence_writer.write(
+                place=persisted_core,
+                evidence=list(c.evidence),
+                user_id=user_id,
+                request_id=request_id,
+                source_url=source_url,
+            )
             items.append(ExtractPlaceItem(**_candidate_to_item_dict(c, persisted_core)))
         return items
 

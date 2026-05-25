@@ -6,11 +6,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from kebi.api.schemas.extract_place import (
-    EvidenceDTO,
-    ExtractPlaceItem,
-    ExtractPlaceResponse,
-)
+from kebi.api.schemas.extract_place import ExtractPlaceItem
+from kebi.core.extraction.evidence_bucket import EvidenceBucketWriter
 from kebi.core.extraction.extraction_pipeline import TooManyCandidatesError
 from kebi.core.extraction.service import ExtractionService
 from kebi.core.extraction.types import (
@@ -114,9 +111,6 @@ def _build_service(
     else:
         user_places_service.save_places = AsyncMock(return_value=[])
 
-    status_repo = MagicMock()
-    status_repo.write = AsyncMock()
-
     event_dispatcher = MagicMock()
     event_dispatcher.dispatch = AsyncMock()
 
@@ -125,22 +119,27 @@ def _build_service(
     result_cache.set = AsyncMock()
     result_cache.delete = AsyncMock()
 
+    object_storage = MagicMock()
+    object_storage.put_json = AsyncMock()
+    evidence_writer = EvidenceBucketWriter(storage=object_storage)
+
     service = ExtractionService(
         pipeline=pipeline,
         upsert_service=upsert_service,
         user_places_service=user_places_service,
-        status_repo=status_repo,
         event_dispatcher=event_dispatcher,
         result_cache=result_cache,
+        evidence_writer=evidence_writer,
     )
 
     container = MagicMock()
     container.pipeline = pipeline
     container.upsert = upsert_service
     container.user_places = user_places_service
-    container.status_repo = status_repo
     container.event_dispatcher = event_dispatcher
     container.result_cache = result_cache
+    container.object_storage = object_storage
+    container.evidence_writer = evidence_writer
     return service, container
 
 
@@ -159,7 +158,6 @@ def _cached_item(
             categories=[PlaceCategory.restaurant],
         ),
         confidence=confidence,
-        evidence=[EvidenceDTO(producer="llm_ner", medium="caption", snippet="…")],
     )
 
 
@@ -182,8 +180,6 @@ async def test_unsupported_url_returns_failed_envelope() -> None:
     assert resp.status == "failed"
     assert resp.failure_reason == "unsupported_url"
     assert resp.results == []
-    # Status envelope written even on failure path.
-    c.status_repo.write.assert_called_once()
     # Pipeline never invoked.
     c.pipeline.run.assert_not_called()
 
@@ -289,19 +285,6 @@ async def test_mixed_save_and_duplicate_dispatches_event_for_new_link_only() -> 
 
 
 @pytest.mark.asyncio
-async def test_status_repo_written_for_every_terminal_envelope() -> None:
-    candidate = _candidate()
-    persisted = _persisted_core()
-    service, c = _build_service(pipeline_result=[candidate], upsert_result=[persisted])
-    resp = await service.run(raw_input="Fuji Ramen", user_id="u1")
-    c.status_repo.write.assert_awaited_once()
-    _key, payload = c.status_repo.write.await_args.args
-    assert payload["status"] == "completed"
-    # Envelope keys check
-    assert isinstance(resp, ExtractPlaceResponse)
-
-
-@pytest.mark.asyncio
 async def test_save_places_called_with_v2_source() -> None:
     candidate = _candidate()
     persisted = _persisted_core()
@@ -379,8 +362,6 @@ async def test_cache_hit_skips_pipeline_and_calls_save_places() -> None:
     assert resp.status == "completed"
     assert len(resp.results) == 1
     assert resp.results[0].place.place_name == "Fuji Ramen"
-    # Status repo still written so the polling route stays consistent.
-    c.status_repo.write.assert_awaited_once()
     # We did NOT re-write the cache (it was already there).
     c.result_cache.set.assert_not_awaited()
 

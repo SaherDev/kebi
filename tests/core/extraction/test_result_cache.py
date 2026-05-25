@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock
 import pytest
 from redis.asyncio import Redis
 
-from kebi.api.schemas.extract_place import EvidenceDTO, ExtractPlaceItem
+from kebi.api.schemas.extract_place import ExtractPlaceItem
 from kebi.core.extraction.result_cache import (
     _KEY_PREFIX,
     ExtractionResultCache,
@@ -34,7 +34,6 @@ def _make_item(
             place_name=place_name,
         ),
         confidence=0.9,
-        evidence=[EvidenceDTO(producer="llm_ner", medium="caption", snippet="…")],
     )
 
 

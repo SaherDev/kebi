@@ -886,6 +886,13 @@ class EnvConfig(BaseSettings):
     LANGFUSE_HOST: str | None = None
     AGENT_ENABLED: bool = True
     AGENT_MODEL: str | None = None  # ADR-068: orchestrator option key override
+    # S3-compatible object storage (Railway / AWS S3 / R2 / MinIO). All
+    # unset = NullObjectStorage (no-op fallback for local dev).
+    BUCKET_ENDPOINT_URL: str | None = None
+    BUCKET_NAME: str | None = None
+    BUCKET_ACCESS_KEY_ID: str | None = None
+    BUCKET_SECRET_ACCESS_KEY: str | None = None
+    BUCKET_REGION: str = "auto"
 
 
 _env: EnvConfig | None = None
