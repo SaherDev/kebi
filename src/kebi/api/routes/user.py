@@ -2,17 +2,24 @@
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, Query, Request, status
 
-from kebi.api.deps import get_user_data_deletion_service
+from kebi.api.deps import (
+    GatewayIdentity,
+    get_user_data_deletion_service,
+    require_gateway_identity,
+)
+from kebi.api.rate_limit import limiter
 from kebi.core.user.service import DataScope, UserDataDeletionService
 
 router = APIRouter()
 
 
-@router.delete("/user/{user_id}/data", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/user/data", status_code=status.HTTP_204_NO_CONTENT)
+@limiter.limit("3/hour")
 async def delete_user_data(
-    user_id: str,
+    request: Request,
+    identity: Annotated[GatewayIdentity, Depends(require_gateway_identity)],
     scope: Annotated[
         list[DataScope] | None,
         Query(
@@ -48,4 +55,4 @@ async def delete_user_data(
     (no `scope`).
     """
     scopes = set(scope) if scope else None
-    await service.delete_user_data(user_id, scopes=scopes)
+    await service.delete_user_data(identity.user_id, scopes=scopes)

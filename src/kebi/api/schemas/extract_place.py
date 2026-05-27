@@ -58,10 +58,22 @@ class ExtractPlaceItem(BaseModel):
 
 
 class ExtractPlaceRequest(BaseModel):
-    """Request body for extract-place endpoint."""
+    """Request body for extract-place endpoint.
 
-    user_id: str = Field(description="User ID (validated by NestJS)")
-    raw_input: str = Field(description="TikTok URL or plain text")
+    `user_id` is intentionally absent — the caller's identity is supplied
+    by the gateway as `X-Gateway-User-Id` and verified by
+    `require_gateway_identity`. The route passes it explicitly to the
+    service layer.
+
+    `raw_input` is length-capped at 8000 chars — large enough for a
+    plain-text place description with notes; small enough to refuse
+    pathological payloads at the boundary before paying for any
+    enrichment.
+    """
+
+    raw_input: str = Field(
+        min_length=1, max_length=8000, description="TikTok URL or plain text"
+    )
 
 
 FailureReason = Literal[

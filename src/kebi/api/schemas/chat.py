@@ -49,10 +49,20 @@ class MovementProfile(BaseModel):
 
 
 class ChatRequest(BaseModel):
-    """Request body for POST /v1/chat endpoint."""
+    """Request body for POST /v1/chat endpoint.
 
-    user_id: str
-    message: str
+    `user_id` is intentionally absent — the caller's identity is verified
+    by the gateway and forwarded as `X-Gateway-User-Id`; routes resolve
+    it via `require_gateway_identity` and pass it explicitly to the
+    service layer (see ADR for gateway auth).
+
+    `message` is length-capped to bound LLM token cost on adversarial
+    inputs and keep the per-user memory buffer from ballooning. 4000
+    chars covers typical conversational and voice-transcribed inputs
+    with headroom; longer payloads are rejected with 422.
+    """
+
+    message: str = Field(min_length=1, max_length=4000)
     location: Location | None = None
     movement_profile: MovementProfile | None = None
 

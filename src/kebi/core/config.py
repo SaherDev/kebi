@@ -886,6 +886,26 @@ class EnvConfig(BaseSettings):
     LANGFUSE_HOST: str | None = None
     AGENT_ENABLED: bool = True
     AGENT_MODEL: str | None = None  # ADR-068: orchestrator option key override
+    # Gateway service-to-service auth. The NestJS gateway holds the same
+    # secret and forwards it on every call as X-Gateway-Token alongside
+    # X-Gateway-User-Id (the verified Clerk subject). kebi never sees
+    # Clerk tokens directly; it trusts the gateway iff the shared secret
+    # validates. Required at startup — startup fails closed if unset.
+    GATEWAY_SHARED_SECRET: str | None = None
+    # "production" disables /docs, /redoc, /openapi.json and enables
+    # strict CORS. Any other value (default "development") leaves docs
+    # exposed and CORS permissive for local tooling.
+    ENVIRONMENT: str = "development"
+    # Comma-separated list of allowed CORS origins for the protected
+    # router. Empty = no cross-origin requests permitted. Gateway calls
+    # are server-to-server and do not need CORS; this field is for
+    # browser-based dev tooling only.
+    CORS_ALLOW_ORIGINS: str = ""
+    # When true (default), redact user-content fields (message, intent,
+    # transcript, city) from Langfuse traces. Disable only in
+    # short-lived debug sessions on dev data — production traces must
+    # never carry PII.
+    LANGFUSE_SCRUB_INPUT: bool = True
     # S3-compatible object storage (Railway / AWS S3 / R2 / MinIO). All
     # unset = NullObjectStorage (no-op fallback for local dev).
     BUCKET_ENDPOINT_URL: str | None = None

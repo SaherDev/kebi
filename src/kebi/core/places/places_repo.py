@@ -27,6 +27,7 @@ from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ._place_utils import escape_like
 from .models import (
     LocationContext,
     PlaceCategory,
@@ -110,7 +111,12 @@ class PlacesRepo:
 
         if query.place_names:
             conditions.append(
-                or_(*[_t.place_name.ilike(f"%{n}%") for n in query.place_names])
+                or_(
+                    *[
+                        _t.place_name.ilike(f"%{escape_like(n)}%", escape="\\")
+                        for n in query.place_names
+                    ]
+                )
             )
 
         if query.categories:
@@ -137,12 +143,18 @@ class PlacesRepo:
 
         loc = query.location
         if loc and loc.city:
-            conditions.append(_t.location["city"].astext.ilike(f"%{loc.city}%"))
+            conditions.append(
+                _t.location["city"].astext.ilike(
+                    f"%{escape_like(loc.city)}%", escape="\\"
+                )
+            )
         if loc and loc.country:
             conditions.append(_t.location["country"].astext == loc.country)
         if loc and loc.neighborhood:
             conditions.append(
-                _t.location["neighborhood"].astext.ilike(f"%{loc.neighborhood}%")
+                _t.location["neighborhood"].astext.ilike(
+                    f"%{escape_like(loc.neighborhood)}%", escape="\\"
+                )
             )
 
         if (

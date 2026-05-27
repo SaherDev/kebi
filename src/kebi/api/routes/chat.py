@@ -1,17 +1,30 @@
-"""POST /v1/chat and POST /v1/chat/stream — unified chat entry point (ADR-052)."""
+"""POST /v1/chat and POST /v1/chat/stream — unified chat entry point (ADR-052).
 
-from __future__ import annotations
+Note: this file intentionally does NOT use `from __future__ import
+annotations`. slowapi's `@limiter.limit` wraps the route function and
+FastAPI's per-body type-adapter rebuild then fails to resolve forward
+refs from the wrapper's module globals — manifests as
+`PydanticUserError: ChatRequest is not fully defined`. Keeping
+annotations as real classes here sidesteps that interaction.
+"""
 
+import asyncio
 import json
 import logging
 from collections.abc import AsyncGenerator
 from typing import Any
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Body, Depends, Request
 from fastapi.responses import StreamingResponse
 from langchain_core.messages import AIMessage
 
-from kebi.api.deps import get_agent_graph, get_chat_service
+from kebi.api.deps import (
+    GatewayIdentity,
+    get_agent_graph,
+    get_chat_service,
+    require_gateway_identity,
+)
+from kebi.api.rate_limit import limiter
 from kebi.api.schemas.chat import ChatRequest, ChatResponse
 from kebi.core.agent._trace_context import feature_trace
 from kebi.core.agent.invocation import build_turn_payload
@@ -23,30 +36,62 @@ from kebi.providers.tracing import get_tracing_client
 
 logger = logging.getLogger(__name__)
 
+# Hard wall-clock budget on a single SSE stream. The agent's per-tool
+# budgets (`agent.tool_timeouts_seconds`) bound individual nodes; this
+# bounds the whole turn. Anti-slowloris: a client that opens the
+# connection then refuses to read can't pin a worker forever — once we
+# exceed the budget we emit a `timeout` error frame and close.
+_SSE_WALL_CLOCK_SECONDS = 90.0
+
+# Hard cap on a single SSE frame's `data:` JSON body. Bounds memory if
+# a tool result or reasoning step ever becomes unexpectedly large. The
+# limit is high (16 KiB) so normal frames pass through untouched.
+_SSE_FRAME_MAX_BYTES = 16 * 1024
+
+
+def _frame(event: str, payload: dict[str, Any] | str) -> str:
+    """Format an SSE frame, truncating the JSON body if it overflows."""
+    body = payload if isinstance(payload, str) else json.dumps(payload, default=str)
+    if len(body.encode("utf-8")) > _SSE_FRAME_MAX_BYTES:
+        body = json.dumps(
+            {"truncated": True, "original_bytes": len(body.encode("utf-8"))}
+        )
+    return f"event: {event}\ndata: {body}\n\n"
+
+
 router = APIRouter()
 
 
 @router.post("/chat", status_code=200)
+@limiter.limit("30/minute")
 async def chat(
-    body: ChatRequest,
+    request: Request,
+    body: ChatRequest = Body(...),  # noqa: B008
+    identity: GatewayIdentity = Depends(require_gateway_identity),  # noqa: B008
     service: ChatService = Depends(get_chat_service),  # noqa: B008
 ) -> ChatResponse:
     """Unified chat endpoint — classify intent and dispatch to correct pipeline.
 
     Args:
-        body: Chat request containing user_id, message, and optional location.
+        body: Chat request containing message, optional location, optional
+            movement profile. `user_id` is NOT a body field — it is
+            forwarded by the gateway as `X-Gateway-User-Id` and resolved
+            via `require_gateway_identity`.
+        identity: Verified gateway identity (carries `user_id`).
         service: Injected ChatService instance.
 
     Returns:
         ChatResponse with type, message, and optional data payload.
     """
-    return await service.run(body)
+    return await service.run(body, user_id=identity.user_id)
 
 
 @router.post("/chat/stream", status_code=200)
+@limiter.limit("30/minute")
 async def chat_stream(
-    body: ChatRequest,
     request: Request,
+    body: ChatRequest = Body(...),  # noqa: B008
+    identity: GatewayIdentity = Depends(require_gateway_identity),  # noqa: B008
     service: ChatService = Depends(get_chat_service),  # noqa: B008
     agent_graph: Any = Depends(get_agent_graph),  # noqa: B008
 ) -> StreamingResponse:
@@ -79,12 +124,13 @@ async def chat_stream(
             content={"detail": "Agent not enabled or graph unavailable"},
         )
 
-    taste_summary = await service._compose_taste_summary(body.user_id)
-    memory_summary = await service._compose_memory_summary(body.user_id)
+    user_id = identity.user_id
+    taste_summary = await service._compose_taste_summary(user_id)
+    memory_summary = await service._compose_memory_summary(user_id)
 
     payload = build_turn_payload(
         message=body.message,
-        user_id=body.user_id,
+        user_id=user_id,
         taste_profile_summary=taste_summary,
         memory_summary=memory_summary,
         user_location=(body.location.model_dump() if body.location else None),
@@ -93,14 +139,14 @@ async def chat_stream(
         ),
     )
     graph_config = {
-        "configurable": {"thread_id": body.user_id},
-        "metadata": {"user_id": body.user_id},
+        "configurable": {"thread_id": user_id},
+        "metadata": {"user_id": user_id},
     }
 
     async def generate() -> AsyncGenerator[str, None]:
         async with feature_trace(
             "chat",
-            body.user_id,
+            user_id,
             name="chat_turn",
             extra={"endpoint": "/v1/chat/stream"},
         ):
@@ -114,30 +160,40 @@ async def chat_stream(
             tool_results: list[dict[str, Any]] = []
             try:
                 try:
-                    async for stream_mode, chunk in agent_graph.astream(
-                        payload,
-                        config=graph_config,
-                        stream_mode=["custom", "values"],
-                    ):
-                        if await request.is_disconnected():
-                            tracer.capture_message(
-                                message="chat_stream client disconnected",
-                                level="info",
-                                metadata={"user_id": body.user_id},
-                                user_id=body.user_id,
-                            )
-                            return
-                        if stream_mode == "custom":
-                            data = json.dumps(chunk, default=str)
-                            yield f"event: reasoning_step\ndata: {data}\n\n"
-                        elif stream_mode == "values":
-                            final_state = chunk
-                            snap_tool_results = chunk.get("tool_results") or []
-                            if snap_tool_results:
-                                tool_results = snap_tool_results
-                except Exception as exc:
-                    logger.exception("chat_stream graph error: %s", exc)
-                    yield f"event: error\ndata: {json.dumps({'detail': str(exc)})}\n\n"
+                    # Hard wall-clock bound: a slow-reading or unresponsive
+                    # client can't pin the worker beyond _SSE_WALL_CLOCK_SECONDS.
+                    async with asyncio.timeout(_SSE_WALL_CLOCK_SECONDS):
+                        async for stream_mode, chunk in agent_graph.astream(
+                            payload,
+                            config=graph_config,
+                            stream_mode=["custom", "values"],
+                        ):
+                            if await request.is_disconnected():
+                                tracer.capture_message(
+                                    message="chat_stream client disconnected",
+                                    level="info",
+                                    metadata={"user_id": user_id},
+                                    user_id=user_id,
+                                )
+                                return
+                            if stream_mode == "custom":
+                                yield _frame("reasoning_step", chunk)
+                            elif stream_mode == "values":
+                                final_state = chunk
+                                snap_tool_results = chunk.get("tool_results") or []
+                                if snap_tool_results:
+                                    tool_results = snap_tool_results
+                except TimeoutError:
+                    logger.warning(
+                        "chat_stream wall-clock timeout (%.0fs) for user %s",
+                        _SSE_WALL_CLOCK_SECONDS,
+                        user_id,
+                    )
+                    yield _frame("error", {"detail": "timeout"})
+                    return
+                except Exception:
+                    logger.exception("chat_stream graph error")
+                    yield _frame("error", {"detail": "internal_error"})
                     return
 
                 messages: list[Any] = final_state.get("messages") or []
@@ -152,15 +208,13 @@ async def chat_stream(
                             break
 
                 for tool_result in tool_results:
-                    yield f"event: tool_result\ndata: {json.dumps(tool_result)}\n\n"
+                    yield _frame("tool_result", tool_result)
                 if final_message:
-                    msg_payload = json.dumps({"content": final_message})
-                    yield f"event: message\ndata: {msg_payload}\n\n"
-                done_payload = json.dumps({"tool_calls_used": tool_calls_used})
-                yield f"event: done\ndata: {done_payload}\n\n"
+                    yield _frame("message", {"content": final_message})
+                yield _frame("done", {"tool_calls_used": tool_calls_used})
             finally:
                 await service._dispatcher.dispatch(
-                    TurnCompleted(user_id=body.user_id, user_message=body.message)
+                    TurnCompleted(user_id=user_id, user_message=body.message)
                 )
 
     return StreamingResponse(generate(), media_type="text/event-stream")

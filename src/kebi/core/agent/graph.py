@@ -430,13 +430,22 @@ def _render_system_prompt(state: AgentState) -> str:
 
     Every template slot is validated at `_load_prompts()` boot time
     (FR-018a), so `.format(...)` on the loaded content is safe.
+
+    `taste_profile_summary` and `memory_summary` are derived from user
+    content (memory facts the user typed; signals against places the
+    user named). They are wrapped in `trust="low"` blocks so the model
+    treats them as data, not instruction (see `prompt_safety`).
     """
+    from kebi.core.prompt_safety import wrap_untrusted
+
     template = get_config().prompts["agent"].content
     return template.format(
         location_context=_render_location_context(state),
         movement_context=_render_movement_context(state),
-        taste_profile_summary=state.get("taste_profile_summary") or "",
-        memory_summary=state.get("memory_summary") or "",
+        taste_profile_summary=wrap_untrusted(
+            state.get("taste_profile_summary"), "taste_profile"
+        ),
+        memory_summary=wrap_untrusted(state.get("memory_summary"), "user_memories"),
     )
 
 

@@ -41,7 +41,7 @@ class TestChatRouteHappyPath:
 
         response = client.post(
             "/v1/chat",
-            json={"user_id": "user_1", "message": "is tipping expected in Japan?"},
+            json={"message": "is tipping expected in Japan?"},
         )
 
         assert response.status_code == 200
@@ -62,7 +62,6 @@ class TestChatRouteHappyPath:
         response = client.post(
             "/v1/chat",
             json={
-                "user_id": "user_1",
                 "message": "what's this city known for",
                 "location": {"lat": 13.7563, "lng": 100.5018},
             },
@@ -87,7 +86,7 @@ class TestChatRouteToolCallsUsed:
 
         response = client.post(
             "/v1/chat",
-            json={"user_id": "user_1", "message": "find me ramen"},
+            json={"message": "find me ramen"},
         )
 
         assert response.status_code == 200
@@ -105,7 +104,7 @@ class TestChatRouteToolCallsUsed:
 
         response = client.post(
             "/v1/chat",
-            json={"user_id": "user_1", "message": "hello"},
+            json={"message": "hello"},
         )
 
         assert response.status_code == 200
@@ -116,20 +115,11 @@ class TestChatRouteToolCallsUsed:
 class TestChatRouteValidation:
     """Verify request validation for POST /v1/chat."""
 
-    def test_missing_user_id_returns_422(self) -> None:
-        """Missing user_id field is rejected with 422."""
-        test_client = TestClient(app)
-        response = test_client.post(
-            "/v1/chat",
-            json={"message": "cheap dinner"},
-        )
-        assert response.status_code == 422
-
     def test_missing_message_returns_422(self) -> None:
         """Missing message field is rejected with 422."""
         test_client = TestClient(app)
         response = test_client.post(
             "/v1/chat",
-            json={"user_id": "user_1"},
+            json={},
         )
         assert response.status_code == 422

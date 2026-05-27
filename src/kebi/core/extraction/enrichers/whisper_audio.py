@@ -29,6 +29,12 @@ def _whisper_cost_for(duration_seconds: float) -> float | None:
 
 _DEFAULT_WHISPER_CONFIG = ExtractionWhisperConfig()
 
+# Hard cap on audio payload size sent to Groq Whisper. Groq's own
+# limit is 25 MB; we cap a bit below that to refuse pathological
+# inputs (a multi-hour stream pulled through yt-dlp) before paying the
+# transcription bill. A normal TikTok / Reel comes in under 5 MB.
+_MAX_AUDIO_BYTES = 24 * 1024 * 1024
+
 
 class WhisperAudioEnricher:
     """Transcribes audio via Groq Whisper and writes it to `context.transcript`.
@@ -125,6 +131,14 @@ class WhisperAudioEnricher:
             if not audio_bytes:
                 logger.debug(
                     "Whisper Tier 2 skipped — yt-dlp returned 0 audio bytes for url=%s",
+                    url,
+                )
+                return None
+            if len(audio_bytes) > _MAX_AUDIO_BYTES:
+                logger.warning(
+                    "Whisper Tier 2 refused %d bytes (> %d cap) for url=%s",
+                    len(audio_bytes),
+                    _MAX_AUDIO_BYTES,
                     url,
                 )
                 return None

@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import re
+import secrets
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from typing import Any
 
-from fastapi import BackgroundTasks, Depends, Request
+from fastapi import BackgroundTasks, Depends, Header, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from kebi.core.agent.tools.candidate_namer import CandidateNamerService
@@ -59,6 +62,62 @@ from kebi.providers.object_storage import (
     S3ObjectStorage,
 )
 from kebi.providers.redis_cache import RedisCacheBackend, get_redis_client
+
+# ---------------------------------------------------------------------------
+# Gateway service-to-service auth.
+#
+# kebi exposes HTTP routes but never authenticates end users itself. The
+# NestJS gateway holds GATEWAY_SHARED_SECRET, verifies the Clerk session
+# on its side, and forwards two headers on every protected call:
+#
+#   X-Gateway-Token    — the shared secret (constant-time compared)
+#   X-Gateway-User-Id  — the verified Clerk subject (e.g. "user_2abc...")
+#
+# Both headers are required; a missing or wrong token is 401, a malformed
+# user id is 400. user_id format is restricted to the Clerk pattern so it
+# can be safely substituted into Redis keys, checkpointer thread ids, and
+# parameterised SQL without collateral injection paths.
+# ---------------------------------------------------------------------------
+
+_USER_ID_PATTERN = re.compile(r"^user_[A-Za-z0-9]{20,40}$")
+
+
+@dataclass(frozen=True)
+class GatewayIdentity:
+    """A verified caller identity forwarded by the NestJS gateway.
+
+    Constructed only inside `require_gateway_identity` after the shared
+    secret check passes. Routes treat the `user_id` field as ground truth
+    — body-level / path-level `user_id` is no longer accepted.
+    """
+
+    user_id: str
+
+
+def require_gateway_identity(
+    request: Request,
+    x_gateway_token: str = Header(..., alias="X-Gateway-Token"),
+    x_gateway_user_id: str = Header(..., alias="X-Gateway-User-Id"),
+) -> GatewayIdentity:
+    """Verify the gateway shared secret and return the forwarded identity.
+
+    Mounted as a global dependency on the protected router. The public
+    router (just `/v1/health`) bypasses this — health probes must remain
+    reachable for load-balancer / Railway HEALTHCHECK.
+    """
+    expected = get_env().GATEWAY_SHARED_SECRET
+    if not expected:
+        # Misconfigured deploy — fail closed.
+        raise HTTPException(status_code=503, detail="auth_misconfigured")
+    if not secrets.compare_digest(x_gateway_token, expected):
+        raise HTTPException(status_code=401, detail="unauthorized")
+    if not _USER_ID_PATTERN.match(x_gateway_user_id):
+        raise HTTPException(status_code=400, detail="bad_user_id")
+    identity = GatewayIdentity(user_id=x_gateway_user_id)
+    # Stash on request.state so middleware (rate limiter, request-id
+    # logger) can reach it without re-resolving the dep chain.
+    request.state.identity = identity
+    return identity
 
 
 def get_taste_service() -> TasteModelService:

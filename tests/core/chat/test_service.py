@@ -93,7 +93,9 @@ async def test_run_invokes_agent_graph_and_returns_agent_type() -> None:
     )
     service = _make_service(agent_graph=graph)
 
-    result = await service.run(ChatRequest(user_id="u1", message="show me my saves"))
+    result = await service.run(
+        ChatRequest(message="show me my saves"), user_id="u1"
+    )
 
     assert result.type == "agent"
     assert result.message == "here's what I found"
@@ -126,7 +128,7 @@ async def test_run_filters_reasoning_steps_to_user_visible() -> None:
     )
     service = _make_service(agent_graph=graph)
 
-    result = await service.run(ChatRequest(user_id="u1", message="hi"))
+    result = await service.run(ChatRequest(message="hi"), user_id="u1")
 
     assert result.data is not None
     assert len(result.data["reasoning_steps"]) == 1
@@ -134,14 +136,14 @@ async def test_run_filters_reasoning_steps_to_user_visible() -> None:
 
 
 async def test_run_passes_user_id_as_thread_id() -> None:
-    """graph.astream is called with configurable.thread_id == request.user_id."""
+    """graph.astream is called with configurable.thread_id == identity user_id."""
     graph = AsyncMock()
     graph.astream = _mock_astream(
         [{"messages": [AIMessage(content="ok")], "reasoning_steps": []}]
     )
     service = _make_service(agent_graph=graph)
 
-    await service.run(ChatRequest(user_id="u-agent", message="test"))
+    await service.run(ChatRequest(message="test"), user_id="u-agent")
 
     call = graph.astream.call_args
     assert call.kwargs["config"]["configurable"]["thread_id"] == "u-agent"
@@ -153,7 +155,7 @@ async def test_run_returns_error_on_graph_exception() -> None:
     graph.astream = _mock_astream(raises=RuntimeError("boom"))
 
     service = _make_service(agent_graph=graph)
-    result = await service.run(ChatRequest(user_id="u", message="hi"))
+    result = await service.run(ChatRequest(message="hi"), user_id="u")
 
     assert result.type == "error"
 
@@ -178,10 +180,10 @@ async def test_run_threads_raw_user_location() -> None:
 
     await service.run(
         ChatRequest(
-            user_id="u",
             message="ramen for date night",
             location=Location(lat=52.12, lng=11.62),
-        )
+        ),
+        user_id="u",
     )
 
     payload = graph.astream.call_args.args[0]
@@ -197,7 +199,7 @@ async def test_run_no_location_threads_none() -> None:
 
     service = _make_service(agent_graph=graph)
 
-    await service.run(ChatRequest(user_id="u", message="hi"))
+    await service.run(ChatRequest(message="hi"), user_id="u")
 
     payload = graph.astream.call_args.args[0]
     assert payload["user_location"] is None

@@ -4,13 +4,20 @@
 (ADR-073). The product repo calls this directly to save a place. The
 agent (`/v1/chat`) is conversation-only and does not write to
 `user_places`.
+
+Note: no `from __future__ import annotations` here — slowapi's
+`@limiter.limit` + FastAPI's per-body type-adapter rebuild fails to
+resolve forward refs through the wrapper.
 """
 
-from __future__ import annotations
+from fastapi import APIRouter, Body, Depends, Request
 
-from fastapi import APIRouter, Depends
-
-from kebi.api.deps import get_extraction_service
+from kebi.api.deps import (
+    GatewayIdentity,
+    get_extraction_service,
+    require_gateway_identity,
+)
+from kebi.api.rate_limit import limiter
 from kebi.api.schemas.extract_place import (
     ExtractPlaceRequest,
     ExtractPlaceResponse,
@@ -21,8 +28,11 @@ router = APIRouter()
 
 
 @router.post("/extract", status_code=200)
+@limiter.limit("10/minute")
 async def extract_place(
-    body: ExtractPlaceRequest,
+    request: Request,
+    body: ExtractPlaceRequest = Body(...),  # noqa: B008
+    identity: GatewayIdentity = Depends(require_gateway_identity),  # noqa: B008
     service: ExtractionService = Depends(get_extraction_service),  # noqa: B008
 ) -> ExtractPlaceResponse:
     """Run the extraction pipeline and save the place(s) — canonical
@@ -35,5 +45,9 @@ async def extract_place(
     user curates after the fact. Per ADR-093, the per-candidate
     evidence audit trail writes to an object-storage ledger and is no
     longer returned in the response.
+
+    `user_id` is resolved from the verified gateway identity — not a
+    body field — so a caller cannot link a place to someone else's
+    account.
     """
-    return await service.run(raw_input=body.raw_input, user_id=body.user_id)
+    return await service.run(raw_input=body.raw_input, user_id=identity.user_id)

@@ -19,7 +19,44 @@ All requests come from NestJS after auth verification. kebi never receives reque
 - All endpoints are prefixed with `/v1/`
 - Most requests are JSON over HTTP (`Content-Type: application/json`)
 - `POST /v1/chat/stream` uses Server-Sent Events (`Content-Type: text/event-stream`) — NestJS must forward the stream to the frontend without buffering
-- Auth between services is a trusted-upstream model: NestJS verifies the user and forwards `user_id`; kebi does not re-authenticate
+
+### Service-to-service auth (gateway header contract)
+
+Every protected request **MUST** carry two headers signed by NestJS
+after it has verified the Clerk session:
+
+| Header              | Value                                                                                              |
+| ------------------- | -------------------------------------------------------------------------------------------------- |
+| `X-Gateway-Token`   | The shared secret. Same value as `GATEWAY_SHARED_SECRET` in both repos. Constant-time compared.    |
+| `X-Gateway-User-Id` | The Clerk subject NestJS just verified (e.g. `user_2pZ1A8KqxYbzABC123…`). Pattern `^user_[A-Za-z0-9]{20,40}$`. |
+
+`user_id` is **no longer a body field** on any request — kebi reads
+the verified subject from the header. A missing or wrong token → 401;
+malformed user id → 400. The public health probe (`GET /v1/health`)
+is the only route that bypasses this check.
+
+Both repos must hold the same `GATEWAY_SHARED_SECRET` byte-for-byte;
+rotate by setting the new value on both sides during the same deploy.
+
+### Per-user rate limits
+
+Per-user buckets enforced via slowapi. Excess → HTTP 429. Buckets are
+keyed by the verified `X-Gateway-User-Id`.
+
+| Endpoint                          | Bucket          |
+| --------------------------------- | --------------- |
+| POST /v1/chat                     | 30 / minute     |
+| POST /v1/chat/stream              | 30 / minute     |
+| POST /v1/extract                  | 10 / minute     |
+| POST /v1/signal                   | 60 / minute     |
+| DELETE /v1/user/data              | 3 / hour        |
+
+### Request-ID correlation
+
+Every response (success or error) carries an `X-Request-Id` header
+with a uuid4 hex. Error response bodies include the same id under
+`request_id` so support / oncall can correlate without raw exception
+text leaving the server.
 
 ---
 
@@ -96,7 +133,6 @@ to `POST /v1/extract` — the chat path never writes to `user_places`.
 
 ```json
 {
-  "user_id": "<user_id>",
   "message": "somewhere for cheap dinner near me",
   "location": { "lat": 13.7563, "lng": 100.5018 },
   "movement_profile": {
@@ -106,12 +142,16 @@ to `POST /v1/extract` — the chat path never writes to `user_places`.
 }
 ```
 
+(Plus the `X-Gateway-Token` + `X-Gateway-User-Id` headers — see "Service-to-service auth" above.)
+
 | Field              | Type                         | Required | Notes                                                                                 |
 | ------------------ | ---------------------------- | -------- | ------------------------------------------------------------------------------------- |
-| `user_id`          | `string`                     | Yes      | Clerk-issued user ID; trusted, not validated here                                     |
-| `message`          | `string`                     | Yes      | Natural-language message from the user                                                |
+| `message`          | `string`                     | Yes      | Natural-language message from the user. Max 4000 chars; longer payloads → 422.        |
 | `location`         | `{ lat: float, lng: float }` | No       | The user's **actual** location — where they physically are. ADR-083 makes this the anchor for per-turn working-location resolution: the agent resolves the location a turn operates against (a place named in the message, one carried from the conversation, or this actual location as fallback) and reverse-geocodes these coords when they are used. Shape unchanged |
 | `movement_profile` | `MovementProfile \| null`    | No       | The user's mobility capability (ADR-084 + ADR-085) — owned by the product repo's `user_settings`, sent each turn like `location`. `{ available_modes, reach }`. `available_modes` items ∈ `walking \| cycling \| motorbike \| driving \| transit \| rideshare`; list is non-empty and represents modes the user *can* use (licence, owned vehicles, comfort) — NOT per-city availability. `reach` ∈ `compact \| normal \| far`, default `normal`. Omitted → kebi applies a neutral fallback. The agent resolves an effective mode per turn by pairing this capability with the working location's city + density; an explicit mode word in the message still overrides. It never mutates the profile. A stray `default_mode` key (from a pre-ADR-085 client) is silently ignored |
+
+> `user_id` is **no longer a body field**. kebi reads the caller from
+> `X-Gateway-User-Id` after the shared-secret check passes.
 
 **Response:**
 
@@ -218,13 +258,17 @@ Canonical product-facing extraction endpoint (ADR-073). The product repo calls t
 **Request:**
 
 ```json
-{ "raw_input": "https://www.tiktok.com/@user/video/123", "user_id": "user-uuid" }
+{ "raw_input": "https://www.tiktok.com/@user/video/123" }
 ```
+
+(Plus `X-Gateway-Token` + `X-Gateway-User-Id` headers.)
 
 | Field       | Type     | Required | Description                                                          |
 | ----------- | -------- | -------- | -------------------------------------------------------------------- |
-| `raw_input` | `string` | yes      | URL (TikTok / Instagram / YouTube / Google Maps list) or place name  |
-| `user_id`   | `string` | yes      | The submitting user's ID. Used as the `user_places` owner            |
+| `raw_input` | `string` | yes      | URL (TikTok / Instagram / YouTube / Google Maps list) or place name. Max 8000 chars. URLs are matched against an exact-suffix host allowlist; an attacker host like `tiktok.com.evil.tld` is rejected with `failure_reason: "unsupported_url"` |
+
+> `user_id` is sourced from `X-Gateway-User-Id` and used as the
+> `user_places` owner — never a body field.
 
 **Response (200):** `ExtractPlaceResponse`:
 
@@ -267,16 +311,22 @@ ADR-074: results are cached by canonical URL — a repeat submission of the same
 
 ---
 
-## DELETE /v1/user/{user_id}/data
+## DELETE /v1/user/data
 
 Hard-deletes a user's **AI-owned data**. Does NOT delete the user account — that lives in NestJS/Clerk. Called by the product repo's account-deletion flow after it deletes its own `users` / `user_settings` rows.
+
+The path no longer carries the `user_id` segment — the target user is
+the one identified by `X-Gateway-User-Id`. This guarantees a caller
+can only ever wipe their own data, never another user's.
 
 **Request:**
 
 ```
-DELETE /v1/user/user_abc/data
-DELETE /v1/user/user_abc/data?scope=chat_history
+DELETE /v1/user/data
+DELETE /v1/user/data?scope=chat_history
 ```
+
+(Plus `X-Gateway-Token` + `X-Gateway-User-Id` headers.)
 
 **Response (204):** Empty body.
 
@@ -315,18 +365,22 @@ Behavioral signal endpoint (ADR-060, narrowed by ADR-076 to recommendation accep
 ```json
 {
   "signal_type": "recommendation_accepted",
-  "user_id": "<user_id>",
   "recommendation_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
   "place_core_id": "c0ffee00-1111-2222-3333-444455556666"
 }
 ```
 
+(Plus `X-Gateway-Token` + `X-Gateway-User-Id` headers.)
+
 | Field               | Type     | Required | Notes                                                                                                                 |
 | ------------------- | -------- | -------- | --------------------------------------------------------------------------------------------------------------------- |
 | `signal_type`       | `string` | Yes      | `"recommendation_accepted"` or `"recommendation_rejected"`                                                             |
-| `user_id`           | `string` | Yes      | Clerk-issued user ID                                                                                                   |
 | `recommendation_id` | `string` | Yes      | **Trusted, not validated.** ADR-078 dropped the `recommendations` table; the id is recorded on the event, never looked up |
 | `place_core_id`     | `string` | Yes      | `places.id` of the place (ADR-077; renamed from `place_id` to disambiguate from `user_place_id` / `provider_id`). Trusted, not validated |
+
+> `user_id` is sourced from `X-Gateway-User-Id`, not the body. A caller
+> can only register signals for themselves — never poison another
+> user's taste profile.
 
 **Responses:** `202 { "status": "accepted" }`; `422` on schema errors (including an unknown `signal_type`). **No `404`** — ADR-078 removed the recommendation existence check.
 
@@ -355,14 +409,16 @@ Always HTTP 200 — DB outages surface via `db: "disconnected"`.
 
 ## API Contract Summary
 
-| Endpoint                          | Purpose                                | NestJS Sends                                                   | kebi Returns                                                          |
+All protected calls additionally send the `X-Gateway-Token` + `X-Gateway-User-Id` headers (see "Service-to-service auth").
+
+| Endpoint                          | Purpose                                | NestJS Sends (body)                                            | kebi Returns                                                          |
 | --------------------------------- | -------------------------------------- | -------------------------------------------------------------- | --------------------------------------------------------------------- |
-| POST /v1/chat                     | Conversational turn (consult-family agent) | user_id, message, optional location, movement_profile          | type (`agent`\|`error`), message, data (reasoning_steps + tool_results), tool_calls_used |
+| POST /v1/chat                     | Conversational turn (consult-family agent) | message, optional location, movement_profile                   | type (`agent`\|`error`), message, data (reasoning_steps + tool_results), tool_calls_used |
 | POST /v1/chat/stream              | SSE streaming chat                     | Same as POST /v1/chat                                          | reasoning_step + tool_result + message + done frames                  |
-| POST /v1/extract                  | Canonical extraction (save a place)    | raw_input, user_id                                             | ExtractPlaceResponse                                                  |
-| DELETE /v1/user/{user_id}/data    | Account-deletion sweep of AI data      | user_id (path), optional `scope`                               | 204 No Content                                                        |
-| POST /v1/signal                   | Recommendation accept/reject           | signal_type, user_id, recommendation_id, place_core_id         | status (202)                                                          |
-| GET /v1/health                    | Service health check                   | —                                                              | status, db connectivity                                               |
+| POST /v1/extract                  | Canonical extraction (save a place)    | raw_input                                                      | ExtractPlaceResponse                                                  |
+| DELETE /v1/user/data              | Account-deletion sweep of AI data      | — (optional `scope` query param)                               | 204 No Content                                                        |
+| POST /v1/signal                   | Recommendation accept/reject           | signal_type, recommendation_id, place_core_id                  | status (202)                                                          |
+| GET /v1/health                    | Service health check (unauthenticated) | —                                                              | status, db connectivity                                               |
 
 ---
 
@@ -399,6 +455,7 @@ Always HTTP 200 — DB outages surface via `db: "disconnected"`.
 
 ## General Notes
 
-- All requests include `user_id`; the product repo authenticates and validates it upstream (trusted-upstream model).
+- All protected requests carry `X-Gateway-Token` (shared HMAC secret) and `X-Gateway-User-Id` (verified Clerk subject). kebi never sees Clerk tokens directly — it trusts the gateway iff the shared secret validates and the user_id matches the expected pattern.
 - FastAPI owns all AI-generated data in PostgreSQL; NestJS owns product data (users, settings). Neither writes the other's tables.
 - The `places` / `place_embeddings` table rename (ADR-079) is a coordinated cross-repo change — deploy kebi and the product repo together.
+- The gateway-auth contract is also a coordinated change — both repos must hold the same `GATEWAY_SHARED_SECRET` and ship together. Rotating the secret means setting the new value in both deploys.

@@ -9,6 +9,27 @@ from kebi.core.extraction.enrichers.vision_images import VisionImagesEnricher
 from kebi.core.extraction.types import ExtractionContext, Medium, Producer
 
 
+@pytest.fixture(autouse=True)
+def bypass_url_safety(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Replace `safe_get` with a thin `client.get(url)` call for these tests.
+
+    The enricher now wraps `client.get(...)` in `safe_get` for the
+    SSRF host-allowlist + redirect-revalidation defense. Unit tests
+    here drive the enricher with mocked responses whose `is_redirect`
+    attribute is a MagicMock truthy by default — `safe_get` interprets
+    that as a redirect and loops to "too many redirects". Replace it
+    with a passthrough so the tests continue asserting on the bare
+    URL / mock-response shape; the safety layer is covered by its own
+    tests in `test_url_safety.py`.
+    """
+    from kebi.core.extraction import url_safety
+
+    async def _passthrough(client, url, *, allowed_suffixes, timeout=None, **kwargs):
+        return await client.get(url)
+
+    monkeypatch.setattr(url_safety, "safe_get", _passthrough)
+
+
 @pytest.fixture
 def vision_extractor() -> AsyncMock:
     # `(names, usage_dict | None)` tuple — matches the post-Phase-4.5

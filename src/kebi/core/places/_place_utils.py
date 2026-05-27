@@ -5,6 +5,21 @@ from __future__ import annotations
 from .models import PlaceCore, PlaceObject
 
 
+def escape_like(s: str) -> str:
+    """Escape LIKE / ILIKE wildcards (`%` and `_`) in user-controlled
+    substrings.
+
+    SQL is already parameterised via SQLAlchemy bind params, so this
+    isn't an injection fix — it's a DoS fix. Without the escape, a
+    value like `"%_%_%_%_%_%_%"` triggers catastrophic LIKE
+    backtracking on Postgres' JSONB `astext` fields. Apply at every
+    site that builds `ilike(f"%{user_value}%")`; pair with
+    `escape="\\"` on the `ilike` call so Postgres honours the
+    backslash escape.
+    """
+    return s.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 def overlay_with_cache(
     cores: list[PlaceCore],
     cached: dict[str, PlaceObject],

@@ -8,15 +8,24 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from kebi.api.deps import get_signal_service
+from kebi.api.deps import (
+    GatewayIdentity,
+    get_signal_service,
+    require_gateway_identity,
+)
 from kebi.api.routes.signal import router as signal_router
 from kebi.core.signal.service import SignalService
+
+_TEST_USER_ID = "user_test_dummy_123456789012345"
 
 
 def _make_app(service: SignalService) -> TestClient:
     app = FastAPI()
     app.include_router(signal_router, prefix="/v1")
     app.dependency_overrides[get_signal_service] = lambda: service
+    app.dependency_overrides[require_gateway_identity] = lambda: GatewayIdentity(
+        user_id=_TEST_USER_ID
+    )
     return TestClient(app)
 
 
@@ -34,7 +43,6 @@ def test_unknown_signal_type_returns_422(svc: AsyncMock) -> None:
         "/v1/signal",
         json={
             "signal_type": "no_such_type",
-            "user_id": "user_abc",
             "recommendation_id": "rec_1",
             "place_core_id": "pl_1",
         },
@@ -50,7 +58,6 @@ def test_recommendation_accepted_still_routes_correctly(svc: AsyncMock) -> None:
         "/v1/signal",
         json={
             "signal_type": "recommendation_accepted",
-            "user_id": "user_abc",
             "recommendation_id": "rec_1",
             "place_core_id": "pl_1",
         },
@@ -61,3 +68,5 @@ def test_recommendation_accepted_still_routes_correctly(svc: AsyncMock) -> None:
     call_kwargs = svc.handle_signal.await_args.kwargs
     assert call_kwargs["signal_type"] == "recommendation_accepted"
     assert call_kwargs["recommendation_id"] == "rec_1"
+    # user_id is sourced from the verified gateway identity — not the body.
+    assert call_kwargs["user_id"] == _TEST_USER_ID

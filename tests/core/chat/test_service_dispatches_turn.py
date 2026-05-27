@@ -71,7 +71,7 @@ async def test_run_dispatches_turn_completed_on_success() -> None:
     dispatcher = _make_dispatcher()
     service = _make_service(agent_graph=graph, dispatcher=dispatcher)
 
-    result = await service.run(ChatRequest(user_id="u-1", message="find ramen"))
+    result = await service.run(ChatRequest(message="find ramen"), user_id="u-1")
 
     assert result.type == "agent"
     dispatcher.dispatch.assert_awaited_once()
@@ -87,7 +87,7 @@ async def test_run_dispatches_turn_completed_on_outer_error() -> None:
     dispatcher = _make_dispatcher()
     service = _make_service(agent_graph=graph, dispatcher=dispatcher)
 
-    result = await service.run(ChatRequest(user_id="u-3", message="anything"))
+    result = await service.run(ChatRequest(message="anything"), user_id="u-3")
 
     assert result.type == "error"
     dispatcher.dispatch.assert_awaited_once()

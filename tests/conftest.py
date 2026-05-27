@@ -5,7 +5,15 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from kebi.api.main import app
+# Set environment vars BEFORE importing kebi.api.main — that module has a
+# fail-closed check on GATEWAY_SHARED_SECRET at import time, and the
+# pytest fixture below runs too late.
+os.environ.setdefault("GATEWAY_SHARED_SECRET", "test-gateway-secret-dummy")
+os.environ.setdefault(
+    "DATABASE_URL", "postgresql+asyncpg://user:password@localhost/testdb"
+)
+
+from kebi.api.main import app  # noqa: E402
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -20,6 +28,9 @@ def setup_test_env() -> None:
     os.environ.setdefault(
         "DATABASE_URL", "postgresql+asyncpg://user:password@localhost/testdb"
     )
+    # Gateway shared secret — required by EnvConfig / require_gateway_identity.
+    # Tests that exercise auth use this value as the expected token.
+    os.environ.setdefault("GATEWAY_SHARED_SECRET", "test-gateway-secret-dummy")
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -60,6 +71,39 @@ def override_session_dependency(mock_session: AsyncMock) -> None:
     from kebi.api import deps
 
     app.dependency_overrides[deps.get_session] = lambda: mock_session
+
+
+@pytest.fixture(autouse=True)
+def override_gateway_identity() -> None:
+    """Bypass the gateway-token check for HTTP-level tests.
+
+    Production routes require `X-Gateway-Token` + `X-Gateway-User-Id`
+    (see `api/deps.require_gateway_identity`). Most tests assert
+    business behavior, not auth, so we hand them a fixed identity by
+    overriding the dependency. Auth-specific tests opt back into the
+    real dep via `app.dependency_overrides.pop(...)`.
+    """
+    from kebi.api import deps
+
+    app.dependency_overrides[deps.require_gateway_identity] = (
+        lambda: deps.GatewayIdentity(user_id="user_test_dummy_123456789012345")
+    )
+
+
+@pytest.fixture(autouse=True)
+def disable_rate_limits() -> None:
+    """Turn off per-user rate limits for all tests.
+
+    Production routes enforce per-user buckets via slowapi. Tests
+    repeatedly hit the same endpoint with the same identity, which
+    would exhaust the bucket (notably the 3/hour cap on
+    `DELETE /v1/user/data`) and turn unrelated assertions into 429s.
+    Flip the limiter off for tests; explicit rate-limit tests can
+    re-enable it locally.
+    """
+    from kebi.api.rate_limit import limiter
+
+    limiter.enabled = False
 
 
 @pytest.fixture(autouse=True)

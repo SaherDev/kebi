@@ -232,15 +232,28 @@ async def _fetch_tiktok_carousel_urls(client: httpx.AsyncClient, url: str) -> li
 
     Best-effort: any HTTP failure / missing JSON / shape change returns
     `[]` so the caller can fall back to yt-dlp's cover thumbnail.
+
+    Host-validated against the TikTok suffix allowlist + public-IP
+    check at every redirect hop (SSRF defense — the URL comes from
+    upstream input that may be attacker-influenced).
     """
+    from kebi.core.extraction.url_safety import HOST_SUFFIXES, safe_get
+    from kebi.core.places import PlaceSource
+
     try:
-        response = await client.get(
+        response = await safe_get(
+            client,
             url,
+            allowed_suffixes=HOST_SUFFIXES[PlaceSource.tiktok],
             headers=_TIKTOK_PAGE_HEADERS,
             timeout=_TIKTOK_PAGE_TIMEOUT_SECONDS,
-            follow_redirects=True,
         )
         response.raise_for_status()
+    except PermissionError as exc:
+        logger.warning(
+            "tiktok_carousel_refused", extra={"url": url, "error": str(exc)}
+        )
+        return []
     except (httpx.HTTPError, httpx.TimeoutException) as exc:
         logger.warning(
             "tiktok_carousel_fetch_failed",

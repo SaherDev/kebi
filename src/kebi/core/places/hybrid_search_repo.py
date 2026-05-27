@@ -60,6 +60,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, TSVECTOR
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ._place_utils import escape_like
 from .embeddings_repo import EMBEDDING_DIMENSIONS
 from .models import (
     HybridSearchFilters,
@@ -394,11 +395,17 @@ def _filter_conditions(
             )
 
     if filters.city:
-        conditions.append(_p.location["city"].astext.ilike(f"%{filters.city}%"))
+        conditions.append(
+            _p.location["city"].astext.ilike(
+                f"%{escape_like(filters.city)}%", escape="\\"
+            )
+        )
 
     if filters.neighborhood:
         conditions.append(
-            _p.location["neighborhood"].astext.ilike(f"%{filters.neighborhood}%")
+            _p.location["neighborhood"].astext.ilike(
+                f"%{escape_like(filters.neighborhood)}%", escape="\\"
+            )
         )
 
     if filters.country:

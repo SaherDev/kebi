@@ -29,6 +29,12 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Hard wall-clock on the synchronous chat path. Mirrors the SSE budget
+# in `api/routes/chat.py`. Per-tool budgets bound individual nodes;
+# this bounds the whole turn so a misbehaving graph or a hung
+# downstream can't pin the worker indefinitely.
+_CHAT_WALL_CLOCK_SECONDS = 90.0
+
 
 class ChatService:
     """Unified chat entry point — delegates all traffic to the agent pipeline."""
@@ -47,19 +53,25 @@ class ChatService:
         self._config = config
         self._agent_graph = agent_graph
 
-    async def run(self, request: ChatRequest) -> ChatResponse:
-        """Delegate to `_run_agent` — the only dispatch path (ADR-065)."""
+    async def run(self, request: ChatRequest, *, user_id: str) -> ChatResponse:
+        """Delegate to `_run_agent` — the only dispatch path (ADR-065).
+
+        `user_id` is passed explicitly by the route after gateway-identity
+        verification — never read from the request body.
+        """
         try:
-            return await self._run_agent(request)
-        except Exception as exc:
-            logger.exception("ChatService.run failed: %s", exc)
+            return await self._run_agent(request, user_id=user_id)
+        except Exception:
+            logger.exception("ChatService.run failed")
             return ChatResponse(
                 type="error",
                 message="Something went wrong, please try again.",
-                data={"detail": str(exc)},
+                data=None,
             )
 
-    async def _run_agent(self, request: ChatRequest) -> ChatResponse:
+    async def _run_agent(
+        self, request: ChatRequest, *, user_id: str
+    ) -> ChatResponse:
         """Invoke the compiled agent graph and map its final state to ChatResponse.
 
         Dispatches a TurnCompleted event in `finally` so the memory layer
@@ -72,20 +84,20 @@ class ChatService:
         """
         async with feature_trace(
             "chat",
-            request.user_id,
+            user_id,
             name="chat_turn",
             extra={"endpoint": "/v1/chat"},
         ):
             try:
                 # Pre-agent prep runs in parallel.
                 taste_summary, memory_summary = await asyncio.gather(
-                    self._compose_taste_summary(request.user_id),
-                    self._compose_memory_summary(request.user_id),
+                    self._compose_taste_summary(user_id),
+                    self._compose_memory_summary(user_id),
                 )
 
                 payload = build_turn_payload(
                     message=request.message,
-                    user_id=request.user_id,
+                    user_id=user_id,
                     taste_profile_summary=taste_summary,
                     memory_summary=memory_summary,
                     user_location=(
@@ -99,8 +111,8 @@ class ChatService:
                 )
 
                 graph_config = {
-                    "configurable": {"thread_id": request.user_id},
-                    "metadata": {"user_id": request.user_id},
+                    "configurable": {"thread_id": user_id},
+                    "metadata": {"user_id": user_id},
                 }
                 # The only producer of GraphInterrupt was the save tool's
                 # needs_review branch (ADR-063). ADR-071 removed that branch
@@ -114,13 +126,14 @@ class ChatService:
                 # (human-readable summaries) persist as agent history.
                 final_state: dict[str, Any] = {}
                 tool_results: list[dict[str, Any]] = []
-                async for snapshot in self._agent_graph.astream(
-                    payload, config=graph_config, stream_mode="values"
-                ):
-                    final_state = snapshot
-                    snap_tool_results = snapshot.get("tool_results") or []
-                    if snap_tool_results:
-                        tool_results = snap_tool_results
+                async with asyncio.timeout(_CHAT_WALL_CLOCK_SECONDS):
+                    async for snapshot in self._agent_graph.astream(
+                        payload, config=graph_config, stream_mode="values"
+                    ):
+                        final_state = snapshot
+                        snap_tool_results = snapshot.get("tool_results") or []
+                        if snap_tool_results:
+                            tool_results = snap_tool_results
 
                 messages = final_state.get("messages", [])
                 ai_message = _last_ai_message(messages)
@@ -149,7 +162,7 @@ class ChatService:
             finally:
                 await self._dispatcher.dispatch(
                     TurnCompleted(
-                        user_id=request.user_id,
+                        user_id=user_id,
                         user_message=request.message,
                     )
                 )

@@ -82,11 +82,17 @@ def _render_list_block(items: list[str] | None, label: str) -> str:
 
 
 def _render_taste_block(taste_summary: str | None) -> str:
-    """The user's prior preferences, free text or a placeholder."""
+    """The user's prior preferences, free text or a placeholder.
+
+    Wrapped in `trust="low"` so the namer LLM treats it as data, not
+    instruction (the summary is built from user-influenced signals).
+    """
+    from kebi.core.prompt_safety import wrap_untrusted
+
     summary = (taste_summary or "").strip()
     if not summary:
         return "(no prior taste signal — treat as cold start)"
-    return summary
+    return wrap_untrusted(summary, "taste_profile")
 
 
 class CandidateNamerService:
@@ -112,9 +118,12 @@ class CandidateNamerService:
         validation failure — the tool maps that to `empty_reason="no_match"`.
         Failures are logged + traced; never raised.
         """
+        from kebi.core.prompt_safety import wrap_untrusted
+
         prompt_template = get_prompt("candidate_namer")
         prompt_text = prompt_template.format(
-            intent=intent.strip(),
+            # The intent is the user's free text — wrap it as data.
+            intent=wrap_untrusted(intent.strip(), "user_intent"),
             location_block=_render_location_block(working),
             mobility_block=_render_mobility_block(working),
             categories_block=_render_list_block(

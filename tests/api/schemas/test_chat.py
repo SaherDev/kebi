@@ -59,7 +59,6 @@ def test_chat_response_rejects_unknown_type() -> None:
 def test_chat_request_parses_valid_movement_profile() -> None:
     req = ChatRequest.model_validate(
         {
-            "user_id": "u1",
             "message": "dinner nearby",
             "movement_profile": {
                 "available_modes": ["walking", "transit"],
@@ -73,8 +72,17 @@ def test_chat_request_parses_valid_movement_profile() -> None:
 
 
 def test_chat_request_movement_profile_defaults_to_none() -> None:
-    req = ChatRequest(user_id="u1", message="hi")
+    req = ChatRequest(message="hi")
     assert req.movement_profile is None
+
+
+def test_chat_request_does_not_accept_user_id_field() -> None:
+    """user_id arrives via X-Gateway-User-Id, not the body. Pydantic
+    ignores unknown keys by default, so verify the field is absent on
+    the parsed model rather than expecting a ValidationError."""
+    req = ChatRequest.model_validate({"user_id": "u1", "message": "hi"})
+    assert not hasattr(req, "user_id")
+    assert req.message == "hi"
 
 
 def test_movement_profile_reach_defaults_to_normal() -> None:

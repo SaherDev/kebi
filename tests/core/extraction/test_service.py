@@ -209,7 +209,11 @@ async def test_pipeline_exception_returns_pipeline_error() -> None:
     resp = await service.run(raw_input="something", user_id="u1")
     assert resp.status == "failed"
     assert resp.failure_reason == "pipeline_error"
-    assert "RuntimeError" in (resp.failure_message or "")
+    # The exception detail is now logged server-side, not surfaced to
+    # the client — the user-facing message is a stable generic string
+    # so internals (table names, place ids, schema fragments) don't
+    # leak through the failure envelope.
+    assert resp.failure_message == "Pipeline error — see server logs."
 
 
 @pytest.mark.asyncio

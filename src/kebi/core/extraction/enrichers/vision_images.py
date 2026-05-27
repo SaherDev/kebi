@@ -108,14 +108,27 @@ class VisionImagesEnricher(SourceFilteredEnricher):
                 )
 
     async def _download(self, client: httpx.AsyncClient, url: str) -> bytes | None:
+        # Apify / TikTok rehydration JSON is attacker-influenced: a
+        # malicious page could list internal IPs (169.254.169.254,
+        # RFC1918) as carousel CDN URLs. `safe_get` enforces the host
+        # allowlist and re-validates each redirect hop, so a 302 into
+        # private space raises rather than completing.
+        from kebi.core.extraction.url_safety import CDN_ALLOWLIST, safe_get
+
         try:
-            response = await client.get(
+            response = await safe_get(
+                client,
                 url,
+                allowed_suffixes=CDN_ALLOWLIST,
                 timeout=_PER_REQUEST_TIMEOUT_SECONDS,
-                follow_redirects=True,
             )
             response.raise_for_status()
             return response.content
+        except PermissionError as exc:
+            logger.warning(
+                "VisionImagesEnricher refused disallowed URL %s: %s", url, exc
+            )
+            return None
         except Exception as exc:
             logger.debug("VisionImagesEnricher download failed for %s: %s", url, exc)
             return None

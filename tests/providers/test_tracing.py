@@ -78,8 +78,18 @@ def _mock_observation_ctx(mock_observation):
     return cm
 
 
-def test_langfuse_client_generation_delegates_to_sdk():
-    """`generation()` opens an `_as_current_` observation so children nest."""
+def test_langfuse_client_generation_delegates_to_sdk(monkeypatch):
+    """`generation()` opens an `_as_current_` observation so children nest.
+
+    PII scrubbing is on by default. This test asserts the verbatim
+    delegation shape, so we disable scrubbing for it; a separate
+    test below covers the scrubbed path.
+    """
+    monkeypatch.setenv("LANGFUSE_SCRUB_INPUT", "false")
+    from kebi.core import config as cfg
+
+    cfg._env = None  # type: ignore[attr-defined]
+
     mock_observation = MagicMock()
     cm = _mock_observation_ctx(mock_observation)
     mock_sdk = MagicMock()
@@ -103,6 +113,28 @@ def test_langfuse_client_generation_delegates_to_sdk():
         level="DEFAULT", output={"count": 3}
     )
     cm.__exit__.assert_called_once()
+    cfg._env = None  # type: ignore[attr-defined]
+
+
+def test_langfuse_client_generation_scrubs_pii_keys_by_default():
+    """When LANGFUSE_SCRUB_INPUT is on (production default), PII keys
+    inside `input` are replaced by a `{redacted, len, sha8}` marker."""
+    mock_observation = MagicMock()
+    cm = _mock_observation_ctx(mock_observation)
+    mock_sdk = MagicMock()
+    mock_sdk.start_as_current_observation.return_value = cm
+
+    client = tracing_module._LangfuseTracingClient(mock_sdk)
+    client.generation(
+        name="extractor",
+        input={"message": "I am vegetarian", "count": 5},
+        model="gpt-4o-mini",
+    )
+
+    call_input = mock_sdk.start_as_current_observation.call_args.kwargs["input"]
+    assert call_input["count"] == 5  # non-PII passes through
+    assert call_input["message"]["redacted"] is True
+    assert call_input["message"]["len"] == len("I am vegetarian")
 
 
 def test_langfuse_client_generation_propagates_metadata():

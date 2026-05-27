@@ -11,16 +11,79 @@ as an async context manager — every `generation(...)` call made inside
 the block nests under that trace automatically (Langfuse's own SDK uses
 contextvars). Subtasks 2 (extraction) and 3 (external APIs) consume this
 shape without further infrastructure work.
+
+PII scrubbing: when `LANGFUSE_SCRUB_INPUT=True` (the production
+default), the Langfuse adapter redacts user-content fields from the
+`input` payload before shipping to Langfuse — see `_scrub_input`
+below. The trace structure, timings, token counts, and costs are still
+captured; only the verbatim text is replaced with a length-and-hash
+descriptor so privacy investigations can still correlate by hash
+without exposing the text itself.
 """
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any, Protocol, runtime_checkable
 
 logger = logging.getLogger(__name__)
+
+
+# Keys whose string values are user-content PII. Scrubbed when
+# LANGFUSE_SCRUB_INPUT is on. Kept narrow on purpose — non-PII keys
+# (counts, modes, model names, latency) stay verbatim so traces remain
+# useful for performance analysis.
+_PII_INPUT_KEYS: frozenset[str] = frozenset(
+    {
+        "message",
+        "intent",
+        "transcript",
+        "caption",
+        "city",
+        "country",
+        "neighborhood",
+        "address",
+        "raw_input",
+        "memory",
+        "text",
+    }
+)
+
+
+def _scrub_input(value: Any) -> Any:
+    """Recursively redact PII fields from a trace input payload.
+
+    Strings under PII-keyed slots become a `{"redacted": True, "len":
+    N, "sha8": "..."}` marker so privacy investigations can correlate
+    by hash. Non-PII keys, numbers, booleans, and structural types
+    pass through unchanged.
+    """
+    if isinstance(value, dict):
+        return {
+            k: _redact_string(v) if k in _PII_INPUT_KEYS else _scrub_input(v)
+            for k, v in value.items()
+        }
+    if isinstance(value, list):
+        return [_scrub_input(v) for v in value]
+    return value
+
+
+def _redact_string(value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+    digest = hashlib.sha256(value.encode("utf-8")).hexdigest()[:8]
+    return {"redacted": True, "len": len(value), "sha8": digest}
+
+
+def _scrubbing_enabled() -> bool:
+    # Imported lazily so this module stays free of a hard config dep
+    # for the no-op test path.
+    from kebi.core.config import get_env
+
+    return bool(get_env().LANGFUSE_SCRUB_INPUT)
 
 
 # ---------------------------------------------------------------------------
@@ -217,7 +280,7 @@ class _LangfuseTracingClient:
         """
         kwargs: dict[str, Any] = {"name": name}
         if input is not None:
-            kwargs["input"] = input
+            kwargs["input"] = _scrub_input(input) if _scrubbing_enabled() else input
         if model is not None:
             kwargs["model"] = model
         meta: dict[str, Any] = dict(metadata or {})
@@ -292,6 +355,8 @@ class _LangfuseTracingClient:
             meta["user_id"] = user_id
         if session_id is not None:
             meta["session_id"] = session_id
+        if _scrubbing_enabled():
+            meta = _scrub_input(meta)
         with self._client.start_as_current_observation(
             as_type="event", name=message, input=meta
         ):

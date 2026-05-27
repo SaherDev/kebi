@@ -85,27 +85,20 @@ def source_from_url(url: str | None) -> PlaceSource | None:
     `None` is returned in two distinct cases:
     - `url is None` — caller passed nothing.
     - URL host doesn't map to any supported platform (e.g. a blog
-      post, a generic short link). The service distinguishes the two
-      by checking the original `url` value: a URL with `source is None`
-      is an unsupported URL and gets rejected with a clear message
-      before the cascade runs.
+      post, a generic short link, or an attacker host like
+      `tiktok.com.evil.tld` whose hostname does not match the suffix
+      `tiktok.com`). The service distinguishes the two by checking the
+      original `url` value: a URL with `source is None` is an
+      unsupported URL and gets rejected with a clear message before
+      the cascade runs.
 
     Supported sources: TikTok, Instagram, YouTube, Google Maps.
+
+    The actual host-suffix logic lives in
+    `core/extraction/url_safety.source_from_url` — kept there so the
+    same allowlist is reused by SSRF guards on the httpx / yt-dlp /
+    Apify edges.
     """
-    if url is None:
-        return None
-    lowered = url.lower()
-    if "tiktok.com" in lowered:
-        return PlaceSource.tiktok
-    if "instagram.com" in lowered:
-        return PlaceSource.instagram
-    if "youtube.com" in lowered or "youtu.be" in lowered:
-        return PlaceSource.youtube
-    if (
-        "maps.app.goo.gl" in lowered
-        or "goo.gl/maps" in lowered
-        or "google.com/maps" in lowered
-        or "maps.google.com" in lowered
-    ):
-        return PlaceSource.google_maps_list
-    return None
+    from kebi.core.extraction.url_safety import source_from_url as _delegate
+
+    return _delegate(url)

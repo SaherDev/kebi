@@ -51,7 +51,6 @@ class TestExtractRoute:
             resp = client.post(
                 "/v1/extract",
                 json={
-                    "user_id": "u1",
                     "raw_input": "https://tiktok.com/@x/video/123",
                 },
             )
@@ -64,8 +63,11 @@ class TestExtractRoute:
         # Evidence no longer rides the response; it ships to the bucket
         # ledger instead. The product repo never sees it.
         assert "evidence" not in body["results"][0]
+        # user_id is sourced from the verified gateway identity (conftest
+        # supplies a test-fixed value), not the body.
         mock_service.run.assert_awaited_once_with(
-            raw_input="https://tiktok.com/@x/video/123", user_id="u1"
+            raw_input="https://tiktok.com/@x/video/123",
+            user_id="user_test_dummy_123456789012345",
         )
 
     def test_post_extract_returns_failed_envelope(self) -> None:
@@ -83,7 +85,7 @@ class TestExtractRoute:
             client = TestClient(app)
             resp = client.post(
                 "/v1/extract",
-                json={"user_id": "u1", "raw_input": "gibberish"},
+                json={"raw_input": "gibberish"},
             )
         finally:
             app.dependency_overrides.pop(get_extraction_service, None)

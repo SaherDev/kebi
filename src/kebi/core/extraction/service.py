@@ -308,13 +308,15 @@ class ExtractionService:
                     f"validation quota."
                 ),
             )
-        except Exception as exc:
+        except Exception:
             logger.exception("Extraction pipeline failed for request %s", rid)
+            # Generic message — the exception type / detail stays in
+            # the server log only. The `request_id` lets oncall correlate.
             return _failed_response(
                 raw_input,
                 rid,
                 reason="pipeline_error",
-                message=f"Pipeline error: {type(exc).__name__}: {exc}",
+                message="Pipeline error — see server logs.",
             )
 
         if not candidates:

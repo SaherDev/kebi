@@ -77,7 +77,7 @@ class TestChatStreamHappyPath:
     def test_stream_returns_200(self, client: TestClient) -> None:
         response = client.post(
             "/v1/chat/stream",
-            json={"user_id": "u1", "message": "dinner nearby"},
+            json={"message": "dinner nearby"},
             headers={"Accept": "text/event-stream"},
         )
         assert response.status_code == 200
@@ -85,21 +85,21 @@ class TestChatStreamHappyPath:
     def test_stream_content_type_is_event_stream(self, client: TestClient) -> None:
         response = client.post(
             "/v1/chat/stream",
-            json={"user_id": "u1", "message": "dinner nearby"},
+            json={"message": "dinner nearby"},
         )
         assert "text/event-stream" in response.headers["content-type"]
 
     def test_stream_contains_reasoning_step_frame(self, client: TestClient) -> None:
         response = client.post(
             "/v1/chat/stream",
-            json={"user_id": "u1", "message": "dinner nearby"},
+            json={"message": "dinner nearby"},
         )
         assert "event: reasoning_step" in response.text
 
     def test_stream_contains_message_frame(self, client: TestClient) -> None:
         response = client.post(
             "/v1/chat/stream",
-            json={"user_id": "u1", "message": "dinner nearby"},
+            json={"message": "dinner nearby"},
         )
         assert "event: message" in response.text
         assert "Here is my recommendation" in response.text
@@ -110,7 +110,7 @@ class TestChatStreamHappyPath:
 
         response = client.post(
             "/v1/chat/stream",
-            json={"user_id": "u1", "message": "dinner nearby"},
+            json={"message": "dinner nearby"},
         )
         lines = response.text.splitlines()
         step_data: dict[str, Any] | None = None
@@ -133,7 +133,7 @@ class TestChatStreamHappyPath:
 
         response = client.post(
             "/v1/chat/stream",
-            json={"user_id": "u1", "message": "dinner nearby"},
+            json={"message": "dinner nearby"},
         )
         lines = response.text.splitlines()
         msg_data: dict[str, Any] | None = None
@@ -156,7 +156,7 @@ class TestChatStreamToolCallsUsed:
     def test_stream_contains_done_frame(self, client: TestClient) -> None:
         response = client.post(
             "/v1/chat/stream",
-            json={"user_id": "u1", "message": "dinner nearby"},
+            json={"message": "dinner nearby"},
         )
         assert "event: done" in response.text
 
@@ -165,7 +165,7 @@ class TestChatStreamToolCallsUsed:
 
         response = client.post(
             "/v1/chat/stream",
-            json={"user_id": "u1", "message": "dinner nearby"},
+            json={"message": "dinner nearby"},
         )
         lines = response.text.splitlines()
         done_data: dict[str, Any] | None = None
@@ -211,7 +211,7 @@ class TestChatStreamToolCallsUsed:
             tc = TestClient(app)
             response = tc.post(
                 "/v1/chat/stream",
-                json={"user_id": "u1", "message": "dinner nearby"},
+                json={"message": "dinner nearby"},
             )
             lines = response.text.splitlines()
             done_data = None
@@ -246,7 +246,7 @@ class TestChatStreamDisabledAgent:
                 tc = TestClient(app)
                 response = tc.post(
                     "/v1/chat/stream",
-                    json={"user_id": "u1", "message": "test"},
+                    json={"message": "test"},
                 )
                 assert response.status_code == 400
             finally:
@@ -261,7 +261,7 @@ class TestChatStreamDisabledAgent:
             tc = TestClient(app)
             response = tc.post(
                 "/v1/chat/stream",
-                json={"user_id": "u1", "message": "test"},
+                json={"message": "test"},
             )
             assert response.status_code == 400
         finally:

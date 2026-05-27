@@ -57,7 +57,13 @@ class Interaction(Base):
         Index("ix_interactions_user_created", "user_id", "created_at"),
     )
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    # UUID primary key (was sequential int prior to the 2026-05 hardening).
+    # Sequential ints leak row counts and are a future IDOR primitive if
+    # the column ever surfaces in a response — UUIDs avoid both. The
+    # log is append-only, so there are no FK consumers to update.
+    id: Mapped[str] = mapped_column(
+        String, primary_key=True, default=lambda: str(uuid4())
+    )
     user_id: Mapped[str] = mapped_column(String, nullable=False)
     type: Mapped[InteractionType] = mapped_column(
         Enum(
