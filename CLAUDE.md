@@ -10,7 +10,7 @@ Kebi is the AI engine for the Kebi product — an AI-native place decision engin
 
 - `src/kebi/` — main package (src layout)
   - `api/` — FastAPI routes and request/response schemas
-  - `core/` — domain modules: `agent/`, `chat/`, `extraction/`, `memory/`, `places/`, `places_v2/`, `signal/`, `taste/`, `user/`
+  - `core/` — domain modules: `agent/`, `chat/`, `extraction/`, `memory/`, `places/`, `signal/`, `taste/`, `user/`
   - `providers/` — LLM/embedding provider abstraction (config-driven via YAML)
   - `db/` — SQLAlchemy models, migrations (Alembic), and repositories
   - `eval/` — evaluation harnesses and datasets
