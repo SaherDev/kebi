@@ -31,8 +31,10 @@ The canonical place shape (ADR-070, ADR-077; the catalog table is
 `places` since ADR-079). Identity + static catalog fields only.
 Extraction returns `PlaceCore` — it does **not** populate live fields
 (rating, hours, popularity, business_status); those are filled in later
-by the catalog read/enrichment path, which has no product-facing
-endpoint today (ADR-075 removed recall/consult).
+by the catalog read/enrichment path that backs the agent's consult-family
+tools (ADR-089, ADR-090, ADR-091). There is no standalone product-facing
+endpoint for catalog reads today — saved/discovered/suggested places are
+returned inside chat responses as `tool_results`.
 
 ```json
 {
@@ -80,11 +82,15 @@ endpoint today (ADR-075 removed recall/consult).
 ## POST /v1/chat
 
 Unified conversational entry point (ADR-052, ADR-065). The agent is a
-**zero-tool conversational Q&A surface** (ADR-075): it answers from
-general knowledge plus the user's taste/memory context, and redirects
-place save / recall / recommendation requests to the product's own
-surfaces (e.g. the share/submit input → `POST /v1/extract`). It performs
-no retrieval and writes no data.
+LangGraph turn driven by the `orchestrator` LLM role with a small
+**consult-family** of internal tools — `find_saved` (the user's saved
+places), `suggest_places` (LLM-named candidates validated against the
+place provider), and `discover_places` (direct provider lookup for
+utility intents and as a fall-through) — see ADR-089, ADR-090, ADR-091.
+Each tool returns a structured `ConsultResult` that is surfaced to the
+caller in `data.tool_results` so the product UI can render places
+without re-parsing the agent's prose. URL submissions are redirected
+to `POST /v1/extract` — the chat path never writes to `user_places`.
 
 **Request:**
 
@@ -112,29 +118,36 @@ no retrieval and writes no data.
 ```json
 {
   "type": "agent",
-  "message": "For ramen, look for a shop that…",
-  "data": { "reasoning_steps": [] },
-  "tool_calls_used": 0
+  "message": "Here are three places nearby that fit…",
+  "data": {
+    "reasoning_steps": [],
+    "tool_results": [
+      { "tool": "find_saved", "tool_call_id": "…", "payload": { /* ConsultResult */ } }
+    ]
+  },
+  "tool_calls_used": 1
 }
 ```
 
 | Field             | Type             | Notes                                                                                          |
 | ----------------- | ---------------- | ---------------------------------------------------------------------------------------------- |
-| `type`            | `string`         | One of `agent`, `error`. ADR-075 removed `consult`/`recall`; ADR-073 had removed `extract-place`/`clarification`. No other values are emitted. |
+| `type`            | `string`         | One of `agent`, `error`. No other values are emitted.                                          |
 | `message`         | `string`         | Human-readable response text                                                                   |
-| `data`            | `object \| null` | `agent`: `{ "reasoning_steps": ReasoningStep[] }` (user-visible steps only). `error`: `{ "detail": string }` |
-| `tool_calls_used` | `integer`        | **Always `0`** — the agent has no tools (ADR-075). Retained for response-shape stability        |
+| `data`            | `object \| null` | `agent`: `{ "reasoning_steps": ReasoningStep[], "tool_results": ToolResult[] }` (user-visible steps only). `error`: `{ "detail": string }` |
+| `tool_calls_used` | `integer`        | Number of tool calls the agent made this turn (0 if the agent answered without retrieval). Surfaced for rate-limit accounting on the NestJS side and capped at `agent.max_tool_calls` (ADR-091) |
 
 `ReasoningStep` shape:
 
-| Field         | Type                          | Notes                                                                       |
-| ------------- | ----------------------------- | --------------------------------------------------------------------------- |
-| `step`        | `string`                      | Identifier, e.g. `agent.response`, `fallback`                               |
-| `summary`     | `string`                      | Human-readable description (LLM reasoning text may be truncated)            |
-| `source`      | `"agent" \| "fallback"`       | Which node produced it. No `"tool"` source since ADR-075; `tool_name` is gone |
-| `visibility`  | `"user" \| "debug"`           | Only `"user"` steps appear in the JSON response; `"debug"` → Langfuse/SSE   |
-| `timestamp`   | `ISO-8601 string`             | UTC; when the step was recorded                                            |
-| `duration_ms` | `float \| null`               | Node latency; non-null in persisted steps                                  |
+| Field         | Type                                  | Notes                                                                       |
+| ------------- | ------------------------------------- | --------------------------------------------------------------------------- |
+| `step`        | `string`                              | Identifier, e.g. `agent.tool_decision`, `tool.summary`, `fallback`          |
+| `summary`     | `string`                              | Human-readable description (LLM reasoning text may be truncated)            |
+| `source`      | `"agent" \| "tool" \| "fallback"`    | Which node produced it                                                      |
+| `visibility`  | `"user" \| "debug"`                   | Only `"user"` steps appear in the JSON response; `"debug"` → Langfuse/SSE   |
+| `timestamp`   | `ISO-8601 string`                     | UTC; when the step was recorded                                            |
+| `duration_ms` | `float \| null`                       | Node latency; non-null in persisted steps                                  |
+
+`ToolResult` shape: `{ tool: "find_saved" | "suggest_places" | "discover_places", tool_call_id: string, payload: ConsultResult }`. `ConsultResult` carries `candidates` (each with `place`, `source ∈ {saved, suggested, discovered}`, optional namer `reason`), and an `empty_reason` literal when no candidates were produced (e.g. `no_location`, `no_match`).
 
 ### `error`
 
@@ -161,28 +174,28 @@ SSE streaming variant. Emits reasoning steps as they happen, then a final messag
 
 **Request:** Identical body to `POST /v1/chat`.
 
-**Response:** `Content-Type: text/event-stream`. Frame types, in this order:
+**Response:** `Content-Type: text/event-stream`. Frame types, in approximately this order:
 
 ```
 event: reasoning_step
 data: <ReasoningStep JSON>
 
+event: tool_result
+data: <ToolResult JSON>
+
 event: message
 data: {"content": "<final assistant text>"}
 
 event: done
-data: {"tool_calls_used": 0}
+data: {"tool_calls_used": 1}
 ```
 
 | Frame            | When emitted                                            | Data shape                       |
 | ---------------- | ------------------------------------------------------- | -------------------------------- |
-| `reasoning_step` | Each time the agent/fallback node emits a custom event  | `ReasoningStep` (all fields)     |
+| `reasoning_step` | Each time the agent / a tool / the fallback emits one   | `ReasoningStep` (all fields)     |
+| `tool_result`    | Once per completed tool call this turn                  | `ToolResult` (tool, tool_call_id, payload) |
 | `message`        | Once, after the graph completes, if there is text       | `{"content": string}`            |
-| `done`           | Always last — even if no message was produced           | `{"tool_calls_used": 0}`         |
-
-> ADR-075 removed all tools, so the stream emits **no `tool_result`
-> frames**. Any prior recall/consult tool-result handling in the client
-> is dead and should be removed.
+| `done`           | Always last — even if no message was produced           | `{"tool_calls_used": integer}`   |
 
 On error mid-stream:
 
@@ -342,14 +355,14 @@ Always HTTP 200 — DB outages surface via `db: "disconnected"`.
 
 ## API Contract Summary
 
-| Endpoint                        | Purpose                              | NestJS Sends                                                   | kebi Returns                                          |
-| ------------------------------- | ------------------------------------ | -------------------------------------------------------------- | ----------------------------------------------------- |
-| POST /v1/chat                   | Conversational Q&A (zero-tool agent) | user_id, message, optional location                            | type (`agent`\|`error`), message, data, tool_calls_used (0) |
-| POST /v1/chat/stream            | SSE streaming chat                   | Same as POST /v1/chat                                           | reasoning_step frames, message frame, done frame      |
-| POST /v1/extract                | Canonical extraction (save a place)  | raw_input, user_id                                             | ExtractPlaceResponse                                  |
-| GET /v1/extraction/{request_id} | Poll background extraction (reserved) | request_id (path param)                                        | ExtractPlaceResponse (200) or 404                     |
-| POST /v1/signal                 | Recommendation accept/reject         | signal_type, user_id, recommendation_id, place_core_id         | status (202)                                          |
-| GET /v1/health                  | Service health check                 | —                                                              | status, db connectivity                               |
+| Endpoint                          | Purpose                                | NestJS Sends                                                   | kebi Returns                                                          |
+| --------------------------------- | -------------------------------------- | -------------------------------------------------------------- | --------------------------------------------------------------------- |
+| POST /v1/chat                     | Conversational turn (consult-family agent) | user_id, message, optional location, movement_profile          | type (`agent`\|`error`), message, data (reasoning_steps + tool_results), tool_calls_used |
+| POST /v1/chat/stream              | SSE streaming chat                     | Same as POST /v1/chat                                          | reasoning_step + tool_result + message + done frames                  |
+| POST /v1/extract                  | Canonical extraction (save a place)    | raw_input, user_id                                             | ExtractPlaceResponse                                                  |
+| DELETE /v1/user/{user_id}/data    | Account-deletion sweep of AI data      | user_id (path), optional `scope`                               | 204 No Content                                                        |
+| POST /v1/signal                   | Recommendation accept/reject           | signal_type, user_id, recommendation_id, place_core_id         | status (202)                                                          |
+| GET /v1/health                    | Service health check                   | —                                                              | status, db connectivity                                               |
 
 ---
 
