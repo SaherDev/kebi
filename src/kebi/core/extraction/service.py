@@ -195,13 +195,18 @@ class ExtractionService:
                 )
 
             # ADR-074 cache lookup — short-circuits pipeline + upsert.
-            if parsed.url is not None:
+            # `source is not None` is guaranteed here: the unsupported-URL
+            # branch above returns before this point, so any non-None
+            # `parsed.url` has a known `PlaceSource`. Manual freetext
+            # (`parsed.url is None`) skips the cache entirely —
+            # freetext isn't content-addressable across users.
+            if parsed.url is not None and source is not None:
                 cached = await self._try_cache_hit(
-                    canonical_url=parsed.url,
+                    source=source,
+                    source_ref=parsed.url,
                     raw_input=raw_input,
                     user_id=user_id,
                     request_id=rid,
-                    source=source,
                 )
                 if cached is not None:
                     return cached
@@ -220,26 +225,29 @@ class ExtractionService:
             # re-serving.
             if (
                 parsed.url is not None
+                and source is not None
                 and response.status == "completed"
                 and response.results
             ):
-                await self._result_cache.set(parsed.url, response.results)
+                await self._result_cache.set(
+                    source, parsed.url, response.results
+                )
 
             return response
 
     async def _try_cache_hit(
         self,
-        canonical_url: str,
+        source: PlaceSource,
+        source_ref: str,
         raw_input: str,
         user_id: str,
         request_id: str,
-        source: PlaceSource | None,
     ) -> ExtractPlaceResponse | None:
         """Look up the result cache; on hit, link the cached cores to this
         user and return the response. On miss or unrecoverable error
         (FK violation against a deleted `places` row), evict and
         return None so the caller falls back to a full pipeline run."""
-        cached_items = await self._result_cache.get(canonical_url)
+        cached_items = await self._result_cache.get(source, source_ref)
         if cached_items is None:
             return None
         try:
@@ -249,15 +257,15 @@ class ExtractionService:
                 user_id=user_id,
                 request_id=request_id,
                 source=source,
-                canonical_url=canonical_url,
+                source_ref=source_ref,
             )
         except Exception:
             logger.warning(
                 "extraction_cache_hit_invalid",
-                extra={"canonical_url": canonical_url},
+                extra={"source": source.value, "source_ref": source_ref},
                 exc_info=True,
             )
-            await self._result_cache.delete(canonical_url)
+            await self._result_cache.delete(source, source_ref)
             return None
 
     async def _run_pipeline_and_persist(
@@ -497,8 +505,8 @@ class ExtractionService:
         raw_input: str,
         user_id: str,
         request_id: str,
-        source: PlaceSource | None,
-        canonical_url: str,
+        source: PlaceSource,
+        source_ref: str,
     ) -> ExtractPlaceResponse:
         """ADR-074 cache-hit save path. Skips pipeline + upsert.
 
@@ -521,7 +529,8 @@ class ExtractionService:
             "extraction_cache_hit",
             level="info",
             metadata={
-                "source_ref": canonical_url,
+                "source": source.value,
+                "source_ref": source_ref,
                 "place_count": len(cached_items),
             },
             user_id=user_id,
@@ -532,7 +541,7 @@ class ExtractionService:
             request_id=request_id,
             cores=eligible_cores,
             source=source,
-            source_ref=canonical_url,
+            source_ref=source_ref,
         )
         return ExtractPlaceResponse(
             status="completed",

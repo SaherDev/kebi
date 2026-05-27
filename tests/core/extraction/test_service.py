@@ -316,8 +316,9 @@ async def test_cache_miss_writes_completed_response_to_cache() -> None:
     # Cache was populated with the response items, keyed by the canonical
     # URL (query stripped).
     c.result_cache.set.assert_awaited_once()
-    cached_url, cached_items = c.result_cache.set.await_args.args
-    assert cached_url == "https://www.tiktok.com/@x/video/1"
+    cached_source, cached_ref, cached_items = c.result_cache.set.await_args.args
+    assert cached_source == PlaceSource.tiktok
+    assert cached_ref == "https://www.tiktok.com/@x/video/1"
     assert len(cached_items) == 1
     assert cached_items[0].place.id == "place-uuid-1"
     # Response is the completed envelope.
@@ -405,8 +406,9 @@ async def test_cache_hit_fk_violation_falls_back_to_pipeline() -> None:
     resp = await service.run(raw_input="https://tiktok.com/@x/video/1", user_id="u1")
     # Cache entry was evicted after the bad hit.
     c.result_cache.delete.assert_awaited_once()
-    deleted_url = c.result_cache.delete.await_args.args[0]
-    assert deleted_url == "https://tiktok.com/@x/video/1"
+    deleted_source, deleted_ref = c.result_cache.delete.await_args.args
+    assert deleted_source == PlaceSource.tiktok
+    assert deleted_ref == "https://tiktok.com/@x/video/1"
     # Pipeline then ran (the fallback path).
     c.pipeline.run.assert_awaited_once()
     c.upsert.upsert_and_embed.assert_awaited_once()
