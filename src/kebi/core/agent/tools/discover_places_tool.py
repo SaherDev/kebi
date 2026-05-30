@@ -6,16 +6,18 @@ places, `discover_places` calls the place provider directly for the
 turn's working location + category + filters. No LLM in the loop, no
 saved-collection lookup.
 
-Two routing roles, both decided by the agent prompt:
+It is the **fall-through floor**, not a front-line tool — decided by
+the agent prompt. When `find_saved` and/or `suggest_places` returned
+`empty_reason="no_match"` earlier in the same turn, the agent calls
+`discover_places` to recover with whatever the catalog or Google can
+surface near the working location.
 
-1. **Direct-utility** — practical intents the other tools can't answer:
-   "pharmacy near me", "nearest ATM", "supermarket close by". The user
-   has no saved pharmacies and no LLM would name famous ones, so going
-   straight to the provider is the only sensible path.
-2. **Safety net** — when `find_saved` and/or `suggest_places` returned
-   `empty_reason="no_match"` earlier in the same turn, the agent may
-   call `discover_places` as a fall-through to recover with whatever
-   the catalog or Google can surface near the working location.
+This includes utility errands (pharmacy, ATM, supermarket, …). Those
+no longer route here directly: the agent sends them to `suggest_places`
+first, where the namer proposes the trusted brand/chain for the country
+and the provider resolves the nearest branch — an opinionated pick. Only
+when that path names no credible brand or none validates nearby does
+`discover_places` step in with the generic nearest match.
 
 Mechanics:
 
@@ -56,6 +58,7 @@ from kebi.core.agent.location import WorkingLocation
 from kebi.core.agent.reasoning import ReasoningStep
 from kebi.core.agent.state import AgentState
 from kebi.core.agent.tools._hard_constraints import hard_constraints_satisfied
+from kebi.core.agent.tools._scope import clamp_to_walkable_for_utility
 from kebi.core.agent.tools._search_args import (
     CATEGORIES_DESC,
     CITY_DESC,
@@ -288,6 +291,11 @@ async def _run_discover_places_impl(
         )
 
     assert working is not None  # narrowed by _is_anchored
+    # Utility errands are walked to — clamp to a walkable radius (same rule as
+    # suggest_places) so this fallback can't reintroduce a far result.
+    working = clamp_to_walkable_for_utility(
+        working, categories, get_config().movement
+    )
     location_label = _location_label(working)
     steps.append(
         _make_step("start", f"Checking the area around {location_label}.")

@@ -149,6 +149,26 @@ class PlaceCategory(str, Enum):
     study_cafe = "study_cafe"
 
 
+# Practical "near me" errands — places you walk to, not destinations you
+# choose. A turn whose categories fall in this set is clamped to a walkable
+# search radius (see core/agent/tools/_scope.py) so "nearest ATM" doesn't
+# surface a prominent branch across town.
+UTILITY_CATEGORIES: frozenset[PlaceCategory] = frozenset(
+    {
+        PlaceCategory.atm,
+        PlaceCategory.bank,
+        PlaceCategory.post_office,
+        PlaceCategory.gas_station,
+        PlaceCategory.parking,
+        PlaceCategory.laundry,
+        PlaceCategory.pharmacy,
+        PlaceCategory.convenience_store,
+        PlaceCategory.supermarket,
+        PlaceCategory.grocery_store,
+    }
+)
+
+
 # weekday → list of "HH:MM-HH:MM" ranges, plus "timezone" key for IANA string.
 # total=True: the only constructor (_google_mapper._map_hours) always sets all
 # 7 day keys + timezone. Empty days are stored as []; closed-all-day as
@@ -197,7 +217,7 @@ class PlaceNameAlias(BaseModel):
     source: str          # "tiktok" | "instagram" | "user" | "llm" | ...
 
 
-SortField = Literal["created_at", "refreshed_at", "place_name"]
+SortField = Literal["created_at", "refreshed_at", "place_name", "distance"]
 
 
 class PlaceCatalogFilters(BaseModel):
@@ -239,7 +259,10 @@ class PlaceQuery(PlaceCatalogFilters):
     created_after: datetime | None = None
     created_before: datetime | None = None
 
-    # ordering (DB)
+    # ordering — provider-agnostic; each backend maps it (DB sorts the
+    # column / earth_distance, the place provider maps it to its own rank
+    # preference). "distance" orders nearest-first and requires location
+    # coords (see _validate_geo_location); sort_desc is ignored for it.
     sort_by: SortField | None = None
     sort_desc: bool = True
 
@@ -249,6 +272,13 @@ class PlaceQuery(PlaceCatalogFilters):
     @model_validator(mode="after")
     def _validate_geo_location(self) -> PlaceQuery:
         loc = self.location
+        if self.sort_by == "distance" and (
+            loc is None or loc.lat is None or loc.lng is None
+        ):
+            raise ValueError(
+                "sort_by='distance' requires location.lat and location.lng "
+                "(a named-area location has no anchor to measure from)"
+            )
         if loc is None:
             return self
         if (loc.lat is not None or loc.lng is not None) and loc.radius_m is None:
