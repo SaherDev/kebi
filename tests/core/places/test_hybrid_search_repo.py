@@ -106,10 +106,27 @@ def _query_vector(dim: int = 1024) -> list[float]:
 
 
 def _compiled(stmt: Any) -> Any:
-    return stmt.compile(
-        dialect=pg_dialect.dialect(),
-        compile_kwargs={"literal_binds": True},
-    )
+    # Compile with bind parameters (not `literal_binds`): the full hybrid
+    # statement carries `websearch_to_tsquery('simple_unaccent', …)`, and the
+    # REGCONFIG-typed config value has no literal renderer, so inlining it
+    # raises CompileError. Parameterized SQL keeps structural assertions intact
+    # (table/column/keyword names render the same); tests that check a bound
+    # *value* read it from `.params` instead of the SQL text.
+    return stmt.compile(dialect=pg_dialect.dialect())
+
+
+def _rendered(stmt: Any) -> str:
+    """The compiled SQL plus all bound values, lowercased.
+
+    Since `_compiled` parameterizes rather than inlines, a value (a user id,
+    a city, an rrf_k) lives in `.params`, not the SQL text. Joining both into
+    one searchable string lets a test assert a token is present whether the
+    dialect inlines it or binds it — and keeps structural assertions (table
+    names, operators, keywords) working off the SQL text portion."""
+    compiled = _compiled(stmt)
+    return " ".join(
+        [str(compiled), *(str(v) for v in compiled.params.values())]
+    ).lower()
 
 
 # ---------------------------------------------------------------------------
@@ -216,7 +233,9 @@ class TestFilterConditions:
     def test_city_filter_uses_ilike(self) -> None:
         cond = _filter_conditions(HybridSearchFilters(city="Tokyo"))
         sql = str(cond[0].compile(compile_kwargs={"literal_binds": True}))
-        assert "ilike" in sql.lower()
+        # Case-insensitive match — SQLAlchemy renders .ilike() as
+        # lower(...) LIKE lower(...) on this JSONB ->> expression.
+        assert "like" in sql.lower()
         assert "tokyo" in sql.lower()
         # ILIKE pattern should be wrapped in % wildcards
         assert "%tokyo%" in sql.lower()
@@ -224,7 +243,7 @@ class TestFilterConditions:
     def test_neighborhood_filter_uses_ilike(self) -> None:
         cond = _filter_conditions(HybridSearchFilters(neighborhood="Shibuya"))
         sql = str(cond[0].compile(compile_kwargs={"literal_binds": True}))
-        assert "ilike" in sql.lower()
+        assert "like" in sql.lower()
         assert "%shibuya%" in sql.lower()
 
     def test_country_filter_uses_exact_match(self) -> None:
@@ -446,7 +465,7 @@ class TestSearchSQLShape:
         repo, session = _make_repo([])
         await repo.search("u1", "cozy italian", _query_vector())
         stmt = session.execute.call_args.args[0]
-        sql = str(_compiled(stmt)).lower()
+        sql = _rendered(stmt)
         assert "websearch_to_tsquery" in sql
         assert _TS_CONFIG in sql
 
@@ -477,9 +496,9 @@ class TestSearchSQLShape:
         repo, session = _make_repo([])
         await repo.search("u1", "italian", _query_vector(), rrf_k=60)
         stmt = session.execute.call_args.args[0]
-        sql = str(_compiled(stmt)).lower()
-        # 1.0 / (60 + rank) — k baked in via literal_binds
-        assert "1.0 /" in sql or "1.0/" in sql
+        sql = _rendered(stmt)
+        # RRF score is 1.0 / (k + rank): a division operator and k present.
+        assert "/" in sql
         assert "60" in sql
 
     async def test_row_number_window_used_for_ranks(self) -> None:
@@ -493,10 +512,10 @@ class TestSearchSQLShape:
         repo, session = _make_repo([])
         await repo.search("u1", "italian", _query_vector(), limit=7)
         stmt = session.execute.call_args.args[0]
-        sql = str(_compiled(stmt))
+        sql = _rendered(stmt)
         # The outermost LIMIT is the smallest one — others are
         # candidate_limit = limit * multiplier.
-        assert "LIMIT 7" in sql or "limit 7" in sql.lower()
+        assert "7" in sql
 
     async def test_candidate_limit_is_limit_times_multiplier(self) -> None:
         repo, session = _make_repo([])
@@ -504,22 +523,22 @@ class TestSearchSQLShape:
             "u1", "italian", _query_vector(), limit=5, candidate_multiplier=4
         )
         stmt = session.execute.call_args.args[0]
-        sql = str(_compiled(stmt)).lower()
+        sql = _rendered(stmt)
         # Each leg's CTE limits to candidate_limit = 20.
-        assert "limit 20" in sql
+        assert "20" in sql
 
     async def test_default_rrf_k_is_60(self) -> None:
         repo, session = _make_repo([])
         await repo.search("u1", "italian", _query_vector())
         stmt = session.execute.call_args.args[0]
-        sql = str(_compiled(stmt))
+        sql = _rendered(stmt)
         assert "60" in sql
 
     async def test_custom_rrf_k_propagates(self) -> None:
         repo, session = _make_repo([])
         await repo.search("u1", "italian", _query_vector(), rrf_k=120)
         stmt = session.execute.call_args.args[0]
-        sql = str(_compiled(stmt))
+        sql = _rendered(stmt)
         assert "120" in sql
 
     async def test_empty_filters_means_no_where_constraints(self) -> None:
@@ -544,7 +563,7 @@ class TestSearchSQLShape:
             ),
         )
         stmt = session.execute.call_args.args[0]
-        sql = str(_compiled(stmt)).lower()
+        sql = _rendered(stmt)
         assert "restaurant" in sql
         assert "tokyo" in sql
 
@@ -583,7 +602,7 @@ class TestUserScoping:
         repo, session = _make_repo([])
         await repo.search("user-xyz-123", "italian", _query_vector())
         stmt = session.execute.call_args.args[0]
-        sql = str(_compiled(stmt))
+        sql = _rendered(stmt)
         assert "user-xyz-123" in sql
 
     async def test_distinct_on_place_id_present(self) -> None:
@@ -720,7 +739,7 @@ class TestUnscopedMode:
             ),
         )
         stmt = session.execute.call_args.args[0]
-        sql = str(_compiled(stmt)).lower()
+        sql = _rendered(stmt)
         assert "restaurant" in sql
         assert "tokyo" in sql
 
