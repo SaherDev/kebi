@@ -9,6 +9,7 @@ from langchain_core.messages import HumanMessage
 
 from kebi.core.agent.graph import _CORRIDOR_ASK, make_resolve_location_node
 from kebi.core.agent.location import LocationResolution, resolve_radius
+from kebi.core.agent.state import LOCATION_INHERIT
 from kebi.core.config import get_config
 from kebi.core.places.nominatim_geocoding_client import GeocodeResult, GeocodingError
 
@@ -267,6 +268,30 @@ async def test_user_actual_reverse_geocodes_request_coords() -> None:
     assert wl["neighborhood"] is None
     assert update["location_clarification"] is None
     geocoder.reverse.assert_awaited_once_with(lat=52.13, lng=11.64)
+
+
+async def test_inherit_sentinel_on_fresh_thread_resolves_not_crashes() -> None:
+    """Regression: on a brand-new thread LangGraph stores the first
+    `working_location` value as-is, so the raw `LOCATION_INHERIT` sentinel
+    string (not a dict) is present when the resolver runs. It must be treated
+    as 'no carried location' rather than have `.get()` called on it — the bug
+    was an `AttributeError: 'str' object has no attribute 'get'` that fell the
+    whole turn through to a clarification."""
+    resolution = LocationResolution(source="user_actual")
+    geocoder = _geocoder(reverse={"country": "Japan", "city": "Tokyo"})
+    node = make_resolve_location_node(_resolver_llm(resolution), geocoder)
+    update = await node(
+        _state(
+            message="any atm near me?",
+            user_location={"lat": 35.6762, "lng": 139.6503},
+            working_location=LOCATION_INHERIT,  # raw sentinel string, not a dict
+        )
+    )
+    wl = update["working_location"]
+    assert wl is not None
+    assert wl["city"] == "Tokyo"
+    assert wl["lat"] == 35.6762
+    assert update["location_clarification"] is None
 
 
 async def test_user_actual_without_request_location_clarifies() -> None:

@@ -67,6 +67,21 @@ def _bangkok_no_radius() -> dict[str, Any]:
     ).model_dump()
 
 
+def _bangkok_city_working() -> dict[str, Any]:
+    """City-scope, transit, dense — a broad ~9.8 km radius."""
+    return WorkingLocation(
+        country="Thailand",
+        city="Bangkok",
+        lat=13.7563,
+        lng=100.5018,
+        density="dense",
+        effective_mode="transit",
+        scope_tier="city",
+        scope_shape="area",
+        search_radius_m=9800.0,
+    ).model_dump()
+
+
 def _state(
     *,
     working_location: dict[str, Any] | None = None,
@@ -366,7 +381,9 @@ async def test_provider_call_carries_location_context() -> None:
     assert loc is not None
     assert loc.lat == 13.7563
     assert loc.lng == 100.5018
-    assert loc.radius_m == 1200
+    # pharmacy is a utility category, so the walkable clamp tightens the
+    # working radius: 1000 (walkable) × 1.0 (walking) × 0.7 (dense) = 700.
+    assert loc.radius_m == 700
     assert loc.city == "Bangkok"
     assert loc.neighborhood == "Sukhumvit"
     assert loc.country == "Thailand"
@@ -499,3 +516,47 @@ async def test_discovered_candidate_reason_left_for_agent_to_compose() -> None:
     payload = ConsultResult.model_validate_json(cmd.update["messages"][0].content)
     assert len(payload.candidates) == 2
     assert all(c.reason is None for c in payload.candidates)
+
+
+# ---------------------------------------------------------------------------
+# Utility-errand radius clamp (fallback path must clamp too)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_utility_category_clamps_provider_radius() -> None:
+    """A utility errand on a broad city-scope turn searches a walkable circle."""
+    factory, search = _make_search_factory(hits=[_place("CVS", place_id="p1")])
+
+    await _run_discover_places(
+        places_search_factory=factory,
+        state=_state(working_location=_bangkok_city_working()),
+        tool_call_id="tc-1",
+        query="pharmacy",
+        categories=[PlaceCategory.pharmacy],
+        tags=None,
+        limit=10,
+    )
+    loc = search.find.await_args_list[0].args[0].location
+    # walkable(1000) × transit(2.0) × dense(0.7) = 1400, down from 9800.
+    assert loc.radius_m == 1400
+
+
+@pytest.mark.asyncio
+async def test_non_utility_category_keeps_broad_radius() -> None:
+    """A non-errand intent is untouched by the utility clamp."""
+    factory, search = _make_search_factory(
+        hits=[_place("Park", place_id="p1", categories=[PlaceCategory.park])]
+    )
+
+    await _run_discover_places(
+        places_search_factory=factory,
+        state=_state(working_location=_bangkok_city_working()),
+        tool_call_id="tc-1",
+        query="park",
+        categories=[PlaceCategory.park],
+        tags=None,
+        limit=10,
+    )
+    loc = search.find.await_args_list[0].args[0].location
+    assert loc.radius_m == 9800

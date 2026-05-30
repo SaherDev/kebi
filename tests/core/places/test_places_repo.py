@@ -234,6 +234,37 @@ class TestFind:
         compiled = str(stmt.compile(compile_kwargs={"literal_binds": True}))
         assert "cafe" in compiled.lower()
 
+    async def test_distance_sort_orders_by_earth_distance_asc(self) -> None:
+        repo, session = _make_repo([])
+        await repo.find(
+            PlaceQuery(
+                sort_by="distance",
+                location=LocationContext(lat=13.7, lng=100.5, radius_m=500),
+            )
+        )
+        stmt = session.execute.call_args.args[0]
+        compiled = str(
+            stmt.compile(compile_kwargs={"literal_binds": True})
+        ).lower()
+        # earthdistance/cube extension — NOT PostGIS ST_Distance.
+        assert "earth_distance" in compiled
+        assert "ll_to_earth" in compiled
+        assert "st_distance" not in compiled
+        order_clause = compiled.split("order by", 1)[1]
+        assert "earth_distance" in order_clause
+        assert " asc" in order_clause
+
+    async def test_default_sort_unchanged_by_distance_support(self) -> None:
+        repo, session = _make_repo([])
+        await repo.find(PlaceQuery(sort_by="created_at", sort_desc=True))
+        stmt = session.execute.call_args.args[0]
+        compiled = str(
+            stmt.compile(compile_kwargs={"literal_binds": True})
+        ).lower()
+        assert "earth_distance" not in compiled
+        order_clause = compiled.split("order by", 1)[1]
+        assert "created_at" in order_clause and " desc" in order_clause
+
     async def test_categories_cast_renders_as_text_array(self) -> None:
         """Regression guard for the ARRAY(String)→ARRAY(Text) cast (ADR-090).
 

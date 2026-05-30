@@ -888,3 +888,37 @@ class TestGetCoresByIds:
         cache.mget.assert_not_awaited()
         client.get_by_ids.assert_not_awaited()
         client.search.assert_not_awaited()
+
+
+class TestDistanceSortThreading:
+    """sort_by survives unchanged into BOTH the DB and the Google paths."""
+
+    _DIST_QUERY = PlaceQuery(
+        place_names=["Some Bank"],
+        sort_by="distance",
+        location=LocationContext(lat=13.7, lng=100.5, radius_m=500),
+    )
+
+    async def test_db_path_receives_distance_sort(self) -> None:
+        repo = MagicMock(
+            find=AsyncMock(return_value=[_core("a")]),
+            get_by_provider_ids=AsyncMock(return_value={}),
+        )
+        svc = _make_service(repo=repo)
+        await svc.find(self._DIST_QUERY, limit=1)
+        assert repo.find.call_args.args[0].sort_by == "distance"
+
+    async def test_google_fallback_receives_distance_sort(self) -> None:
+        # DB empty → cold path hits the provider client.
+        repo = MagicMock(
+            find=AsyncMock(return_value=[]),
+            get_by_provider_ids=AsyncMock(return_value={}),
+        )
+        client = MagicMock(
+            search=AsyncMock(return_value=[]),
+            get_by_ids=AsyncMock(return_value=[]),
+        )
+        svc = _make_service(repo=repo, client=client)
+        await svc.find(self._DIST_QUERY, limit=1)
+        client.search.assert_awaited_once()
+        assert client.search.call_args.args[0].sort_by == "distance"

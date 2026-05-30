@@ -121,6 +121,74 @@ class TestSearchRouting:
 
 
 # ---------------------------------------------------------------------------
+# distance ordering → rankPreference on the request body
+# ---------------------------------------------------------------------------
+
+class TestRankPreference:
+    _LOC = LocationContext(lat=13.7, lng=100.5, radius_m=500)
+
+    async def test_text_search_sets_distance_rank(self) -> None:
+        c = _client_with_request(return_value=[])
+        await c._text_search(
+            PlaceQuery(place_names=["ATM"], sort_by="distance", location=self._LOC),
+            limit=5,
+        )
+        body = c._request.call_args.kwargs["body"]
+        assert body["rankPreference"] == "DISTANCE"
+
+    async def test_nearby_search_sets_distance_rank(self) -> None:
+        c = _client_with_request(return_value=[])
+        await c._nearby_search(
+            PlaceQuery(
+                categories=[PlaceCategory.atm],
+                sort_by="distance",
+                location=self._LOC,
+            ),
+            limit=5,
+        )
+        body = c._request.call_args.kwargs["body"]
+        assert body["rankPreference"] == "DISTANCE"
+
+    async def test_no_distance_sort_omits_rank(self) -> None:
+        c = _client_with_request(return_value=[])
+        await c._nearby_search(
+            PlaceQuery(categories=[PlaceCategory.atm], location=self._LOC),
+            limit=5,
+        )
+        body = c._request.call_args.kwargs["body"]
+        assert "rankPreference" not in body
+
+
+class TestTextSearchHardBound:
+    """Distance text search is bounded hard (rectangle); default stays soft."""
+
+    _LOC = LocationContext(lat=13.7, lng=100.5, radius_m=500)
+
+    async def test_distance_uses_hard_rectangle_not_soft_bias(self) -> None:
+        c = _client_with_request(return_value=[])
+        await c._text_search(
+            PlaceQuery(place_names=["ATM"], sort_by="distance", location=self._LOC),
+            limit=5,
+        )
+        body = c._request.call_args.kwargs["body"]
+        rect = body["locationRestriction"]["rectangle"]
+        assert {"low", "high"} <= rect.keys()
+        assert rect["low"]["latitude"] < 13.7 < rect["high"]["latitude"]
+        assert rect["low"]["longitude"] < 100.5 < rect["high"]["longitude"]
+        assert "locationBias" not in body  # the soft circle is gone
+
+    async def test_default_keeps_soft_circle_bias(self) -> None:
+        c = _client_with_request(return_value=[])
+        await c._text_search(
+            PlaceQuery(place_names=["ramen"], location=self._LOC),
+            limit=5,
+        )
+        body = c._request.call_args.kwargs["body"]
+        assert body["locationBias"]["circle"]["radius"] == 500.0
+        assert "locationRestriction" not in body
+
+
+# ---------------------------------------------------------------------------
 # build_text_search_params — text/type dedup
 # ---------------------------------------------------------------------------
 

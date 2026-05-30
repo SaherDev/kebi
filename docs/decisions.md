@@ -17,6 +17,46 @@ Format:
 
 ---
 
+## ADR-099: Nearest-first searches use a hard geographic bound
+
+**Date:** 2026-05-30\
+**Status:** accepted\
+**Context:** Distance ordering (ADR-097) and the walkable-radius clamp (ADR-098) still let a "near me" brand search return a branch ten kilometres away. Verified end-to-end: routing, brand naming, the category signal, and the tight radius were all correct, yet the result was far. The cause is the place provider's text-search endpoint, which binds location only with a *soft* preference — it ranks toward the area but does not exclude prominent results outside it, and the distance rank preference is weakly honoured for text queries. The nearby-search endpoint already uses a hard circular restriction, but brand resolution must go through text search (it matches a name, not a category), so it inherited the soft bound. A soft bound can never guarantee "nearest"; tightening the radius only shrinks a fence results can still jump.\
+**Decision:** A nearest-first search is bounded by a *hard* geographic restriction, not a soft bias. Because the text endpoint accepts a rectangle but not a circle for a hard restriction, the working circle (centre + radius) is converted to a bounding box and sent as the restriction whenever the query is distance-ranked; non-distance searches keep the soft bias (a renowned place just outside a city circle should not be hard-cut). This is what makes ADR-097's distance ordering actually bind on the text path: the radius (sized by ADR-098) now defines a wall, not a preference, and ordering settles ties within it.\
+**Consequences:** "Nearest X" returns something genuinely within the working radius; a prominent far branch can no longer surface. The bound is a square circumscribing the circle, so its corners admit results slightly beyond the radius — immaterial next to the kilometres it removes. Discovery for non-proximity intents is unchanged. The three proximity levers now compose with distinct jobs: the clamp sizes the bound, the hard restriction enforces it, the distance rank orders within it.
+
+---
+
+## ADR-098: Utility errands search a walkable radius
+
+**Date:** 2026-05-30\
+**Status:** accepted\
+**Context:** Distance ordering (ADR-097) made a brand resolve to its nearest branch, but a "near me" ATM still came back kilometres away. The cause was the turn's search radius: the location resolver, which runs before the agent picks a tool and so cannot know the errand's category, classified "any ATM near me" at city scope, producing a multi-kilometre bias circle. Over a circle that wide the place provider's text search ranks by prominence, so a prominent branch across town out-ranks the closest one — and nearest-first ordering cannot rescue a search area that was too large to begin with. Errands you walk to (cash, a pharmacy, a corner shop) are inherently local; treating them at city scope is the error.\
+**Decision:** Clamp the search radius to walkable scope for practical errands, deterministically, at the tool that already knows the category — not at the resolver, which would have to guess intent from free text. The walkable radius reuses the same scope-to-metres formula every turn uses (keeping the turn's travel mode and the location's density), so there is no second source of truth and no hardcoded distance; it only ever tightens, never widens. The location resolver stays category-agnostic. Both the editorial path and its fall-through apply the clamp, so the fallback can't reintroduce a far result.\
+**Consequences:** "Nearest ATM/pharmacy/supermarket" now searches a tight, density-aware circle and returns a genuinely close option; non-errand intents (dinner, sightseeing) keep the broad radius. The set of categories treated as walkable errands is an explicit list, easily tuned. Because the clamp lives at the tool, any future caller that issues a utility-category search inherits the same behaviour without touching location resolution.
+
+---
+
+## ADR-097: Distance as a provider-agnostic ordering on the place query
+
+**Date:** 2026-05-30\
+**Status:** accepted\
+**Context:** Resolving a brand/chain to a real venue (ADR-096) returned the wrong branch. Brand validation runs as a name-based provider search, which ranks by relevance/prominence within a soft location bias — so a prominent far flagship outranks a closer branch, and taking the top hit yielded a 10 km result for a "near me" errand. The query model already carried an ordering field, but it was implemented as a database-only concept (sort by stored columns) that the place provider ignored entirely. Pushing a fix into the one calling tool would have been worse: the search path is catalog-first with a provider fallback, threading the same query into both, so a tool-local sort would order results differently depending on which tier answered.\
+**Decision:** Make "nearest-first" a first-class, provider-agnostic ordering on the place query, honored wherever the query runs. Each backend maps it to its native mechanism — the catalog sorts by geographic distance from the anchor, the place provider sets its distance rank preference. Distance ordering requires anchor coordinates (a named-area-only location is rejected at construction) and is inherently nearest-first. Hybrid saved-place search is excluded: it is relevance-fused (semantic + lexical rank), and distance is not a ranking axis there. The brand-resolution step simply requests this ordering; taking the top hit now yields the closest branch.\
+**Consequences:** Ordering lives in the query contract, so catalog hits and provider-fallback hits sort identically — no tier-dependent surprises — and any future provider implements the same mapping rather than a bespoke sort. "Near me" brand errands return the nearest branch instead of the flagship. One caveat is unchanged: catalog-first means that if the catalog already holds only far branches of a chain, the nearest-of-those is returned and the provider (which could find a closer one) is not consulted, because the catalog was non-empty. Per the decision to always return the nearest available, no hard radius cut is applied — a genuinely remote nearest branch is still returned rather than suppressed.
+
+---
+
+## ADR-096: Utility errands route through the editorial path
+
+**Date:** 2026-05-30\
+**Status:** accepted\
+**Context:** Practical errands — find an ATM, a pharmacy, a supermarket — were answered by calling the place provider directly for the nearest category match, with no model in the loop. That produces the commodity answer Google Maps already gives, for exactly the intents where the product's value is an opinionated pick: the no-fee ATM, the trusted pharmacy chain, the supermarket worth the walk. That editorial knowledge (brand reputation, fee norms, country-specific chains) lives in the language model, not in the provider's catalog, and the direct-provider route discarded it. The model already had a name-then-validate discovery path that proposes real, well-known places and confirms each against the provider near the working location — utility errands simply bypassed it.\
+**Decision:** Route utility errands through the same name-then-validate discovery path as any other "what's good near me" intent. The namer proposes the trusted brand or chain for the errand in the working location's country; the provider resolves that brand to its nearest real branch. The inside-info that justifies the pick (e.g. "usually no fees", "reliable late-night chain") rides in the per-candidate reason, framed as opinion — the provider confirms the branch exists, not the claim. The direct-provider search is demoted to a fall-through floor: it runs only when the editorial path names no credible brand or none validates nearby, so the user still gets a real nearby venue instead of a fabricated tip. No new tool or model. (Originally this also claimed no new query shape; that proved wrong — resolving a chain to its *nearest* branch needed distance ordering, see ADR-097.)\
+**Consequences:** Utility errands now get an opinionated brand pick instead of a random nearest match, consistent with every other recommendation. The editorial claim is model knowledge the provider cannot ground, so it is phrased as a typical/known property, never a guarantee, and is never enforced as a hard constraint. The namer now fires on errand intents it previously skipped — a small added model cost per such turn, traceable like any other model call. If the namer's brand knowledge proves thin for a market, the fix is a model-config change for that role, not code.
+
+---
+
 ## ADR-095: Rename the user-place source pointer
 
 **Date:** 2026-05-25\

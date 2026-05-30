@@ -52,6 +52,7 @@ from kebi.core.agent.location import WorkingLocation
 from kebi.core.agent.reasoning import ReasoningStep
 from kebi.core.agent.state import AgentState
 from kebi.core.agent.tools._hard_constraints import hard_constraints_satisfied
+from kebi.core.agent.tools._scope import clamp_to_walkable_for_utility
 from kebi.core.agent.tools._search_args import (
     CATEGORIES_DESC,
     CITY_DESC,
@@ -329,6 +330,12 @@ async def _run_suggest_places_impl(
         )
 
     assert working is not None  # narrowed by _is_anchored
+    # Utility errands ("ATM near me") are walked to — clamp to a walkable
+    # radius so the namer scope and provider locationBias stay tight and the
+    # nearest branch wins, not a prominent one across town.
+    working = clamp_to_walkable_for_utility(
+        working, categories, get_config().movement
+    )
     location_label = _location_label(working)
     steps.append(_make_step("locate", f"Okay — looking around {location_label}."))
 
@@ -453,10 +460,14 @@ async def _validate_candidates(
     """Fan out proposed names to the place provider, return validated pairs.
 
     For each proposed name, run a single bounded `PlacesSearchService.find()`
-    call carrying the working location's `locationBias.circle`. Names
-    with no provider hit are dropped (Google's location bias drops
-    out-of-radius results, so this is also how "famous spots in another
-    city" self-eliminate). On the way back the live `PlaceObject` is
+    call carrying the working location's `locationBias.circle`, ordered
+    nearest-first (`sort_by="distance"`). The nearest-first ordering matters
+    for brand/chain names — a chain resolves to many branches, and without
+    it the provider's relevance rank returns the most prominent (often a
+    far flagship) rather than the closest branch. Names with no provider
+    hit are dropped (the location bias drops out-of-radius results, so this
+    is also how "famous spots in another city" self-eliminate). On the way
+    back the live `PlaceObject` is
     stripped to a persistable `PlaceCore` — the agent surface only needs
     canonical fields, not the cache-only live half.
 
@@ -485,6 +496,10 @@ async def _validate_candidates(
                     PlaceQuery(
                         place_names=[candidate.name],
                         location=location,
+                        # Brand names (a chain) resolve to many branches;
+                        # order nearest-first so limit=1 returns the closest
+                        # branch, not the most prominent/flagship one.
+                        sort_by="distance",
                     ),
                     limit=1,
                 )

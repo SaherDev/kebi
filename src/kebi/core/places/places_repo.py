@@ -186,8 +186,25 @@ class PlacesRepo:
         if conditions:
             stmt = stmt.where(and_(*conditions))
 
-        sort_col = _SORT_COLUMNS[query.sort_by] if query.sort_by else _t.created_at
-        stmt = stmt.order_by(sort_col.desc() if query.sort_desc else sort_col.asc())
+        if query.sort_by == "distance":
+            # Nearest-first ordering. The model validator guarantees lat/lng
+            # are present when sort_by == "distance", so loc is anchored here.
+            # sort_desc is not meaningful for distance — always ascending.
+            assert loc is not None and loc.lat is not None and loc.lng is not None
+            order_lat = cast(_t.location["lat"].astext, Float())
+            order_lng = cast(_t.location["lng"].astext, Float())
+            distance = func.earth_distance(
+                func.ll_to_earth(loc.lat, loc.lng),
+                func.ll_to_earth(order_lat, order_lng),
+            )
+            stmt = stmt.order_by(distance.asc())
+        else:
+            sort_col = (
+                _SORT_COLUMNS[query.sort_by] if query.sort_by else _t.created_at
+            )
+            stmt = stmt.order_by(
+                sort_col.desc() if query.sort_desc else sort_col.asc()
+            )
 
         result = await self._session.execute(stmt.limit(limit))
         return [_row_to_core(row._mapping) for row in result]

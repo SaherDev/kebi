@@ -9,9 +9,13 @@ consult-family tools today:
 - `suggest_places` — proposes well-known places via an LLM namer and
   validates them against `PlacesSearchService`.
 - `discover_places` — provider-driven nearby/area search via
-  `PlacesSearchService` (no LLM, no saved-collection lookup). Used for
-  utility intents (pharmacy, ATM, gas station, etc.) and as a fall-
-  through when the other two tools came back empty in the same turn.
+  `PlacesSearchService` (no LLM, no saved-collection lookup). The
+  fall-through floor: used when the other two tools came back empty in
+  the same turn. Utility errands (pharmacy, ATM, gas station, etc.) now
+  route to `suggest_places` first — the namer proposes the trusted
+  brand/chain and the provider resolves the nearest branch — so
+  `discover_places` only handles the generic nearest match when no
+  brand validated nearby.
 
 All three share the same Pydantic arg schema (see `_search_args.py`);
 the agent picks between them on routing semantics, not on parameter

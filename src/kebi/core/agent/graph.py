@@ -767,6 +767,22 @@ def _render_mobility_profile(state: AgentState) -> str:
     )
 
 
+def _carried_working_location(state: AgentState) -> dict[str, Any] | None:
+    """Prior turn's working location as a dict, or None when there is none.
+
+    `build_turn_payload` seeds `working_location` with the `LOCATION_INHERIT`
+    sentinel every turn so carry-forward is explicit. On a brand-new thread
+    LangGraph's reducer channel stores that first value *as-is* — the reducer
+    only combines *subsequent* writes — so the raw sentinel string can be the
+    value when `resolve_location` reads state on the very first turn. Anything
+    that is not a dict (the sentinel, or a cleared `None`) means "no carried
+    location", so coerce it to `None` here and everywhere the resolver reads
+    the prior location.
+    """
+    wl = state.get("working_location")
+    return wl if isinstance(wl, dict) else None
+
+
 def _distance_from_previous_km(state: AgentState) -> float | None:
     """Distance between user_actual and previous working location, in km.
 
@@ -777,7 +793,7 @@ def _distance_from_previous_km(state: AgentState) -> float | None:
     prior place or re-anchor to the user's new actual location.
     """
     user_loc = state.get("user_location") or {}
-    prev = state.get("working_location") or {}
+    prev = _carried_working_location(state) or {}
     user_lat = _coerce_coord(user_loc.get("lat"))
     user_lng = _coerce_coord(user_loc.get("lng"))
     prev_lat = _coerce_coord(prev.get("lat"))
@@ -796,7 +812,7 @@ def _distance_from_previous_km(state: AgentState) -> float | None:
 
 def _render_distance_from_previous(state: AgentState) -> str:
     """Human-readable rendering of the {distance_from_previous} slot."""
-    prev = state.get("working_location") or {}
+    prev = _carried_working_location(state) or {}
     user_loc = state.get("user_location") or {}
     if not prev:
         return "first turn — no previous working location"
@@ -823,7 +839,7 @@ def _render_resolver_prompt(state: AgentState) -> str:
             _format_history_for_resolver(messages) or "(no prior messages)"
         ),
         user_actual_location=json.dumps(state.get("user_location")),
-        previous_working_location=json.dumps(state.get("working_location")),
+        previous_working_location=json.dumps(_carried_working_location(state)),
         distance_from_previous=_render_distance_from_previous(state),
         mobility_profile=_render_mobility_profile(state),
     )
@@ -1105,7 +1121,7 @@ def make_resolve_location_node(resolver_llm: Any, geocoding_client: Any) -> Any:
             working = await _build_working_location(
                 resolution,
                 state.get("user_location"),
-                state.get("working_location"),
+                _carried_working_location(state),
                 geocoding_client,
             )
             if working is None:

@@ -9,6 +9,8 @@ from typing import Any
 
 import httpx
 
+from kebi.core.utils.geo import bounding_box
+
 from ._google_mapper import GOOGLE_PROVIDER_PREFIX, map_place
 from ._google_query_builder import (
     build_text_search_param_sets,
@@ -184,16 +186,34 @@ class GooglePlacesClient:
             and loc.lng is not None
             and loc.radius_m is not None
         ):
-            # searchText only allows `rectangle` inside `locationRestriction`.
-            # For a circular bound we have to use `locationBias` — Google rejects
-            # `locationRestriction.circle` here with a 400. (searchNearby is the
-            # opposite shape: it requires `locationRestriction.circle`.)
-            body["locationBias"] = {
-                "circle": {
-                    "center": {"latitude": loc.lat, "longitude": loc.lng},
-                    "radius": float(loc.radius_m),
+            # searchText only allows `rectangle` inside `locationRestriction`;
+            # a circular bound has to go through `locationBias` (Google rejects
+            # `locationRestriction.circle` here with a 400 — searchNearby is the
+            # opposite shape).
+            #
+            # `locationBias` is a *soft* preference: it ranks toward the circle
+            # but does not exclude prominent results outside it. For a distance
+            # search that means a far flagship can still out-rank the nearest
+            # branch — so a nearest-first query is bounded *hard* with a
+            # rectangle derived from the circle. Other searches keep the soft
+            # bias (a famous place just outside a city circle shouldn't be cut).
+            if query.sort_by == "distance":
+                lo_lat, lo_lng, hi_lat, hi_lng = bounding_box(
+                    loc.lat, loc.lng, float(loc.radius_m)
+                )
+                body["locationRestriction"] = {
+                    "rectangle": {
+                        "low": {"latitude": lo_lat, "longitude": lo_lng},
+                        "high": {"latitude": hi_lat, "longitude": hi_lng},
+                    }
                 }
-            }
+            else:
+                body["locationBias"] = {
+                    "circle": {
+                        "center": {"latitude": loc.lat, "longitude": loc.lng},
+                        "radius": float(loc.radius_m),
+                    }
+                }
         if included_type:
             body["includedType"] = included_type
         _apply_common_filters(body, query)
@@ -308,3 +328,15 @@ def _apply_common_filters(body: dict[str, Any], query: PlaceQuery) -> None:
     """Decorate the request body with filters shared by text and nearby search."""
     if query.open_now is True:
         body["openNow"] = True
+    # Distance ordering: flip both endpoints off their default rank
+    # (searchText=RELEVANCE, searchNearby=POPULARITY) to nearest-first.
+    # Guarded on coords — searchText only honours DISTANCE with a
+    # locationBias, which is set iff lat/lng are present.
+    loc = query.location
+    if (
+        query.sort_by == "distance"
+        and loc is not None
+        and loc.lat is not None
+        and loc.lng is not None
+    ):
+        body["rankPreference"] = "DISTANCE"

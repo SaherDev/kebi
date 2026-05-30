@@ -161,6 +161,27 @@ class TestPlaceQuery:
         with pytest.raises(ValidationError):
             LocationContext(city="Bangkok", unknown_field="x")  # type: ignore[call-arg]
 
+    def test_distance_sort_requires_location(self) -> None:
+        with pytest.raises(ValidationError, match="sort_by='distance' requires"):
+            PlaceQuery(sort_by="distance")
+
+    def test_distance_sort_requires_coords_not_named_area(self) -> None:
+        with pytest.raises(ValidationError, match="sort_by='distance' requires"):
+            PlaceQuery(sort_by="distance", location=LocationContext(city="Bangkok"))
+
+    def test_distance_sort_with_coords_ok(self) -> None:
+        q = PlaceQuery(
+            sort_by="distance",
+            location=LocationContext(lat=13.7, lng=100.5, radius_m=500),
+        )
+        assert q.sort_by == "distance"
+
+    def test_non_distance_sort_needs_no_location(self) -> None:
+        for field in ("created_at", "refreshed_at", "place_name"):
+            q = PlaceQuery(sort_by=field)  # type: ignore[arg-type]
+            assert q.sort_by == field
+            assert q.location is None
+
 
 class TestSavedPlaceView:
     def test_construction(self) -> None:

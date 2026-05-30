@@ -66,6 +66,21 @@ def _bangkok_no_radius() -> dict[str, Any]:
     ).model_dump()
 
 
+def _bangkok_city_working() -> dict[str, Any]:
+    """City-scope, transit, dense — a broad ~9.8 km radius (the utility bug)."""
+    return WorkingLocation(
+        country="Thailand",
+        city="Bangkok",
+        lat=13.7563,
+        lng=100.5018,
+        density="dense",
+        effective_mode="transit",
+        scope_tier="city",
+        scope_shape="area",
+        search_radius_m=9800.0,
+    ).model_dump()
+
+
 def _state(
     *,
     working_location: dict[str, Any] | None = None,
@@ -410,6 +425,71 @@ async def test_happy_path_returns_suggested_candidates_with_reasons() -> None:
     assert "Gaa" in summary and "Bo.Lan" in summary
 
 
+# ---------------------------------------------------------------------------
+# distance ordering — brand/chain resolves to the nearest branch
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_validation_requests_distance_ordering() -> None:
+    """Every provider lookup asks for nearest-first so a chain resolves to
+    its closest branch, not the prominent flagship."""
+    namer = _make_namer([CandidateName(name="Sumitomo Mitsui Bank", reason="r")])
+    by_name = {"Sumitomo Mitsui Bank": [_place("SMBC", place_id="p1")]}
+    factory, search = _make_search_factory(by_name=by_name)
+
+    await _run_suggest_places(
+        namer=namer,
+        places_search_factory=factory,
+        state=_state(working_location=_bangkok_working()),
+        tool_call_id="tc-1",
+        query="ATM",
+        categories=[PlaceCategory.atm],
+        tags=None,
+        neighborhood_override=None,
+        city_override=None,
+        country_override=None,
+        limit=1,
+        name_count=8,
+        concurrency=5,
+    )
+
+    assert search.find.await_count == 1
+    for call in search.find.await_args_list:
+        assert call.args[0].sort_by == "distance"
+
+
+@pytest.mark.asyncio
+async def test_takes_nearest_branch_from_ordered_results() -> None:
+    """Provider returns branches nearest-first (distance sort); the tool
+    surfaces the first one — the nearest, not the far flagship."""
+    namer = _make_namer([CandidateName(name="Chain Bank", reason="reliable")])
+    nearest = _place("Chain Bank — Shinjuku", place_id="near")
+    flagship = _place("Chain Bank — Flagship", place_id="far")
+    by_name = {"Chain Bank": [nearest, flagship]}  # distance-ordered
+    factory, _ = _make_search_factory(by_name=by_name)
+
+    cmd = await _run_suggest_places(
+        namer=namer,
+        places_search_factory=factory,
+        state=_state(working_location=_bangkok_working()),
+        tool_call_id="tc-1",
+        query="bank",
+        categories=[PlaceCategory.bank],
+        tags=None,
+        neighborhood_override=None,
+        city_override=None,
+        country_override=None,
+        limit=1,
+        name_count=8,
+        concurrency=5,
+    )
+
+    payload = ConsultResult.model_validate_json(cmd.update["messages"][0].content)
+    assert len(payload.candidates) == 1
+    assert payload.candidates[0].place.place_name == "Chain Bank — Shinjuku"
+
+
 @pytest.mark.asyncio
 async def test_limit_caps_returned_candidates() -> None:
     """Namer + provider produce more than `limit` — tool caps at limit."""
@@ -473,6 +553,63 @@ async def test_provider_calls_carry_location_context() -> None:
         assert loc.lng == 100.5018
         assert loc.radius_m == 1200
         assert loc.city == "Bangkok"
+
+
+@pytest.mark.asyncio
+async def test_utility_category_clamps_provider_radius() -> None:
+    """A utility errand on a broad city-scope turn searches a walkable circle."""
+    namer = _make_namer([CandidateName(name="Some Bank", reason="r")])
+    by_name = {"Some Bank": [_place("Some Bank", place_id="p1")]}
+    factory, search = _make_search_factory(by_name=by_name)
+
+    await _run_suggest_places(
+        namer=namer,
+        places_search_factory=factory,
+        state=_state(working_location=_bangkok_city_working()),
+        tool_call_id="tc-1",
+        query="ATM",
+        categories=[PlaceCategory.atm],
+        tags=None,
+        neighborhood_override=None,
+        city_override=None,
+        country_override=None,
+        limit=1,
+        name_count=8,
+        concurrency=5,
+    )
+    for call in search.find.await_args_list:
+        loc: LocationContext | None = call.args[0].location
+        assert loc is not None
+        # walkable(1000) × transit(2.0) × dense(0.7) = 1400, down from 9800.
+        assert loc.radius_m == 1400
+
+
+@pytest.mark.asyncio
+async def test_non_utility_category_keeps_broad_radius() -> None:
+    """A non-errand intent is untouched by the utility clamp."""
+    namer = _make_namer([CandidateName(name="Gaa", reason="r")])
+    by_name = {"Gaa": [_place("Gaa", place_id="p1")]}
+    factory, search = _make_search_factory(by_name=by_name)
+
+    await _run_suggest_places(
+        namer=namer,
+        places_search_factory=factory,
+        state=_state(working_location=_bangkok_city_working()),
+        tool_call_id="tc-1",
+        query="dinner",
+        categories=[PlaceCategory.restaurant],
+        tags=None,
+        neighborhood_override=None,
+        city_override=None,
+        country_override=None,
+        limit=1,
+        name_count=8,
+        concurrency=5,
+    )
+    for call in search.find.await_args_list:
+        loc: LocationContext | None = call.args[0].location
+        assert loc is not None
+        assert loc.radius_m == 9800
 
 
 # ---------------------------------------------------------------------------
