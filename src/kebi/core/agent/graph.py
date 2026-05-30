@@ -425,21 +425,38 @@ def _render_movement_context(state: AgentState) -> str:
     return " ".join(parts)
 
 
-def _render_system_prompt(state: AgentState) -> str:
-    """Format the agent prompt with per-turn summaries substituted.
+# Splits the agent prompt into a static, cacheable head and a per-turn
+# dynamic tail (ADR-100). Everything before the marker is identical for every
+# user and turn, so it caches across requests (Anthropic ephemeral prefix);
+# the per-turn slots (location, movement, taste, memory) live after it and are
+# never part of the cached prefix. The marker is stripped and never reaches
+# the model.
+_DYNAMIC_CONTEXT_MARKER = "<<<DYNAMIC_CONTEXT>>>"
 
-    Every template slot is validated at `_load_prompts()` boot time
-    (FR-018a), so `.format(...)` on the loaded content is safe.
+
+def _render_system_prompt(state: AgentState) -> tuple[str, str]:
+    """Render the agent prompt as `(static_head, dynamic_tail)`.
+
+    The static head carries no slots and is byte-identical for every user
+    and turn — that is what makes it a cacheable Anthropic prefix (ADR-100).
+    Only the dynamic tail is `.format(...)`-substituted with the per-turn
+    summaries. Template slots are validated at `_load_prompts()` boot time
+    (FR-018a), so the substitution is safe.
 
     `taste_profile_summary` and `memory_summary` are derived from user
     content (memory facts the user typed; signals against places the
     user named). They are wrapped in `trust="low"` blocks so the model
     treats them as data, not instruction (see `prompt_safety`).
+
+    Defensive: if the template carries no split marker, the whole prompt is
+    treated as the dynamic tail (single uncached block) so rendering can
+    never leave a raw `{slot}` in front of the model.
     """
     from kebi.core.prompt_safety import wrap_untrusted
 
     template = get_config().prompts["agent"].content
-    return template.format(
+    static_head, marker, dynamic_tail = template.partition(_DYNAMIC_CONTEXT_MARKER)
+    slots = dict(
         location_context=_render_location_context(state),
         movement_context=_render_movement_context(state),
         taste_profile_summary=wrap_untrusted(
@@ -447,6 +464,9 @@ def _render_system_prompt(state: AgentState) -> str:
         ),
         memory_summary=wrap_untrusted(state.get("memory_summary"), "user_memories"),
     )
+    if not marker:
+        return "", template.format(**slots)
+    return static_head.strip(), dynamic_tail.format(**slots).strip()
 
 
 def make_agent_node(llm: Any, tools: list[Any]) -> Any:
@@ -466,17 +486,21 @@ def make_agent_node(llm: Any, tools: list[Any]) -> Any:
     bound = llm.bind_tools(tools, parallel_tool_calls=False)
 
     async def agent_node(state: AgentState) -> dict[str, Any]:
-        system_text = _render_system_prompt(state)
-        if get_config().agent.prompt_caching_enabled:
+        static_head, dynamic_tail = _render_system_prompt(state)
+        if get_config().agent.prompt_caching_enabled and static_head:
+            # Two content blocks: the static head carries the cache breakpoint
+            # so the tools + static prefix cache across turns/users (ADR-100),
+            # while the per-turn dynamic tail stays outside the cached prefix.
             system_content: str | list[str | dict[str, Any]] = [
                 {
                     "type": "text",
-                    "text": system_text,
+                    "text": static_head,
                     "cache_control": {"type": "ephemeral"},
-                }
+                },
+                {"type": "text", "text": dynamic_tail},
             ]
         else:
-            system_content = system_text
+            system_content = f"{static_head}\n\n{dynamic_tail}".strip()
         system = SystemMessage(content=system_content)
         max_hist = get_config().agent.max_history_messages
         trimmed = state["messages"][-max_hist:]
@@ -521,9 +545,9 @@ def make_agent_node(llm: Any, tools: list[Any]) -> Any:
             # Summary marker — the per-attempt spans above already carry
             # the failed attempts; this one records that the retry budget
             # was exhausted (distinct event in Langfuse views).
-            feature_span(
-                "agent.orchestrator.exhausted", "agent", user_id=user_id
-            ).end(output={"error_type": "llm_retry_exhausted"}, level="ERROR")
+            feature_span("agent.orchestrator.exhausted", "agent", user_id=user_id).end(
+                output={"error_type": "llm_retry_exhausted"}, level="ERROR"
+            )
             error_msg = AIMessage(
                 content=(
                     "I hit a temporary connection issue talking to my language "
@@ -762,9 +786,7 @@ def _render_mobility_profile(state: AgentState) -> str:
         if is_fallback
         else ""
     )
-    return (
-        f"Capabilities: {', '.join(available) or 'unknown'}. Reach: {reach}.{note}"
-    )
+    return f"Capabilities: {', '.join(available) or 'unknown'}. Reach: {reach}.{note}"
 
 
 def _carried_working_location(state: AgentState) -> dict[str, Any] | None:
@@ -1315,9 +1337,7 @@ def finalize_node(state: AgentState) -> dict[str, Any]:
     if tool_results:
         update["tool_results"] = tool_results
     if to_remove:
-        logger.debug(
-            "finalize_node stripping %d tool-related messages", len(to_remove)
-        )
+        logger.debug("finalize_node stripping %d tool-related messages", len(to_remove))
         update["messages"] = [RemoveMessage(id=mid) for mid in to_remove]
     return update
 

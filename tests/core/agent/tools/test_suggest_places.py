@@ -365,6 +365,50 @@ async def test_constraint_filter_drops_everything_returns_no_match() -> None:
 
 
 # ---------------------------------------------------------------------------
+# _run_suggest_places — candidate dedup before the provider fan-out
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_duplicate_named_candidates_issue_one_provider_call() -> None:
+    """Two namer phrasings that normalize to the same name must fan out to a
+    SINGLE billed provider lookup, keeping the first phrasing + reason."""
+    namer = _make_namer(
+        [
+            CandidateName(name="Wat Pho", reason="first phrasing"),
+            CandidateName(name="wat pho!!", reason="second phrasing"),
+        ]
+    )
+    by_name = {"Wat Pho": [_place("Wat Pho", place_id="p1")]}
+    factory, search = _make_search_factory(by_name=by_name)
+
+    cmd = await _run_suggest_places(
+        namer=namer,
+        places_search_factory=factory,
+        state=_state(working_location=_bangkok_working()),
+        tool_call_id="tc-1",
+        query="temple",
+        categories=None,
+        tags=None,
+        neighborhood_override=None,
+        city_override=None,
+        country_override=None,
+        limit=5,
+        name_count=8,
+        concurrency=5,
+    )
+
+    # One distinct name → one provider call (no duplicate billing), and the
+    # call carries the first phrasing the namer emitted.
+    assert search.find.await_count == 1
+    assert search.find.await_args_list[0].args[0].place_names == ["Wat Pho"]
+
+    payload = ConsultResult.model_validate_json(cmd.update["messages"][0].content)
+    assert len(payload.candidates) == 1
+    assert payload.candidates[0].reason == "first phrasing"
+
+
+# ---------------------------------------------------------------------------
 # _run_suggest_places — happy path
 # ---------------------------------------------------------------------------
 

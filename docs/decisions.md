@@ -17,6 +17,26 @@ Format:
 
 ---
 
+## ADR-101: Google Places cost containment without feature loss
+
+**Date:** 2026-05-30\
+**Status:** accepted\
+**Context:** The place provider bills on both consult-time and save-time place resolution, and the trial credit that has masked this spend ends imminently — after which both paths bill per call. The single biggest theoretical lever, trimming the requested field set to a cheaper billing tier, would strip the dietary, accessibility, and feature signals that hard-constraint filtering depends on (a vegetarian or wheelchair constraint is enforced off those fields), so it is ruled out by a standing no-feature-loss constraint. The provider is already cache-first — a place is paid for at most once, then served from the catalog and cache — which leaves redundant *calls*, not redundant *fields*, as the only waste left to recover.\
+**Decision:** Keep the full field set and contain cost by eliminating duplicate provider calls. Candidate names proposed for validation are collapsed on their normalized form before the lookup fan-out, so the same place suggested under two phrasings is resolved once rather than billed twice; a place already in the catalog is never re-fetched. Separately, per-call accounting is corrected to the true richest-tier rate, since the requested field set was already at that tier while priced as a cheaper one — cost visibility must not silently under-count ahead of the cliff.\
+**Consequences:** No change to the data a place carries or the constraints that can be enforced — fewer billed lookups per recommendation and accurate per-call cost. The field-tier downgrade stays deliberately on the table-but-unused and is documented as such, so a future owner who accepts the feature tradeoff can revisit it without rediscovering the cliff. Builds on the cache-first place layer and the Langfuse-as-source-of-truth cost posture (ADR-092).
+
+---
+
+## ADR-100: Haiku 4.5 as default orchestrator, prompt caching re-enabled
+
+**Date:** 2026-05-30\
+**Status:** accepted (supersedes the model choice of ADR-067)\
+**Context:** The orchestrator is the dominant share of per-consult cost — each turn makes two model calls (tool decision, then answer synthesis) that resend the same large system prompt — and the free-tier cushion hiding this ends imminently. ADR-067 chose the premium model of the family for demo-grade quality and enabled system-prompt caching; caching was later disabled while the orchestrator was trialled on non-family models, so the two same-turn calls were both billed in full. Two facts reframe the cost cut: the family's cheaper tier leads its class on exactly the multi-step tool-use workload this agent runs, and the agent's hard constraints (dietary, accessibility) are enforced through prompt discipline rather than a hard gate — so dropping out of the family to a cheaper outside model risks a *safety* regression, not merely a quality one.\
+**Decision:** Make the family's cheaper tier the default orchestrator and re-enable system-prompt caching now that the orchestrator is back inside the family. The system prompt is split into a static head — persona, tool contract, routing rules, vocabulary, examples, safety, identical for every user and turn — and a small per-turn tail carrying the working location, movement scope, taste profile, and memory. The cache breakpoint sits after the head, so the head (the bulk of the tokens) plus the tool schemas form a prefix shared across all users and turns and read-hit within the cache window; only the small tail is re-billed each turn, and the same-turn second call also reads the whole thing. The per-user context moves to the tail rather than staying mid-prompt: adjacent to the conversation it sits in a recency-favoured position, so constraint salience is preserved, not the regression an earlier draft feared from "burying" it. Model selection stays a runtime dial — one switch reverts to the premium model with no deploy — so the change is reversible and A/B-able against real acceptance and constraint-adherence data rather than committed blind.\
+**Consequences:** Per-consult orchestration cost falls substantially with no change to the request contract, tools, or answer shape. Caching now spans turns and users, not just the two same-turn calls — but the cross-turn win is realised only while traffic keeps the shared prefix warm in the cache window, so it scales with volume and is near-zero at launch. The cheaper model is gated on real first-recommendation acceptance and hard-constraint adherence, and reverts by config if it regresses either. Supersedes ADR-067's model choice while keeping its caching mechanism intact; cache hits must still appear on traces or caching is silently inactive. Closes the loop ADR-067 left open ("evaluate a cheaper option against acceptance data before downgrading").
+
+---
+
 ## ADR-099: Nearest-first searches use a hard geographic bound
 
 **Date:** 2026-05-30\
