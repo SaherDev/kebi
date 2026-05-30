@@ -89,8 +89,13 @@ def test_no_location_and_no_profile_asks_when_load_bearing() -> None:
 def test_system_prompt_fills_movement_slot_without_keyerror() -> None:
     """_render_system_prompt must format the {movement_context} slot — a
     missing/extra slot would raise KeyError on .format()."""
-    prompt = _render_system_prompt(
+    static_head, dynamic_tail = _render_system_prompt(
         _state(working_location=_AREA_WL, movement_profile=_PROFILE)
     )
+    prompt = f"{static_head}\n\n{dynamic_tail}"
     assert "driving" in prompt
     assert "{movement_context}" not in prompt
+    # The per-turn movement slot resolves in the dynamic tail, never the
+    # cacheable static head (ADR-100).
+    assert "driving" in dynamic_tail
+    assert "{" not in static_head

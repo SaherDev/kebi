@@ -69,6 +69,7 @@ from kebi.core.agent.tools.candidate_namer import (
 )
 from kebi.core.agent.tools.consult_models import ConsultCandidate, ConsultResult
 from kebi.core.config import get_config
+from kebi.core.extraction.candidate_mapper import normalize_query
 from kebi.core.extraction.extraction_pipeline import SearchServiceFactory
 from kebi.core.places.models import (
     LocationContext,
@@ -486,6 +487,23 @@ async def _validate_candidates(
     """
     if not proposed:
         return []
+
+    # Dedup proposed names before the provider fan-out. The namer can emit the
+    # same place under two phrasings ("Wat Pho" / "Wat Pho Temple"), and each
+    # would otherwise fire its own billed provider lookup. Collapse on the
+    # normalized name (same key the extraction pipeline dedups on), keeping the
+    # first occurrence so the namer's preferred phrasing + reason survive. The
+    # post-fetch provider_id dedup below still catches distinct names that
+    # resolve to the same place; this only removes redundant *calls*.
+    deduped: list[CandidateName] = []
+    seen_names: set[str] = set()
+    for candidate in proposed:
+        key = normalize_query(candidate.name)
+        if not key or key in seen_names:
+            continue
+        seen_names.add(key)
+        deduped.append(candidate)
+    proposed = deduped
 
     sem = asyncio.Semaphore(concurrency)
 

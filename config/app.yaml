@@ -63,8 +63,14 @@ models:
   # Runtime selection (ADR-068): set AGENT_MODEL=<option-key> in the env to
   # pick a non-default option. Unset / unknown values fall back to `default`.
   # Boot fails if `default` does not name one of the option keys below.
+  #
+  # Default is Haiku 4.5 (ADR-100, supersedes ADR-067's Sonnet choice): the
+  # orchestrator is ~69% of consult cost, and Haiku 4.5 is ~3x cheaper per
+  # token while staying in the function-calling-leading Claude family — so
+  # prompt caching below still applies. Set AGENT_MODEL=claude-sonnet to A/B
+  # back to Sonnet without a deploy.
   orchestrator:
-    default: claude-sonnet
+    default: claude-haiku
     claude-sonnet:
       provider: anthropic
       model: claude-sonnet-4-6
@@ -313,7 +319,14 @@ agent:
   state_message_cap: 200
   state_message_floor: 150
   checkpointer_ttl_seconds: 86400
-  prompt_caching_enabled: false  # ADR-067: Anthropic-only (ephemeral cache_control). Re-enable when orchestrator returns to Anthropic.
+  # ADR-067/100: Anthropic ephemeral cache_control on the orchestrator system
+  # message. Enabled now the default orchestrator is Anthropic Haiku 4.5 — the
+  # two same-turn Sonnet/Haiku calls (tool-decision + synthesis) render an
+  # identical system prompt, so the second call reads the cache instead of
+  # re-billing the full input. Haiku's min cacheable prompt (2048 tokens) is
+  # well under the ~9k-token system prompt. Set false for non-Anthropic
+  # orchestrators (AGENT_MODEL=gpt-4o-mini), which auto-cache server-side.
+  prompt_caching_enabled: true
   # Per-tool asyncio budgets. One key per live tool.
   tool_timeouts_seconds:
     find_saved: 8

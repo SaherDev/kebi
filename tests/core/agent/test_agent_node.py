@@ -80,6 +80,31 @@ async def test_agent_node_renders_prompt_with_both_slots_substituted(
     assert "MEMORY-SUBSTITUTED" in text
 
 
+async def test_agent_node_caches_static_head_as_separate_block(
+    captured_llm: MagicMock,
+) -> None:
+    """With caching enabled (the default config), the system message splits
+    into a cached static head carrying the cache breakpoint and an uncached
+    per-turn dynamic tail (ADR-100). The head must be slot-free and identical
+    across turns; the per-turn values live only in the tail."""
+    node = make_agent_node(captured_llm, [])
+    await node(_base_state())
+
+    system = captured_llm.ainvoke.call_args.args[0][0]
+    assert isinstance(system, SystemMessage)
+    blocks = system.content
+    assert isinstance(blocks, list) and len(blocks) == 2
+    head, tail = blocks
+    assert head["cache_control"] == {"type": "ephemeral"}
+    assert "cache_control" not in tail
+    # Static head is slot-free and free of per-turn user values; the tail
+    # carries the substituted taste/memory.
+    assert "{" not in head["text"]
+    assert "TASTE-SUBSTITUTED" not in head["text"]
+    assert "TASTE-SUBSTITUTED" in tail["text"]
+    assert "MEMORY-SUBSTITUTED" in tail["text"]
+
+
 async def test_agent_node_sends_system_plus_messages(captured_llm: MagicMock) -> None:
     node = make_agent_node(captured_llm, [])
     state = _base_state(messages=[HumanMessage(content="hello")])
