@@ -411,20 +411,22 @@ async def test_reasoning_step_summary_emitted() -> None:
     assert len(steps) == 1
     assert steps[0].step == "find_saved.summary"
     assert steps[0].source == "agent"
-    assert "ramen" in steps[0].summary
-    assert "1 saved match" in steps[0].summary
-    # Singular: no "es" suffix, just "match".
-    assert "matches" not in steps[0].summary
+    # User-facing copy is plain narration — no tool name or raw query echo.
+    assert "find_saved" not in steps[0].summary
+    assert "ramen" not in steps[0].summary
+    assert "1 saved spot" in steps[0].summary
+    # Singular: no "s" suffix, just "spot".
+    assert "spots" not in steps[0].summary
     # Names of the matched places are surfaced in the summary.
     assert "X" in steps[0].summary
 
 
 @pytest.mark.asyncio
 async def test_reasoning_step_summary_lists_names_with_correct_plural() -> None:
-    """Multi-result summary previews up to 3 names and uses 'matches' plural.
+    """Multi-result summary previews up to 3 names and pluralises correctly.
 
-    Regression for the user-visible step which used to read "3 saved matchs"
-    (wrong plural) and didn't surface names — so users had to dig into
+    Regression for the user-visible step which used to read "3 saved spots"
+    with a wrong plural and didn't surface names — so users had to dig into
     `tool_results` to see what was actually returned.
     """
     hybrid = MagicMock()
@@ -449,8 +451,8 @@ async def test_reasoning_step_summary_lists_names_with_correct_plural() -> None:
         limit=10,
     )
     summary = cmd.update["reasoning_steps"][0].summary
-    assert "4 saved matches" in summary
-    assert "matchs" not in summary
+    assert "4 saved spots" in summary
+    assert "spotss" not in summary
     # First 3 names previewed, 4th hinted at via "and a few more".
     assert "Wat Phra Yai" in summary
     assert "Samui Elephant Sanctuary" in summary

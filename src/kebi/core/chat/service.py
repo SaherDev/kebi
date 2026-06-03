@@ -152,8 +152,12 @@ class ChatService:
                     type="agent",
                     message=message_text,
                     data={
+                        # `id`/`status` are SSE step-lifecycle markers (ADR-102)
+                        # — they're set only on stream frames and excluded here
+                        # so the non-stream JSON contract stays unchanged.
                         "reasoning_steps": [
-                            s.model_dump(mode="json") for s in user_steps
+                            s.model_dump(mode="json", exclude={"id", "status"})
+                            for s in user_steps
                         ],
                         "tool_results": tool_results,
                     },

@@ -132,7 +132,12 @@ async def test_run_filters_reasoning_steps_to_user_visible() -> None:
 
     assert result.data is not None
     assert len(result.data["reasoning_steps"]) == 1
-    assert result.data["reasoning_steps"][0]["step"] == "agent.tool_decision"
+    dumped = result.data["reasoning_steps"][0]
+    assert dumped["step"] == "agent.tool_decision"
+    # The non-stream JSON contract is unchanged: the SSE-only lifecycle markers
+    # (ADR-102) are excluded entirely, not surfaced as null.
+    assert "id" not in dumped
+    assert "status" not in dumped
 
 
 async def test_run_passes_user_id_as_thread_id() -> None:

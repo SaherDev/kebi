@@ -74,7 +74,8 @@ async def test_error_count_increments_on_agent_node_failure(
     assert "connection issue" in error_message.content.lower()
     user_steps = [s for s in result["reasoning_steps"] if s.visibility == "user"]
     assert len(user_steps) == 1
-    assert "connection error" in user_steps[0].summary.lower()
+    # Plain user-facing copy — no exception class name leaked into the summary.
+    assert "connection issue" in user_steps[0].summary.lower()
 
 
 async def test_llm_retry_recovers_on_second_attempt(monkeypatch: Any) -> None:

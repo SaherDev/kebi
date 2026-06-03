@@ -17,6 +17,16 @@ Format:
 
 ---
 
+## ADR-102: Reasoning steps stream as an active→done lifecycle
+
+**Date:** 2026-06-03\
+**Status:** accepted\
+**Context:** The chat surface wants to show its thinking as it happens — a list where finished steps are checked off and the one currently running pulses with a skeleton. The streaming contract could not drive that: a reasoning step was published only once, after its node finished, so the client could render *completed* work but never a named step that is *in progress*. There was also no stable handle to update a step in place, and most steps never reached the stream at all — only the orchestrator's own thinking and location resolution did, while the tools and the terminal fallback, which is where most of the visible narration lives, were silent. The non-streaming turn returns the same steps as a plain list and must keep doing so.\
+**Decision:** Each reasoning step is streamed twice over its lifecycle, keyed by a stable id the client upserts on: an `active` frame when the step begins (its name known, its result not yet) and a `done` frame when it completes (summary and duration filled). The skeleton is simply the gap between the two. Every step that produces user-visible narration streams this way — orchestrator, location, all tools, and the fallback — and steps marked debug ride the same channel for tooling to consume and the client to filter. The lifecycle markers are stream-only: the non-streaming turn returns the very same step objects untagged, so its payload is unchanged in shape. No total step count is published — the agent decides its tools one at a time and a fixed "N of M" would be a fabrication — so the client shows a live count and a final tally rather than greyed-out pending rows. The contract is one-directional: a completion is always preceded by its start, but a step interrupted mid-flight (a tool that times out) may stay in its started state, which reads honestly as work that never finished. Separately, every user-visible step's wording is held to plain narration — no tool names, internal identifiers, raw query text, or budget internals; that technical detail moves to the paired debug step.\
+**Consequences:** The client can render a faithful, progressive reasoning block — checked steps, a named pulsing step, and an honest meta line — without inferring state from completed-only events. Stream volume roughly doubles per step and tools/fallback now narrate where they were silent, which is the intended richer surface, not a regression. The step shape is shared between the streaming and non-streaming paths, but the lifecycle fields stay strictly stream-only: on the stream `id` is always a string and `status` always `active`/`done`, while the non-stream JSON omits both, leaving that payload byte-unchanged. The canonical contract and the shared client type live in the product repo and must be updated in the same coordinated change so the two copies do not drift. The no-total decision keeps the contract safe for a dynamic agent; if planning ever becomes known up front, an optional plan frame can be added without breaking this one.
+
+---
+
 ## ADR-101: Google Places cost containment without feature loss
 
 **Date:** 2026-05-30\

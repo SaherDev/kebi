@@ -51,6 +51,7 @@ from kebi.core.agent._trace_context import set_tool
 from kebi.core.agent.location import WorkingLocation
 from kebi.core.agent.reasoning import ReasoningStep
 from kebi.core.agent.state import AgentState
+from kebi.core.agent.stream_emit import emit_step_active, emit_step_done
 from kebi.core.agent.tools._hard_constraints import hard_constraints_satisfied
 from kebi.core.agent.tools._scope import clamp_to_walkable_for_utility
 from kebi.core.agent.tools._search_args import (
@@ -62,7 +63,7 @@ from kebi.core.agent.tools._search_args import (
     QUERY_DESC,
     TAGS_DESC,
 )
-from kebi.core.agent.tools._with_timeout import with_timeout
+from kebi.core.agent.tools._with_timeout import tool_step_base_id, with_timeout
 from kebi.core.agent.tools.candidate_namer import (
     CandidateName,
     CandidateNamerService,
@@ -313,15 +314,36 @@ async def _run_suggest_places_impl(
     """
     steps: list[ReasoningStep] = []
     user_id = state["user_id"]
+    base_id = tool_step_base_id(_TOOL_NAME, state)
+
+    def _record(
+        step_id: str,
+        summary: str,
+        *,
+        phase: str | None = None,
+        started: float | None = None,
+    ) -> None:
+        """Append a phase step and stream its SSE `done` frame (ADR-102).
+
+        `phase` pairs the `done` with an earlier `emit_step_active` emitted
+        before a latency call (namer/provider) so the frontend shows a
+        skeleton while that work runs; pass that call's `started` token for the
+        measured duration. Instant steps (no `phase`) emit their own adjacent
+        `active` first to satisfy the lifecycle contract and time themselves.
+        """
+        step = _make_step(step_id, summary)
+        sid = f"{base_id}.{phase or step_id}"
+        if phase is None:
+            started = emit_step_active(sid, step.step, source="agent")
+        emit_step_done(sid, step, started=started)
+        steps.append(step)
 
     working = _maybe_working_location(state)
     if not _is_anchored(working):
-        steps.append(
-            _make_step(
-                "no_location",
-                "I'd need to know roughly where you are first — share a "
-                "location or name a place and I can take another look.",
-            )
+        _record(
+            "no_location",
+            "I'd need to know roughly where you are first — share a "
+            "location or name a place and I can take another look.",
         )
         return _build_command(
             state=state,
@@ -334,12 +356,14 @@ async def _run_suggest_places_impl(
     # Utility errands ("ATM near me") are walked to — clamp to a walkable
     # radius so the namer scope and provider locationBias stay tight and the
     # nearest branch wins, not a prominent one across town.
-    working = clamp_to_walkable_for_utility(
-        working, categories, get_config().movement
-    )
+    working = clamp_to_walkable_for_utility(working, categories, get_config().movement)
     location_label = _location_label(working)
-    steps.append(_make_step("locate", f"Okay — looking around {location_label}."))
+    _record("locate", f"Okay — looking around {location_label}.")
 
+    # Name phase (namer latency): skeleton while candidate names are generated.
+    name_started = emit_step_active(
+        f"{base_id}.name", f"{_TOOL_NAME}.name", source="agent"
+    )
     namer_result = await namer.generate(
         intent=query,
         working=working,
@@ -351,12 +375,12 @@ async def _run_suggest_places_impl(
     )
     proposed: list[CandidateName] = namer_result.candidates
     if not proposed:
-        steps.append(
-            _make_step(
-                "namer_empty",
-                "Nothing specific came to mind for that here — try a "
-                "different angle and I'll have another go.",
-            )
+        _record(
+            "namer_empty",
+            "Nothing specific came to mind for that here — try a "
+            "different angle and I'll have another go.",
+            phase="name",
+            started=name_started,
         )
         return _build_command(
             state=state,
@@ -367,14 +391,19 @@ async def _run_suggest_places_impl(
 
     preview = ", ".join(c.name for c in proposed[:3])
     extra = "" if len(proposed) <= 3 else " (and a few more)"
-    steps.append(
-        _make_step(
-            "brainstorm",
-            f"A few names came to mind — {preview}{extra}. Let me see "
-            f"which ones are actually near you.",
-        )
+    _record(
+        "brainstorm",
+        f"A few names came to mind — {preview}{extra}. Let me see "
+        f"which ones are actually near you.",
+        phase="name",
+        started=name_started,
     )
 
+    # Verify phase (provider latency): skeleton while we check which names
+    # are real and actually near the user.
+    verify_started = emit_step_active(
+        f"{base_id}.verify", f"{_TOOL_NAME}.verify", source="agent"
+    )
     place_loc = _build_location_context(working)
     validated = await _validate_candidates(
         places_search_factory=places_search_factory,
@@ -383,12 +412,12 @@ async def _run_suggest_places_impl(
         concurrency=concurrency,
     )
     if not validated:
-        steps.append(
-            _make_step(
-                "no_provider_hits",
-                "Those names didn't turn up anywhere right near you — let's "
-                "try a wider angle.",
-            )
+        _record(
+            "no_provider_hits",
+            "Those names didn't turn up anywhere right near you — let's "
+            "try a wider angle.",
+            phase="verify",
+            started=verify_started,
         )
         return _build_command(
             state=state,
@@ -405,12 +434,12 @@ async def _run_suggest_places_impl(
 
     if not filtered:
         constraint_note = " (none fit your requirements)" if tags else ""
-        steps.append(
-            _make_step(
-                "constraints_drop",
-                f"Found a few real spots but nothing matched what you're "
-                f"after{constraint_note} — want me to relax something?",
-            )
+        _record(
+            "constraints_drop",
+            f"Found a few real spots but nothing matched what you're "
+            f"after{constraint_note} — want me to relax something?",
+            phase="verify",
+            started=verify_started,
         )
         return _build_command(
             state=state,
@@ -425,11 +454,11 @@ async def _run_suggest_places_impl(
     constraint_tail = (
         f" ({dropped} didn't fit your requirements)" if dropped and tags else ""
     )
-    steps.append(
-        _make_step(
-            "summary",
-            f"Found {len(final)} option{plural}: {final_names}{constraint_tail}.",
-        )
+    _record(
+        "summary",
+        f"Found {len(final)} option{plural}: {final_names}{constraint_tail}.",
+        phase="verify",
+        started=verify_started,
     )
 
     candidates = [
