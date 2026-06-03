@@ -293,21 +293,22 @@ class GooglePlacesClient:
                 response.raise_for_status()
                 data: dict[str, Any] = response.json()
             except httpx.HTTPStatusError as exc:
+                # Fold status + body into the message: the app configures no
+                # log formatter, so `extra` fields are never rendered. A 403
+                # here is almost always billing/API-not-enabled — keep that
+                # visible at a glance, since the call still degrades to [].
                 logger.error(
-                    "google_places_http_error",
-                    extra={
-                        "method": method,
-                        "path": path,
-                        "status": exc.response.status_code,
-                        "body": exc.response.text[:1000],
-                    },
+                    "google_places_http_error %s %s -> %s: %s",
+                    method,
+                    path,
+                    exc.response.status_code,
+                    exc.response.text[:1000],
                 )
                 t.output = {"status": exc.response.status_code, "places": 0}
                 return []
             except Exception as exc:
                 logger.exception(
-                    "google_places_request_error",
-                    extra={"method": method, "path": path},
+                    "google_places_request_error %s %s", method, path
                 )
                 t.fail(exc)
                 return []
