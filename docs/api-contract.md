@@ -181,7 +181,8 @@ to `POST /v1/extract` — the chat path never writes to `user_places`.
 | Field         | Type                                  | Notes                                                                       |
 | ------------- | ------------------------------------- | --------------------------------------------------------------------------- |
 | `step`        | `string`                              | Identifier, e.g. `agent.tool_decision`, `find_saved.summary`, `fallback`    |
-| `summary`     | `string \| null`                      | Human-readable, plain narration (no tool names / internal keys). `null` only on an `active` SSE frame; always set on JSON-path steps |
+| `title`       | `string`                              | Bold action line (ADR-103), e.g. `searched nearby`. Short, lowercase, carries the verb. Same string on the `active` and `done` SSE frames |
+| `summary`     | `string \| null`                      | Result line under the title — plain narration, never repeats the verb (no tool names / internal keys). `null` only on an `active` SSE frame; always set on JSON-path steps |
 | `source`      | `"agent" \| "fallback"`               | Which node produced it (ADR-075 removed the `"tool"` source)                |
 | `visibility`  | `"user" \| "debug"`                   | Only `"user"` steps appear in the JSON response; `"debug"` → Langfuse/SSE   |
 | `timestamp`   | `ISO-8601 string`                     | UTC; when the step was recorded                                            |
@@ -221,10 +222,10 @@ SSE streaming variant. Emits reasoning steps as they happen, then a final messag
 
 ```
 event: reasoning_step
-data: {"id":"find_saved#0","step":"find_saved","summary":null,"status":"active","source":"agent","visibility":"user","duration_ms":null}
+data: {"id":"find_saved#0","step":"find_saved","title":"searched your saved spots","summary":null,"status":"active","source":"agent","visibility":"user","duration_ms":null}
 
 event: reasoning_step
-data: {"id":"find_saved#0","step":"find_saved.summary","summary":"Found 2 saved spots — …","status":"done","source":"agent","visibility":"user","duration_ms":420.0}
+data: {"id":"find_saved#0","step":"find_saved.summary","title":"searched your saved spots","summary":"2 spots — Wagyu, Beef Tei","status":"done","source":"agent","visibility":"user","duration_ms":420.0}
 
 event: tool_result
 data: <ToolResult JSON>
@@ -249,7 +250,9 @@ data: {"tool_calls_used": 1}
 | ------------- | ---------------------- | ------------------------------ | ------------------------------------------------------------------ |
 | `id`          | stable step id         | same `id` as the active frame  | e.g. `find_saved#0`, `agent.tool_decision#0`; upsert key           |
 | `status`      | `"active"`             | `"done"`                       | lifecycle marker                                                   |
+| `title`       | set                    | same string                    | bold action line; known before the result, so present on `active` |
 | `summary`     | `null`                 | filled                         | client shows a skeleton while `null`                               |
+| `visibility`  | set                    | same value                     | must not change across a step's lifecycle (client keys on `id`)    |
 | `duration_ms` | `null`                 | set                            | node latency on completion                                         |
 | `source`      | `"agent" \| "fallback"`| same                           | ADR-075 narrowed this; no `"tool"` value                           |
 

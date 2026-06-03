@@ -43,6 +43,7 @@ from kebi.core.agent.tools._search_args import (
     QUERY_DESC,
     TAGS_DESC,
 )
+from kebi.core.agent.tools._summaries import NEED_LOCATION, TITLES, found_summary
 from kebi.core.agent.tools._with_timeout import tool_step_base_id, with_timeout
 from kebi.core.agent.tools.consult_models import ConsultCandidate, ConsultResult
 from kebi.core.config import get_config
@@ -142,31 +143,24 @@ def _assemble_filters(
     )
 
 
-_SUMMARY_NAMES_PREVIEW = 3
-
-
 def _summarise(result: ConsultResult) -> str:
     """One-line user-visible step summary.
 
     Plain narration, no tool name or raw query echo (per project feedback on
     user-facing reasoning steps). The success branch surfaces the matched
     place names (capped to a short preview) so the user sees what was found
-    without parsing the structured `tool_results` payload — mirrors the
-    `suggest_places` / `discover_places` summary register.
+    without parsing the structured `tool_results` payload — shares the
+    `found_summary` register with `suggest_places` / `discover_places`.
     """
     if result.empty_reason == "no_saves":
-        return "You don't have any saved places yet."
+        return "no saved places yet"
     if result.empty_reason == "no_match":
-        return "Nothing in your saved places matched that."
+        return "nothing saved matched that"
     if result.empty_reason == "no_location":
-        return "I'd need to know where you are to search your saved places."
+        return NEED_LOCATION
 
-    count = len(result.candidates)
-    plural = "" if count == 1 else "s"
-    names = [c.place.place_name for c in result.candidates[:_SUMMARY_NAMES_PREVIEW]]
-    preview = ", ".join(names)
-    extra = "" if count <= _SUMMARY_NAMES_PREVIEW else " (and a few more)"
-    return f"Found {count} saved spot{plural} — {preview}{extra}."
+    names = [c.place.place_name for c in result.candidates]
+    return found_summary(names)
 
 
 def build_find_saved_tool(hybrid_search: HybridSearchService) -> BaseTool:
@@ -266,7 +260,9 @@ async def _run_find_saved_impl(
     user_id = state["user_id"]
     # SSE lifecycle: announce the step before the search latency.
     base_id = tool_step_base_id(_TOOL_NAME, state)
-    started = emit_step_active(base_id, _TOOL_NAME, source="agent")
+    started = emit_step_active(
+        base_id, _TOOL_NAME, title=TITLES[_TOOL_NAME], source="agent"
+    )
 
     working = _maybe_working_location(state)
     has_named_area = bool(neighborhood or city or country)
@@ -318,6 +314,7 @@ async def _run_find_saved_impl(
     )
     step = ReasoningStep(
         step=f"{_TOOL_NAME}.summary",
+        title=TITLES[_TOOL_NAME],
         summary=_summarise(result),
         source="agent",
         visibility="user",

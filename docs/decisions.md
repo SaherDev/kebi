@@ -17,6 +17,16 @@ Format:
 
 ---
 
+## ADR-103: Reasoning steps are two-line records of work — title + result, one row per tool
+
+**Date:** 2026-06-03\
+**Status:** accepted\
+**Context:** With the lifecycle stream live (ADR-102), the thinking panel had three faults. It showed the whole answer twice: the orchestrator's final turn produces the recommendation as its message content, and that same content was also published as a user-visible reasoning step, so the panel rendered the multi-paragraph answer and then the answer again. The trace read in the wrong register — long first-person present-tense lines with trailing colons and full venue lists ("Let me search again:", "Found 5 options: <five names>") — where the surface wants a terse, glanceable record. And a single tool call emitted several user rows (a tool narrated each internal phase — locate, brainstorm, verify), so one search sprawled across the panel. The client renders each step as two lines, a bold action over a result, but the step model had only one human field, so nothing drove the action line.\
+**Decision:** A reasoning step is a two-line record of *work*, never the answer. It carries a `title` (the bold action — "searched nearby") distinct from its `summary` (the result under it — "5 spots — …"): the title is short, lowercase, carries the verb, and rides both the active and done frames; the summary is null while active, filled on done, and never repeats the verb. Each tool surfaces exactly one user row for the whole call — its action title plus the outcome — while the internal phases ride the same stream as debug for tracing. An orchestrator turn with a tool call is intermediate narration ("thinking") and stays visible; a turn with no tool call is the terminal answer, whose text equals the message, so it is debug and the client filters it. The conversational reply — including any "want me to widen the search?" follow-up — belongs to the message frame, not the trace.\
+**Consequences:** The answer renders once; each tool shows a single scannable two-line row in a uniform voice, with full venue detail reached only through the cards and the answer. `title` is a new field on every step, present on both lifecycle frames and in the non-stream JSON; the active/done lifecycle and stream shape from ADR-102 are otherwise unchanged. The canonical contract and the shared client type live in the product repo and must add `title` in the same coordinated change. A client-side length clamp on the trace and a wall-clock-derived meta tally remain the product repo's concern.
+
+---
+
 ## ADR-102: Reasoning steps stream as an active→done lifecycle
 
 **Date:** 2026-06-03\

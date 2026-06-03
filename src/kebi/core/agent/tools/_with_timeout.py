@@ -35,6 +35,7 @@ from langgraph.types import Command
 from kebi.core.agent.reasoning import ReasoningStep
 from kebi.core.agent.state import AgentState
 from kebi.core.agent.stream_emit import emit_step_active, emit_step_done
+from kebi.core.agent.tools._summaries import TITLES
 
 logger = logging.getLogger(__name__)
 
@@ -86,6 +87,7 @@ def _degraded_command(
     )
     user_step = ReasoningStep(
         step=f"{tool_name}.failure",
+        title=TITLES.get(tool_name, "searched"),
         summary=user_summary,
         source="agent",
         visibility="user",
@@ -99,7 +101,11 @@ def _degraded_command(
         (user_step, f"{base_id}.failure"),
     ):
         started = emit_step_active(
-            step_id, step.step, source="agent", visibility=step.visibility
+            step_id,
+            step.step,
+            title=step.title,
+            source="agent",
+            visibility=step.visibility,
         )
         emit_step_done(step_id, step, started=started)
     return Command(
@@ -134,7 +140,7 @@ async def with_timeout(
             tool_name,
             tool_call_id,
             state,
-            user_summary="That search took too long this time — try again in a moment.",
+            user_summary="that search timed out",
             detail=f"{tool_name} timed out after {seconds}s",
         )
     except Exception as exc:
@@ -143,6 +149,6 @@ async def with_timeout(
             tool_name,
             tool_call_id,
             state,
-            user_summary="I couldn't finish that search — try again in a moment.",
+            user_summary="couldn't finish that search",
             detail=f"{tool_name} raised {type(exc).__name__}: {str(exc)[:200]}",
         )

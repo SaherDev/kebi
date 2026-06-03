@@ -35,7 +35,8 @@ async def test_error_count_increments_on_agent_node_failure(
 ) -> None:
     """agent_node increments error_count after exhausting LLM retries,
     appends an AIMessage explaining the connection error, and emits a
-    user-visible reasoning step."""
+    debug reasoning step (the orchestrator's thinking is never a user row —
+    ADR-103; the user-facing error rides the message content)."""
     from kebi.core.agent import graph as graph_module
     from kebi.core.agent.graph import make_agent_node
 
@@ -72,10 +73,15 @@ async def test_error_count_increments_on_agent_node_failure(
     assert isinstance(error_message, AIMessage)
     assert isinstance(error_message.content, str)
     assert "connection issue" in error_message.content.lower()
-    user_steps = [s for s in result["reasoning_steps"] if s.visibility == "user"]
-    assert len(user_steps) == 1
-    # Plain user-facing copy — no exception class name leaked into the summary.
-    assert "connection issue" in user_steps[0].summary.lower()
+    # The orchestrator step is debug on both frames (ADR-103) — no user row.
+    assert not [s for s in result["reasoning_steps"] if s.visibility == "user"]
+    decision = [
+        s for s in result["reasoning_steps"] if s.step == "agent.tool_decision"
+    ]
+    assert len(decision) == 1
+    assert decision[0].visibility == "debug"
+    # Plain copy — no exception class name leaked into the summary.
+    assert "connection issue" in decision[0].summary.lower()
 
 
 async def test_llm_retry_recovers_on_second_attempt(monkeypatch: Any) -> None:

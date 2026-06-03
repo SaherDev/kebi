@@ -104,7 +104,7 @@ class TestChatStreamHappyPath:
         assert "Here is my recommendation" in response.text
 
     def test_reasoning_step_frame_has_expected_shape(self, client: TestClient) -> None:
-        """reasoning_step frames contain step, summary, source, tool_name fields."""
+        """reasoning_step frames contain step, title, summary, source fields."""
         import json
 
         response = client.post(
@@ -124,6 +124,7 @@ class TestChatStreamHappyPath:
 
         assert step_data is not None
         assert "step" in step_data
+        assert "title" in step_data
         assert "summary" in step_data
         assert "source" in step_data
 
@@ -176,6 +177,7 @@ class TestChatStreamReasoningLifecycle:
         ) -> AsyncGenerator[tuple[str, Any], None]:
             active = ReasoningStep(
                 step="find_saved",
+                title="searched your saved spots",
                 summary=None,
                 source="agent",
                 id="find_saved#0",
@@ -183,7 +185,8 @@ class TestChatStreamReasoningLifecycle:
             )
             done = ReasoningStep(
                 step="find_saved.summary",
-                summary="Found 2 saved spots — A, B.",
+                title="searched your saved spots",
+                summary="2 spots — A, B",
                 source="agent",
                 duration_ms=420.0,
                 id="find_saved#0",
@@ -223,11 +226,13 @@ class TestChatStreamReasoningLifecycle:
         # Same id pairs the two frames; the active arrived first.
         assert active["id"] == done["id"]
         assert frames.index(active) < frames.index(done)
-        # Active carries no summary/duration (frontend shows a skeleton);
-        # done fills both in.
+        # Active carries the title but no summary/duration (frontend shows a
+        # skeleton with the action line); done fills both in (ADR-103).
+        assert active["title"] == "searched your saved spots"
         assert active["summary"] is None
         assert active["duration_ms"] is None
-        assert done["summary"] == "Found 2 saved spots — A, B."
+        assert done["title"] == "searched your saved spots"
+        assert done["summary"] == "2 spots — A, B"
         assert done["duration_ms"] == 420.0
 
 

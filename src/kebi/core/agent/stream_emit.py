@@ -51,11 +51,14 @@ def emit_step_active(
     step_id: str,
     step: str,
     *,
+    title: str,
     source: Literal["agent", "fallback"],
     visibility: Literal["user", "debug"] = "user",
 ) -> float:
     """Mark a step as starting now and emit its `active` frame.
 
+    `title` is the action line — known before the result, so it rides the
+    `active` frame; the matching `done` frame must carry the same string.
     Returns a start token to hand to `emit_step_done` for duration measurement.
     The token is returned even off-stream (no writer) so the JSON path still
     gets a real `duration_ms`.
@@ -65,6 +68,7 @@ def emit_step_active(
     if writer is not None:
         frame = ReasoningStep(
             step=step,
+            title=title,
             summary=None,
             source=source,
             visibility=visibility,
