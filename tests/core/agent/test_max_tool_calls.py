@@ -81,14 +81,22 @@ def test_fallback_node_uses_tool_cap_message_on_cap_hit() -> None:
     assert "something went wrong" not in text
 
 
-def test_fallback_node_user_step_summary_mentions_tool_cap() -> None:
+def test_fallback_node_user_step_summary_is_plain_tool_cap_copy() -> None:
     cap = get_config().agent.max_tool_calls
     result = fallback_node(_base_state(tool_calls_used=cap))
-    user_steps = [s for s in result["reasoning_steps"] if s.visibility == "user"]
+    steps = result["reasoning_steps"]
+    user_steps = [s for s in steps if s.visibility == "user"]
     assert len(user_steps) == 1
     summary = user_steps[0].summary.lower()
-    assert str(cap) in summary
-    assert "tool" in summary
+    # Plain narration: no raw cap count or "tool" implementation word in the
+    # user-facing copy — those live on the paired debug step.
+    assert "more detail" in summary
+    assert str(cap) not in summary
+    assert "tool" not in summary
+    debug_steps = [s for s in steps if s.visibility == "debug"]
+    assert any(
+        "max_tool_calls" in d.summary and str(cap) in d.summary for d in debug_steps
+    )
 
 
 def test_fallback_node_emits_langfuse_span_with_error_type_max_tool_calls() -> None:

@@ -26,7 +26,6 @@ from langchain_core.messages import (
     SystemMessage,
     ToolMessage,
 )
-from langgraph.config import get_stream_writer
 from langgraph.graph import END, StateGraph
 from langgraph.prebuilt import ToolNode
 
@@ -41,6 +40,7 @@ from kebi.core.agent.location import (
 from kebi.core.agent.messages import extract_text_content
 from kebi.core.agent.reasoning import ReasoningStep
 from kebi.core.agent.state import AgentState
+from kebi.core.agent.stream_emit import emit_step_active, emit_step_done
 from kebi.core.config import get_config
 from kebi.core.places.nominatim_geocoding_client import GeocodingError
 from kebi.core.utils.geo import haversine_m
@@ -138,9 +138,9 @@ def _structured_usage(result: Any) -> dict[str, int]:
 
 
 # Shown for the user-visible `agent.tool_decision` step when the LLM
-# returns empty content. The agent has no tools (ADR-075), so a direct
-# response is the only outcome.
-_DIRECT_RESPONSE_FALLBACK = "responding directly"
+# returns empty content (a silent tool call, no preamble prose). Plain,
+# non-technical wording — this is a user-visible reasoning step.
+_DIRECT_RESPONSE_FALLBACK = "Let me look into that…"
 
 # Node names are re-used by tests asserting graph structure.
 NODE_RESOLVE_LOCATION = "resolve_location"
@@ -477,11 +477,11 @@ def make_agent_node(llm: Any, tools: list[Any]) -> Any:
     `messages`, increments `steps_taken`, and emits one user-visible
     `agent.tool_decision` reasoning step per LLM call (feature 028 M5).
 
-    The reasoning step's `summary` carries `AIMessage.content` truncated
-    to 200 chars. When `content` is empty (tool-call-only response), a
-    synthesized fallback keyed by the first tool-call name is used. A
-    streaming caller (via `get_stream_writer()`) receives the full,
-    untruncated text.
+    The persisted reasoning step's `summary` carries `AIMessage.content`
+    truncated to 200 chars. When `content` is empty (tool-call-only
+    response), a plain fallback summary is used. The SSE lifecycle frames
+    (via `stream_emit`) carry an `active` frame before the LLM call and a
+    `done` frame with the full, untruncated text after it.
     """
     bound = llm.bind_tools(tools, parallel_tool_calls=False)
 
@@ -533,6 +533,13 @@ def make_agent_node(llm: Any, tools: list[Any]) -> Any:
                 role="orchestrator",
             )
 
+        # SSE lifecycle: announce the step before the LLM call so a streaming
+        # client can show a skeleton while the orchestrator thinks. The id is
+        # keyed by `steps_taken` (read before the +1 write) so the matching
+        # `done` frame below carries the same id across both branches.
+        step_id = f"agent.tool_decision#{state.get('steps_taken', 0)}"
+        started = emit_step_active(step_id, "agent.tool_decision", source="agent")
+
         try:
             ai_msg = await _invoke_llm_with_retry(
                 bound,
@@ -556,11 +563,12 @@ def make_agent_node(llm: Any, tools: list[Any]) -> Any:
             )
             step = ReasoningStep(
                 step="agent.tool_decision",
-                summary=f"Connection error ({type(exc).__name__}) — please retry",
+                summary="I hit a brief connection issue — give that another try.",
                 source="agent",
                 visibility="user",
                 duration_ms=0.0,
             )
+            emit_step_done(step_id, step, started=started)
             return {
                 "messages": [error_msg],
                 "error_count": state.get("error_count", 0) + 1,
@@ -572,20 +580,19 @@ def make_agent_node(llm: Any, tools: list[Any]) -> Any:
 
         summary_source = full_text if full_text else _DIRECT_RESPONSE_FALLBACK
 
-        try:
-            writer = get_stream_writer()
-        except RuntimeError:
-            writer = None
-        if writer is not None:
-            writer({"step": "agent.tool_decision", "summary": summary_source})
-
-        step = ReasoningStep(
+        # The streamed `done` frame keeps the full, untruncated text; the
+        # persisted step truncates to 200 chars so checkpointer history stays
+        # bounded.
+        done_step = ReasoningStep(
             step="agent.tool_decision",
-            summary=summary_source[:200],
+            summary=summary_source,
             source="agent",
             visibility="user",
             duration_ms=0.0,
         )
+        emit_step_done(step_id, done_step, started=started)
+
+        step = done_step.model_copy(update={"summary": summary_source[:200]})
         existing_steps = state.get("reasoning_steps") or []
         return {
             "messages": [ai_msg],
@@ -1021,26 +1028,25 @@ async def _resolve_search_scope(
     )
 
 
-def _emit_step(step: ReasoningStep) -> None:
-    """Fan a reasoning step out to a streaming caller, if any."""
-    try:
-        writer = get_stream_writer()
-    except RuntimeError:
-        writer = None
-    if writer is not None:
-        writer({"step": step.step, "summary": step.summary})
+# One location resolution per turn, so a single stable lifecycle id. The
+# `active` frame is emitted at node entry (`agent.location` step name); the
+# `done` frame reuses this id with the resolved/clarify step below — the
+# frontend keys on the id, not the step name.
+_LOCATION_STEP_ID = "agent.location#0"
 
 
-def _location_clarification_update(state: AgentState, reason: str) -> dict[str, Any]:
+def _location_clarification_update(
+    state: AgentState, reason: str, *, started: float | None = None
+) -> dict[str, Any]:
     """State update that clears the working location and asks the user."""
     step = ReasoningStep(
         step="agent.location_clarify",
-        summary=f"Location needs clarification: {reason}",
+        summary=reason,
         source="agent",
         visibility="user",
         duration_ms=0.0,
     )
-    _emit_step(step)
+    emit_step_done(_LOCATION_STEP_ID, step, started=started)
     return {
         "working_location": None,
         "location_clarification": reason,
@@ -1049,19 +1055,19 @@ def _location_clarification_update(state: AgentState, reason: str) -> dict[str, 
 
 
 def _location_resolved_update(
-    state: AgentState, working: WorkingLocation
+    state: AgentState, working: WorkingLocation, *, started: float | None = None
 ) -> dict[str, Any]:
     """State update that records a fully resolved working location."""
     parts = [working.neighborhood, working.city, working.country]
     place = ", ".join(p for p in parts if p)
     step = ReasoningStep(
         step="agent.location_resolved",
-        summary=f"Working location: {place}",
+        summary=f"Looking around {place}.",
         source="agent",
         visibility="user",
         duration_ms=0.0,
     )
-    _emit_step(step)
+    emit_step_done(_LOCATION_STEP_ID, step, started=started)
     return {
         "working_location": working.model_dump(),
         "location_clarification": None,
@@ -1098,6 +1104,11 @@ def make_resolve_location_node(resolver_llm: Any, geocoding_client: Any) -> Any:
     async def resolve_location_node(state: AgentState) -> dict[str, Any]:
         user_id = state.get("user_id")
 
+        # SSE lifecycle: announce location resolution before the resolver LLM
+        # call. The matching `done` frame is emitted by the resolved/clarify
+        # update helpers under the same id; `started` carries the timing token.
+        started = emit_step_active(_LOCATION_STEP_ID, "agent.location", source="agent")
+
         def _resolver_span() -> TracingSpan:
             return feature_span(
                 "agent.location_resolver",
@@ -1115,7 +1126,9 @@ def make_resolve_location_node(resolver_llm: Any, geocoding_client: Any) -> Any:
             )
         except Exception as exc:
             logger.warning("resolve_location LLM failed: %s", exc)
-            return _location_clarification_update(state, _LOCATION_ASK_CITY)
+            return _location_clarification_update(
+                state, _LOCATION_ASK_CITY, started=started
+            )
 
         # Defensive: include_raw=True can return a dict with parsing_error
         # set when the model output failed schema validation. Treat that
@@ -1125,7 +1138,9 @@ def make_resolve_location_node(resolver_llm: Any, geocoding_client: Any) -> Any:
             parsed = result.get("parsed")
             if parse_err is not None or parsed is None:
                 logger.warning("resolve_location parsing_error: %s", parse_err)
-                return _location_clarification_update(state, _LOCATION_ASK_CITY)
+                return _location_clarification_update(
+                    state, _LOCATION_ASK_CITY, started=started
+                )
             resolution: LocationResolution = parsed
         else:
             # Older / cached `with_structured_output` without include_raw —
@@ -1137,7 +1152,7 @@ def make_resolve_location_node(resolver_llm: Any, geocoding_client: Any) -> Any:
                 resolution.clarification_reason.strip()
                 or "the location you mean is ambiguous"
             )
-            return _location_clarification_update(state, reason)
+            return _location_clarification_update(state, reason, started=started)
 
         try:
             working = await _build_working_location(
@@ -1147,7 +1162,9 @@ def make_resolve_location_node(resolver_llm: Any, geocoding_client: Any) -> Any:
                 geocoding_client,
             )
             if working is None:
-                return _location_clarification_update(state, _LOCATION_ASK_CONFIRM)
+                return _location_clarification_update(
+                    state, _LOCATION_ASK_CONFIRM, started=started
+                )
             # Fold in the movement scope (effective mode + tier → radius, and
             # for a corridor, the eagerly geocoded destination).
             working = await _resolve_search_scope(
@@ -1158,13 +1175,15 @@ def make_resolve_location_node(resolver_llm: Any, geocoding_client: Any) -> Any:
             )
         except GeocodingError as exc:
             logger.warning("resolve_location geocoding failed: %s", exc)
-            return _location_clarification_update(state, _LOCATION_ASK_CONFIRM)
+            return _location_clarification_update(
+                state, _LOCATION_ASK_CONFIRM, started=started
+            )
 
         if working is None:
             # The point resolved, but a corridor destination did not — ask
             # rather than silently degrading to an area search.
-            return _location_clarification_update(state, _CORRIDOR_ASK)
-        return _location_resolved_update(state, working)
+            return _location_clarification_update(state, _CORRIDOR_ASK, started=started)
+        return _location_resolved_update(state, working, started=started)
 
     return resolve_location_node
 
@@ -1190,8 +1209,8 @@ def fallback_node(state: AgentState) -> dict[str, Any]:
     if tool_calls_used >= cfg.max_tool_calls:
         error_type = "max_tool_calls"
         summary = (
-            f"Couldn't get there in {cfg.max_tool_calls} tool calls — "
-            "the query needs more detail to narrow things down"
+            "I tried a few angles but couldn't narrow it down — "
+            "a bit more detail would help."
         )
         user_message = _TOOL_CAP_MESSAGE
         debug_steps.append(
@@ -1204,9 +1223,7 @@ def fallback_node(state: AgentState) -> dict[str, Any]:
         )
     elif steps_taken >= cfg.max_steps:
         error_type = "max_steps"
-        summary = (
-            f"Got stuck after {cfg.max_steps} steps, something went wrong on my end"
-        )
+        summary = "I got a bit tangled up there — something went wrong on my end."
         debug_steps.append(
             ReasoningStep(
                 step="max_steps_detail",
@@ -1217,7 +1234,7 @@ def fallback_node(state: AgentState) -> dict[str, Any]:
         )
     elif error_count >= cfg.max_errors:
         error_type = "max_errors"
-        summary = "Hit too many errors, try rephrasing or sharing more detail"
+        summary = "I ran into a few snags — try rephrasing or sharing a bit more."
         debug_steps.append(
             ReasoningStep(
                 step="max_errors_detail",
@@ -1228,7 +1245,7 @@ def fallback_node(state: AgentState) -> dict[str, Any]:
         )
     else:
         error_type = "max_errors"
-        summary = "Something went wrong on my end"
+        summary = "Something went wrong on my end."
 
     tracer = get_tracing_client()
     span = tracer.generation("agent_fallback", user_id=state.get("user_id"))
@@ -1240,6 +1257,16 @@ def fallback_node(state: AgentState) -> dict[str, Any]:
         source="fallback",
         visibility="user",
     )
+    # Terminal node: the steps are instantaneous, so emit each step's `active`
+    # and `done` frames back-to-back (keeps the lifecycle contract uniform —
+    # every `done` has a prior `active`). Debug steps ride the SSE too; the
+    # frontend filters them by `visibility`.
+    for diag in (*debug_steps, user_step):
+        diag_id = f"{diag.step}#0"
+        diag_started = emit_step_active(
+            diag_id, diag.step, source="fallback", visibility=diag.visibility
+        )
+        emit_step_done(diag_id, diag, started=diag_started)
     existing_steps = state.get("reasoning_steps") or []
     return {
         "messages": [AIMessage(content=user_message)],

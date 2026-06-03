@@ -57,6 +57,7 @@ from kebi.core.agent._trace_context import set_tool
 from kebi.core.agent.location import WorkingLocation
 from kebi.core.agent.reasoning import ReasoningStep
 from kebi.core.agent.state import AgentState
+from kebi.core.agent.stream_emit import emit_step_active, emit_step_done
 from kebi.core.agent.tools._hard_constraints import hard_constraints_satisfied
 from kebi.core.agent.tools._scope import clamp_to_walkable_for_utility
 from kebi.core.agent.tools._search_args import (
@@ -68,7 +69,7 @@ from kebi.core.agent.tools._search_args import (
     QUERY_DESC,
     TAGS_DESC,
 )
-from kebi.core.agent.tools._with_timeout import with_timeout
+from kebi.core.agent.tools._with_timeout import tool_step_base_id, with_timeout
 from kebi.core.agent.tools.consult_models import ConsultCandidate, ConsultResult
 from kebi.core.config import get_config
 from kebi.core.extraction.extraction_pipeline import SearchServiceFactory
@@ -273,15 +274,36 @@ async def _run_discover_places_impl(
     wrapper.
     """
     steps: list[ReasoningStep] = []
+    base_id = tool_step_base_id(_TOOL_NAME, state)
+
+    def _record(
+        step_id: str,
+        summary: str,
+        *,
+        phase: str | None = None,
+        started: float | None = None,
+    ) -> None:
+        """Append a phase step and stream its SSE `done` frame (ADR-102).
+
+        `phase` pairs the `done` with an earlier `emit_step_active` emitted
+        before the provider call so the frontend shows a skeleton while that
+        work runs; pass that call's `started` token for the measured duration.
+        Instant steps (no `phase`) emit their own adjacent `active` first to
+        satisfy the lifecycle contract and time themselves.
+        """
+        step = _make_step(step_id, summary)
+        sid = f"{base_id}.{phase or step_id}"
+        if phase is None:
+            started = emit_step_active(sid, step.step, source="agent")
+        emit_step_done(sid, step, started=started)
+        steps.append(step)
 
     working = _maybe_working_location(state)
     if not _is_anchored(working):
-        steps.append(
-            _make_step(
-                "no_location",
-                "I'd need to know roughly where you are first — share a "
-                "location or name a place and I can take another look.",
-            )
+        _record(
+            "no_location",
+            "I'd need to know roughly where you are first — share a "
+            "location or name a place and I can take another look.",
         )
         return _build_command(
             state=state,
@@ -293,14 +315,14 @@ async def _run_discover_places_impl(
     assert working is not None  # narrowed by _is_anchored
     # Utility errands are walked to — clamp to a walkable radius (same rule as
     # suggest_places) so this fallback can't reintroduce a far result.
-    working = clamp_to_walkable_for_utility(
-        working, categories, get_config().movement
-    )
+    working = clamp_to_walkable_for_utility(working, categories, get_config().movement)
     location_label = _location_label(working)
-    steps.append(
-        _make_step("start", f"Checking the area around {location_label}.")
-    )
+    _record("start", f"Checking the area around {location_label}.")
 
+    # Search phase (provider latency): skeleton while the provider is queried.
+    search_started = emit_step_active(
+        f"{base_id}.search", f"{_TOOL_NAME}.search", source="agent"
+    )
     place_loc = _build_location_context(working)
     place_query = PlaceQuery(
         place_names=[query] if query else None,
@@ -313,15 +335,13 @@ async def _run_discover_places_impl(
         async with places_search_factory() as svc:
             hits = await svc.find(place_query, limit=limit)
     except Exception as exc:
-        logger.warning(
-            "discover_places provider lookup failed: %s", exc, exc_info=True
-        )
-        steps.append(
-            _make_step(
-                "provider_error",
-                "The place search hit an error — try again in a moment or "
-                "narrow what you're after.",
-            )
+        logger.warning("discover_places provider lookup failed: %s", exc, exc_info=True)
+        _record(
+            "provider_error",
+            "The place search hit an error — try again in a moment or "
+            "narrow what you're after.",
+            phase="search",
+            started=search_started,
         )
         return _build_command(
             state=state,
@@ -333,12 +353,12 @@ async def _run_discover_places_impl(
     venues = drop_geographic_features(hits)
 
     if not venues:
-        steps.append(
-            _make_step(
-                "no_match",
-                "Nothing around here matched that — want to widen the area "
-                "or try a different angle?",
-            )
+        _record(
+            "no_match",
+            "Nothing around here matched that — want to widen the area "
+            "or try a different angle?",
+            phase="search",
+            started=search_started,
         )
         return _build_command(
             state=state,
@@ -353,12 +373,12 @@ async def _run_discover_places_impl(
 
     if not filtered:
         constraint_note = " (none fit your requirements)" if required else ""
-        steps.append(
-            _make_step(
-                "constraints_drop",
-                f"Found a few real spots but nothing matched what you're "
-                f"after{constraint_note} — want me to relax something?",
-            )
+        _record(
+            "constraints_drop",
+            f"Found a few real spots but nothing matched what you're "
+            f"after{constraint_note} — want me to relax something?",
+            phase="search",
+            started=search_started,
         )
         return _build_command(
             state=state,
@@ -371,16 +391,13 @@ async def _run_discover_places_impl(
     final_names = ", ".join(p.place_name for p in final_objs)
     plural = "" if len(final_objs) == 1 else "s"
     constraint_tail = (
-        f" ({dropped} didn't fit your requirements)"
-        if dropped and required
-        else ""
+        f" ({dropped} didn't fit your requirements)" if dropped and required else ""
     )
-    steps.append(
-        _make_step(
-            "summary",
-            f"Found {len(final_objs)} option{plural}: {final_names}"
-            f"{constraint_tail}.",
-        )
+    _record(
+        "summary",
+        f"Found {len(final_objs)} option{plural}: {final_names}{constraint_tail}.",
+        phase="search",
+        started=search_started,
     )
 
     candidates = [

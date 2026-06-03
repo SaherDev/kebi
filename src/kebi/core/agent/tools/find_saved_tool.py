@@ -33,6 +33,7 @@ from kebi.core.agent._trace_context import set_tool
 from kebi.core.agent.location import WorkingLocation
 from kebi.core.agent.reasoning import ReasoningStep
 from kebi.core.agent.state import AgentState
+from kebi.core.agent.stream_emit import emit_step_active, emit_step_done
 from kebi.core.agent.tools._search_args import (
     CATEGORIES_DESC,
     CITY_DESC,
@@ -42,7 +43,7 @@ from kebi.core.agent.tools._search_args import (
     QUERY_DESC,
     TAGS_DESC,
 )
-from kebi.core.agent.tools._with_timeout import with_timeout
+from kebi.core.agent.tools._with_timeout import tool_step_base_id, with_timeout
 from kebi.core.agent.tools.consult_models import ConsultCandidate, ConsultResult
 from kebi.core.config import get_config
 from kebi.core.places.hybrid_search_service import HybridSearchService
@@ -144,29 +145,28 @@ def _assemble_filters(
 _SUMMARY_NAMES_PREVIEW = 3
 
 
-def _summarise(query: str, result: ConsultResult) -> str:
+def _summarise(result: ConsultResult) -> str:
     """One-line user-visible step summary.
 
-    The success branch surfaces the matched place names (capped to a
-    short preview) so the user sees what was found without parsing the
-    structured `tool_results` payload — mirrors `suggest_places.summary`.
+    Plain narration, no tool name or raw query echo (per project feedback on
+    user-facing reasoning steps). The success branch surfaces the matched
+    place names (capped to a short preview) so the user sees what was found
+    without parsing the structured `tool_results` payload — mirrors the
+    `suggest_places` / `discover_places` summary register.
     """
     if result.empty_reason == "no_saves":
-        return f'find_saved: no saved places yet for "{query}"'
+        return "You don't have any saved places yet."
     if result.empty_reason == "no_match":
-        return f'find_saved: 0 saved places matched "{query}"'
+        return "Nothing in your saved places matched that."
     if result.empty_reason == "no_location":
-        return f'find_saved: 0 matches for "{query}" (no location resolved this turn)'
+        return "I'd need to know where you are to search your saved places."
 
     count = len(result.candidates)
-    plural = "" if count == 1 else "es"
+    plural = "" if count == 1 else "s"
     names = [c.place.place_name for c in result.candidates[:_SUMMARY_NAMES_PREVIEW]]
     preview = ", ".join(names)
     extra = "" if count <= _SUMMARY_NAMES_PREVIEW else " (and a few more)"
-    return (
-        f'find_saved: {count} saved match{plural} for "{query}" — '
-        f"{preview}{extra}."
-    )
+    return f"Found {count} saved spot{plural} — {preview}{extra}."
 
 
 def build_find_saved_tool(hybrid_search: HybridSearchService) -> BaseTool:
@@ -264,6 +264,10 @@ async def _run_find_saved_impl(
     limit: int,
 ) -> Command[Any]:
     user_id = state["user_id"]
+    # SSE lifecycle: announce the step before the search latency.
+    base_id = tool_step_base_id(_TOOL_NAME, state)
+    started = emit_step_active(base_id, _TOOL_NAME, source="agent")
+
     working = _maybe_working_location(state)
     has_named_area = bool(neighborhood or city or country)
 
@@ -314,11 +318,12 @@ async def _run_find_saved_impl(
     )
     step = ReasoningStep(
         step=f"{_TOOL_NAME}.summary",
-        summary=_summarise(query, result),
+        summary=_summarise(result),
         source="agent",
         visibility="user",
         duration_ms=0.0,
     )
+    emit_step_done(base_id, step, started=started)
 
     return Command(
         update={

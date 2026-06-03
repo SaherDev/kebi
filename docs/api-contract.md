@@ -180,12 +180,15 @@ to `POST /v1/extract` — the chat path never writes to `user_places`.
 
 | Field         | Type                                  | Notes                                                                       |
 | ------------- | ------------------------------------- | --------------------------------------------------------------------------- |
-| `step`        | `string`                              | Identifier, e.g. `agent.tool_decision`, `tool.summary`, `fallback`          |
-| `summary`     | `string`                              | Human-readable description (LLM reasoning text may be truncated)            |
-| `source`      | `"agent" \| "tool" \| "fallback"`    | Which node produced it                                                      |
+| `step`        | `string`                              | Identifier, e.g. `agent.tool_decision`, `find_saved.summary`, `fallback`    |
+| `summary`     | `string \| null`                      | Human-readable, plain narration (no tool names / internal keys). `null` only on an `active` SSE frame; always set on JSON-path steps |
+| `source`      | `"agent" \| "fallback"`               | Which node produced it (ADR-075 removed the `"tool"` source)                |
 | `visibility`  | `"user" \| "debug"`                   | Only `"user"` steps appear in the JSON response; `"debug"` → Langfuse/SSE   |
 | `timestamp`   | `ISO-8601 string`                     | UTC; when the step was recorded                                            |
 | `duration_ms` | `float \| null`                       | Node latency; non-null in persisted steps                                  |
+
+> The SSE step-lifecycle fields `id` and `status` (ADR-102) are **not** part of
+> this non-stream shape — they appear only on `/v1/chat/stream` frames (below).
 
 `ToolResult` shape: `{ tool: "find_saved" | "suggest_places" | "discover_places", tool_call_id: string, payload: ConsultResult }`. `ConsultResult` carries `candidates` (each with `place`, `source ∈ {saved, suggested, discovered}`, optional namer `reason`), and an `empty_reason` literal when no candidates were produced (e.g. `no_location`, `no_match`).
 
@@ -218,7 +221,10 @@ SSE streaming variant. Emits reasoning steps as they happen, then a final messag
 
 ```
 event: reasoning_step
-data: <ReasoningStep JSON>
+data: {"id":"find_saved#0","step":"find_saved","summary":null,"status":"active","source":"agent","visibility":"user","duration_ms":null}
+
+event: reasoning_step
+data: {"id":"find_saved#0","step":"find_saved.summary","summary":"Found 2 saved spots — …","status":"done","source":"agent","visibility":"user","duration_ms":420.0}
 
 event: tool_result
 data: <ToolResult JSON>
@@ -232,10 +238,24 @@ data: {"tool_calls_used": 1}
 
 | Frame            | When emitted                                            | Data shape                       |
 | ---------------- | ------------------------------------------------------- | -------------------------------- |
-| `reasoning_step` | Each time the agent / a tool / the fallback emits one   | `ReasoningStep` (all fields)     |
+| `reasoning_step` | Twice per step over its lifecycle (see below) — the agent, every tool, and the fallback all stream | `ReasoningStep` + stream lifecycle fields (`id`, `status`) |
 | `tool_result`    | Once per completed tool call this turn                  | `ToolResult` (tool, tool_call_id, payload) |
 | `message`        | Once, after the graph completes, if there is text       | `{"content": string}`            |
 | `done`           | Always last — even if no message was produced           | `{"tool_calls_used": integer}`   |
+
+**Step lifecycle (ADR-102).** Each reasoning step is emitted as **two** `reasoning_step` frames keyed by a stable `id`: an `active` frame when the step starts and a `done` frame when it finishes. The frontend upserts by `id`. On the SSE stream `ReasoningStep` carries two fields beyond the JSON-path shape, and relaxes one:
+
+| Field         | On `active` frame      | On `done` frame                | Notes                                                              |
+| ------------- | ---------------------- | ------------------------------ | ------------------------------------------------------------------ |
+| `id`          | stable step id         | same `id` as the active frame  | e.g. `find_saved#0`, `agent.tool_decision#0`; upsert key           |
+| `status`      | `"active"`             | `"done"`                       | lifecycle marker                                                   |
+| `summary`     | `null`                 | filled                         | client shows a skeleton while `null`                               |
+| `duration_ms` | `null`                 | set                            | node latency on completion                                         |
+| `source`      | `"agent" \| "fallback"`| same                           | ADR-075 narrowed this; no `"tool"` value                           |
+
+Rules: every `done` frame is preceded by an `active` frame with the same `id`; an interrupted step (e.g. a tool that times out mid-phase) may emit `active` with no `done` (renders as a step left in its skeleton). `visibility:"debug"` steps ride the stream too — the client filters them. There is **no** "step N of M" total: the agent decides tools dynamically, so the client shows a live "step N" and a "N steps · time" meta line on completion, no greyed pending rows.
+
+On the stream `id` is always a non-null string and `status` is always `"active"` or `"done"`. The non-stream `POST /v1/chat` omits both fields entirely (its steps are implicitly complete) — that payload is unchanged from before this feature.
 
 On error mid-stream:
 

@@ -100,9 +100,19 @@ async def chat_stream(
     Requires agent path to be enabled and graph to be available.
     Returns 400 if agent is disabled or graph is unavailable.
 
-    Frame format (text/event-stream):
+    Frame format (text/event-stream). Each reasoning step is streamed twice
+    over its lifecycle (ADR-102), keyed by a stable `id`: an `active` frame
+    when it starts (`summary`/`duration_ms` null → the client shows a
+    skeleton) then a `done` frame when it completes (same `id`, filled in):
       event: reasoning_step
-      data: <ReasoningStep JSON>
+      data: {"id":"find_saved#0","step":"find_saved","summary":null,
+             "status":"active","source":"agent","visibility":"user",
+             "duration_ms":null}
+
+      event: reasoning_step
+      data: {"id":"find_saved#0","step":"find_saved.summary",
+             "summary":"Found 2 saved spots — …","status":"done",
+             "source":"agent","visibility":"user","duration_ms":420.0}
 
       event: message
       data: {"content": "<final assistant text>"}

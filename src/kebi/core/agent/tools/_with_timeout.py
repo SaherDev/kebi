@@ -11,9 +11,10 @@ and on `TimeoutError` (or any unexpected exception) emit a degraded
   the per-turn budget is exceeded.
 - Bumps `tool_calls_used` so the response surfaces the attempt for
   rate-limit accounting (success or failure counts).
-- Appends one user-visible `ReasoningStep` under `source="agent"`
+- Appends a plain user-visible `ReasoningStep` plus a paired `debug`
+  step carrying the technical cause, both under `source="agent"`
   (ADR-075 narrowed `source` and removed `tool_name`; we do not widen
-  it back for one wrapper).
+  it back for one wrapper), and emits their SSE active→done frames.
 
 `AgentState.error_count`, `tool_calls_used`, and `reasoning_steps` all
 use plain-overwrite reducers (FR-021) — the wrapper takes the state
@@ -33,22 +34,41 @@ from langgraph.types import Command
 
 from kebi.core.agent.reasoning import ReasoningStep
 from kebi.core.agent.state import AgentState
+from kebi.core.agent.stream_emit import emit_step_active, emit_step_done
 
 logger = logging.getLogger(__name__)
+
+
+def tool_step_base_id(tool_name: str, state: AgentState) -> str:
+    """Deterministic SSE-lifecycle id base for this tool call (ADR-102).
+
+    Keyed by `tool_calls_used` read at entry — before the tool's `+1` write —
+    so the tool body and `with_timeout` derive the same id independently,
+    without threading it across the call boundary. Phase steps append
+    `.{phase}`; the failure step appends `.failure`.
+    """
+    return f"{tool_name}#{state.get('tool_calls_used', 0)}"
 
 
 def _degraded_command(
     tool_name: str,
     tool_call_id: str,
     state: AgentState,
-    summary: str,
+    *,
+    user_summary: str,
+    detail: str,
 ) -> Command[Any]:
-    """Build the Command emitted when a tool times out or raises."""
+    """Build the Command emitted when a tool times out or raises.
+
+    The user-visible step carries plain, non-technical copy; the technical
+    cause (tool name, timeout, exception type) rides a paired `debug` step
+    and the tool_result `error` payload — never the user summary.
+    """
     payload = json.dumps(
         {
             "candidates": [],
             "empty_reason": "error",
-            "error": summary,
+            "error": detail,
         }
     )
     tool_msg = ToolMessage(
@@ -56,17 +76,37 @@ def _degraded_command(
         tool_call_id=tool_call_id,
         name=tool_name,
     )
-    step = ReasoningStep(
+    base_id = tool_step_base_id(tool_name, state)
+    debug_step = ReasoningStep(
+        step=f"{tool_name}.failure_detail",
+        summary=detail,
+        source="agent",
+        visibility="debug",
+        duration_ms=0.0,
+    )
+    user_step = ReasoningStep(
         step=f"{tool_name}.failure",
-        summary=summary,
+        summary=user_summary,
         source="agent",
         visibility="user",
         duration_ms=0.0,
     )
+    # Self-contained active→done pairs (failure is terminal/instant), so the
+    # lifecycle contract holds even when the tool raised before emitting any
+    # phase frames. The user `.failure` step stays last in `reasoning_steps`.
+    for step, step_id in (
+        (debug_step, f"{base_id}.failure_detail"),
+        (user_step, f"{base_id}.failure"),
+    ):
+        started = emit_step_active(
+            step_id, step.step, source="agent", visibility=step.visibility
+        )
+        emit_step_done(step_id, step, started=started)
     return Command(
         update={
             "messages": [tool_msg],
-            "reasoning_steps": (state.get("reasoning_steps") or []) + [step],
+            "reasoning_steps": (state.get("reasoning_steps") or [])
+            + [debug_step, user_step],
             "error_count": state.get("error_count", 0) + 1,
             "tool_calls_used": state.get("tool_calls_used", 0) + 1,
         }
@@ -94,7 +134,8 @@ async def with_timeout(
             tool_name,
             tool_call_id,
             state,
-            f"Couldn't run {tool_name} this turn — search took longer than {seconds}s.",
+            user_summary="That search took too long this time — try again in a moment.",
+            detail=f"{tool_name} timed out after {seconds}s",
         )
     except Exception as exc:
         logger.exception("Tool %s raised: %s", tool_name, exc)
@@ -102,5 +143,6 @@ async def with_timeout(
             tool_name,
             tool_call_id,
             state,
-            f"Couldn't run {tool_name} this turn — {type(exc).__name__}.",
+            user_summary="I couldn't finish that search — try again in a moment.",
+            detail=f"{tool_name} raised {type(exc).__name__}: {str(exc)[:200]}",
         )
