@@ -18,12 +18,19 @@ def _capture() -> tuple[list[dict[str, Any]], Any]:
 def test_emit_step_active_builds_active_frame() -> None:
     sink, writer = _capture()
     with patch("kebi.core.agent.stream_emit.get_stream_writer", return_value=writer):
-        emit_step_active("find_saved#0", "find_saved", source="agent")
+        emit_step_active(
+            "find_saved#0",
+            "find_saved",
+            title="searched your saved spots",
+            source="agent",
+        )
     assert len(sink) == 1
     frame = sink[0]
     assert frame["id"] == "find_saved#0"
     assert frame["step"] == "find_saved"
     assert frame["status"] == "active"
+    # title (action) rides the active frame; summary (result) is null until done.
+    assert frame["title"] == "searched your saved spots"
     assert frame["summary"] is None
     assert frame["duration_ms"] is None
     assert frame["source"] == "agent"
@@ -34,7 +41,8 @@ def test_emit_step_done_decorates_the_real_step() -> None:
     sink, writer = _capture()
     step = ReasoningStep(
         step="find_saved.summary",
-        summary="Found 2 saved spots — A, B.",
+        title="searched your saved spots",
+        summary="2 spots — A, B",
         source="agent",
         visibility="user",
         duration_ms=420.0,
@@ -46,7 +54,8 @@ def test_emit_step_done_decorates_the_real_step() -> None:
     assert frame["id"] == "find_saved#0"
     assert frame["step"] == "find_saved.summary"
     assert frame["status"] == "done"
-    assert frame["summary"] == "Found 2 saved spots — A, B."
+    assert frame["title"] == "searched your saved spots"
+    assert frame["summary"] == "2 spots — A, B"
     assert frame["duration_ms"] == 420.0
 
 
@@ -60,7 +69,12 @@ def test_done_stamps_measured_duration_on_step_and_frame() -> None:
         duration_ms=0.0,
     )
     with patch("kebi.core.agent.stream_emit.get_stream_writer", return_value=writer):
-        started = emit_step_active("find_saved#0", "find_saved", source="agent")
+        started = emit_step_active(
+            "find_saved#0",
+            "find_saved",
+            title="searched your saved spots",
+            source="agent",
+        )
         emit_step_done("find_saved#0", step, started=started)
 
     active, done = sink
@@ -86,7 +100,7 @@ def test_done_without_active_keeps_constructed_duration() -> None:
 def test_emit_preserves_debug_visibility() -> None:
     sink, writer = _capture()
     with patch("kebi.core.agent.stream_emit.get_stream_writer", return_value=writer):
-        emit_step_active("x#0", "x", source="fallback", visibility="debug")
+        emit_step_active("x#0", "x", title="", source="fallback", visibility="debug")
     assert sink[0]["visibility"] == "debug"
     assert sink[0]["source"] == "fallback"
 
@@ -100,7 +114,7 @@ def test_emit_is_noop_without_a_writer() -> None:
     step = ReasoningStep(step="s", summary="x", source="agent")
     with patch("kebi.core.agent.stream_emit.get_stream_writer", side_effect=_raise):
         # Neither call should raise.
-        emit_step_active("s#0", "s", source="agent")
+        emit_step_active("s#0", "s", title="", source="agent")
         emit_step_done("s#0", step)
 
 

@@ -22,6 +22,14 @@ class ReasoningStep(BaseModel):
     `duration_ms` is populated by the agent/fallback node from timestamp
     deltas. Non-null in persisted steps; a lingering `None` is a bug.
 
+    The two human fields are a pair the client renders as two lines: `title`
+    is the bold action line (what the step is *doing* — "searched nearby"),
+    `summary` is the result line under it (what it *found* — "5 spots — …").
+    `title` is short, lowercase, no colon, not first person, and carries the
+    verb so `summary` never repeats it. The same `title` rides both the
+    `active` and `done` frames (the action is known before the result);
+    `summary` is null on `active` and filled on `done`.
+
     SSE step-lifecycle (ADR-102): the same step is streamed twice, keyed
     by a stable `id` — an `active` frame when it starts (`summary` and
     `duration_ms` null → the frontend shows a skeleton) and a `done` frame
@@ -35,6 +43,7 @@ class ReasoningStep(BaseModel):
     """
 
     step: str
+    title: str = ""
     summary: str | None = None
     source: Literal["agent", "fallback"]
     visibility: Literal["user", "debug"] = "user"

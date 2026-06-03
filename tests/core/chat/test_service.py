@@ -106,6 +106,7 @@ async def test_run_filters_reasoning_steps_to_user_visible() -> None:
     """Only user-visible ReasoningStep objects survive the serialization filter."""
     user_step = ReasoningStep(
         step="agent.tool_decision",
+        title="thinking",
         summary="responding directly",
         source="agent",
         visibility="user",
@@ -134,6 +135,9 @@ async def test_run_filters_reasoning_steps_to_user_visible() -> None:
     assert len(result.data["reasoning_steps"]) == 1
     dumped = result.data["reasoning_steps"][0]
     assert dumped["step"] == "agent.tool_decision"
+    # title (action) + summary (result) are both in the /v1/chat JSON (ADR-103).
+    assert dumped["title"] == "thinking"
+    assert dumped["summary"] == "responding directly"
     # The non-stream JSON contract is unchanged: the SSE-only lifecycle markers
     # (ADR-102) are excluded entirely, not surfaced as null.
     assert "id" not in dumped

@@ -482,6 +482,13 @@ def make_agent_node(llm: Any, tools: list[Any]) -> Any:
     response), a plain fallback summary is used. The SSE lifecycle frames
     (via `stream_emit`) carry an `active` frame before the LLM call and a
     `done` frame with the full, untruncated text after it.
+
+    Visibility is gated on tool calls (ADR-102): a response that carries
+    tool calls is intermediate narration the client shows; a response with
+    no tool calls IS the terminal answer, whose content is byte-identical
+    to the `message` frame, so the step is marked `debug` to keep it off
+    the user-visible trace (it still rides SSE for tracing). Otherwise the
+    thinking panel would render the whole answer, then the answer again.
     """
     bound = llm.bind_tools(tools, parallel_tool_calls=False)
 
@@ -537,8 +544,19 @@ def make_agent_node(llm: Any, tools: list[Any]) -> Any:
         # client can show a skeleton while the orchestrator thinks. The id is
         # keyed by `steps_taken` (read before the +1 write) so the matching
         # `done` frame below carries the same id across both branches.
+        # The orchestrator's own thinking is debug on BOTH frames (ADR-103):
+        # it's either between-tool monologue (the tool steps already narrate the
+        # work) or the terminal answer (identical to the message frame). Keeping
+        # the visibility identical across active+done is also required — the
+        # client keys on `id`, so a step that flips user→debug never resolves.
         step_id = f"agent.tool_decision#{state.get('steps_taken', 0)}"
-        started = emit_step_active(step_id, "agent.tool_decision", source="agent")
+        started = emit_step_active(
+            step_id,
+            "agent.tool_decision",
+            title="thinking",
+            source="agent",
+            visibility="debug",
+        )
 
         try:
             ai_msg = await _invoke_llm_with_retry(
@@ -563,9 +581,10 @@ def make_agent_node(llm: Any, tools: list[Any]) -> Any:
             )
             step = ReasoningStep(
                 step="agent.tool_decision",
+                title="thinking",
                 summary="I hit a brief connection issue — give that another try.",
                 source="agent",
-                visibility="user",
+                visibility="debug",
                 duration_ms=0.0,
             )
             emit_step_done(step_id, step, started=started)
@@ -582,12 +601,14 @@ def make_agent_node(llm: Any, tools: list[Any]) -> Any:
 
         # The streamed `done` frame keeps the full, untruncated text; the
         # persisted step truncates to 200 chars so checkpointer history stays
-        # bounded.
+        # bounded. Debug-only (see the active frame above) — the client filters
+        # it, so the answer never duplicates and the thinking row never lingers.
         done_step = ReasoningStep(
             step="agent.tool_decision",
+            title="thinking",
             summary=summary_source,
             source="agent",
-            visibility="user",
+            visibility="debug",
             duration_ms=0.0,
         )
         emit_step_done(step_id, done_step, started=started)
@@ -1041,6 +1062,7 @@ def _location_clarification_update(
     """State update that clears the working location and asks the user."""
     step = ReasoningStep(
         step="agent.location_clarify",
+        title="checking your location",
         summary=reason,
         source="agent",
         visibility="user",
@@ -1062,7 +1084,8 @@ def _location_resolved_update(
     place = ", ".join(p for p in parts if p)
     step = ReasoningStep(
         step="agent.location_resolved",
-        summary=f"Looking around {place}.",
+        title="found your location",
+        summary=f"around {place}",
         source="agent",
         visibility="user",
         duration_ms=0.0,
@@ -1107,7 +1130,12 @@ def make_resolve_location_node(resolver_llm: Any, geocoding_client: Any) -> Any:
         # SSE lifecycle: announce location resolution before the resolver LLM
         # call. The matching `done` frame is emitted by the resolved/clarify
         # update helpers under the same id; `started` carries the timing token.
-        started = emit_step_active(_LOCATION_STEP_ID, "agent.location", source="agent")
+        started = emit_step_active(
+            _LOCATION_STEP_ID,
+            "agent.location",
+            title="found your location",
+            source="agent",
+        )
 
         def _resolver_span() -> TracingSpan:
             return feature_span(
@@ -1253,6 +1281,7 @@ def fallback_node(state: AgentState) -> dict[str, Any]:
 
     user_step = ReasoningStep(
         step="fallback",
+        title="wrapping up",
         summary=summary,
         source="fallback",
         visibility="user",
@@ -1264,7 +1293,11 @@ def fallback_node(state: AgentState) -> dict[str, Any]:
     for diag in (*debug_steps, user_step):
         diag_id = f"{diag.step}#0"
         diag_started = emit_step_active(
-            diag_id, diag.step, source="fallback", visibility=diag.visibility
+            diag_id,
+            diag.step,
+            title=diag.title,
+            source="fallback",
+            visibility=diag.visibility,
         )
         emit_step_done(diag_id, diag, started=diag_started)
     existing_steps = state.get("reasoning_steps") or []

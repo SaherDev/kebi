@@ -30,9 +30,9 @@ provider call. Search scope (radius, density, mode) is whatever the
 
 Arg schema is byte-identical to `find_saved` (shared module
 `_search_args`) so the agent picks between the two tools on semantics
-alone. Reasoning steps narrate the work in plain language across natural
-phases ("Okay, looking in …", "A few names came to mind…", "Found N: …")
-rather than as one technical end-of-tool summary.
+alone. The user sees one reasoning row for the whole call (ADR-103): the
+"suggested a few spots" action with the outcome result line under it;
+the internal name/validate phases ride the stream as `debug` for tracing.
 """
 
 from __future__ import annotations
@@ -62,6 +62,12 @@ from kebi.core.agent.tools._search_args import (
     NEIGHBORHOOD_DESC,
     QUERY_DESC,
     TAGS_DESC,
+)
+from kebi.core.agent.tools._summaries import (
+    NEED_LOCATION,
+    NONE_FIT,
+    TITLES,
+    found_summary,
 )
 from kebi.core.agent.tools._with_timeout import tool_step_base_id, with_timeout
 from kebi.core.agent.tools.candidate_namer import (
@@ -144,16 +150,17 @@ def _location_label(working: WorkingLocation) -> str:
 
 
 def _make_step(step_id: str, summary: str) -> ReasoningStep:
-    """Build a user-visible reasoning step from this tool's namespace.
+    """Build a debug-only internal narration step from this tool's namespace.
 
-    All steps emitted by this tool share the `suggest_places.*` prefix so
-    the smoke script and other consumers can pick them up by tool name.
+    User-facing output is the single `base_id` outcome row (ADR-103); these
+    phase steps ride the stream as `debug` for tracing only. All share the
+    `suggest_places.*` prefix so tooling can pick them up by tool name.
     """
     return ReasoningStep(
         step=f"{_TOOL_NAME}.{step_id}",
         summary=summary,
         source="agent",
-        visibility="user",
+        visibility="debug",
         duration_ms=0.0,
     )
 
@@ -316,35 +323,44 @@ async def _run_suggest_places_impl(
     user_id = state["user_id"]
     base_id = tool_step_base_id(_TOOL_NAME, state)
 
-    def _record(
-        step_id: str,
-        summary: str,
-        *,
-        phase: str | None = None,
-        started: float | None = None,
-    ) -> None:
-        """Append a phase step and stream its SSE `done` frame (ADR-102).
+    # One user-visible row for the whole call (ADR-103): a single skeleton now,
+    # filled with the outcome by `_finish` below. The skeleton spans the namer
+    # and provider latency, so no per-phase user steps. Internal narration
+    # (locate, brainstorm) rides as debug for tracing.
+    outcome_started = emit_step_active(
+        base_id, _TOOL_NAME, title=TITLES[_TOOL_NAME], source="agent"
+    )
 
-        `phase` pairs the `done` with an earlier `emit_step_active` emitted
-        before a latency call (namer/provider) so the frontend shows a
-        skeleton while that work runs; pass that call's `started` token for the
-        measured duration. Instant steps (no `phase`) emit their own adjacent
-        `active` first to satisfy the lifecycle contract and time themselves.
-        """
+    def _trace(step_id: str, summary: str) -> None:
+        """Emit a debug-only internal narration step (tracing, not a user row)."""
         step = _make_step(step_id, summary)
-        sid = f"{base_id}.{phase or step_id}"
-        if phase is None:
-            started = emit_step_active(sid, step.step, source="agent")
+        sid = f"{base_id}.{step_id}"
+        started = emit_step_active(
+            sid, step.step, title="", source="agent", visibility="debug"
+        )
         emit_step_done(sid, step, started=started)
+        steps.append(step)
+
+    def _finish(summary: str, *, kind: str = "summary") -> None:
+        """Emit the single user-visible outcome row under `base_id`.
+
+        `kind` names the outcome (summary / no_location / no_match / …) as the
+        machine `step` id; the user only ever sees the shared title + summary.
+        """
+        step = ReasoningStep(
+            step=f"{_TOOL_NAME}.{kind}",
+            title=TITLES[_TOOL_NAME],
+            summary=summary,
+            source="agent",
+            visibility="user",
+            duration_ms=0.0,
+        )
+        emit_step_done(base_id, step, started=outcome_started)
         steps.append(step)
 
     working = _maybe_working_location(state)
     if not _is_anchored(working):
-        _record(
-            "no_location",
-            "I'd need to know roughly where you are first — share a "
-            "location or name a place and I can take another look.",
-        )
+        _finish(NEED_LOCATION, kind="no_location")
         return _build_command(
             state=state,
             tool_call_id=tool_call_id,
@@ -358,12 +374,8 @@ async def _run_suggest_places_impl(
     # nearest branch wins, not a prominent one across town.
     working = clamp_to_walkable_for_utility(working, categories, get_config().movement)
     location_label = _location_label(working)
-    _record("locate", f"Okay — looking around {location_label}.")
+    _trace("locate", f"looking around {location_label}")
 
-    # Name phase (namer latency): skeleton while candidate names are generated.
-    name_started = emit_step_active(
-        f"{base_id}.name", f"{_TOOL_NAME}.name", source="agent"
-    )
     namer_result = await namer.generate(
         intent=query,
         working=working,
@@ -375,13 +387,7 @@ async def _run_suggest_places_impl(
     )
     proposed: list[CandidateName] = namer_result.candidates
     if not proposed:
-        _record(
-            "namer_empty",
-            "Nothing specific came to mind for that here — try a "
-            "different angle and I'll have another go.",
-            phase="name",
-            started=name_started,
-        )
+        _finish("nothing specific came to mind here", kind="namer_empty")
         return _build_command(
             state=state,
             tool_call_id=tool_call_id,
@@ -389,21 +395,10 @@ async def _run_suggest_places_impl(
             steps=steps,
         )
 
-    preview = ", ".join(c.name for c in proposed[:3])
-    extra = "" if len(proposed) <= 3 else " (and a few more)"
-    _record(
-        "brainstorm",
-        f"A few names came to mind — {preview}{extra}. Let me see "
-        f"which ones are actually near you.",
-        phase="name",
-        started=name_started,
-    )
+    preview = ", ".join(c.name for c in proposed[:2])
+    extra = "" if len(proposed) <= 2 else f", +{len(proposed) - 2} more"
+    _trace("brainstorm", f"a few ideas — {preview}{extra}")
 
-    # Verify phase (provider latency): skeleton while we check which names
-    # are real and actually near the user.
-    verify_started = emit_step_active(
-        f"{base_id}.verify", f"{_TOOL_NAME}.verify", source="agent"
-    )
     place_loc = _build_location_context(working)
     validated = await _validate_candidates(
         places_search_factory=places_search_factory,
@@ -412,13 +407,7 @@ async def _run_suggest_places_impl(
         concurrency=concurrency,
     )
     if not validated:
-        _record(
-            "no_provider_hits",
-            "Those names didn't turn up anywhere right near you — let's "
-            "try a wider angle.",
-            phase="verify",
-            started=verify_started,
-        )
+        _finish("none of those turned up near you", kind="no_provider_hits")
         return _build_command(
             state=state,
             tool_call_id=tool_call_id,
@@ -433,14 +422,7 @@ async def _run_suggest_places_impl(
     dropped = len(validated) - len(filtered)
 
     if not filtered:
-        constraint_note = " (none fit your requirements)" if tags else ""
-        _record(
-            "constraints_drop",
-            f"Found a few real spots but nothing matched what you're "
-            f"after{constraint_note} — want me to relax something?",
-            phase="verify",
-            started=verify_started,
-        )
+        _finish(NONE_FIT, kind="constraints_drop")
         return _build_command(
             state=state,
             tool_call_id=tool_call_id,
@@ -449,17 +431,8 @@ async def _run_suggest_places_impl(
         )
 
     final = filtered[:limit]
-    final_names = ", ".join(place.place_name for place, _ in final)
-    plural = "" if len(final) == 1 else "s"
-    constraint_tail = (
-        f" ({dropped} didn't fit your requirements)" if dropped and tags else ""
-    )
-    _record(
-        "summary",
-        f"Found {len(final)} option{plural}: {final_names}{constraint_tail}.",
-        phase="verify",
-        started=verify_started,
-    )
+    final_names = [place.place_name for place, _ in final]
+    _finish(found_summary(final_names, dropped=dropped if tags else 0))
 
     candidates = [
         ConsultCandidate(

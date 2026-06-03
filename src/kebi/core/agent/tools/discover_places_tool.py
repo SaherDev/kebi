@@ -69,6 +69,12 @@ from kebi.core.agent.tools._search_args import (
     QUERY_DESC,
     TAGS_DESC,
 )
+from kebi.core.agent.tools._summaries import (
+    NEED_LOCATION,
+    NONE_FIT,
+    TITLES,
+    found_summary,
+)
 from kebi.core.agent.tools._with_timeout import tool_step_base_id, with_timeout
 from kebi.core.agent.tools.consult_models import ConsultCandidate, ConsultResult
 from kebi.core.config import get_config
@@ -139,12 +145,16 @@ def _location_label(working: WorkingLocation) -> str:
 
 
 def _make_step(step_id: str, summary: str) -> ReasoningStep:
-    """Build a user-visible reasoning step from this tool's namespace."""
+    """Build a debug-only internal narration step from this tool's namespace.
+
+    User-facing output is the single `base_id` outcome row (ADR-103); these
+    phase steps ride the stream as `debug` for tracing only.
+    """
     return ReasoningStep(
         step=f"{_TOOL_NAME}.{step_id}",
         summary=summary,
         source="agent",
-        visibility="user",
+        visibility="debug",
         duration_ms=0.0,
     )
 
@@ -275,36 +285,44 @@ async def _run_discover_places_impl(
     """
     steps: list[ReasoningStep] = []
     base_id = tool_step_base_id(_TOOL_NAME, state)
+    # One user-visible row for the whole call (ADR-103): a single skeleton now,
+    # filled with the outcome by `_finish` below. The skeleton spans the
+    # provider latency, so no per-phase user steps. Internal narration rides as
+    # debug for tracing.
+    outcome_started = emit_step_active(
+        base_id, _TOOL_NAME, title=TITLES[_TOOL_NAME], source="agent"
+    )
 
-    def _record(
-        step_id: str,
-        summary: str,
-        *,
-        phase: str | None = None,
-        started: float | None = None,
-    ) -> None:
-        """Append a phase step and stream its SSE `done` frame (ADR-102).
-
-        `phase` pairs the `done` with an earlier `emit_step_active` emitted
-        before the provider call so the frontend shows a skeleton while that
-        work runs; pass that call's `started` token for the measured duration.
-        Instant steps (no `phase`) emit their own adjacent `active` first to
-        satisfy the lifecycle contract and time themselves.
-        """
+    def _trace(step_id: str, summary: str) -> None:
+        """Emit a debug-only internal narration step (tracing, not a user row)."""
         step = _make_step(step_id, summary)
-        sid = f"{base_id}.{phase or step_id}"
-        if phase is None:
-            started = emit_step_active(sid, step.step, source="agent")
+        sid = f"{base_id}.{step_id}"
+        started = emit_step_active(
+            sid, step.step, title="", source="agent", visibility="debug"
+        )
         emit_step_done(sid, step, started=started)
+        steps.append(step)
+
+    def _finish(summary: str, *, kind: str = "summary") -> None:
+        """Emit the single user-visible outcome row under `base_id`.
+
+        `kind` names the outcome (summary / no_location / no_match / …) as the
+        machine `step` id; the user only ever sees the shared title + summary.
+        """
+        step = ReasoningStep(
+            step=f"{_TOOL_NAME}.{kind}",
+            title=TITLES[_TOOL_NAME],
+            summary=summary,
+            source="agent",
+            visibility="user",
+            duration_ms=0.0,
+        )
+        emit_step_done(base_id, step, started=outcome_started)
         steps.append(step)
 
     working = _maybe_working_location(state)
     if not _is_anchored(working):
-        _record(
-            "no_location",
-            "I'd need to know roughly where you are first — share a "
-            "location or name a place and I can take another look.",
-        )
+        _finish(NEED_LOCATION, kind="no_location")
         return _build_command(
             state=state,
             tool_call_id=tool_call_id,
@@ -317,12 +335,8 @@ async def _run_discover_places_impl(
     # suggest_places) so this fallback can't reintroduce a far result.
     working = clamp_to_walkable_for_utility(working, categories, get_config().movement)
     location_label = _location_label(working)
-    _record("start", f"Checking the area around {location_label}.")
+    _trace("start", f"checking around {location_label}")
 
-    # Search phase (provider latency): skeleton while the provider is queried.
-    search_started = emit_step_active(
-        f"{base_id}.search", f"{_TOOL_NAME}.search", source="agent"
-    )
     place_loc = _build_location_context(working)
     place_query = PlaceQuery(
         place_names=[query] if query else None,
@@ -336,13 +350,7 @@ async def _run_discover_places_impl(
             hits = await svc.find(place_query, limit=limit)
     except Exception as exc:
         logger.warning("discover_places provider lookup failed: %s", exc, exc_info=True)
-        _record(
-            "provider_error",
-            "The place search hit an error — try again in a moment or "
-            "narrow what you're after.",
-            phase="search",
-            started=search_started,
-        )
+        _finish("place search hit an error", kind="provider_error")
         return _build_command(
             state=state,
             tool_call_id=tool_call_id,
@@ -353,13 +361,7 @@ async def _run_discover_places_impl(
     venues = drop_geographic_features(hits)
 
     if not venues:
-        _record(
-            "no_match",
-            "Nothing around here matched that — want to widen the area "
-            "or try a different angle?",
-            phase="search",
-            started=search_started,
-        )
+        _finish("nothing nearby matched that", kind="no_match")
         return _build_command(
             state=state,
             tool_call_id=tool_call_id,
@@ -372,14 +374,7 @@ async def _run_discover_places_impl(
     dropped = len(venues) - len(filtered)
 
     if not filtered:
-        constraint_note = " (none fit your requirements)" if required else ""
-        _record(
-            "constraints_drop",
-            f"Found a few real spots but nothing matched what you're "
-            f"after{constraint_note} — want me to relax something?",
-            phase="search",
-            started=search_started,
-        )
+        _finish(NONE_FIT, kind="constraints_drop")
         return _build_command(
             state=state,
             tool_call_id=tool_call_id,
@@ -388,17 +383,8 @@ async def _run_discover_places_impl(
         )
 
     final_objs = filtered[:limit]
-    final_names = ", ".join(p.place_name for p in final_objs)
-    plural = "" if len(final_objs) == 1 else "s"
-    constraint_tail = (
-        f" ({dropped} didn't fit your requirements)" if dropped and required else ""
-    )
-    _record(
-        "summary",
-        f"Found {len(final_objs)} option{plural}: {final_names}{constraint_tail}.",
-        phase="search",
-        started=search_started,
-    )
+    final_names = [p.place_name for p in final_objs]
+    _finish(found_summary(final_names, dropped=dropped if required else 0))
 
     candidates = [
         ConsultCandidate(

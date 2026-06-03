@@ -458,14 +458,21 @@ async def test_happy_path_returns_suggested_candidates_with_reasons() -> None:
         "seasonal Thai, vegetarian set",
     ]
 
-    # Reasoning steps walk all four phases in order.
-    step_ids = [s.step for s in cmd.update["reasoning_steps"]]
+    # Internal phases stream for tracing, in order; the user sees one row.
+    steps = cmd.update["reasoning_steps"]
+    step_ids = [s.step for s in steps]
     assert step_ids == [
         "suggest_places.locate",
         "suggest_places.brainstorm",
         "suggest_places.summary",
     ]
-    summary = cmd.update["reasoning_steps"][-1].summary
+    # Collapsed to one user-visible row (ADR-103): locate/brainstorm are debug,
+    # the outcome is the single user row carrying the tool's action title.
+    user_steps = [s for s in steps if s.visibility == "user"]
+    assert len(user_steps) == 1
+    assert user_steps[0].step == "suggest_places.summary"
+    assert user_steps[0].title == "suggested a few spots"
+    summary = user_steps[0].summary
     assert "Gaa" in summary and "Bo.Lan" in summary
 
 

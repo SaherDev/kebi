@@ -103,16 +103,20 @@ async def chat_stream(
     Frame format (text/event-stream). Each reasoning step is streamed twice
     over its lifecycle (ADR-102), keyed by a stable `id`: an `active` frame
     when it starts (`summary`/`duration_ms` null → the client shows a
-    skeleton) then a `done` frame when it completes (same `id`, filled in):
+    skeleton) then a `done` frame when it completes (same `id`, filled in).
+    Each step carries two human fields (ADR-103): `title` is the bold action
+    line (same on both frames), `summary` is the result line under it (null
+    on `active`, filled on `done`):
       event: reasoning_step
-      data: {"id":"find_saved#0","step":"find_saved","summary":null,
-             "status":"active","source":"agent","visibility":"user",
-             "duration_ms":null}
+      data: {"id":"find_saved#0","step":"find_saved","title":"searched your
+             saved spots","summary":null,"status":"active","source":"agent",
+             "visibility":"user","duration_ms":null}
 
       event: reasoning_step
-      data: {"id":"find_saved#0","step":"find_saved.summary",
-             "summary":"Found 2 saved spots — …","status":"done",
-             "source":"agent","visibility":"user","duration_ms":420.0}
+      data: {"id":"find_saved#0","step":"find_saved.summary","title":"searched
+             your saved spots","summary":"2 spots — Wagyu, Beef Tei",
+             "status":"done","source":"agent","visibility":"user",
+             "duration_ms":420.0}
 
       event: message
       data: {"content": "<final assistant text>"}

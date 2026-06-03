@@ -326,9 +326,16 @@ async def test_happy_path_returns_discovered_candidates() -> None:
     names = [c.place.place_name for c in payload.candidates]
     assert names == ["Boots Pharmacy", "Watson's"]
 
-    step_ids = [s.step for s in cmd.update["reasoning_steps"]]
+    steps = cmd.update["reasoning_steps"]
+    step_ids = [s.step for s in steps]
     assert step_ids == ["discover_places.start", "discover_places.summary"]
-    summary = cmd.update["reasoning_steps"][-1].summary
+    # Collapsed to one user-visible row (ADR-103): the "start" phase is debug,
+    # the outcome is the single user row carrying the tool's action title.
+    user_steps = [s for s in steps if s.visibility == "user"]
+    assert len(user_steps) == 1
+    assert user_steps[0].step == "discover_places.summary"
+    assert user_steps[0].title == "searched nearby"
+    summary = user_steps[0].summary
     assert "Boots Pharmacy" in summary and "Watson's" in summary
 
 
