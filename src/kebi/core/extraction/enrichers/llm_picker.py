@@ -93,9 +93,15 @@ class _PickedPlace(BaseModel):
         default_factory=list,
         max_length=3,
         description=(
-            "1-3 PlaceCategory values, most-specific first. Empty only "
-            "if the candidate has no obvious category and the post text "
-            "gives no hint."
+            "1-3 PlaceCategory values, most-specific first. Derive them from "
+            "the venue's OWN identity — its name plus the post — and pick the "
+            "most specific fit; never just echo a generic search label. "
+            "Examples: a name ending in 'Beach' -> beach; a 'Wat'/temple/Buddha "
+            "site -> temple (or shrine); a shopping mall or department store -> "
+            "shopping_mall; a named 'Viewpoint' -> viewpoint; a 'Market' -> the "
+            "matching *_market. Use `landmark` ONLY for a notable attraction "
+            "with no more specific category. Leave empty only when nothing in "
+            "the vocabulary fits (e.g. a whole town, island, or region)."
         ),
     )
     tags: list[_LLMTag] = Field(default_factory=list)
