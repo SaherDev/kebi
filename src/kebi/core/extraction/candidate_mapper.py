@@ -230,7 +230,12 @@ def reconcile_picks(
             ValidatedCandidate(
                 place_name=place.place_name,
                 provider_id=place.provider_id or pick.provider_id,
-                categories=pick.categories,
+                # The picker's categories win, but it's told to emit none when a
+                # candidate has no obvious category — which blanks places Google
+                # did classify (e.g. a temple → `temple`). Fall back to the v2
+                # PlaceObject's Google-mapped categories so those don't end up
+                # uncategorised. Both are already strict PlaceCategory values.
+                categories=pick.categories or place.categories,
                 tags=pick.tags,
                 confidence=confidence,
                 evidence=evidence,

@@ -198,3 +198,60 @@ def test_reconcile_source_label_none_when_normalized_equal() -> None:
     )
     assert len(out) == 1
     assert out[0].source_label is None
+
+
+# ---------------------------------------------------------------------------
+# reconcile_picks category fallback — picker-empty must not blank a place that
+# Google classified (otherwise the product app shows a generic pin avatar).
+# ---------------------------------------------------------------------------
+
+
+def _search_set_with_categories(
+    canonical: str, categories: list[PlaceCategory]
+) -> dict[str, AttributedSearchResult]:
+    return {
+        "google:x": AttributedSearchResult(
+            place=PlaceObject(
+                provider_id="google:x", place_name=canonical, categories=categories
+            ),
+            query=canonical,
+            query_producer=Producer.VISION_FRAMES,
+            query_medium=Medium.FRAME,
+        )
+    }
+
+
+def _vc_categories(categories: list[PlaceCategory]) -> ValidatedCandidate:
+    return ValidatedCandidate(
+        place_name="ignored — reconcile sources it from the search hit",
+        provider_id="google:x",
+        categories=categories,
+        tags=[],
+        confidence=0.0,
+        evidence=[Evidence(Producer.LLM_NER, Medium.CAPTION)],
+    )
+
+
+def test_reconcile_falls_back_to_google_categories_when_picker_empty() -> None:
+    """The picker emits no categories for an "obvious" place (e.g. a temple);
+    reconcile keeps the v2 PlaceObject's Google-mapped categories rather than
+    blanking them."""
+    out = reconcile_picks(
+        [_vc_categories([])],
+        _search_set_with_categories("Wat Phra Yai", [PlaceCategory.temple]),
+        ConfidenceConfig(),
+        ExtractionContext(url=None, user_id="u1"),
+    )
+    assert len(out) == 1
+    assert out[0].categories == [PlaceCategory.temple]
+
+
+def test_reconcile_keeps_picker_categories_when_present() -> None:
+    """A non-empty picker classification still wins over Google's."""
+    out = reconcile_picks(
+        [_vc_categories([PlaceCategory.cafe])],
+        _search_set_with_categories("X", [PlaceCategory.landmark]),
+        ConfidenceConfig(),
+        ExtractionContext(url=None, user_id="u1"),
+    )
+    assert out[0].categories == [PlaceCategory.cafe]
