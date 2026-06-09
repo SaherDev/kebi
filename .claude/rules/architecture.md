@@ -50,6 +50,7 @@ All LLM and embedding calls go through the provider abstraction layer.
 ## Coding Constraints
 
 - **Pydantic for all boundaries**: Function inputs/outputs that cross module boundaries use Pydantic models. No raw dicts.
+- **Responses are explicit DTOs (ADR-105)**: Every route returns a response model that names exactly the fields that leave the service — never a domain/persistence model serialized directly. A field is exposed only by being declared on the response model; never echo the caller's identity. Applies to all `/v1` endpoints.
 - **No hardcoded model names**: Always read from config.
 - **No `.env` files**: Secrets via environment variables. Non-secret config in `config/*.yaml`.
 - **FastAPI routes under `/v1/`**: All endpoints are versioned.
