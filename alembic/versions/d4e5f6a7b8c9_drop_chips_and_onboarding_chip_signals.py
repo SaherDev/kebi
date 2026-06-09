@@ -35,9 +35,16 @@ depends_on: Union[str, Sequence[str], None] = None
 def upgrade() -> None:
     # 1. Purge rows whose type is being removed (safe — these were never
     #    consumed by signal aggregation).
+    #    Compare `type::text`, not the enum directly: on a fresh DB the whole
+    #    migration chain replays in one transaction, and the enum value
+    #    'chip_confirm' was ADDED by an earlier migration in that same
+    #    transaction — Postgres forbids using a newly-added enum value before
+    #    commit ("unsafe use of new value"). Casting to text compares plain
+    #    string literals and sidesteps that check.
     op.execute(
         "DELETE FROM interactions "
-        "WHERE type IN ('onboarding_confirm','onboarding_dismiss','chip_confirm')"
+        "WHERE type::text IN "
+        "('onboarding_confirm','onboarding_dismiss','chip_confirm')"
     )
 
     # 2. Rebuild interactiontype enum without the removed values.
