@@ -34,43 +34,39 @@ embedder.
 
 from __future__ import annotations
 
-import json
 import logging
-from collections.abc import Mapping
 from datetime import datetime
 from typing import Any
 
 from pgvector.sqlalchemy import Vector  # type: ignore[import-untyped]
 from sqlalchemy import (
-    Boolean,
     Column,
     ColumnElement,
     DateTime,
-    Float,
     MetaData,
+    RowMapping,
     String,
     Table,
-    Text,
     and_,
-    cast,
     func,
     null,
     select,
 )
-from sqlalchemy.dialects.postgresql import ARRAY, JSONB, TSVECTOR
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ._place_utils import escape_like
+from ._place_filters import (
+    _p,
+    _PlacesTable,
+    _up,
+    _UserPlacesTable,
+    build_filter_conditions,
+    row_to_place_core,
+)
 from .embeddings_repo import EMBEDDING_DIMENSIONS
 from .models import (
     HybridSearchFilters,
     HybridSearchHit,
-    LocationContext,
-    PlaceCategory,
-    PlaceCore,
-    PlaceNameAlias,
     PlaceSource,
-    PlaceTag,
     UserPlace,
 )
 
@@ -78,29 +74,12 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Local Table references — typed columns for native query building.
-# Each repo defines its own per the v2 pattern (places_repo,
-# user_places_repo, embeddings_repo). search_vector is only declared
-# here because this is the repo that consumes it.
+# Local Table reference — only the embeddings table is search-specific. The
+# places ⋈ user_places tables and their filter/row helpers are shared via
+# `_place_filters` (imported above) so the join logic lives in one place.
 # ---------------------------------------------------------------------------
 
 _metadata = MetaData()
-
-_PlacesTable = Table(
-    "places",
-    _metadata,
-    Column("id", String),
-    Column("provider_id", String),
-    Column("place_name", String),
-    Column("place_name_aliases", JSONB),
-    Column("categories", ARRAY(String)),
-    Column("tags", JSONB),
-    Column("location", JSONB),
-    Column("created_at", DateTime(timezone=True)),
-    Column("refreshed_at", DateTime(timezone=True)),
-    Column("search_vector", TSVECTOR),
-)
-_p = _PlacesTable.c
 
 _PlaceEmbeddingsTable = Table(
     "place_embeddings",
@@ -113,23 +92,6 @@ _PlaceEmbeddingsTable = Table(
     Column("created_at", DateTime(timezone=True)),
 )
 _e = _PlaceEmbeddingsTable.c
-
-_UserPlacesTable = Table(
-    "user_places",
-    _metadata,
-    Column("user_place_id", String),
-    Column("user_id", String),
-    Column("place_id", String),
-    Column("approved", Boolean),
-    Column("visited", Boolean),
-    Column("liked", Boolean),
-    Column("note", Text),
-    Column("source", String),
-    Column("source_ref", Text),
-    Column("saved_at", DateTime(timezone=True)),
-    Column("visited_at", DateTime(timezone=True)),
-)
-_up = _UserPlacesTable.c
 
 
 _TS_CONFIG = "simple_unaccent"  # custom config from the FTS migration
@@ -166,9 +128,7 @@ class HybridSearchRepo:
                 func.row_number().over(order_by=cosine_dist).label("rank"),
             )
             .select_from(
-                _PlaceEmbeddingsTable.join(
-                    filtered, filtered.c.place_id == _e.place_id
-                )
+                _PlaceEmbeddingsTable.join(filtered, filtered.c.place_id == _e.place_id)
             )
             .order_by(cosine_dist)
             .limit(candidate_limit)
@@ -185,9 +145,7 @@ class HybridSearchRepo:
                 _p.id.label("place_id"),
                 func.row_number().over(order_by=text_rank.desc()).label("rank"),
             )
-            .select_from(
-                _PlacesTable.join(filtered, filtered.c.place_id == _p.id)
-            )
+            .select_from(_PlacesTable.join(filtered, filtered.c.place_id == _p.id))
             .where(_p.search_vector.op("@@")(tsq))
             .order_by(text_rank.desc())
             .limit(candidate_limit)
@@ -239,9 +197,9 @@ class HybridSearchRepo:
                 fused.c.text_rank,
             )
             .select_from(
-                fused
-                .join(_PlacesTable, _p.id == fused.c.place_id)
-                .join(filtered, filtered.c.place_id == fused.c.place_id)
+                fused.join(_PlacesTable, _p.id == fused.c.place_id).join(
+                    filtered, filtered.c.place_id == fused.c.place_id
+                )
             )
             .order_by(fused.c.rrf_score.desc())
             .limit(limit)
@@ -267,13 +225,11 @@ class HybridSearchRepo:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _build_scoped_filtered_cte(
-        user_id: str, filters: HybridSearchFilters
-    ) -> Any:
+    def _build_scoped_filtered_cte(user_id: str, filters: HybridSearchFilters) -> Any:
         """places ⋈ user_places, scoped + deduped on place_id."""
         conditions: list[ColumnElement[bool]] = [
             _up.user_id == user_id,
-            *_filter_conditions(filters),
+            *build_filter_conditions(filters),
         ]
         return (
             select(
@@ -290,11 +246,7 @@ class HybridSearchRepo:
                 _up.visited_at,
             )
             .distinct(_p.id)  # DISTINCT ON (place_id) — collapse duplicates
-            .select_from(
-                _PlacesTable.join(
-                    _UserPlacesTable, _up.place_id == _p.id
-                )
-            )
+            .select_from(_PlacesTable.join(_UserPlacesTable, _up.place_id == _p.id))
             .where(and_(*conditions))
             .order_by(_p.id, _up.saved_at.desc())  # keep most recent save
             .cte("filtered")
@@ -323,7 +275,7 @@ class HybridSearchRepo:
                 null().label("saved_at"),
                 null().label("visited_at"),
             )
-            .where(and_(*_filter_conditions(filters)))
+            .where(and_(*build_filter_conditions(filters)))
             .cte("filtered")
         )
 
@@ -334,6 +286,7 @@ class HybridSearchRepo:
 
 
 _USER_SIDE_FILTER_FIELDS = (
+    "source",
     "visited",
     "liked",
     "approved",
@@ -349,8 +302,7 @@ def _reject_user_side_filters(filters: HybridSearchFilters) -> None:
     ("why didn't visited=True filter anything?"). Raise at the door.
     """
     set_fields = [
-        f for f in _USER_SIDE_FILTER_FIELDS
-        if getattr(filters, f) is not None
+        f for f in _USER_SIDE_FILTER_FIELDS if getattr(filters, f) is not None
     ]
     if set_fields:
         raise ValueError(
@@ -359,121 +311,13 @@ def _reject_user_side_filters(filters: HybridSearchFilters) -> None:
         )
 
 
-def _filter_conditions(
-    filters: HybridSearchFilters,
-) -> list[ColumnElement[bool]]:
-    """Build WHERE conditions from a HybridSearchFilters.
-
-    Place-side conditions reference _p; user-side reference _up. Caller
-    prepends the `user_id == user_id` condition; this function emits
-    only the optional filter set.
-    """
-    conditions: list[ColumnElement[bool]] = []
-
-    # ---- place catalog ----
-    if filters.categories:
-        # Array overlap: a place matches if its categories list shares any
-        # element with the filter's category set (OR semantics).
-        # NB: cast as ARRAY(Text), not ARRAY(String) — Postgres column is
-        # text[]; varchar[] mismatches and triggers
-        # "operator does not exist: text[] && character varying[]".
-        conditions.append(
-            _p.categories.op("&&")(
-                cast([c.value for c in filters.categories], ARRAY(Text))
-            )
-        )
-
-    if filters.tags:
-        # AND semantics: every requested tag value must be present.
-        # Pre-stringify the JSONB literal because cast() expects a
-        # primitive bind value.
-        for tag_val in filters.tags:
-            conditions.append(
-                _p.tags.op("@>")(
-                    cast(json.dumps([{"value": tag_val}]), JSONB)
-                )
-            )
-
-    if filters.city:
-        conditions.append(
-            _p.location["city"].astext.ilike(
-                f"%{escape_like(filters.city)}%", escape="\\"
-            )
-        )
-
-    if filters.neighborhood:
-        conditions.append(
-            _p.location["neighborhood"].astext.ilike(
-                f"%{escape_like(filters.neighborhood)}%", escape="\\"
-            )
-        )
-
-    if filters.country:
-        conditions.append(_p.location["country"].astext == filters.country)
-
-    if (
-        filters.lat is not None
-        and filters.lng is not None
-        and filters.radius_m is not None
-    ):
-        geo_lat = cast(_p.location["lat"].astext, Float())
-        geo_lng = cast(_p.location["lng"].astext, Float())
-        query_box = func.earth_box(
-            func.ll_to_earth(filters.lat, filters.lng), float(filters.radius_m)
-        )
-        conditions.extend(
-            [
-                _p.location.isnot(None),
-                _p.location["lat"].astext.isnot(None),
-                _p.location["lng"].astext.isnot(None),
-                query_box.op("@>")(func.ll_to_earth(geo_lat, geo_lng)),
-            ]
-        )
-
-    # ---- user_places ----
-    if filters.visited is not None:
-        conditions.append(_up.visited == filters.visited)
-
-    if filters.liked is not None:
-        conditions.append(_up.liked == filters.liked)
-
-    if filters.approved is not None:
-        conditions.append(_up.approved == filters.approved)
-
-    if filters.saved_after is not None:
-        conditions.append(_up.saved_at >= filters.saved_after)
-
-    if filters.saved_before is not None:
-        conditions.append(_up.saved_at <= filters.saved_before)
-
-    return conditions
-
-
 # ---------------------------------------------------------------------------
 # Row → HybridSearchHit
 # ---------------------------------------------------------------------------
 
 
-def _row_to_hit(row: Mapping[str, Any]) -> HybridSearchHit:
-    tags = [PlaceTag.model_validate(t) for t in (row.get("tags") or [])]
-    aliases = [
-        PlaceNameAlias.model_validate(a)
-        for a in (row.get("place_name_aliases") or [])
-    ]
-    loc_raw = row.get("location")
-    location = LocationContext.model_validate(loc_raw) if loc_raw else None
-
-    place = PlaceCore(
-        id=row.get("id"),
-        provider_id=row.get("provider_id"),
-        place_name=row["place_name"],
-        place_name_aliases=aliases,
-        categories=[PlaceCategory(c) for c in (row.get("categories") or [])],
-        tags=tags,
-        location=location,
-        created_at=_to_datetime(row.get("created_at")),
-        refreshed_at=_to_datetime(row.get("refreshed_at")),
-    )
+def _row_to_hit(row: RowMapping) -> HybridSearchHit:
+    place = row_to_place_core(row)
 
     # user_data is None on rows produced by the unscoped CTE (it pads
     # the user_places columns with NULL). user_place_id is the cheapest

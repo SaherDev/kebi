@@ -592,14 +592,10 @@ def get_search_service_factory(
 
 
 def get_user_places_service(
-    places_repo: PlacesRepo = Depends(get_places_repo),  # noqa: B008
     user_places_repo: UserPlacesRepo = Depends(get_user_places_repo),  # noqa: B008
 ) -> UserPlacesService:
     """FastAPI dependency providing UserPlacesService (places)."""
-    return UserPlacesService(
-        places_repo=places_repo,
-        user_places_repo=user_places_repo,
-    )
+    return UserPlacesService(user_places_repo=user_places_repo)
 
 
 # ---------------------------------------------------------------------------
@@ -678,9 +674,7 @@ _object_storage: ObjectStorageProtocol | None = None
 def _build_object_storage() -> ObjectStorageProtocol:
     env = get_env()
     if not (
-        env.BUCKET_NAME
-        and env.BUCKET_ACCESS_KEY_ID
-        and env.BUCKET_SECRET_ACCESS_KEY
+        env.BUCKET_NAME and env.BUCKET_ACCESS_KEY_ID and env.BUCKET_SECRET_ACCESS_KEY
     ):
         return NullObjectStorage()
     return S3ObjectStorage(

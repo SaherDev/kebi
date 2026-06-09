@@ -23,6 +23,7 @@ from .models import (
     PlaceQuery,
     PlaceSource,
     PlaceTag,
+    SavedPlaceFilters,
     SavedPlaceView,
     UserPlace,
 )
@@ -92,6 +93,7 @@ __all__ = [
     "PlaceQuery",
     "PlaceSource",
     "PlaceTag",
+    "SavedPlaceFilters",
     "SavedPlaceView",
     "UserPlace",
     # protocols

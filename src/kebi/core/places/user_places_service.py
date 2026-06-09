@@ -1,19 +1,20 @@
-"""UserPlacesService — combines user_places + places repos."""
+"""UserPlacesService — write + read operations over a user's saved places."""
 
 from __future__ import annotations
 
-import logging
 import uuid
 from collections.abc import Mapping
 from datetime import UTC, datetime
 
-from .models import PlaceCore, PlaceSource, SavedPlaceView, UserPlace
-from .protocols import (
-    PlacesRepoProtocol,
-    UserPlacesRepoProtocol,
+from ._cursor import LibraryCursor
+from .models import (
+    PlaceCore,
+    PlaceSource,
+    SavedPlaceFilters,
+    SavedPlaceView,
+    UserPlace,
 )
-
-logger = logging.getLogger(__name__)
+from .protocols import UserPlacesRepoProtocol
 
 
 class DuplicateUserPlaceError(Exception):
@@ -31,10 +32,8 @@ class DuplicateUserPlaceError(Exception):
 class UserPlacesService:
     def __init__(
         self,
-        places_repo: PlacesRepoProtocol,
         user_places_repo: UserPlacesRepoProtocol,
     ) -> None:
-        self._places_repo = places_repo
         self._user_places_repo = user_places_repo
 
     async def save_places(
@@ -97,28 +96,37 @@ class UserPlacesService:
         ]
         return await self._user_places_repo.save_user_places(rows)
 
-    async def get_user_places(self, user_id: str) -> list[SavedPlaceView]:
-        """Two reads: user_places → places. Zero writes."""
-        user_places = await self._user_places_repo.get_by_user(user_id)
-        if not user_places:
-            return []
+    async def browse(
+        self,
+        user_id: str,
+        filters: SavedPlaceFilters,
+        limit: int,
+        cursor: str | None = None,
+    ) -> tuple[list[SavedPlaceView], str | None]:
+        """One filtered, keyset-paged page of the user's saved places.
 
-        place_ids = [up.place_id for up in user_places]
-        cores = await self._places_repo.get_by_ids(place_ids)
-        cores_by_id = {c.id: c for c in cores if c.id}
+        The opaque `cursor` token is owned end-to-end here: this is the only
+        boundary that decodes the incoming token and encodes the outgoing
+        `next_cursor` (see `LibraryCursor`); callers pass and receive opaque
+        strings. A malformed token raises `ValueError`.
 
-        result: list[SavedPlaceView] = []
-        for up in user_places:
-            core = cores_by_id.get(up.place_id)
-            if core is None:
-                logger.warning(
-                    "user_place_missing_core",
-                    extra={"place_id": up.place_id, "user_id": user_id},
-                )
-                continue
-            result.append(SavedPlaceView(place=core, user_data=up))
-
-        return result
+        Single read — the repo JOINs `user_places ⋈ places` and returns the
+        combined `SavedPlaceView` directly; a saved place whose catalog row is
+        missing is simply excluded by the inner join. Fetches `limit + 1` to
+        detect a next page without a separate count: more than `limit` rows
+        means another page, whose cursor is the last kept row's anchor;
+        otherwise the cursor is None and the client stops paging.
+        """
+        anchor = LibraryCursor.decode(cursor) if cursor else None
+        rows = await self._user_places_repo.browse(
+            user_id, filters, limit=limit + 1, cursor=anchor
+        )
+        has_more = len(rows) > limit
+        page = rows[:limit]
+        next_cursor = (
+            LibraryCursor.from_view(page[-1]).encode() if has_more and page else None
+        )
+        return page, next_cursor
 
     async def update_status(
         self,

@@ -1,0 +1,141 @@
+"""Tests for GET /v1/user/library (the Library browse endpoint)."""
+
+from __future__ import annotations
+
+from datetime import UTC, datetime
+from unittest.mock import AsyncMock
+
+import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+from kebi.api.deps import (
+    GatewayIdentity,
+    get_user_places_service,
+    require_gateway_identity,
+)
+from kebi.api.errors import register_error_handlers
+from kebi.api.routes.user import router as user_router
+from kebi.core.places import (
+    LocationContext,
+    PlaceCategory,
+    PlaceCore,
+    PlaceSource,
+    SavedPlaceView,
+    UserPlace,
+    UserPlacesService,
+)
+
+_TEST_USER_ID = "user_test_dummy_123456789012345"
+
+
+def _make_app(service: AsyncMock) -> TestClient:
+    app = FastAPI()
+    register_error_handlers(app)  # wires ValueError → 400 + X-Request-Id
+    app.include_router(user_router, prefix="/v1")
+    app.dependency_overrides[get_user_places_service] = lambda: service
+    app.dependency_overrides[require_gateway_identity] = lambda: GatewayIdentity(
+        user_id=_TEST_USER_ID
+    )
+    return TestClient(app)
+
+
+def _view(pid: str) -> SavedPlaceView:
+    return SavedPlaceView(
+        place=PlaceCore(id=pid, place_name=f"Place {pid}", location=LocationContext()),
+        user_data=UserPlace(
+            user_place_id=f"up-{pid}",
+            user_id=_TEST_USER_ID,
+            place_id=pid,
+            source=PlaceSource.manual,
+            saved_at=datetime(2026, 6, 9, tzinfo=UTC),
+        ),
+    )
+
+
+@pytest.fixture
+def svc() -> AsyncMock:
+    service = AsyncMock(spec=UserPlacesService)
+    service.browse = AsyncMock(return_value=([_view("p1")], "next-tok"))
+    return service
+
+
+def test_returns_places_and_next_cursor(svc: AsyncMock) -> None:
+    client = _make_app(svc)
+
+    resp = client.get("/v1/user/library")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert [p["place"]["id"] for p in body["places"]] == ["p1"]
+    assert body["next_cursor"] == "next-tok"
+
+    # user_id from the gateway identity; defaults: limit 50, no cursor.
+    args = svc.browse.await_args.args
+    kwargs = svc.browse.await_args.kwargs
+    assert args[0] == _TEST_USER_ID
+    assert args[2] == 50  # limit
+    assert kwargs["cursor"] is None
+
+
+def test_filters_and_paging_passed_through(svc: AsyncMock) -> None:
+    client = _make_app(svc)
+
+    resp = client.get(
+        "/v1/user/library",
+        params={
+            "category": "cafe",
+            "visited": "false",
+            "source": "tiktok",
+            "city": "Bangkok",
+            "limit": "10",
+            "cursor": "abc",
+        },
+    )
+
+    assert resp.status_code == 200
+    args = svc.browse.await_args.args
+    kwargs = svc.browse.await_args.kwargs
+    filters = args[1]
+    assert filters.categories == [PlaceCategory.cafe]
+    assert filters.visited is False
+    assert filters.source == PlaceSource.tiktok
+    assert filters.city == "Bangkok"
+    assert args[2] == 10  # limit
+    assert kwargs["cursor"] == "abc"
+
+
+def test_empty_library_returns_empty_state(svc: AsyncMock) -> None:
+    svc.browse = AsyncMock(return_value=([], None))
+    client = _make_app(svc)
+
+    resp = client.get("/v1/user/library")
+
+    assert resp.status_code == 200
+    assert resp.json() == {"places": [], "next_cursor": None}
+
+
+def test_unknown_query_param_rejected_422(svc: AsyncMock) -> None:
+    client = _make_app(svc)
+
+    resp = client.get("/v1/user/library", params={"bogus": "1"})
+
+    assert resp.status_code == 422
+
+
+def test_limit_over_cap_rejected_422(svc: AsyncMock) -> None:
+    client = _make_app(svc)
+
+    resp = client.get("/v1/user/library", params={"limit": "1000"})
+
+    assert resp.status_code == 422
+
+
+def test_malformed_cursor_returns_400(svc: AsyncMock) -> None:
+    # The service raises ValueError on a bad cursor; the shared handler → 400.
+    svc.browse = AsyncMock(side_effect=ValueError("invalid library cursor: '@@'"))
+    client = _make_app(svc)
+
+    resp = client.get("/v1/user/library", params={"cursor": "@@"})
+
+    assert resp.status_code == 400

@@ -17,6 +17,16 @@ Format:
 
 ---
 
+## ADR-104: The saved library is a first-class, keyset-paged browse endpoint
+
+**Date:** 2026-06-09\
+**Status:** accepted\
+**Context:** The product's Library screen needs to read a user's saved places, but the only server-side access to saves was the agent's internal recall tool — there was no product-facing catalog read, so saved places were reachable only as a side effect of a chat turn. A read existed in the data layer that returned a user's entire saved list at once with no filtering and no paging; fine for a small collection, wrong for a screen that must filter (by category, tag, place location, save source, visited/liked/approved, save-date range) and scroll a library that grows without bound. The places-side filter predicate and the saved ⋈ catalog join already existed for hybrid search, so a browse path should reuse them rather than grow a second copy.\
+**Decision:** Expose the saved library as its own product-facing read, scoped to the gateway-verified caller so a request can only ever return that user's saves. It is a *browse*, not a search — no relevance query — ordered newest-first and filtered by an AND-combined predicate shared with hybrid search (extended with the save-source filter). Paging is keyset (cursor), not offset: the page boundary anchors on a real row rather than a count, so concurrent new saves never skip or duplicate rows and depth stays cheap. Because a batch import stamps every row in it with one save-time, the cursor must tie-break on a stable per-save identity, not the timestamp alone. The cursor is opaque on the wire and owned in exactly one place — the service is the only boundary that encodes and decodes it; the surrounding layers pass the token through untouched. The curation flag does not filter by default: the library shows everything saved, and the client opts into a curated/needs-review split. With browse covering the filtered read, the old fetch-everything read and the now-unused dependency it carried were removed.\
+**Consequences:** The product gets one endpoint for the Library screen, with a stable empty-state contract (an empty page and a null cursor) the client can render against. The filter predicate now has a single home reused by both browse and search, so a new filter lands in both at once; adding the save-source filter to that shared predicate makes it available to hybrid search too, harmlessly. Keyset paging means the client pages by following the returned cursor and stops on null — there is no random page access by design, which suits an infinite-scroll surface. The endpoint is a new line in the cross-repo contract (a new route, its rate-limit bucket, and the page shape) and must be reflected in the product repo's copy.
+
+---
+
 ## ADR-103: Reasoning steps are two-line records of work — title + result, one row per tool
 
 **Date:** 2026-06-03\

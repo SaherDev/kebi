@@ -200,8 +200,8 @@ class LocationContext(BaseModel):
 
 class PlaceTag(BaseModel):
     type: TagType | str  # TagType for known types; plain str for LLM custom types
-    value: TagValue      # known enum value (CuisineTag, FeatureTag, …) or free-text str
-    source: str          # "google" | "llm" | "manual" | "tiktok" | ...
+    value: TagValue  # known enum value (CuisineTag, FeatureTag, …) or free-text str
+    source: str  # "google" | "llm" | "manual" | "tiktok" | ...
 
 
 class PlaceNameAlias(BaseModel):
@@ -214,7 +214,7 @@ class PlaceNameAlias(BaseModel):
     """
 
     value: str
-    source: str          # "tiktok" | "instagram" | "user" | "llm" | ...
+    source: str  # "tiktok" | "instagram" | "user" | "llm" | ...
 
 
 SortField = Literal["created_at", "refreshed_at", "place_name", "distance"]
@@ -230,7 +230,7 @@ class PlaceCatalogFilters(BaseModel):
     """
 
     categories: list[PlaceCategory] | None = None  # OR across values
-    tags: list[str] | None = None   # tag values; all must be present (AND)
+    tags: list[str] | None = None  # tag values; all must be present (AND)
 
 
 class PlaceQuery(PlaceCatalogFilters):
@@ -249,8 +249,8 @@ class PlaceQuery(PlaceCatalogFilters):
     """
 
     # DB filters — known-identity batch lookup (exact, OR across values)
-    ids: list[str] | None = None             # places.id exact match
-    provider_ids: list[str] | None = None    # namespaced provider_id exact match
+    ids: list[str] | None = None  # places.id exact match
+    provider_ids: list[str] | None = None  # namespaced provider_id exact match
 
     place_names: list[str] | None = None  # ILIKE any (OR); also drives text search
     location: LocationContext | None = None
@@ -267,7 +267,7 @@ class PlaceQuery(PlaceCatalogFilters):
     sort_desc: bool = True
 
     # client hints (ignored for DB queries)
-    open_now: bool | None = None     # only return currently open places
+    open_now: bool | None = None  # only return currently open places
 
     @model_validator(mode="after")
     def _validate_geo_location(self) -> PlaceQuery:
@@ -400,32 +400,33 @@ class SavedPlaceView(BaseModel):
     user_data: UserPlace
 
 
-class HybridSearchFilters(PlaceCatalogFilters):
-    """Filters applied identically to both legs of hybrid search.
+class SavedPlaceFilters(PlaceCatalogFilters):
+    """Predicate over a user's saved places ⋈ the place catalog.
 
-    All fields optional, combined with AND. The same filter set is joined
-    into both the vector and FTS CTEs so RRF fuses ranks computed within
-    the same constrained candidate pool.
+    All fields optional, combined with AND. Shared by every read that
+    filters the `places ⋈ user_places` join — hybrid search (which fuses
+    ranks within this constrained pool) and the library browse endpoint.
 
     Filters split across two tables:
       - place catalog (places): categories, tags, location, geo
-      - user_places:  visited, liked, approved, saved_at range
+      - user_places:  source, visited, liked, approved, saved_at range
 
     `categories` / `tags` inherited from `PlaceCatalogFilters`.
     """
 
     # ---- place catalog filters --------------------------------------
-    city: str | None = None               # ILIKE
-    neighborhood: str | None = None       # ILIKE
-    country: str | None = None            # exact
+    city: str | None = None  # ILIKE
+    neighborhood: str | None = None  # ILIKE
+    country: str | None = None  # exact
 
     lat: float | None = None
     lng: float | None = None
-    radius_m: int | None = None           # required if lat/lng set
+    radius_m: int | None = None  # required if lat/lng set
 
     # ---- user_places filters (tri-state booleans: omit for "any") ---
+    source: PlaceSource | None = None  # exact: where the save came from
     visited: bool | None = None
-    liked: bool | None = None             # NULL liked rows pass when None
+    liked: bool | None = None  # NULL liked rows pass when None
     approved: bool | None = None
 
     saved_after: datetime | None = None
@@ -434,7 +435,7 @@ class HybridSearchFilters(PlaceCatalogFilters):
     model_config = ConfigDict(extra="forbid")
 
     @model_validator(mode="after")
-    def _validate_geo(self) -> HybridSearchFilters:
+    def _validate_geo(self) -> SavedPlaceFilters:
         has_lat = self.lat is not None
         has_lng = self.lng is not None
         if has_lat != has_lng:
@@ -442,6 +443,15 @@ class HybridSearchFilters(PlaceCatalogFilters):
         if (has_lat or has_lng) and self.radius_m is None:
             raise ValueError("radius_m is required when lat/lng is provided")
         return self
+
+
+class HybridSearchFilters(SavedPlaceFilters):
+    """Filters applied identically to both legs of hybrid search.
+
+    The same filter set is joined into both the vector and FTS CTEs so
+    RRF fuses ranks computed within the same constrained candidate pool.
+    Inherits the full predicate from `SavedPlaceFilters` — no extra fields.
+    """
 
 
 class HybridSearchHit(BaseModel):

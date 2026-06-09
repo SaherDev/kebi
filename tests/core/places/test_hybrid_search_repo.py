@@ -17,10 +17,12 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from sqlalchemy.dialects import postgresql as pg_dialect
 
+from kebi.core.places._place_filters import (
+    build_filter_conditions as _filter_conditions,
+)
 from kebi.core.places.hybrid_search_repo import (
     _TS_CONFIG,
     HybridSearchRepo,
-    _filter_conditions,
     _row_to_hit,
 )
 from kebi.core.places.models import (
@@ -191,9 +193,7 @@ class TestFilterConditions:
         varying[]`. The fix is `ARRAY(Text)` so the rendered cast is
         `TEXT[]` and the && operator resolves cleanly.
         """
-        cond = _filter_conditions(
-            HybridSearchFilters(categories=[PlaceCategory.bar])
-        )
+        cond = _filter_conditions(HybridSearchFilters(categories=[PlaceCategory.bar]))
         sql = str(
             cond[0].compile(
                 dialect=pg_dialect.dialect(),
@@ -207,24 +207,18 @@ class TestFilterConditions:
         )
 
     def test_single_tag_uses_jsonb_containment(self) -> None:
-        cond = _filter_conditions(
-            HybridSearchFilters(tags=["italian"])
-        )
+        cond = _filter_conditions(HybridSearchFilters(tags=["italian"]))
         assert len(cond) == 1
         compiled = cond[0].compile(dialect=pg_dialect.dialect())
         assert "@>" in str(compiled)
         assert any("italian" in str(v) for v in compiled.params.values())
 
     def test_multiple_tags_each_get_own_condition(self) -> None:
-        cond = _filter_conditions(
-            HybridSearchFilters(tags=["italian", "cozy"])
-        )
+        cond = _filter_conditions(HybridSearchFilters(tags=["italian", "cozy"]))
         assert len(cond) == 2
 
     def test_tag_param_value_is_jsonb_array_string(self) -> None:
-        cond = _filter_conditions(
-            HybridSearchFilters(tags=["italian"])
-        )
+        cond = _filter_conditions(HybridSearchFilters(tags=["italian"]))
         compiled = cond[0].compile(dialect=pg_dialect.dialect())
         # The bound JSONB literal is the json.dumps of [{"value": "italian"}].
         expected = json.dumps([{"value": "italian"}])
@@ -261,8 +255,7 @@ class TestFilterConditions:
         # earth_box containment.
         assert len(cond) == 4
         joined = " ".join(
-            str(c.compile(compile_kwargs={"literal_binds": True}))
-            for c in cond
+            str(c.compile(compile_kwargs={"literal_binds": True})) for c in cond
         )
         assert "earth_box" in joined
         assert "ll_to_earth" in joined
@@ -372,8 +365,10 @@ class TestRowToHit:
     def test_location_parsed_when_present(self) -> None:
         row = _hit_row(
             location={
-                "lat": 35.6, "lng": 139.7,
-                "city": "Tokyo", "country": "Japan",
+                "lat": 35.6,
+                "lng": 139.7,
+                "city": "Tokyo",
+                "country": "Japan",
             },
         )
         hit = _row_to_hit(row)
@@ -651,8 +646,16 @@ def _unscoped_row(**overrides: Any) -> dict[str, Any]:
     """Row produced by the unscoped CTE — user_places columns are NULL."""
     row = _hit_row(**overrides)
     for key in (
-        "user_place_id", "user_id", "approved", "visited", "liked",
-        "note", "source", "source_ref", "saved_at", "visited_at",
+        "user_place_id",
+        "user_id",
+        "approved",
+        "visited",
+        "liked",
+        "note",
+        "source",
+        "source_ref",
+        "saved_at",
+        "visited_at",
     ):
         row[key] = None
     return row

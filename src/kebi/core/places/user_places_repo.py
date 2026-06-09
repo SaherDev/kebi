@@ -4,45 +4,32 @@ from __future__ import annotations
 
 import logging
 
-from sqlalchemy import (
-    Boolean,
-    Column,
-    DateTime,
-    MetaData,
-    String,
-    Table,
-    Text,
-    delete,
-    select,
-)
+from sqlalchemy import and_, delete, literal, select, tuple_
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .models import PlaceSource, UserPlace
+from ._cursor import LibraryCursor
+from ._place_filters import (
+    _p,
+    _PlacesTable,
+    _up,
+    _UserPlacesTable,
+    build_filter_conditions,
+    row_to_place_core,
+)
+from .models import (
+    PlaceSource,
+    SavedPlaceFilters,
+    SavedPlaceView,
+    UserPlace,
+)
 
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# Table reference — typed columns for native query building
-# ---------------------------------------------------------------------------
-_metadata = MetaData()
-_UserPlacesTable = Table(
-    "user_places",
-    _metadata,
-    Column("user_place_id", String),
-    Column("user_id", String),
-    Column("place_id", String),
-    Column("approved", Boolean),
-    Column("visited", Boolean),
-    Column("liked", Boolean),
-    Column("note", Text),
-    Column("source", String),
-    Column("source_ref", Text),
-    Column("source_label", Text),
-    Column("saved_at", DateTime(timezone=True)),
-    Column("visited_at", DateTime(timezone=True)),
-)
-_u = _UserPlacesTable.c
+# user_places columns — the canonical table ref + filter/row helpers live in
+# `_place_filters` (shared with hybrid_search_repo). `_u` is the short alias
+# this module's existing queries use.
+_u = _up
 
 
 class UserPlacesRepo:
@@ -57,6 +44,67 @@ class UserPlacesRepo:
         )
         result = await self._session.execute(stmt)
         return [_row_to_user_place(row._mapping) for row in result]
+
+    async def browse(
+        self,
+        user_id: str,
+        filters: SavedPlaceFilters,
+        limit: int,
+        cursor: LibraryCursor | None = None,
+    ) -> list[SavedPlaceView]:
+        """Browse the user's saved places ⋈ catalog, filtered + keyset-paged.
+
+        Ordered newest-first (`saved_at DESC, user_place_id DESC`). The
+        `user_place_id` tie-break is load-bearing: `save_places` stamps one
+        `saved_at` for an entire import batch, so paging on `saved_at` alone
+        would skip or repeat rows at a page boundary. `cursor` is the keyset
+        anchor of the previous page's last row; rows strictly *after* it (in
+        the DESC order) are returned.
+        """
+        conditions = [_up.user_id == user_id, *build_filter_conditions(filters)]
+        if cursor is not None:
+            conditions.append(
+                tuple_(_up.saved_at, _up.user_place_id)
+                < tuple_(literal(cursor.saved_at), literal(cursor.user_place_id))
+            )
+
+        stmt = (
+            select(
+                _p.id,
+                _p.provider_id,
+                _p.place_name,
+                _p.place_name_aliases,
+                _p.categories,
+                _p.tags,
+                _p.location,
+                _p.created_at,
+                _p.refreshed_at,
+                _up.user_place_id,
+                _up.user_id,
+                _up.place_id,
+                _up.approved,
+                _up.visited,
+                _up.liked,
+                _up.note,
+                _up.source,
+                _up.source_ref,
+                _up.source_label,
+                _up.saved_at,
+                _up.visited_at,
+            )
+            .select_from(_PlacesTable.join(_UserPlacesTable, _up.place_id == _p.id))
+            .where(and_(*conditions))
+            .order_by(_up.saved_at.desc(), _up.user_place_id.desc())
+            .limit(limit)
+        )
+        result = await self._session.execute(stmt)
+        return [
+            SavedPlaceView(
+                place=row_to_place_core(row._mapping),
+                user_data=_row_to_user_place(row._mapping),
+            )
+            for row in result
+        ]
 
     async def get_by_user_place_id(self, user_place_id: str) -> UserPlace | None:
         stmt = select(_UserPlacesTable).where(_u.user_place_id == user_place_id)
@@ -80,9 +128,7 @@ class UserPlacesRepo:
         result = await self._session.execute(stmt)
         return {row[0] for row in result}
 
-    async def save_user_places(
-        self, user_places: list[UserPlace]
-    ) -> list[UserPlace]:
+    async def save_user_places(self, user_places: list[UserPlace]) -> list[UserPlace]:
         """INSERT or UPDATE on user_place_id primary key.
 
         Rolls back the session on any execute error before re-raising —

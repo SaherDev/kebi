@@ -1,4 +1,4 @@
-"""User-scoped routes (/v1/user/...): AI-data erase."""
+"""User-scoped routes (/v1/user/...): saved-places library + AI-data erase."""
 
 from typing import Annotated
 
@@ -7,12 +7,48 @@ from fastapi import APIRouter, Depends, Query, Request, status
 from kebi.api.deps import (
     GatewayIdentity,
     get_user_data_deletion_service,
+    get_user_places_service,
     require_gateway_identity,
 )
 from kebi.api.rate_limit import limiter
+from kebi.api.schemas.library import LibraryQuery, LibraryResponse
+from kebi.core.places import UserPlacesService
 from kebi.core.user.service import DataScope, UserDataDeletionService
 
 router = APIRouter()
+
+
+@router.get("/user/library", response_model=LibraryResponse)
+@limiter.limit("60/minute")
+async def get_user_library(
+    request: Request,
+    identity: Annotated[GatewayIdentity, Depends(require_gateway_identity)],
+    params: Annotated[LibraryQuery, Query()],
+    service: UserPlacesService = Depends(get_user_places_service),  # noqa: B008
+) -> LibraryResponse:
+    """Browse the caller's saved places (the Library screen).
+
+    Returns one filtered, newest-first page of the user's saved places
+    (`user_places ⋈ places`) plus an opaque `next_cursor` for the next page
+    (`null` on the last page). An empty library returns `{"places": [],
+    "next_cursor": null}` — the empty-state UI is the product's concern.
+
+    Filters (`category`, `tag`, `city`, `country`, `source`, `visited`,
+    `liked`, `approved`, `saved_after`, `saved_before`) combine with AND.
+    By default every save is returned regardless of its `approved` flag;
+    pass `approved=` to split curated vs. needs-review.
+
+    `user_id` comes only from the verified gateway identity — a caller can
+    only ever read their own library. A malformed `cursor` surfaces as a
+    400 via the shared `ValueError` handler.
+    """
+    places, next_cursor = await service.browse(
+        identity.user_id,
+        params.to_filters(),
+        params.limit,
+        cursor=params.cursor,
+    )
+    return LibraryResponse(places=places, next_cursor=next_cursor)
 
 
 @router.delete("/user/data", status_code=status.HTTP_204_NO_CONTENT)

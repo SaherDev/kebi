@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from datetime import datetime
 from typing import Protocol
 
+from ._cursor import LibraryCursor
 from .models import (
     HybridSearchFilters,
     HybridSearchHit,
@@ -13,6 +14,7 @@ from .models import (
     PlaceObject,
     PlaceQuery,
     PlaceSource,
+    SavedPlaceFilters,
     SavedPlaceView,
     UserPlace,
 )
@@ -30,9 +32,7 @@ class PlacesRepoProtocol(Protocol):
         self, provider_ids: list[str]
     ) -> dict[str, PlaceCore]: ...
 
-    async def find(
-        self, query: PlaceQuery, limit: int = 20
-    ) -> list[PlaceCore]: ...
+    async def find(self, query: PlaceQuery, limit: int = 20) -> list[PlaceCore]: ...
 
     async def upsert_places(self, cores: list[PlaceCore]) -> list[PlaceCore]: ...
 
@@ -41,6 +41,14 @@ class PlacesRepoProtocol(Protocol):
 
 class UserPlacesRepoProtocol(Protocol):
     async def get_by_user(self, user_id: str) -> list[UserPlace]: ...
+
+    async def browse(
+        self,
+        user_id: str,
+        filters: SavedPlaceFilters,
+        limit: int,
+        cursor: LibraryCursor | None = None,
+    ) -> list[SavedPlaceView]: ...
 
     async def get_by_user_place_id(self, user_place_id: str) -> UserPlace | None: ...
 
@@ -54,9 +62,7 @@ class UserPlacesRepoProtocol(Protocol):
 
 
 class PlacesCacheProtocol(Protocol):
-    async def mget(
-        self, provider_ids: list[str]
-    ) -> dict[str, PlaceObject]: ...
+    async def mget(self, provider_ids: list[str]) -> dict[str, PlaceObject]: ...
 
     async def mset(
         self, places: list[PlaceObject], ttl_seconds: int = PLACE_CACHE_TTL_SECONDS
@@ -66,23 +72,15 @@ class PlacesCacheProtocol(Protocol):
 
 
 class PlacesClientProtocol(Protocol):
-    async def search(
-        self, query: PlaceQuery, limit: int = 20
-    ) -> list[PlaceObject]: ...
+    async def search(self, query: PlaceQuery, limit: int = 20) -> list[PlaceObject]: ...
 
-    async def get_by_ids(
-        self, provider_ids: list[str]
-    ) -> list[PlaceObject]: ...
+    async def get_by_ids(self, provider_ids: list[str]) -> list[PlaceObject]: ...
 
 
 class PlacesSearchServiceProtocol(Protocol):
-    async def find(
-        self, query: PlaceQuery, limit: int = 20
-    ) -> list[PlaceObject]: ...
+    async def find(self, query: PlaceQuery, limit: int = 20) -> list[PlaceObject]: ...
 
-    async def get_by_ids(
-        self, provider_ids: list[str]
-    ) -> dict[str, PlaceObject]: ...
+    async def get_by_ids(self, provider_ids: list[str]) -> dict[str, PlaceObject]: ...
 
     async def get_cores_by_ids(
         self, place_core_ids: list[str]
@@ -109,7 +107,13 @@ class UserPlacesServiceProtocol(Protocol):
         source_labels: Mapping[str, str | None] | None = None,
     ) -> list[UserPlace]: ...
 
-    async def get_user_places(self, user_id: str) -> list[SavedPlaceView]: ...
+    async def browse(
+        self,
+        user_id: str,
+        filters: SavedPlaceFilters,
+        limit: int,
+        cursor: str | None = None,
+    ) -> tuple[list[SavedPlaceView], str | None]: ...
 
     async def update_status(
         self,
@@ -143,9 +147,7 @@ class EmbedderProtocol(Protocol):
     `providers.embeddings` implementation drops in unchanged.
     """
 
-    async def embed(
-        self, texts: list[str], input_type: str
-    ) -> list[list[float]]: ...
+    async def embed(self, texts: list[str], input_type: str) -> list[list[float]]: ...
 
 
 class EmbeddingServiceProtocol(Protocol):

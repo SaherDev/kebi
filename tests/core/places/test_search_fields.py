@@ -2,7 +2,8 @@
 
 Three sources reference the same logical field set:
   * `EmbeddingService._build_text` — Pydantic attribute access on PlaceCore.
-  * `HybridSearchRepo._filter_conditions` — SQLAlchemy column refs.
+  * `_place_filters.build_filter_conditions` — SQLAlchemy column refs (shared
+    by hybrid search and the library browse path).
   * The Alembic migration's `search_vector` generated column — raw SQL.
 
 The library itself doesn't carry a constant for these fields; the
@@ -36,20 +37,10 @@ _MIGRATION_PATH = (
     / "a4d2c1b9e8f3_places_v2_category_to_categories_array.py"
 )
 _EMBEDDING_SERVICE_PATH = (
-    _REPO_ROOT
-    / "src"
-    / "kebi"
-    / "core"
-    / "places"
-    / "embedding_service.py"
+    _REPO_ROOT / "src" / "kebi" / "core" / "places" / "embedding_service.py"
 )
-_HYBRID_SEARCH_REPO_PATH = (
-    _REPO_ROOT
-    / "src"
-    / "kebi"
-    / "core"
-    / "places"
-    / "hybrid_search_repo.py"
+_PLACE_FILTERS_PATH = (
+    _REPO_ROOT / "src" / "kebi" / "core" / "places" / "_place_filters.py"
 )
 
 
@@ -73,9 +64,9 @@ class TestSearchableFieldsCrossReference:
             f"Add them to _build_text."
         )
 
-    def test_every_field_in_hybrid_search_repo(self) -> None:
-        missing = _missing_in(_HYBRID_SEARCH_REPO_PATH)
+    def test_every_field_in_place_filters(self) -> None:
+        missing = _missing_in(_PLACE_FILTERS_PATH)
         assert not missing, (
-            f"hybrid_search_repo.py doesn't reference: {missing}. "
-            f"Add them to _filter_conditions or the Table column list."
+            f"_place_filters.py doesn't reference: {missing}. "
+            f"Add them to build_filter_conditions or the Table column list."
         )

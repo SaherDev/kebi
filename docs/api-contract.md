@@ -48,6 +48,7 @@ keyed by the verified `X-Gateway-User-Id`.
 | POST /v1/chat                     | 30 / minute     |
 | POST /v1/chat/stream              | 30 / minute     |
 | POST /v1/extract                  | 10 / minute     |
+| GET /v1/user/library              | 60 / minute     |
 | POST /v1/signal                   | 60 / minute     |
 | DELETE /v1/user/data              | 3 / hour        |
 
@@ -334,6 +335,96 @@ ADR-074: results are cached by canonical URL — a repeat submission of the same
 
 ---
 
+## GET /v1/user/library
+
+The Library screen — a browsable, filterable, paged list of the caller's
+saved places (`user_places ⋈ places`). This is the first standalone
+product-facing catalog read; saved places were previously reachable only
+inside chat `tool_results`. `user_id` is taken from `X-Gateway-User-Id`, so
+a caller can only ever read **their own** library.
+
+**Request:** query params only (all optional). Plus the
+`X-Gateway-Token` + `X-Gateway-User-Id` headers.
+
+```
+GET /v1/user/library
+GET /v1/user/library?category=cafe&visited=false&source=tiktok&limit=20
+GET /v1/user/library?limit=20&cursor=<next_cursor-from-prior-response>
+```
+
+| Param          | Type                         | Notes                                                                                          |
+| -------------- | ---------------------------- | ---------------------------------------------------------------------------------------------- |
+| `category`     | repeated `PlaceCategory`     | OR across repeats. `?category=cafe&category=bar`                                                |
+| `tag`          | repeated `string`            | Tag **value**; AND across repeats (every value must be present)                                |
+| `city`         | `string`                     | Case-insensitive match on `place.location.city`                                                |
+| `country`      | `string`                     | Exact match on `place.location.country`                                                        |
+| `source`       | `PlaceSource`                | `tiktok \| instagram \| youtube \| google_maps_list \| manual \| kebi`                          |
+| `visited`      | `bool`                       | Filter on the user's visited flag                                                              |
+| `liked`        | `bool`                       | Filter on the user's like flag                                                                 |
+| `approved`     | `bool`                       | Curation flag (ADR-071). **Omitted → every save is returned regardless of `approved`**          |
+| `saved_after`  | ISO-8601                     | Saves on/after this instant                                                                    |
+| `saved_before` | ISO-8601                     | Saves on/before this instant                                                                   |
+| `limit`        | `int` (1–100, default 50)    | Max places per page. Out-of-range → 422                                                        |
+| `cursor`       | `string`                     | Opaque cursor from a prior response's `next_cursor`. Omit for the first page. Malformed → 400  |
+
+Filters combine with **AND**. Results are always ordered newest-first
+(`saved_at` descending); there is no sort param.
+
+**Response (200):** `LibraryResponse`
+
+```json
+{
+  "places": [
+    {
+      "place": { /* PlaceCore */ },
+      "user_data": {
+        "user_place_id": "9b1c…",
+        "place_id": "c0ffee00-1111-2222-3333-444455556666",
+        "approved": false,
+        "visited": false,
+        "liked": null,
+        "note": null,
+        "source": "tiktok",
+        "source_ref": "https://www.tiktok.com/@user/video/123",
+        "source_label": "Mirror Temple",
+        "saved_at": "2026-05-01T08:00:00Z",
+        "visited_at": null
+      }
+    }
+  ],
+  "next_cursor": "eyJ0cyI6…"
+}
+```
+
+| Field         | Type                    | Notes                                                                                              |
+| ------------- | ----------------------- | -------------------------------------------------------------------------------------------------- |
+| `places`      | `SavedPlaceView[]`      | `{ place: PlaceCore, user_data: UserPlace }`. `place` carries catalog fields only — no live rating/hours (same as extraction). `user_data` is this user's relationship to the place |
+| `next_cursor` | `string \| null`        | Opaque keyset cursor. Pass it back as `?cursor=` for the next page. **`null` on the last page**     |
+
+`user_data` (`UserPlace`) fields: `user_place_id`, `place_id`, `approved`,
+`visited`, `liked` (tri-state, may be `null`), `note`, `source`,
+`source_ref` (origin URL; `null` for `manual`/`kebi`), `source_label` (the
+name the place was shown as in the source post, ADR-081; `null` when it
+matched the canonical name), `saved_at`, `visited_at`. `user_id` is **not**
+echoed — the caller already knows who they are.
+
+**Empty state:** a user with no saves (or no matches) returns
+`{ "places": [], "next_cursor": null }` — the empty-state UI is the
+product's concern; the shape is guaranteed.
+
+**Paging:** keyset (cursor) pagination, not offset — stable under new
+saves (no skipped/duplicated rows at page boundaries) and fast at any
+depth. The cursor anchors on `(saved_at, user_place_id)`; clients treat it
+as opaque and stop when `next_cursor` is `null`.
+
+| Code  | When                                                              |
+| ----- | ----------------------------------------------------------------- |
+| `200` | Success (including the empty library)                             |
+| `400` | Malformed `cursor`                                                |
+| `422` | Unknown query param, bad enum value, or `limit` out of 1–100      |
+
+---
+
 ## DELETE /v1/user/data
 
 Hard-deletes a user's **AI-owned data**. Does NOT delete the user account — that lives in NestJS/Clerk. Called by the product repo's account-deletion flow after it deletes its own `users` / `user_settings` rows.
@@ -439,6 +530,7 @@ All protected calls additionally send the `X-Gateway-Token` + `X-Gateway-User-Id
 | POST /v1/chat                     | Conversational turn (consult-family agent) | message, optional location, movement_profile                   | type (`agent`\|`error`), message, data (reasoning_steps + tool_results), tool_calls_used |
 | POST /v1/chat/stream              | SSE streaming chat                     | Same as POST /v1/chat                                          | reasoning_step + tool_result + message + done frames                  |
 | POST /v1/extract                  | Canonical extraction (save a place)    | raw_input                                                      | ExtractPlaceResponse                                                  |
+| GET /v1/user/library              | Browse the user's saved places (Library) | — (optional filter + `limit`/`cursor` query params)          | LibraryResponse (`places: SavedPlaceView[]`, `next_cursor`)           |
 | DELETE /v1/user/data              | Account-deletion sweep of AI data      | — (optional `scope` query param)                               | 204 No Content                                                        |
 | POST /v1/signal                   | Recommendation accept/reject           | signal_type, recommendation_id, place_core_id                  | status (202)                                                          |
 | GET /v1/health                    | Service health check (unauthenticated) | —                                                              | status, db connectivity                                               |
