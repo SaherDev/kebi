@@ -17,6 +17,16 @@ Format:
 
 ---
 
+## ADR-105: Outward responses are explicit DTOs, never raw domain models
+
+**Date:** 2026-06-09\
+**Status:** accepted\
+**Context:** The first cut of the library endpoint serialized its internal domain models straight to the client, which leaked fields the client neither needs nor should see — most starkly the caller's own identity echoed back in every row, alongside internal provenance and identifiers. The hazard is structural, not a one-off typo: when the wire shape *is* the domain model, every field added to that model later is published automatically and silently, and the omission is invisible in review because nothing at the boundary states what is allowed out. The same coupling had already produced a leak once before, when an internal pipeline audit trail rode an extraction response until it was deliberately removed.\
+**Decision:** Outward-facing responses are an explicit projection — a response model that names exactly the fields that leave the service — never a domain or persistence model serialized directly. A field is exposed only by being declared on the response model; adding a field to a domain model never widens the public surface by default. The caller's authenticated identity is never echoed back in a payload (the client already holds it), and internal-only identifiers and provenance are included only when a client genuinely needs them, decided per field rather than by dumping the whole object. This is the response-side counterpart to the existing rule that inputs are validated at the boundary: both directions cross through a declared schema, never a raw object.\
+**Consequences:** Each endpoint owns a small mapping from its internal result to its response model — a little boilerplate, bought back as a single obvious place to audit what escapes and a default-closed posture where new internal fields stay internal until someone opts them out. Reviewers can read a response model and know the entire public surface. The rule is a standing constraint for every current and future endpoint, and a Constitution-check item: a plan that returns a domain/persistence model directly from a route is flagged. It does not, by itself, gate on data-classification labels — the field-by-field judgment still lives with the author — but it guarantees that judgment is made somewhere explicit rather than by omission.
+
+---
+
 ## ADR-104: The saved library is a first-class, keyset-paged browse endpoint
 
 **Date:** 2026-06-09\

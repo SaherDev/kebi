@@ -48,7 +48,7 @@ async def get_user_library(
         params.limit,
         cursor=params.cursor,
     )
-    return LibraryResponse(places=places, next_cursor=next_cursor)
+    return LibraryResponse.from_page(places, next_cursor)
 
 
 @router.delete("/user/data", status_code=status.HTTP_204_NO_CONTENT)

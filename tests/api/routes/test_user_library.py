@@ -78,6 +78,21 @@ def test_returns_places_and_next_cursor(svc: AsyncMock) -> None:
     assert kwargs["cursor"] is None
 
 
+def test_user_id_is_not_exposed_in_response(svc: AsyncMock) -> None:
+    # Security: the caller's identity must not be echoed back in the payload.
+    client = _make_app(svc)
+
+    body = client.get("/v1/user/library").json()
+
+    user_data = body["places"][0]["user_data"]
+    assert "user_id" not in user_data
+    # the fields the Library screen needs are still present
+    assert user_data["user_place_id"] == "up-p1"
+    assert {"visited", "liked", "note", "source", "source_label", "saved_at"} <= (
+        user_data.keys()
+    )
+
+
 def test_filters_and_paging_passed_through(svc: AsyncMock) -> None:
     client = _make_app(svc)
 

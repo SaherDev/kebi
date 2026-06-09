@@ -21,6 +21,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from kebi.core.places import (
     PlaceCategory,
+    PlaceCore,
     PlaceSource,
     SavedPlaceFilters,
     SavedPlaceView,
@@ -85,10 +86,51 @@ class LibraryQuery(BaseModel):
         )
 
 
+class LibraryUserData(BaseModel):
+    """The caller's relationship to a saved place — safe public projection.
+
+    Mirrors `UserPlace` **minus `user_id`**: echoing the caller's identity
+    back in the payload is unnecessary (the client authenticated as that
+    user) and is deliberately excluded. The API never returns the raw
+    domain model, so a field added to `UserPlace` is not leaked by default —
+    it must be added here intentionally.
+    """
+
+    user_place_id: str
+    place_id: str
+    approved: bool
+    visited: bool
+    liked: bool | None
+    note: str | None
+    source: PlaceSource
+    source_ref: str | None
+    source_label: str | None
+    saved_at: datetime
+    visited_at: datetime | None
+
+
+class LibraryItem(BaseModel):
+    """One saved place on a Library page: the catalog place + the user's data."""
+
+    place: PlaceCore
+    user_data: LibraryUserData
+
+    @classmethod
+    def from_view(cls, view: SavedPlaceView) -> LibraryItem:
+        # model_validate drops UserPlace.user_id — LibraryUserData doesn't
+        # declare it, so the extra key is ignored.
+        return cls(
+            place=view.place,
+            user_data=LibraryUserData.model_validate(
+                view.user_data, from_attributes=True
+            ),
+        )
+
+
 class LibraryResponse(BaseModel):
     """One page of the user's saved places."""
 
-    places: list[SavedPlaceView] = Field(
+    places: list[LibraryItem] = Field(
         default_factory=list, description="The saved places on this page."
     )
     next_cursor: str | None = Field(
@@ -98,3 +140,12 @@ class LibraryResponse(BaseModel):
             "page. An empty library returns an empty list with a null cursor."
         ),
     )
+
+    @classmethod
+    def from_page(
+        cls, views: list[SavedPlaceView], next_cursor: str | None
+    ) -> LibraryResponse:
+        return cls(
+            places=[LibraryItem.from_view(v) for v in views],
+            next_cursor=next_cursor,
+        )
