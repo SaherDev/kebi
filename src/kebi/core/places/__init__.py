@@ -15,6 +15,7 @@ from .models import (
     HoursDict,
     HybridSearchFilters,
     HybridSearchHit,
+    LibrarySort,
     LocationContext,
     PlaceCategory,
     PlaceCore,
@@ -26,6 +27,7 @@ from .models import (
     SavedPlaceFilters,
     SavedPlaceView,
     UserPlace,
+    UserPlaceStatusUpdate,
 )
 from .nominatim_geocoding_client import (
     GeocodeResult,
@@ -85,6 +87,7 @@ __all__ = [
     "HoursDict",
     "HybridSearchFilters",
     "HybridSearchHit",
+    "LibrarySort",
     "LocationContext",
     "PlaceCategory",
     "PlaceCore",
@@ -96,6 +99,7 @@ __all__ = [
     "SavedPlaceFilters",
     "SavedPlaceView",
     "UserPlace",
+    "UserPlaceStatusUpdate",
     # protocols
     "EmbedderProtocol",
     "EmbeddingsRepoProtocol",

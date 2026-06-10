@@ -17,14 +17,17 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from kebi.core.places import (
+    LibrarySort,
     PlaceCategory,
     PlaceCore,
     PlaceSource,
     SavedPlaceFilters,
     SavedPlaceView,
+    UserPlace,
+    UserPlaceStatusUpdate,
 )
 
 
@@ -60,7 +63,15 @@ class LibraryQuery(BaseModel):
         None, description="Only saves on/before this ISO-8601 instant."
     )
 
-    # ---- paging ----
+    # ---- sort + paging ----
+    sort: LibrarySort = Field(
+        LibrarySort.recent,
+        description=(
+            "Order: `recent` (newest-saved first, default) or `name` "
+            "(case-insensitive A–Z). A `cursor` must be replayed under the "
+            "same sort it was issued for; switching sort restarts paging."
+        ),
+    )
     limit: int = Field(50, ge=1, le=100, description="Max places per page.")
     cursor: str | None = Field(
         None,
@@ -86,6 +97,44 @@ class LibraryQuery(BaseModel):
         )
 
 
+class UserPlaceStatusPatch(BaseModel):
+    """Partial update body for PATCH /v1/user/places/{user_place_id}.
+
+    The pills and menu actions toggle a save's user-state: `visited`
+    ("✅ been there"), `liked` ("❤️ i like this one"), `approved`
+    ("👍 looks right"), and a free-text `note`. Every field is optional —
+    a request carries only what changed.
+
+    Set vs. unset is meaningful and is *not* the same as null: an omitted
+    field is left untouched, while an explicit `null` clears the column
+    (un-like back to neutral, erase a note). `extra="forbid"` rejects
+    unknown keys with a 422, and an empty body (no fields) is rejected too —
+    a no-op patch is a client mistake, not a silent success.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    visited: bool | None = None
+    liked: bool | None = None
+    approved: bool | None = None
+    note: str | None = None
+
+    @model_validator(mode="after")
+    def _reject_empty(self) -> UserPlaceStatusPatch:
+        if not self.model_fields_set:
+            raise ValueError("at least one field must be provided")
+        return self
+
+    def to_update(self) -> UserPlaceStatusUpdate:
+        """Map to the domain update, preserving exactly which fields were set.
+
+        Round-tripping through `exclude_unset` keeps the set/unset distinction
+        intact, so the service and repo write only the fields the caller sent
+        (an explicit `null` survives as a clear).
+        """
+        return UserPlaceStatusUpdate(**self.model_dump(exclude_unset=True))
+
+
 class LibraryUserData(BaseModel):
     """The caller's relationship to a saved place — safe public projection.
 
@@ -108,6 +157,12 @@ class LibraryUserData(BaseModel):
     saved_at: datetime
     visited_at: datetime | None
 
+    @classmethod
+    def from_user_place(cls, up: UserPlace) -> LibraryUserData:
+        # model_validate drops UserPlace.user_id — this DTO doesn't declare
+        # it, so the extra attribute is ignored (ADR-105).
+        return cls.model_validate(up, from_attributes=True)
+
 
 class LibraryItem(BaseModel):
     """One saved place on a Library page: the catalog place + the user's data."""
@@ -117,13 +172,9 @@ class LibraryItem(BaseModel):
 
     @classmethod
     def from_view(cls, view: SavedPlaceView) -> LibraryItem:
-        # model_validate drops UserPlace.user_id — LibraryUserData doesn't
-        # declare it, so the extra key is ignored.
         return cls(
             place=view.place,
-            user_data=LibraryUserData.model_validate(
-                view.user_data, from_attributes=True
-            ),
+            user_data=LibraryUserData.from_user_place(view.user_data),
         )
 
 

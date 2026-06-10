@@ -11,11 +11,13 @@ from sqlalchemy.dialects import postgresql as pg_dialect
 
 from kebi.core.places._cursor import LibraryCursor
 from kebi.core.places.models import (
+    LibrarySort,
     PlaceCategory,
     PlaceSource,
     SavedPlaceFilters,
     SavedPlaceView,
     UserPlace,
+    UserPlaceStatusUpdate,
 )
 from kebi.core.places.user_places_repo import UserPlacesRepo
 
@@ -90,12 +92,65 @@ async def test_browse_cursor_adds_keyset_predicate() -> None:
     session.execute = AsyncMock(return_value=[])
     repo = UserPlacesRepo(session=session)
 
-    cursor = LibraryCursor(datetime(2026, 6, 9, tzinfo=UTC), "up-50")
+    cursor = LibraryCursor(
+        LibrarySort.recent, datetime(2026, 6, 9, tzinfo=UTC).isoformat(), "up-50"
+    )
     await repo.browse("u1", SavedPlaceFilters(), limit=20, cursor=cursor)
 
     sql = _compiled(session)
     # Row-value keyset comparison over the same (saved_at, user_place_id) key.
     assert "(user_places.saved_at, user_places.user_place_id) < (" in sql
+
+
+@pytest.mark.asyncio
+async def test_browse_name_sort_orders_case_insensitively_asc() -> None:
+    session = MagicMock()
+    session.execute = AsyncMock(return_value=[])
+    repo = UserPlacesRepo(session=session)
+
+    await repo.browse("u1", SavedPlaceFilters(), limit=20, sort=LibrarySort.name)
+
+    sql = _compiled(session)
+    # lower(place_name) ASC, with the user_place_id tie-break ASC.
+    assert "ORDER BY lower(places.place_name) ASC, user_places.user_place_id ASC" in sql
+
+
+@pytest.mark.asyncio
+async def test_browse_name_sort_keyset_uses_lowered_name_and_gt() -> None:
+    session = MagicMock()
+    session.execute = AsyncMock(return_value=[])
+    repo = UserPlacesRepo(session=session)
+
+    cursor = LibraryCursor(LibrarySort.name, "café x", "up-50")
+    await repo.browse(
+        "u1", SavedPlaceFilters(), limit=20, cursor=cursor, sort=LibrarySort.name
+    )
+
+    sql = _compiled(session)
+    # Ascending sort → strictly-greater row-value comparison over the same
+    # (lower(place_name), user_place_id) key the ORDER BY uses.
+    assert "(lower(places.place_name), user_places.user_place_id) > (" in sql
+
+
+@pytest.mark.asyncio
+async def test_browse_rejects_cursor_from_a_different_sort() -> None:
+    """A cursor minted under `recent` cannot be replayed under `name` — the
+    anchor type and comparison differ, so paging must restart."""
+    session = MagicMock()
+    session.execute = AsyncMock(return_value=[])
+    repo = UserPlacesRepo(session=session)
+
+    recent_cursor = LibraryCursor(
+        LibrarySort.recent, datetime(2026, 6, 9, tzinfo=UTC).isoformat(), "up-1"
+    )
+    with pytest.raises(ValueError, match="does not match requested sort"):
+        await repo.browse(
+            "u1",
+            SavedPlaceFilters(),
+            limit=20,
+            cursor=recent_cursor,
+            sort=LibrarySort.name,
+        )
 
 
 @pytest.mark.asyncio
@@ -177,3 +232,175 @@ async def test_save_user_places_empty_is_noop() -> None:
     session.execute.assert_not_awaited()
     session.commit.assert_not_awaited()
     session.rollback.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_delete_one_scopes_on_both_user_place_id_and_user_id() -> None:
+    """The DELETE must filter on user_id too — ownership IS the predicate.
+    Without it, any caller could delete any row by id (IDOR)."""
+    session = MagicMock()
+    session.execute = AsyncMock(return_value=MagicMock(rowcount=1))
+    session.commit = AsyncMock()
+    repo = UserPlacesRepo(session=session)
+
+    await repo.delete_one("up-1", "u1")
+
+    sql = _compiled(session)
+    assert sql.startswith("DELETE FROM user_places")
+    assert "user_places.user_place_id =" in sql
+    assert "user_places.user_id =" in sql
+
+
+@pytest.mark.asyncio
+async def test_delete_one_returns_rowcount_and_commits() -> None:
+    session = MagicMock()
+    session.execute = AsyncMock(return_value=MagicMock(rowcount=1))
+    session.commit = AsyncMock()
+    repo = UserPlacesRepo(session=session)
+
+    assert await repo.delete_one("up-1", "u1") == 1
+    session.commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_delete_one_absent_or_not_owned_returns_zero() -> None:
+    """No matching row (absent, or owned by another user) → 0 rows, still
+    a clean commit. The caller maps this to an idempotent 204."""
+    session = MagicMock()
+    session.execute = AsyncMock(return_value=MagicMock(rowcount=0))
+    session.commit = AsyncMock()
+    repo = UserPlacesRepo(session=session)
+
+    assert await repo.delete_one("up-missing", "u1") == 0
+    session.commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_delete_one_rolls_back_on_execute_error() -> None:
+    session = MagicMock()
+    session.execute = AsyncMock(side_effect=RuntimeError("boom"))
+    session.commit = AsyncMock()
+    session.rollback = AsyncMock()
+    repo = UserPlacesRepo(session=session)
+
+    with pytest.raises(RuntimeError, match="boom"):
+        await repo.delete_one("up-1", "u1")
+
+    session.rollback.assert_awaited_once()
+    session.commit.assert_not_awaited()
+
+
+def _exec_returning(mapping: dict[str, Any] | None) -> MagicMock:
+    """A session.execute return whose .mappings().first() yields `mapping`."""
+    result = MagicMock()
+    result.mappings.return_value.first.return_value = mapping
+    return result
+
+
+@pytest.mark.asyncio
+async def test_update_fields_scopes_on_both_ids_and_writes_only_set_fields() -> None:
+    """The UPDATE is owner-scoped (user_id in WHERE) and touches only the
+    fields the caller set — `liked` here, not `visited`/`approved`/`note`."""
+    t = datetime(2026, 6, 9, tzinfo=UTC)
+    session = MagicMock()
+    session.execute = AsyncMock(
+        return_value=_exec_returning(_row_mapping("p1", "u1", t))
+    )
+    session.commit = AsyncMock()
+    repo = UserPlacesRepo(session=session)
+
+    await repo.update_fields("up-1", "u1", UserPlaceStatusUpdate(liked=True))
+
+    sql = _compiled(session)
+    assert sql.startswith("UPDATE user_places SET")
+    assert "liked=" in sql
+    assert "user_places.user_place_id =" in sql
+    assert "user_places.user_id =" in sql
+    # Unset fields are not in the SET clause.
+    assert "visited=" not in sql
+    assert "approved=" not in sql
+
+
+@pytest.mark.asyncio
+async def test_update_fields_explicit_null_is_written() -> None:
+    """An explicit None clears the column — `note` appears in SET even
+    though its value is null (set ≠ omitted)."""
+    t = datetime(2026, 6, 9, tzinfo=UTC)
+    session = MagicMock()
+    session.execute = AsyncMock(
+        return_value=_exec_returning(_row_mapping("p1", "u1", t))
+    )
+    session.commit = AsyncMock()
+    repo = UserPlacesRepo(session=session)
+
+    await repo.update_fields("up-1", "u1", UserPlaceStatusUpdate(note=None))
+
+    sql = _compiled(session)
+    assert "note=" in sql
+
+
+@pytest.mark.asyncio
+async def test_update_fields_returns_updated_row_and_commits() -> None:
+    t = datetime(2026, 6, 9, tzinfo=UTC)
+    session = MagicMock()
+    session.execute = AsyncMock(
+        return_value=_exec_returning(_row_mapping("p1", "u1", t))
+    )
+    session.commit = AsyncMock()
+    repo = UserPlacesRepo(session=session)
+
+    result = await repo.update_fields("up-1", "u1", UserPlaceStatusUpdate(visited=True))
+
+    assert result is not None
+    assert result.user_place_id == "up-p1"
+    session.commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_update_fields_absent_or_not_owned_returns_none() -> None:
+    """RETURNING yields no row (absent, or owned by another user) → None."""
+    session = MagicMock()
+    session.execute = AsyncMock(return_value=_exec_returning(None))
+    session.commit = AsyncMock()
+    repo = UserPlacesRepo(session=session)
+
+    result = await repo.update_fields(
+        "up-missing", "u1", UserPlaceStatusUpdate(visited=True)
+    )
+
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_update_fields_empty_changes_is_read_only_noop() -> None:
+    """No fields set → no UPDATE issued (would be invalid SQL); falls back
+    to an owner-scoped read and commits nothing."""
+    t = datetime(2026, 6, 9, tzinfo=UTC)
+    session = MagicMock()
+    session.execute = AsyncMock(
+        return_value=_exec_returning(_row_mapping("p1", "u1", t))
+    )
+    session.commit = AsyncMock()
+    repo = UserPlacesRepo(session=session)
+
+    result = await repo.update_fields("up-1", "u1", UserPlaceStatusUpdate())
+
+    sql = _compiled(session)
+    assert sql.startswith("SELECT")
+    assert result is not None
+    session.commit.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_update_fields_rolls_back_on_execute_error() -> None:
+    session = MagicMock()
+    session.execute = AsyncMock(side_effect=RuntimeError("boom"))
+    session.commit = AsyncMock()
+    session.rollback = AsyncMock()
+    repo = UserPlacesRepo(session=session)
+
+    with pytest.raises(RuntimeError, match="boom"):
+        await repo.update_fields("up-1", "u1", UserPlaceStatusUpdate(visited=True))
+
+    session.rollback.assert_awaited_once()
+    session.commit.assert_not_awaited()

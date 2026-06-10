@@ -8,11 +8,13 @@ from datetime import UTC, datetime
 
 from ._cursor import LibraryCursor
 from .models import (
+    LibrarySort,
     PlaceCore,
     PlaceSource,
     SavedPlaceFilters,
     SavedPlaceView,
     UserPlace,
+    UserPlaceStatusUpdate,
 )
 from .protocols import UserPlacesRepoProtocol
 
@@ -102,13 +104,16 @@ class UserPlacesService:
         filters: SavedPlaceFilters,
         limit: int,
         cursor: str | None = None,
+        sort: LibrarySort = LibrarySort.recent,
     ) -> tuple[list[SavedPlaceView], str | None]:
         """One filtered, keyset-paged page of the user's saved places.
 
-        The opaque `cursor` token is owned end-to-end here: this is the only
-        boundary that decodes the incoming token and encodes the outgoing
-        `next_cursor` (see `LibraryCursor`); callers pass and receive opaque
-        strings. A malformed token raises `ValueError`.
+        `sort` selects the order (recent ↔ A–Z) and is carried into the keyset
+        anchor: the opaque `cursor` token is owned end-to-end here — this is
+        the only boundary that decodes the incoming token and encodes the
+        outgoing `next_cursor` (see `LibraryCursor`); callers pass and receive
+        opaque strings. A malformed token, or one minted under a different
+        sort, raises `ValueError`.
 
         Single read — the repo JOINs `user_places ⋈ places` and returns the
         combined `SavedPlaceView` directly; a saved place whose catalog row is
@@ -119,39 +124,43 @@ class UserPlacesService:
         """
         anchor = LibraryCursor.decode(cursor) if cursor else None
         rows = await self._user_places_repo.browse(
-            user_id, filters, limit=limit + 1, cursor=anchor
+            user_id, filters, limit=limit + 1, cursor=anchor, sort=sort
         )
         has_more = len(rows) > limit
         page = rows[:limit]
         next_cursor = (
-            LibraryCursor.from_view(page[-1]).encode() if has_more and page else None
+            LibraryCursor.from_view(page[-1], sort).encode()
+            if has_more and page
+            else None
         )
         return page, next_cursor
 
     async def update_status(
-        self,
-        user_place_id: str,
-        *,
-        visited: bool | None = None,
-        liked: bool | None = None,
-        approved: bool | None = None,
-        note: str | None = None,
-    ) -> UserPlace:
-        """Mutate status flags and note. Returns updated UserPlace."""
-        existing = await self._user_places_repo.get_by_user_place_id(user_place_id)
-        if existing is None:
-            raise ValueError(f"user_place_id not found: {user_place_id}")
+        self, user_place_id: str, user_id: str, changes: UserPlaceStatusUpdate
+    ) -> UserPlace | None:
+        """Apply a partial status update to a save the caller owns.
 
-        updates = {
-            k: v
-            for k, v in {
-                "visited": visited,
-                "liked": liked,
-                "approved": approved,
-                "note": note,
-            }.items()
-            if v is not None
-        }
-        updated = existing.model_copy(update=updates)
-        saved = await self._user_places_repo.save_user_places([updated])
-        return saved[0]
+        Only the fields the caller actually set are written — an unset field
+        is left untouched, an explicit `None` clears it (un-like, clear a
+        note).
+
+        Returns the updated `UserPlace`, or `None` when nothing matched — the
+        save does not exist or belongs to another user (the repo scopes the
+        update on `user_id`, so the two are indistinguishable by design). No
+        raise: the route maps `None` to 404.
+        """
+        return await self._user_places_repo.update_fields(
+            user_place_id, user_id, changes
+        )
+
+    async def delete_place(self, user_place_id: str, user_id: str) -> bool:
+        """Remove a single saved place the caller owns.
+
+        Idempotent and ownership-scoped: returns True if a row was deleted,
+        False if nothing matched — either the save does not exist or it
+        belongs to another user (the repo scopes the delete on `user_id`,
+        so the two are indistinguishable by design). No existence check
+        and no raise: the route maps both outcomes to 204.
+        """
+        deleted = await self._user_places_repo.delete_one(user_place_id, user_id)
+        return deleted > 0

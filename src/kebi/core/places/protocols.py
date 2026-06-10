@@ -10,6 +10,7 @@ from ._cursor import LibraryCursor
 from .models import (
     HybridSearchFilters,
     HybridSearchHit,
+    LibrarySort,
     PlaceCore,
     PlaceObject,
     PlaceQuery,
@@ -17,6 +18,7 @@ from .models import (
     SavedPlaceFilters,
     SavedPlaceView,
     UserPlace,
+    UserPlaceStatusUpdate,
 )
 
 # Default TTL (seconds) for cached PlaceObjects.
@@ -48,9 +50,12 @@ class UserPlacesRepoProtocol(Protocol):
         filters: SavedPlaceFilters,
         limit: int,
         cursor: LibraryCursor | None = None,
+        sort: LibrarySort = LibrarySort.recent,
     ) -> list[SavedPlaceView]: ...
 
-    async def get_by_user_place_id(self, user_place_id: str) -> UserPlace | None: ...
+    async def update_fields(
+        self, user_place_id: str, user_id: str, changes: UserPlaceStatusUpdate
+    ) -> UserPlace | None: ...
 
     async def get_existing_place_ids(
         self, user_id: str, place_ids: list[str]
@@ -59,6 +64,8 @@ class UserPlacesRepoProtocol(Protocol):
     async def save_user_places(
         self, user_places: list[UserPlace]
     ) -> list[UserPlace]: ...
+
+    async def delete_one(self, user_place_id: str, user_id: str) -> int: ...
 
 
 class PlacesCacheProtocol(Protocol):
@@ -113,17 +120,14 @@ class UserPlacesServiceProtocol(Protocol):
         filters: SavedPlaceFilters,
         limit: int,
         cursor: str | None = None,
+        sort: LibrarySort = LibrarySort.recent,
     ) -> tuple[list[SavedPlaceView], str | None]: ...
 
     async def update_status(
-        self,
-        user_place_id: str,
-        *,
-        visited: bool | None = None,
-        liked: bool | None = None,
-        approved: bool | None = None,
-        note: str | None = None,
-    ) -> UserPlace: ...
+        self, user_place_id: str, user_id: str, changes: UserPlaceStatusUpdate
+    ) -> UserPlace | None: ...
+
+    async def delete_place(self, user_place_id: str, user_id: str) -> bool: ...
 
 
 class EmbeddingsRepoProtocol(Protocol):

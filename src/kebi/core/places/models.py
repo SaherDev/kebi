@@ -388,6 +388,38 @@ class UserPlace(BaseModel):
         return self
 
 
+class UserPlaceStatusUpdate(BaseModel):
+    """A partial update to a user's saved-place state.
+
+    Carries only the fields a caller wants to change: an explicitly-set field
+    is written (including to `null` — clearing a note or returning `liked` to
+    neutral), an *unset* field is left untouched. The set/unset distinction is
+    `model_fields_set`, so callers must build this with the provided fields
+    only (e.g. `model_dump(exclude_unset=True)` from the request body) rather
+    than relying on `None` to mean "skip".
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    visited: bool | None = None
+    liked: bool | None = None
+    approved: bool | None = None
+    note: str | None = None
+
+
+class LibrarySort(str, Enum):
+    """Order for the library browse — the screen's recent ↔ A–Z toggle.
+
+    `recent`: newest-saved first (`saved_at` desc), the default.
+    `name`: alphabetical by place name, case-insensitive (`lower(place_name)`
+    asc). Each maps to a distinct keyset anchor (see `LibraryCursor`), so a
+    cursor minted under one sort cannot be replayed under the other.
+    """
+
+    recent = "recent"
+    name = "name"
+
+
 class SavedPlaceView(BaseModel):
     """List view combining a UserPlace with its underlying place data.
 
