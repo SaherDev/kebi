@@ -157,6 +157,23 @@ class UserPlacesRepo:
             for row in result
         ]
 
+    async def count_by_user(self, user_id: str) -> int:
+        """Count every save the user holds — unfiltered grand total.
+
+        Deliberately ignores `SavedPlaceFilters` and the keyset cursor: this
+        is the whole-library size that drives the screen's hero count, the
+        same on every page regardless of the filters narrowing the rows. No
+        join to `places` — a save with a missing catalog row still counts as
+        one of the user's saves.
+        """
+        stmt = (
+            select(func.count())
+            .select_from(_UserPlacesTable)
+            .where(_u.user_id == user_id)
+        )
+        result = await self._session.execute(stmt)
+        return result.scalar_one()
+
     async def update_fields(
         self, user_place_id: str, user_id: str, changes: UserPlaceStatusUpdate
     ) -> UserPlace | None:

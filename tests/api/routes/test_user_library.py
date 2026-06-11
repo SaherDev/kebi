@@ -56,7 +56,7 @@ def _view(pid: str) -> SavedPlaceView:
 @pytest.fixture
 def svc() -> AsyncMock:
     service = AsyncMock(spec=UserPlacesService)
-    service.browse = AsyncMock(return_value=([_view("p1")], "next-tok"))
+    service.browse = AsyncMock(return_value=([_view("p1")], "next-tok", 1))
     return service
 
 
@@ -69,6 +69,7 @@ def test_returns_places_and_next_cursor(svc: AsyncMock) -> None:
     body = resp.json()
     assert [p["place"]["id"] for p in body["places"]] == ["p1"]
     assert body["next_cursor"] == "next-tok"
+    assert body["total"] == 1
 
     # user_id from the gateway identity; defaults: limit 50, no cursor.
     args = svc.browse.await_args.args
@@ -121,13 +122,13 @@ def test_filters_and_paging_passed_through(svc: AsyncMock) -> None:
 
 
 def test_empty_library_returns_empty_state(svc: AsyncMock) -> None:
-    svc.browse = AsyncMock(return_value=([], None))
+    svc.browse = AsyncMock(return_value=([], None, 0))
     client = _make_app(svc)
 
     resp = client.get("/v1/user/library")
 
     assert resp.status_code == 200
-    assert resp.json() == {"places": [], "next_cursor": None}
+    assert resp.json() == {"places": [], "next_cursor": None, "total": 0}
 
 
 def test_unknown_query_param_rejected_422(svc: AsyncMock) -> None:

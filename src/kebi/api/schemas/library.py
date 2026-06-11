@@ -191,12 +191,20 @@ class LibraryResponse(BaseModel):
             "page. An empty library returns an empty list with a null cursor."
         ),
     )
+    total: int = Field(
+        ...,
+        description=(
+            "Grand total of the caller's saves, unfiltered — the full library "
+            "size regardless of any page or filter applied to this response."
+        ),
+    )
 
     @classmethod
     def from_page(
-        cls, views: list[SavedPlaceView], next_cursor: str | None
+        cls, views: list[SavedPlaceView], next_cursor: str | None, total: int
     ) -> LibraryResponse:
         return cls(
             places=[LibraryItem.from_view(v) for v in views],
             next_cursor=next_cursor,
+            total=total,
         )

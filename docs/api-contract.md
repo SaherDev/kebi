@@ -15,7 +15,7 @@ All requests come from NestJS after auth verification. kebi never receives reque
 
 ## Connection
 
-- Base URL loaded from YAML config: `ai_service.base_url`
+- Base URL loaded from the `KEBI_BASE_URL` env var
 - All endpoints are prefixed with `/v1/`
 - Most requests are JSON over HTTP (`Content-Type: application/json`)
 - `POST /v1/chat/stream` uses Server-Sent Events (`Content-Type: text/event-stream`) — NestJS must forward the stream to the frontend without buffering
@@ -25,9 +25,9 @@ All requests come from NestJS after auth verification. kebi never receives reque
 Every protected request **MUST** carry two headers signed by NestJS
 after it has verified the Clerk session:
 
-| Header              | Value                                                                                              |
-| ------------------- | -------------------------------------------------------------------------------------------------- |
-| `X-Gateway-Token`   | The shared secret. Same value as `GATEWAY_SHARED_SECRET` in both repos. Constant-time compared.    |
+| Header              | Value                                                                                                          |
+| ------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `X-Gateway-Token`   | The shared secret. Same value as `GATEWAY_SHARED_SECRET` in both repos. Constant-time compared.                |
 | `X-Gateway-User-Id` | The Clerk subject NestJS just verified (e.g. `user_2pZ1A8KqxYbzABC123…`). Pattern `^user_[A-Za-z0-9]{20,40}$`. |
 
 `user_id` is **no longer a body field** on any request — kebi reads
@@ -43,16 +43,16 @@ rotate by setting the new value on both sides during the same deploy.
 Per-user buckets enforced via slowapi. Excess → HTTP 429. Buckets are
 keyed by the verified `X-Gateway-User-Id`.
 
-| Endpoint                          | Bucket          |
-| --------------------------------- | --------------- |
-| POST /v1/chat                     | 30 / minute     |
-| POST /v1/chat/stream              | 30 / minute     |
-| POST /v1/extract                  | 10 / minute     |
-| GET /v1/user/library              | 60 / minute     |
-| PATCH /v1/user/places/{id}        | 60 / minute     |
-| DELETE /v1/user/places/{id}       | 60 / minute     |
-| POST /v1/signal                   | 60 / minute     |
-| DELETE /v1/user/data              | 3 / hour        |
+| Endpoint                    | Bucket      |
+| --------------------------- | ----------- |
+| POST /v1/chat               | 30 / minute |
+| POST /v1/chat/stream        | 30 / minute |
+| POST /v1/extract            | 10 / minute |
+| GET /v1/user/library        | 60 / minute |
+| PATCH /v1/user/places/{id}  | 60 / minute |
+| DELETE /v1/user/places/{id} | 60 / minute |
+| POST /v1/signal             | 60 / minute |
+| DELETE /v1/user/data        | 3 / hour    |
 
 ### Request-ID correlation
 
@@ -81,35 +81,36 @@ returned inside chat responses as `tool_results`.
   "id": "c0ffee00-1111-2222-3333-444455556666",
   "provider_id": "google:ChIJN1t_tDeuEmsRUsoyG83frY4",
   "place_name": "Nara Eatery",
-  "place_name_aliases": [
-    { "value": "Nara", "source": "tiktok" }
-  ],
+  "place_name_aliases": [{ "value": "Nara", "source": "tiktok" }],
   "categories": ["restaurant"],
   "tags": [
     { "type": "cuisine", "value": "Japanese", "source": "google" },
     { "type": "atmosphere", "value": "casual", "source": "llm" }
   ],
   "location": {
-    "lat": 13.778, "lng": 100.541,
+    "lat": 13.778,
+    "lng": 100.541,
     "address": "123 Ari Soi 4, Bangkok 10400",
-    "neighborhood": "Ari", "city": "Bangkok", "country": "TH"
+    "neighborhood": "Ari",
+    "city": "Bangkok",
+    "country": "TH"
   },
   "created_at": "2026-04-12T10:15:00Z",
   "refreshed_at": "2026-05-01T08:00:00Z"
 }
 ```
 
-| Field                | Type                                  | Notes                                                                                       |
-| -------------------- | ------------------------------------- | ------------------------------------------------------------------------------------------- |
-| `id`                 | `string \| null`                      | Catalog primary key (`places.id`). `null` only for freshly-built, unsaved objects           |
-| `provider_id`        | `string \| null`                      | Namespaced external ID (e.g. `"google:ChIJ…"`)                                               |
-| `place_name`         | `string`                              | Canonical name (provider-sourced)                                                           |
-| `place_name_aliases` | `{ value, source }[]`                 | Alternative names from non-canonical writers (TikTok caption, user note, LLM)                |
-| `categories`         | `string[]`                            | `PlaceCategory` enum values, e.g. `"restaurant"`, `"cafe"`, `"bar"`                          |
-| `tags`               | `{ type, value, source }[]`           | `type` ∈ `cuisine \| dietary \| feature \| atmosphere \| service \| price \| accessibility \| time \| season` (or an LLM free-text type); `value` is an enum or free-text; `source` e.g. `"google" \| "llm" \| "tiktok"` |
-| `location`           | `LocationContext \| null`             | `{ lat, lng, address, neighborhood, city, country }` — any field may be `null`              |
-| `created_at`         | `ISO-8601 string \| null`             | Catalog row creation                                                                        |
-| `refreshed_at`       | `ISO-8601 string \| null`             | Last provider refresh                                                                       |
+| Field                | Type                        | Notes                                                                                                                                                                                                                    |
+| -------------------- | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `id`                 | `string \| null`            | Catalog primary key (`places.id`). `null` only for freshly-built, unsaved objects                                                                                                                                        |
+| `provider_id`        | `string \| null`            | Namespaced external ID (e.g. `"google:ChIJ…"`)                                                                                                                                                                           |
+| `place_name`         | `string`                    | Canonical name (provider-sourced)                                                                                                                                                                                        |
+| `place_name_aliases` | `{ value, source }[]`       | Alternative names from non-canonical writers (TikTok caption, user note, LLM)                                                                                                                                            |
+| `categories`         | `string[]`                  | `PlaceCategory` enum values, e.g. `"restaurant"`, `"cafe"`, `"bar"`                                                                                                                                                      |
+| `tags`               | `{ type, value, source }[]` | `type` ∈ `cuisine \| dietary \| feature \| atmosphere \| service \| price \| accessibility \| time \| season` (or an LLM free-text type); `value` is an enum or free-text; `source` e.g. `"google" \| "llm" \| "tiktok"` |
+| `location`           | `LocationContext \| null`   | `{ lat, lng, address, neighborhood, city, country }` — any field may be `null`                                                                                                                                           |
+| `created_at`         | `ISO-8601 string \| null`   | Catalog row creation                                                                                                                                                                                                     |
+| `refreshed_at`       | `ISO-8601 string \| null`   | Last provider refresh                                                                                                                                                                                                    |
 
 > **Migration note (ADR-070/071):** the legacy v1 `PlaceObject` shape
 > (`place_type`, `subcategory`, `attributes{}`, Tier 2/3 enrichment
@@ -147,11 +148,11 @@ to `POST /v1/extract` — the chat path never writes to `user_places`.
 
 (Plus the `X-Gateway-Token` + `X-Gateway-User-Id` headers — see "Service-to-service auth" above.)
 
-| Field              | Type                         | Required | Notes                                                                                 |
-| ------------------ | ---------------------------- | -------- | ------------------------------------------------------------------------------------- |
-| `message`          | `string`                     | Yes      | Natural-language message from the user. Max 4000 chars; longer payloads → 422.        |
-| `location`         | `{ lat: float, lng: float }` | No       | The user's **actual** location — where they physically are. ADR-083 makes this the anchor for per-turn working-location resolution: the agent resolves the location a turn operates against (a place named in the message, one carried from the conversation, or this actual location as fallback) and reverse-geocodes these coords when they are used. Shape unchanged |
-| `movement_profile` | `MovementProfile \| null`    | No       | The user's mobility capability (ADR-084 + ADR-085) — owned by the product repo's `user_settings`, sent each turn like `location`. `{ available_modes, reach }`. `available_modes` items ∈ `walking \| cycling \| motorbike \| driving \| transit \| rideshare`; list is non-empty and represents modes the user *can* use (licence, owned vehicles, comfort) — NOT per-city availability. `reach` ∈ `compact \| normal \| far`, default `normal`. Omitted → kebi applies a neutral fallback. The agent resolves an effective mode per turn by pairing this capability with the working location's city + density; an explicit mode word in the message still overrides. It never mutates the profile. A stray `default_mode` key (from a pre-ADR-085 client) is silently ignored |
+| Field              | Type                         | Required | Notes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| ------------------ | ---------------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `message`          | `string`                     | Yes      | Natural-language message from the user. Max 4000 chars; longer payloads → 422.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `location`         | `{ lat: float, lng: float }` | No       | The user's **actual** location — where they physically are. ADR-083 makes this the anchor for per-turn working-location resolution: the agent resolves the location a turn operates against (a place named in the message, one carried from the conversation, or this actual location as fallback) and reverse-geocodes these coords when they are used. Shape unchanged                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `movement_profile` | `MovementProfile \| null`    | No       | The user's mobility capability (ADR-084 + ADR-085) — owned by the product repo's `user_settings`, sent each turn like `location`. `{ available_modes, reach }`. `available_modes` items ∈ `walking \| cycling \| motorbike \| driving \| transit \| rideshare`; list is non-empty and represents modes the user _can_ use (licence, owned vehicles, comfort) — NOT per-city availability. `reach` ∈ `compact \| normal \| far`, default `normal`. Omitted → kebi applies a neutral fallback. The agent resolves an effective mode per turn by pairing this capability with the working location's city + density; an explicit mode word in the message still overrides. It never mutates the profile. A stray `default_mode` key (from a pre-ADR-085 client) is silently ignored |
 
 > `user_id` is **no longer a body field**. kebi reads the caller from
 > `X-Gateway-User-Id` after the shared-secret check passes.
@@ -165,31 +166,37 @@ to `POST /v1/extract` — the chat path never writes to `user_places`.
   "data": {
     "reasoning_steps": [],
     "tool_results": [
-      { "tool": "find_saved", "tool_call_id": "…", "payload": { /* ConsultResult */ } }
+      {
+        "tool": "find_saved",
+        "tool_call_id": "…",
+        "payload": {
+          /* ConsultResult */
+        }
+      }
     ]
   },
   "tool_calls_used": 1
 }
 ```
 
-| Field             | Type             | Notes                                                                                          |
-| ----------------- | ---------------- | ---------------------------------------------------------------------------------------------- |
-| `type`            | `string`         | One of `agent`, `error`. No other values are emitted.                                          |
-| `message`         | `string`         | Human-readable response text                                                                   |
-| `data`            | `object \| null` | `agent`: `{ "reasoning_steps": ReasoningStep[], "tool_results": ToolResult[] }` (user-visible steps only). `error`: `{ "detail": string }` |
+| Field             | Type             | Notes                                                                                                                                                                                           |
+| ----------------- | ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `type`            | `string`         | One of `agent`, `error`. No other values are emitted.                                                                                                                                           |
+| `message`         | `string`         | Human-readable response text                                                                                                                                                                    |
+| `data`            | `object \| null` | `agent`: `{ "reasoning_steps": ReasoningStep[], "tool_results": ToolResult[] }` (user-visible steps only). `error`: `{ "detail": string }`                                                      |
 | `tool_calls_used` | `integer`        | Number of tool calls the agent made this turn (0 if the agent answered without retrieval). Surfaced for rate-limit accounting on the NestJS side and capped at `agent.max_tool_calls` (ADR-091) |
 
 `ReasoningStep` shape:
 
-| Field         | Type                                  | Notes                                                                       |
-| ------------- | ------------------------------------- | --------------------------------------------------------------------------- |
-| `step`        | `string`                              | Identifier, e.g. `agent.tool_decision`, `find_saved.summary`, `fallback`    |
-| `title`       | `string`                              | Bold action line (ADR-103), e.g. `searched nearby`. Short, lowercase, carries the verb. Same string on the `active` and `done` SSE frames |
-| `summary`     | `string \| null`                      | Result line under the title — plain narration, never repeats the verb (no tool names / internal keys). `null` only on an `active` SSE frame; always set on JSON-path steps |
-| `source`      | `"agent" \| "fallback"`               | Which node produced it (ADR-075 removed the `"tool"` source)                |
-| `visibility`  | `"user" \| "debug"`                   | Only `"user"` steps appear in the JSON response; `"debug"` → Langfuse/SSE   |
-| `timestamp`   | `ISO-8601 string`                     | UTC; when the step was recorded                                            |
-| `duration_ms` | `float \| null`                       | Node latency; non-null in persisted steps                                  |
+| Field         | Type                    | Notes                                                                                                                                                                      |
+| ------------- | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `step`        | `string`                | Identifier, e.g. `agent.tool_decision`, `find_saved.summary`, `fallback`                                                                                                   |
+| `title`       | `string`                | Bold action line (ADR-103), e.g. `searched nearby`. Short, lowercase, carries the verb. Same string on the `active` and `done` SSE frames                                  |
+| `summary`     | `string \| null`        | Result line under the title — plain narration, never repeats the verb (no tool names / internal keys). `null` only on an `active` SSE frame; always set on JSON-path steps |
+| `source`      | `"agent" \| "fallback"` | Which node produced it (ADR-075 removed the `"tool"` source)                                                                                                               |
+| `visibility`  | `"user" \| "debug"`     | Only `"user"` steps appear in the JSON response; `"debug"` → Langfuse/SSE                                                                                                  |
+| `timestamp`   | `ISO-8601 string`       | UTC; when the step was recorded                                                                                                                                            |
+| `duration_ms` | `float \| null`         | Node latency; non-null in persisted steps                                                                                                                                  |
 
 > The SSE step-lifecycle fields `id` and `status` (ADR-102) are **not** part of
 > this non-stream shape — they appear only on `/v1/chat/stream` frames (below).
@@ -199,7 +206,11 @@ to `POST /v1/extract` — the chat path never writes to `user_places`.
 ### `error`
 
 ```json
-{ "type": "error", "message": "Something went wrong, try again", "data": { "detail": "..." } }
+{
+  "type": "error",
+  "message": "Something went wrong, try again",
+  "data": { "detail": "..." }
+}
 ```
 
 `data.detail` is an internal string for logs — safe to ignore in the UI. All downstream exceptions are caught and surfaced as `type="error"` with **HTTP 200** (not 5xx).
@@ -240,24 +251,24 @@ event: done
 data: {"tool_calls_used": 1}
 ```
 
-| Frame            | When emitted                                            | Data shape                       |
-| ---------------- | ------------------------------------------------------- | -------------------------------- |
+| Frame            | When emitted                                                                                       | Data shape                                                 |
+| ---------------- | -------------------------------------------------------------------------------------------------- | ---------------------------------------------------------- |
 | `reasoning_step` | Twice per step over its lifecycle (see below) — the agent, every tool, and the fallback all stream | `ReasoningStep` + stream lifecycle fields (`id`, `status`) |
-| `tool_result`    | Once per completed tool call this turn                  | `ToolResult` (tool, tool_call_id, payload) |
-| `message`        | Once, after the graph completes, if there is text       | `{"content": string}`            |
-| `done`           | Always last — even if no message was produced           | `{"tool_calls_used": integer}`   |
+| `tool_result`    | Once per completed tool call this turn                                                             | `ToolResult` (tool, tool_call_id, payload)                 |
+| `message`        | Once, after the graph completes, if there is text                                                  | `{"content": string}`                                      |
+| `done`           | Always last — even if no message was produced                                                      | `{"tool_calls_used": integer}`                             |
 
 **Step lifecycle (ADR-102).** Each reasoning step is emitted as **two** `reasoning_step` frames keyed by a stable `id`: an `active` frame when the step starts and a `done` frame when it finishes. The frontend upserts by `id`. On the SSE stream `ReasoningStep` carries two fields beyond the JSON-path shape, and relaxes one:
 
-| Field         | On `active` frame      | On `done` frame                | Notes                                                              |
-| ------------- | ---------------------- | ------------------------------ | ------------------------------------------------------------------ |
-| `id`          | stable step id         | same `id` as the active frame  | e.g. `find_saved#0`, `agent.tool_decision#0`; upsert key           |
-| `status`      | `"active"`             | `"done"`                       | lifecycle marker                                                   |
-| `title`       | set                    | same string                    | bold action line; known before the result, so present on `active` |
-| `summary`     | `null`                 | filled                         | client shows a skeleton while `null`                               |
-| `visibility`  | set                    | same value                     | must not change across a step's lifecycle (client keys on `id`)    |
-| `duration_ms` | `null`                 | set                            | node latency on completion                                         |
-| `source`      | `"agent" \| "fallback"`| same                           | ADR-075 narrowed this; no `"tool"` value                           |
+| Field         | On `active` frame       | On `done` frame               | Notes                                                             |
+| ------------- | ----------------------- | ----------------------------- | ----------------------------------------------------------------- |
+| `id`          | stable step id          | same `id` as the active frame | e.g. `find_saved#0`, `agent.tool_decision#0`; upsert key          |
+| `status`      | `"active"`              | `"done"`                      | lifecycle marker                                                  |
+| `title`       | set                     | same string                   | bold action line; known before the result, so present on `active` |
+| `summary`     | `null`                  | filled                        | client shows a skeleton while `null`                              |
+| `visibility`  | set                     | same value                    | must not change across a step's lifecycle (client keys on `id`)   |
+| `duration_ms` | `null`                  | set                           | node latency on completion                                        |
+| `source`      | `"agent" \| "fallback"` | same                          | ADR-075 narrowed this; no `"tool"` value                          |
 
 Rules: every `done` frame is preceded by an `active` frame with the same `id`; an interrupted step (e.g. a tool that times out mid-phase) may emit `active` with no `done` (renders as a step left in its skeleton). `visibility:"debug"` steps ride the stream too — the client filters them. There is **no** "step N of M" total: the agent decides tools dynamically, so the client shows a live "step N" and a "N steps · time" meta line on completion, no greyed pending rows.
 
@@ -289,8 +300,8 @@ Canonical product-facing extraction endpoint (ADR-073). The product repo calls t
 
 (Plus `X-Gateway-Token` + `X-Gateway-User-Id` headers.)
 
-| Field       | Type     | Required | Description                                                          |
-| ----------- | -------- | -------- | -------------------------------------------------------------------- |
+| Field       | Type     | Required | Description                                                                                                                                                                                                                                    |
+| ----------- | -------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `raw_input` | `string` | yes      | URL (TikTok / Instagram / YouTube / Google Maps list) or place name. Max 8000 chars. URLs are matched against an exact-suffix host allowlist; an attacker host like `tiktok.com.evil.tld` is rejected with `failure_reason: "unsupported_url"` |
 
 > `user_id` is sourced from `X-Gateway-User-Id` and used as the
@@ -303,7 +314,9 @@ Canonical product-facing extraction endpoint (ADR-073). The product repo calls t
   "status": "completed",
   "results": [
     {
-      "place": { /* PlaceCore */ },
+      "place": {
+        /* PlaceCore */
+      },
       "confidence": 0.82
     }
   ],
@@ -314,14 +327,14 @@ Canonical product-facing extraction endpoint (ADR-073). The product repo calls t
 }
 ```
 
-| Field             | Type                                            | Notes                                                                                  |
-| ----------------- | ----------------------------------------------- | -------------------------------------------------------------------------------------- |
-| `status`          | `"pending" \| "completed" \| "failed"`          | Envelope-level only. `results` is non-empty **iff** `status == "completed"`             |
-| `results`         | `ExtractPlaceItem[]`                            | `{ place: PlaceCore, confidence: float (0–1) }`. **No per-item `status`** — ADR-071 saves every picker candidate with `approved=False`; the user curates later in the product UI. **No `evidence`** — ADR-093 moved the audit trail to an object-storage ledger so it no longer rides the response |
-| `raw_input`       | `string \| null`                                | The original user-supplied string, verbatim                                            |
-| `request_id`      | `string \| null`                                | Correlation id                                                                          |
-| `failure_reason`  | `string \| null`                                | Populated only when `status == "failed"` (e.g. `unsupported_url`)                       |
-| `failure_message` | `string \| null`                                | Human-readable diagnostic, only when `status == "failed"`                               |
+| Field             | Type                                   | Notes                                                                                                                                                                                                                                                                                              |
+| ----------------- | -------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `status`          | `"pending" \| "completed" \| "failed"` | Envelope-level only. `results` is non-empty **iff** `status == "completed"`                                                                                                                                                                                                                        |
+| `results`         | `ExtractPlaceItem[]`                   | `{ place: PlaceCore, confidence: float (0–1) }`. **No per-item `status`** — ADR-071 saves every picker candidate with `approved=False`; the user curates later in the product UI. **No `evidence`** — ADR-093 moved the audit trail to an object-storage ledger so it no longer rides the response |
+| `raw_input`       | `string \| null`                       | The original user-supplied string, verbatim                                                                                                                                                                                                                                                        |
+| `request_id`      | `string \| null`                       | Correlation id                                                                                                                                                                                                                                                                                     |
+| `failure_reason`  | `string \| null`                       | Populated only when `status == "failed"` (e.g. `unsupported_url`)                                                                                                                                                                                                                                  |
+| `failure_message` | `string \| null`                       | Human-readable diagnostic, only when `status == "failed"`                                                                                                                                                                                                                                          |
 
 ADR-081: the extract response is unchanged. The name the place was shown as in the source post (e.g. a TikTok card title "Mirror Temple", resolver-cleaned of list numbering) is **not** returned here — it is persisted per save on `user_places.source_label` and surfaced when the user's saved places are read. Independently, a confidently-matched source label is added to the shared `place.place_name_aliases` (which feeds search); low-confidence labels stay per-user-only and never enter shared search.
 
@@ -355,21 +368,21 @@ GET /v1/user/library?sort=name&limit=20
 GET /v1/user/library?sort=name&limit=20&cursor=<next_cursor-from-prior-response>
 ```
 
-| Param          | Type                         | Notes                                                                                          |
-| -------------- | ---------------------------- | ---------------------------------------------------------------------------------------------- |
-| `category`     | repeated `PlaceCategory`     | OR across repeats. `?category=cafe&category=bar`                                                |
-| `tag`          | repeated `string`            | Tag **value**; AND across repeats (every value must be present)                                |
-| `city`         | `string`                     | Case-insensitive match on `place.location.city`                                                |
-| `country`      | `string`                     | Exact match on `place.location.country`                                                        |
-| `source`       | `PlaceSource`                | `tiktok \| instagram \| youtube \| google_maps_list \| manual \| kebi`                          |
-| `visited`      | `bool`                       | Filter on the user's visited flag                                                              |
-| `liked`        | `bool`                       | Filter on the user's like flag                                                                 |
-| `approved`     | `bool`                       | Curation flag (ADR-071). **Omitted → every save is returned regardless of `approved`**          |
-| `saved_after`  | ISO-8601                     | Saves on/after this instant                                                                    |
-| `saved_before` | ISO-8601                     | Saves on/before this instant                                                                   |
-| `sort`         | `recent \| name` (default `recent`) | The screen's recent ↔ A–Z toggle. `recent` = newest-saved first; `name` = case-insensitive A–Z |
-| `limit`        | `int` (1–100, default 50)    | Max places per page. Out-of-range → 422                                                        |
-| `cursor`       | `string`                     | Opaque cursor from a prior response's `next_cursor`. Omit for the first page. Malformed or sort-mismatched → 400 |
+| Param          | Type                                | Notes                                                                                                            |
+| -------------- | ----------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `category`     | repeated `PlaceCategory`            | OR across repeats. `?category=cafe&category=bar`                                                                 |
+| `tag`          | repeated `string`                   | Tag **value**; AND across repeats (every value must be present)                                                  |
+| `city`         | `string`                            | Case-insensitive match on `place.location.city`                                                                  |
+| `country`      | `string`                            | Exact match on `place.location.country`                                                                          |
+| `source`       | `PlaceSource`                       | `tiktok \| instagram \| youtube \| google_maps_list \| manual \| kebi`                                           |
+| `visited`      | `bool`                              | Filter on the user's visited flag                                                                                |
+| `liked`        | `bool`                              | Filter on the user's like flag                                                                                   |
+| `approved`     | `bool`                              | Curation flag (ADR-071). **Omitted → every save is returned regardless of `approved`**                           |
+| `saved_after`  | ISO-8601                            | Saves on/after this instant                                                                                      |
+| `saved_before` | ISO-8601                            | Saves on/before this instant                                                                                     |
+| `sort`         | `recent \| name` (default `recent`) | The screen's recent ↔ A–Z toggle. `recent` = newest-saved first; `name` = case-insensitive A–Z                   |
+| `limit`        | `int` (1–100, default 50)           | Max places per page. Out-of-range → 422                                                                          |
+| `cursor`       | `string`                            | Opaque cursor from a prior response's `next_cursor`. Omit for the first page. Malformed or sort-mismatched → 400 |
 
 Filters combine with **AND**. Default order is newest-first (`saved_at`
 descending); `sort=name` switches to case-insensitive alphabetical. A
@@ -383,7 +396,9 @@ the first page (drop the `cursor`). Keep `sort` fixed across a paging run.
 {
   "places": [
     {
-      "place": { /* PlaceCore */ },
+      "place": {
+        /* PlaceCore */
+      },
       "user_data": {
         "user_place_id": "9b1c…",
         "place_id": "c0ffee00-1111-2222-3333-444455556666",
@@ -399,14 +414,16 @@ the first page (drop the `cursor`). Keep `sort` fixed across a paging run.
       }
     }
   ],
-  "next_cursor": "eyJ0cyI6…"
+  "next_cursor": "eyJ0cyI6…",
+  "total": 42
 }
 ```
 
-| Field         | Type                    | Notes                                                                                              |
-| ------------- | ----------------------- | -------------------------------------------------------------------------------------------------- |
-| `places`      | `SavedPlaceView[]`      | `{ place: PlaceCore, user_data: UserPlace }`. `place` carries catalog fields only — no live rating/hours (same as extraction). `user_data` is this user's relationship to the place |
-| `next_cursor` | `string \| null`        | Opaque keyset cursor. Pass it back as `?cursor=` for the next page. **`null` on the last page**     |
+| Field         | Type               | Notes                                                                                                                                                                               |
+| ------------- | ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `places`      | `SavedPlaceView[]` | `{ place: PlaceCore, user_data: UserPlace }`. `place` carries catalog fields only — no live rating/hours (same as extraction). `user_data` is this user's relationship to the place |
+| `next_cursor` | `string \| null`   | Opaque keyset cursor. Pass it back as `?cursor=` for the next page. **`null` on the last page**                                                                                     |
+| `total`       | `integer`          | The caller's **grand total** of saved places — the whole stash, **independent of the request's filters and pagination** (drives the screen's hero count). Same on every page        |
 
 `user_data` (`UserPlace`) fields: `user_place_id`, `place_id`, `approved`,
 `visited`, `liked` (tri-state, may be `null`), `note`, `source`,
@@ -416,8 +433,10 @@ matched the canonical name), `saved_at`, `visited_at`. `user_id` is **not**
 echoed — the caller already knows who they are.
 
 **Empty state:** a user with no saves (or no matches) returns
-`{ "places": [], "next_cursor": null }` — the empty-state UI is the
-product's concern; the shape is guaranteed.
+`{ "places": [], "next_cursor": null, "total": 0 }` — the empty-state UI is
+the product's concern; the shape is guaranteed. (`total` is `0` only for a
+user with no saves at all; a filtered page that matches nothing still
+reports the unfiltered grand total.)
 
 **Paging:** keyset (cursor) pagination, not offset — stable under new
 saves (no skipped/duplicated rows at page boundaries) and fast at any
@@ -426,11 +445,11 @@ depth. The cursor anchors on the active sort's key plus `user_place_id`
 records which sort minted it; clients treat it as opaque and stop when
 `next_cursor` is `null`.
 
-| Code  | When                                                              |
-| ----- | ----------------------------------------------------------------- |
-| `200` | Success (including the empty library)                             |
+| Code  | When                                                                |
+| ----- | ------------------------------------------------------------------- |
+| `200` | Success (including the empty library)                               |
 | `400` | Malformed `cursor`, or a `cursor` replayed under a different `sort` |
-| `422` | Unknown query param, bad enum value, or `limit` out of 1–100      |
+| `422` | Unknown query param, bad enum value, or `limit` out of 1–100        |
 
 ---
 
@@ -453,12 +472,12 @@ PATCH /v1/user/places/{user_place_id}
 { "visited": true }
 ```
 
-| Field      | Type           | Notes                                                              |
-| ---------- | -------------- | ------------------------------------------------------------------ |
-| `visited`  | `bool`         | Been-there flag                                                    |
-| `liked`    | `bool \| null` | Tri-state like. `null` returns it to neutral                       |
-| `approved` | `bool`         | Curation flag                                                      |
-| `note`     | `string \| null` | Free-text note. `null` clears it                                 |
+| Field      | Type             | Notes                                        |
+| ---------- | ---------------- | -------------------------------------------- |
+| `visited`  | `bool`           | Been-there flag                              |
+| `liked`    | `bool \| null`   | Tri-state like. `null` returns it to neutral |
+| `approved` | `bool`           | Curation flag                                |
+| `note`     | `string \| null` | Free-text note. `null` clears it             |
 
 **Partial semantics:** omitted ≠ null. An **omitted** field is left
 untouched; an **explicit `null`** clears it (un-like to neutral, erase a
@@ -487,11 +506,11 @@ lets the client replace its local row wholesale.
 }
 ```
 
-| Code  | When                                                                        |
-| ----- | --------------------------------------------------------------------------- |
-| `200` | Updated — returns the new user-state                                        |
+| Code  | When                                                                                                                                  |
+| ----- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `200` | Updated — returns the new user-state                                                                                                  |
 | `404` | No such save **or** it belongs to another user (`detail: saved_place_not_found`) — the two are indistinguishable, so it leaks nothing |
-| `422` | Empty body, unknown field, or bad value type                                |
+| `422` | Empty body, unknown field, or bad value type                                                                                          |
 
 ---
 
@@ -512,9 +531,9 @@ DELETE /v1/user/places/{user_place_id}
 
 **Response:** `204 No Content` on success (empty body).
 
-| Code  | When                                                                        |
-| ----- | --------------------------------------------------------------------------- |
-| `204` | The caller's save was removed                                               |
+| Code  | When                                                                                                                                                                            |
+| ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `204` | The caller's save was removed                                                                                                                                                   |
 | `404` | No such save **or** it belongs to another user (`detail: saved_place_not_found`) — indistinguishable, so it leaks nothing. A repeat delete of the same id therefore returns 404 |
 
 ---
@@ -538,8 +557,8 @@ DELETE /v1/user/data?scope=chat_history
 
 **Response (204):** Empty body.
 
-| Param   | Type                                      | Description                                                                                              |
-| ------- | ----------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| Param   | Type                                           | Description                                                                                                                       |
+| ------- | ---------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
 | `scope` | repeated `DataScope` (`all` \| `chat_history`) | Selects what to delete. Omit to wipe everything (default). Unknown values → 422. A set containing `all` collapses to a full wipe. |
 
 **What gets deleted (default / `scope=all`):**
@@ -580,10 +599,10 @@ Behavioral signal endpoint (ADR-060, narrowed by ADR-076 to recommendation accep
 
 (Plus `X-Gateway-Token` + `X-Gateway-User-Id` headers.)
 
-| Field               | Type     | Required | Notes                                                                                                                 |
-| ------------------- | -------- | -------- | --------------------------------------------------------------------------------------------------------------------- |
-| `signal_type`       | `string` | Yes      | `"recommendation_accepted"` or `"recommendation_rejected"`                                                             |
-| `recommendation_id` | `string` | Yes      | **Trusted, not validated.** ADR-078 dropped the `recommendations` table; the id is recorded on the event, never looked up |
+| Field               | Type     | Required | Notes                                                                                                                                    |
+| ------------------- | -------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `signal_type`       | `string` | Yes      | `"recommendation_accepted"` or `"recommendation_rejected"`                                                                               |
+| `recommendation_id` | `string` | Yes      | **Trusted, not validated.** ADR-078 dropped the `recommendations` table; the id is recorded on the event, never looked up                |
 | `place_core_id`     | `string` | Yes      | `places.id` of the place (ADR-077; renamed from `place_id` to disambiguate from `user_place_id` / `provider_id`). Trusted, not validated |
 
 > `user_id` is sourced from `X-Gateway-User-Id`, not the body. A caller
@@ -604,12 +623,12 @@ Health check. **Request:** none.
 { "status": "ok", "name": "kebi", "version": "0.1.0", "db": "connected" }
 ```
 
-| Field     | Type                            | Notes                                                                          |
-| --------- | ------------------------------- | ------------------------------------------------------------------------------ |
-| `status`  | `string`                        | Always `"ok"` when reachable                                                   |
-| `name`    | `string`                        | App name from `config/app.yaml`                                                |
-| `version` | `string`                        | Package version; falls back to `"0.1.0"`                                        |
-| `db`      | `"connected" \| "disconnected"` | `SELECT 1` probe result                                                        |
+| Field     | Type                            | Notes                                    |
+| --------- | ------------------------------- | ---------------------------------------- |
+| `status`  | `string`                        | Always `"ok"` when reachable             |
+| `name`    | `string`                        | App name from `config/app.yaml`          |
+| `version` | `string`                        | Package version; falls back to `"0.1.0"` |
+| `db`      | `"connected" \| "disconnected"` | `SELECT 1` probe result                  |
 
 Always HTTP 200 — DB outages surface via `db: "disconnected"`.
 
@@ -619,29 +638,29 @@ Always HTTP 200 — DB outages surface via `db: "disconnected"`.
 
 All protected calls additionally send the `X-Gateway-Token` + `X-Gateway-User-Id` headers (see "Service-to-service auth").
 
-| Endpoint                          | Purpose                                | NestJS Sends (body)                                            | kebi Returns                                                          |
-| --------------------------------- | -------------------------------------- | -------------------------------------------------------------- | --------------------------------------------------------------------- |
-| POST /v1/chat                     | Conversational turn (consult-family agent) | message, optional location, movement_profile                   | type (`agent`\|`error`), message, data (reasoning_steps + tool_results), tool_calls_used |
-| POST /v1/chat/stream              | SSE streaming chat                     | Same as POST /v1/chat                                          | reasoning_step + tool_result + message + done frames                  |
-| POST /v1/extract                  | Canonical extraction (save a place)    | raw_input                                                      | ExtractPlaceResponse                                                  |
-| GET /v1/user/library              | Browse the user's saved places (Library) | — (optional filter + `sort` + `limit`/`cursor` query params) | LibraryResponse (`places: SavedPlaceView[]`, `next_cursor`)           |
-| PATCH /v1/user/places/{id}        | Update a save's user-state (pills/menu) | partial body: `visited`/`liked`/`approved`/`note`             | LibraryUserData (updated user-state; `200`/`404`)                     |
-| DELETE /v1/user/places/{id}       | Remove one saved place from the library | — (path param only)                                           | 204 No Content (`404` if absent/not owned)                            |
-| DELETE /v1/user/data              | Account-deletion sweep of AI data      | — (optional `scope` query param)                               | 204 No Content                                                        |
-| POST /v1/signal                   | Recommendation accept/reject           | signal_type, recommendation_id, place_core_id                  | status (202)                                                          |
-| GET /v1/health                    | Service health check (unauthenticated) | —                                                              | status, db connectivity                                               |
+| Endpoint                    | Purpose                                    | NestJS Sends (body)                                          | kebi Returns                                                                             |
+| --------------------------- | ------------------------------------------ | ------------------------------------------------------------ | ---------------------------------------------------------------------------------------- |
+| POST /v1/chat               | Conversational turn (consult-family agent) | message, optional location, movement_profile                 | type (`agent`\|`error`), message, data (reasoning_steps + tool_results), tool_calls_used |
+| POST /v1/chat/stream        | SSE streaming chat                         | Same as POST /v1/chat                                        | reasoning_step + tool_result + message + done frames                                     |
+| POST /v1/extract            | Canonical extraction (save a place)        | raw_input                                                    | ExtractPlaceResponse                                                                     |
+| GET /v1/user/library        | Browse the user's saved places (Library)   | — (optional filter + `sort` + `limit`/`cursor` query params) | LibraryResponse (`places: SavedPlaceView[]`, `next_cursor`, `total`)                     |
+| PATCH /v1/user/places/{id}  | Update a save's user-state (pills/menu)    | partial body: `visited`/`liked`/`approved`/`note`            | LibraryUserData (updated user-state; `200`/`404`)                                        |
+| DELETE /v1/user/places/{id} | Remove one saved place from the library    | — (path param only)                                          | 204 No Content (`404` if absent/not owned)                                               |
+| DELETE /v1/user/data        | Account-deletion sweep of AI data          | — (optional `scope` query param)                             | 204 No Content                                                                           |
+| POST /v1/signal             | Recommendation accept/reject               | signal_type, recommendation_id, place_core_id                | status (202)                                                                             |
+| GET /v1/health              | Service health check (unauthenticated)     | —                                                            | status, db connectivity                                                                  |
 
 ---
 
 ## Error Handling
 
-| Status  | Meaning                                | Product repo action                                     |
-| ------- | -------------------------------------- | ------------------------------------------------------- |
-| 200     | Success (including `type="error"`)     | Process response                                        |
-| 400     | Bad request (malformed input)          | Log error, return 400 to frontend                       |
-| 422     | Validation error                       | Return friendly message to frontend                     |
-| 500     | AI service internal error              | Log error, return 503 to frontend with retry suggestion |
-| Timeout | Service unreachable                    | Return 503 with "service temporarily unavailable"       |
+| Status  | Meaning                            | Product repo action                                     |
+| ------- | ---------------------------------- | ------------------------------------------------------- |
+| 200     | Success (including `type="error"`) | Process response                                        |
+| 400     | Bad request (malformed input)      | Log error, return 400 to frontend                       |
+| 422     | Validation error                   | Return friendly message to frontend                     |
+| 500     | AI service internal error          | Log error, return 503 to frontend with retry suggestion |
+| Timeout | Service unreachable                | Return 503 with "service temporarily unavailable"       |
 
 **Timeout policy:** 30 s HTTP client timeout for all AI calls. `POST /v1/extract` on a cold video URL can take up to ~60 s — size that path's timeout accordingly.
 

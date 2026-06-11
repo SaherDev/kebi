@@ -53,26 +53,38 @@ def _view(uid: str, pid: str, saved_at: datetime | None = None) -> SavedPlaceVie
 
 class TestBrowse:
     async def test_empty_returns_empty_page_and_no_cursor(self) -> None:
-        repo = MagicMock(browse=AsyncMock(return_value=[]))
+        repo = MagicMock(
+            browse=AsyncMock(return_value=[]),
+            count_by_user=AsyncMock(return_value=0),
+        )
         svc = UserPlacesService(user_places_repo=repo)
 
-        page, next_cursor = await svc.browse("u1", SavedPlaceFilters(), limit=10)
+        page, next_cursor, total = await svc.browse(
+            "u1", SavedPlaceFilters(), limit=10
+        )
 
         assert page == []
         assert next_cursor is None
+        assert total == 0
         # Over-fetches limit+1 to detect a next page; first page has no cursor.
         _, kwargs = repo.browse.call_args
         assert kwargs["limit"] == 11
         assert kwargs["cursor"] is None
 
     async def test_no_next_cursor_when_page_not_full(self) -> None:
-        repo = MagicMock(browse=AsyncMock(return_value=[_view("u1", "p1")]))
+        repo = MagicMock(
+            browse=AsyncMock(return_value=[_view("u1", "p1")]),
+            count_by_user=AsyncMock(return_value=1),
+        )
         svc = UserPlacesService(user_places_repo=repo)
 
-        page, next_cursor = await svc.browse("u1", SavedPlaceFilters(), limit=10)
+        page, next_cursor, total = await svc.browse(
+            "u1", SavedPlaceFilters(), limit=10
+        )
 
         assert len(page) == 1
         assert next_cursor is None
+        assert total == 1
 
     async def test_next_cursor_anchors_on_last_kept_row(self) -> None:
         # limit=2, repo returns 3 (limit+1) → there is another page.
@@ -84,21 +96,44 @@ class TestBrowse:
                     _view("u1", "p2", t),
                     _view("u1", "p3", t),
                 ]
-            )
+            ),
+            count_by_user=AsyncMock(return_value=3),
         )
         svc = UserPlacesService(user_places_repo=repo)
 
-        page, next_cursor = await svc.browse("u1", SavedPlaceFilters(), limit=2)
+        page, next_cursor, total = await svc.browse(
+            "u1", SavedPlaceFilters(), limit=2
+        )
 
         assert [v.place.id for v in page] == ["p1", "p2"]  # trimmed to limit
         assert next_cursor is not None
+        assert total == 3
         # Cursor resumes after the last *kept* row, not the over-fetched one.
         assert LibraryCursor.decode(next_cursor) == LibraryCursor(
             LibrarySort.recent, t.isoformat(), "up-p2"
         )
 
+    async def test_total_ignores_filters_and_pagination(self) -> None:
+        """`total` is the unfiltered grand total — the count_by_user value,
+        not the (over-fetched, filtered) page length."""
+        repo = MagicMock(
+            browse=AsyncMock(return_value=[_view("u1", "p1")]),
+            count_by_user=AsyncMock(return_value=42),
+        )
+        svc = UserPlacesService(user_places_repo=repo)
+
+        _, _, total = await svc.browse(
+            "u1", SavedPlaceFilters(visited=True), limit=10
+        )
+
+        assert total == 42
+        repo.count_by_user.assert_awaited_once_with("u1")
+
     async def test_incoming_cursor_decoded_and_passed_to_repo(self) -> None:
-        repo = MagicMock(browse=AsyncMock(return_value=[]))
+        repo = MagicMock(
+            browse=AsyncMock(return_value=[]),
+            count_by_user=AsyncMock(return_value=0),
+        )
         svc = UserPlacesService(user_places_repo=repo)
         t = _now()
         token = LibraryCursor(LibrarySort.recent, t.isoformat(), "up-x").encode()
@@ -111,7 +146,10 @@ class TestBrowse:
         )
 
     async def test_malformed_cursor_raises_value_error(self) -> None:
-        repo = MagicMock(browse=AsyncMock(return_value=[]))
+        repo = MagicMock(
+            browse=AsyncMock(return_value=[]),
+            count_by_user=AsyncMock(return_value=0),
+        )
         svc = UserPlacesService(user_places_repo=repo)
 
         with pytest.raises(ValueError, match="invalid library cursor"):
@@ -119,7 +157,10 @@ class TestBrowse:
         repo.browse.assert_not_called()
 
     async def test_sort_defaults_to_recent_and_is_passed_to_repo(self) -> None:
-        repo = MagicMock(browse=AsyncMock(return_value=[]))
+        repo = MagicMock(
+            browse=AsyncMock(return_value=[]),
+            count_by_user=AsyncMock(return_value=0),
+        )
         svc = UserPlacesService(user_places_repo=repo)
 
         await svc.browse("u1", SavedPlaceFilters(), limit=5)
@@ -132,11 +173,14 @@ class TestBrowse:
         # anchor (lowered), not saved_at.
         t = _now()
         repo = MagicMock(
-            browse=AsyncMock(return_value=[_view("u1", "p1", t), _view("u1", "p2", t)])
+            browse=AsyncMock(
+                return_value=[_view("u1", "p1", t), _view("u1", "p2", t)]
+            ),
+            count_by_user=AsyncMock(return_value=2),
         )
         svc = UserPlacesService(user_places_repo=repo)
 
-        _, next_cursor = await svc.browse(
+        _, next_cursor, _ = await svc.browse(
             "u1", SavedPlaceFilters(), limit=1, sort=LibrarySort.name
         )
 

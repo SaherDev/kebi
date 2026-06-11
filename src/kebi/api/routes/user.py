@@ -35,8 +35,10 @@ async def get_user_library(
 
     Returns one filtered page of the user's saved places (`user_places ⋈
     places`) plus an opaque `next_cursor` for the next page (`null` on the
-    last page). An empty library returns `{"places": [], "next_cursor":
-    null}` — the empty-state UI is the product's concern.
+    last page) and `total`, the unfiltered grand total of the caller's saves
+    (the screen's hero count, the same on every page). An empty library
+    returns `{"places": [], "next_cursor": null, "total": 0}` — the
+    empty-state UI is the product's concern.
 
     `sort` is the screen's recent ↔ A–Z toggle: `recent` (newest-saved
     first, default) or `name` (case-insensitive A–Z). A `cursor` is bound to
@@ -52,14 +54,14 @@ async def get_user_library(
     only ever read their own library. A malformed or sort-mismatched
     `cursor` surfaces as a 400 via the shared `ValueError` handler.
     """
-    places, next_cursor = await service.browse(
+    places, next_cursor, total = await service.browse(
         identity.user_id,
         params.to_filters(),
         params.limit,
         cursor=params.cursor,
         sort=params.sort,
     )
-    return LibraryResponse.from_page(places, next_cursor)
+    return LibraryResponse.from_page(places, next_cursor, total)
 
 
 @router.patch("/user/places/{user_place_id}", response_model=LibraryUserData)

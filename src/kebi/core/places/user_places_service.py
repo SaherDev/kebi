@@ -105,8 +105,9 @@ class UserPlacesService:
         limit: int,
         cursor: str | None = None,
         sort: LibrarySort = LibrarySort.recent,
-    ) -> tuple[list[SavedPlaceView], str | None]:
-        """One filtered, keyset-paged page of the user's saved places.
+    ) -> tuple[list[SavedPlaceView], str | None, int]:
+        """One filtered, keyset-paged page of the user's saved places, plus the
+        unfiltered grand total of the caller's saves.
 
         `sort` selects the order (recent ↔ A–Z) and is carried into the keyset
         anchor: the opaque `cursor` token is owned end-to-end here — this is
@@ -121,11 +122,16 @@ class UserPlacesService:
         detect a next page without a separate count: more than `limit` rows
         means another page, whose cursor is the last kept row's anchor;
         otherwise the cursor is None and the client stops paging.
+
+        `total` is the whole library size — independent of the page's filters
+        and cursor — and drives the screen's hero count, so it is the same on
+        every page.
         """
         anchor = LibraryCursor.decode(cursor) if cursor else None
         rows = await self._user_places_repo.browse(
             user_id, filters, limit=limit + 1, cursor=anchor, sort=sort
         )
+        total = await self._user_places_repo.count_by_user(user_id)
         has_more = len(rows) > limit
         page = rows[:limit]
         next_cursor = (
@@ -133,7 +139,7 @@ class UserPlacesService:
             if has_more and page
             else None
         )
-        return page, next_cursor
+        return page, next_cursor, total
 
     async def update_status(
         self, user_place_id: str, user_id: str, changes: UserPlaceStatusUpdate
