@@ -67,7 +67,11 @@ from .tags import (
 )
 from .upsert_service import PlaceUpsertService
 from .user_places_repo import UserPlacesRepo
-from .user_places_service import DuplicateUserPlaceError, UserPlacesService
+from .user_places_service import (
+    DuplicateUserPlaceError,
+    PlaceNotFoundError,
+    UserPlacesService,
+)
 
 __all__ = [
     # tag vocabulary
@@ -134,6 +138,7 @@ __all__ = [
     "GeocodeResult",
     # errors
     "DuplicateUserPlaceError",
+    "PlaceNotFoundError",
     "GeocodingError",
     # constants
     "EMBEDDING_DIMENSIONS",

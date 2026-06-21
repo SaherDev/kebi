@@ -12,6 +12,7 @@ from kebi.core.events.events import (
     PlaceSaved,
     RecommendationAccepted,
     RecommendationRejected,
+    RecommendationSaved,
     TurnCompleted,
 )
 from kebi.db.models import InteractionType
@@ -23,10 +24,11 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Map event_type → (InteractionType, how to get place_core_ids)
+# Map event_type → InteractionType for single-place recommendation signals.
 _TASTE_EVENT_MAP: dict[str, InteractionType] = {
     "recommendation_accepted": InteractionType.ACCEPTED,
     "recommendation_rejected": InteractionType.REJECTED,
+    "recommendation_saved": InteractionType.SAVED_RECOMMENDATION,
 }
 
 
@@ -48,7 +50,7 @@ class EventHandlers:
 
         Dispatches to handle_signal with the correct InteractionType.
         Handles PlaceSaved (multiple place_core_ids), RecommendationAccepted,
-        and RecommendationRejected.
+        RecommendationRejected, and RecommendationSaved.
         """
         try:
             # Build (signal_type, place_core_id) pairs from the event shape
@@ -57,7 +59,10 @@ class EventHandlers:
                 pairs = [
                     (InteractionType.SAVE, pcid) for pcid in event.place_core_ids
                 ]
-            elif isinstance(event, RecommendationAccepted | RecommendationRejected):
+            elif isinstance(
+                event,
+                RecommendationAccepted | RecommendationRejected | RecommendationSaved,
+            ):
                 pairs = [(_TASTE_EVENT_MAP[event.event_type], event.place_core_id)]
 
             for signal_type, place_core_id in pairs:

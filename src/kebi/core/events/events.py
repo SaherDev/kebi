@@ -39,6 +39,21 @@ class RecommendationRejected(DomainEvent):
     place_core_id: str
 
 
+class RecommendationSaved(DomainEvent):
+    """Event: User saved a place kebi recommended (the consult card's "save
+    it" action).
+
+    A stronger positive than the passive `PlaceSaved` of a link-share import:
+    it maps to its own taste interaction type (`saved_recommendation`) with a
+    higher evidence weight, and — unlike a link-share save — does not feed the
+    `source` distribution (kebi is not a discovery channel).
+    """
+
+    event_type: str = "recommendation_saved"
+    recommendation_id: str
+    place_core_id: str
+
+
 class TurnCompleted(DomainEvent):
     """Event: A user turn finished (success, clarification, or error).
 

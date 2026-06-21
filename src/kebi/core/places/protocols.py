@@ -63,6 +63,10 @@ class UserPlacesRepoProtocol(Protocol):
         self, user_id: str, place_ids: list[str]
     ) -> set[str]: ...
 
+    async def get_by_user_and_place(
+        self, user_id: str, place_id: str
+    ) -> UserPlace | None: ...
+
     async def save_user_places(
         self, user_places: list[UserPlace]
     ) -> list[UserPlace]: ...
@@ -124,6 +128,10 @@ class UserPlacesServiceProtocol(Protocol):
         cursor: str | None = None,
         sort: LibrarySort = LibrarySort.recent,
     ) -> tuple[list[SavedPlaceView], str | None, int]: ...
+
+    async def save_one(
+        self, user_id: str, place_id: str, source: PlaceSource
+    ) -> tuple[UserPlace, bool]: ...
 
     async def update_status(
         self, user_place_id: str, user_id: str, changes: UserPlaceStatusUpdate

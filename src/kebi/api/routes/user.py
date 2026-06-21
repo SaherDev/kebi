@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
 from kebi.api.deps import (
     GatewayIdentity,
+    get_event_dispatcher,
     get_user_data_deletion_service,
     get_user_places_service,
     require_gateway_identity,
@@ -15,9 +16,12 @@ from kebi.api.schemas.library import (
     LibraryQuery,
     LibraryResponse,
     LibraryUserData,
+    SaveUserPlaceRequest,
     UserPlaceStatusPatch,
 )
-from kebi.core.places import UserPlacesService
+from kebi.core.events.dispatcher import EventDispatcher
+from kebi.core.events.events import RecommendationSaved
+from kebi.core.places import PlaceNotFoundError, PlaceSource, UserPlacesService
 from kebi.core.user.service import DataScope, UserDataDeletionService
 
 router = APIRouter()
@@ -62,6 +66,58 @@ async def get_user_library(
         sort=params.sort,
     )
     return LibraryResponse.from_page(places, next_cursor, total)
+
+
+@router.post(
+    "/user/places",
+    response_model=LibraryUserData,
+    status_code=status.HTTP_201_CREATED,
+)
+@limiter.limit("60/minute")
+async def save_user_place(
+    request: Request,
+    body: SaveUserPlaceRequest,
+    identity: Annotated[GatewayIdentity, Depends(require_gateway_identity)],
+    service: UserPlacesService = Depends(get_user_places_service),  # noqa: B008
+    event_dispatcher: EventDispatcher = Depends(get_event_dispatcher),  # noqa: B008
+) -> LibraryUserData:
+    """Save a recommended place to the caller's library (the consult card's
+    "save it" action).
+
+    Links the already-cataloged place to the caller as a `user_places` row
+    with `source=kebi`, and emits a `RecommendationSaved` event — the positive
+    taste signal half of "save it". This is a stronger signal than a passive
+    link-share save (its own `saved_recommendation` interaction type, weighted
+    heavier, and not counted toward the `source` distribution).
+
+    Idempotent: a re-tap on an already-saved place returns the existing save
+    and does **not** re-emit the signal, so saving twice never double-trains
+    taste. Returns 404 when `place_core_id` is not in the catalog (the save
+    trips the `place_id → places.id` foreign key).
+
+    `user_id` comes only from the verified gateway identity, never the body —
+    a caller can only ever save into their own library. Returns the created
+    (or existing) user-state as `LibraryUserData` (never the raw domain model
+    — ADR-105).
+    """
+    try:
+        user_place, created = await service.save_one(
+            identity.user_id, body.place_core_id, PlaceSource.kebi
+        )
+    except PlaceNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="place_not_found"
+        ) from exc
+
+    if created:
+        await event_dispatcher.dispatch(
+            RecommendationSaved(
+                user_id=identity.user_id,
+                recommendation_id=body.recommendation_id,
+                place_core_id=body.place_core_id,
+            )
+        )
+    return LibraryUserData.from_user_place(user_place)
 
 
 @router.patch("/user/places/{user_place_id}", response_model=LibraryUserData)

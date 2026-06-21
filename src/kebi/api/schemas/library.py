@@ -97,6 +97,29 @@ class LibraryQuery(BaseModel):
         )
 
 
+class SaveUserPlaceRequest(BaseModel):
+    """Body for POST /v1/user/places — the consult card's "save it" action.
+
+    `place_core_id` is the catalog id of the recommended place; it already
+    exists in the catalog (it was just recommended), so the save just links it
+    to the caller. `recommendation_id` is the id kebi minted on the consult
+    result the place came from — it attributes the `saved_recommendation`
+    taste signal back to that recommendation. `source` is not accepted from
+    the client — the route stamps `PlaceSource.kebi`. `user_id` is
+    intentionally absent (gateway identity, ADR-105). `extra="forbid"` rejects
+    unknown keys with a 422.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    place_core_id: str = Field(
+        ..., description="places.id of the recommended place to save"
+    )
+    recommendation_id: str = Field(
+        ..., description="id of the recommendation the place was saved from"
+    )
+
+
 class UserPlaceStatusPatch(BaseModel):
     """Partial update body for PATCH /v1/user/places/{user_place_id}.
 

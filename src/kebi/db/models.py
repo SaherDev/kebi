@@ -26,6 +26,9 @@ class InteractionType(PyEnum):
     SAVE = "save"
     ACCEPTED = "accepted"
     REJECTED = "rejected"
+    # Saving a place kebi recommended — a stronger positive than a passive
+    # link-share SAVE, carrying its own taste weight (not the same bucket).
+    SAVED_RECOMMENDATION = "saved_recommendation"
 
 
 class TasteModel(Base):

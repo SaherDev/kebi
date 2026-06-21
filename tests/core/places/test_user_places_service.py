@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from sqlalchemy.exc import IntegrityError
 
 from kebi.core.places._cursor import LibraryCursor
 from kebi.core.places.models import (
@@ -20,6 +21,7 @@ from kebi.core.places.models import (
 )
 from kebi.core.places.user_places_service import (
     DuplicateUserPlaceError,
+    PlaceNotFoundError,
     UserPlacesService,
 )
 
@@ -370,3 +372,56 @@ class TestSavePlaces:
 
         assert exc_info.value.conflicts == ["p1"]
         user_places_repo.save_user_places.assert_not_called()
+
+
+class TestSaveOne:
+    async def test_creates_row_when_not_already_saved(self) -> None:
+        repo = MagicMock(
+            get_by_user_and_place=AsyncMock(return_value=None),
+            save_user_places=AsyncMock(side_effect=lambda rows: rows),
+        )
+        svc = UserPlacesService(user_places_repo=repo)
+
+        row, created = await svc.save_one("u1", "p1", PlaceSource.kebi)
+
+        assert created is True
+        assert row.user_id == "u1"
+        assert row.place_id == "p1"
+        assert row.approved is False  # recommended saves start un-curated
+        assert row.source == PlaceSource.kebi
+        assert row.source_ref is None
+        repo.get_by_user_and_place.assert_awaited_once_with("u1", "p1")
+        repo.save_user_places.assert_awaited_once()
+
+    async def test_idempotent_returns_existing_without_writing(self) -> None:
+        """A re-tap on an already-saved place returns the existing row and
+        does not insert — created=False so the route skips the taste signal."""
+        existing = _user_place("u1", "p1")
+        repo = MagicMock(
+            get_by_user_and_place=AsyncMock(return_value=existing),
+            save_user_places=AsyncMock(),
+        )
+        svc = UserPlacesService(user_places_repo=repo)
+
+        row, created = await svc.save_one("u1", "p1", PlaceSource.kebi)
+
+        assert created is False
+        assert row is existing
+        repo.save_user_places.assert_not_called()
+
+    async def test_unknown_place_raises_place_not_found(self) -> None:
+        """A place_id absent from the catalog trips the FK on insert; the
+        service translates the IntegrityError into PlaceNotFoundError so the
+        route can map it to 404 rather than a 500."""
+        repo = MagicMock(
+            get_by_user_and_place=AsyncMock(return_value=None),
+            save_user_places=AsyncMock(
+                side_effect=IntegrityError("INSERT", {}, Exception("fk violation"))
+            ),
+        )
+        svc = UserPlacesService(user_places_repo=repo)
+
+        with pytest.raises(PlaceNotFoundError) as exc_info:
+            await svc.save_one("u1", "ghost", PlaceSource.kebi)
+
+        assert exc_info.value.place_id == "ghost"

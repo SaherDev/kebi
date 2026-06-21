@@ -203,6 +203,7 @@ async def get_event_dispatcher(
         "place_saved",
         "recommendation_accepted",
         "recommendation_rejected",
+        "recommendation_saved",
     ):
         dispatcher.register_handler(event_type, handlers.on_taste_signal)
     dispatcher.register_handler(

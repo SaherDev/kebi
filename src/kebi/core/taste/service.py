@@ -155,7 +155,11 @@ class TasteModelService:
             return
 
         rows = await self._resolve_rows(user_id, raw)
-        signal_counts = aggregate_signal_counts(rows)
+        weights = self._config.taste_model.signal_weights
+        signal_counts = aggregate_signal_counts(
+            rows,
+            weights={"saved_recommendation": weights.saved_recommendation},
+        )
 
         # Build prompt and call LLM
         messages = build_regen_messages(

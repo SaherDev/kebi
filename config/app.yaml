@@ -405,9 +405,11 @@ taste_model:
   regen:
     min_signals: 3
     early_signal_threshold: 10
-  warming_blend:
-    discovered: 0.8
-    saved: 0.2
+  # Evidence weight per interaction in taste aggregation (default 1).
+  # Saving a place kebi recommended is a stronger positive than a passive
+  # link-share save, so it weighs heavier on the taste tree.
+  signal_weights:
+    saved_recommendation: 2
 
 # ---------------------------------------------------------------------------
 # User Memory Configuration

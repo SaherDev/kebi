@@ -49,6 +49,7 @@ keyed by the verified `X-Gateway-User-Id`.
 | POST /v1/chat/stream        | 30 / minute |
 | POST /v1/extract            | 10 / minute |
 | GET /v1/user/library        | 60 / minute |
+| POST /v1/user/places        | 60 / minute |
 | PATCH /v1/user/places/{id}  | 60 / minute |
 | DELETE /v1/user/places/{id} | 60 / minute |
 | POST /v1/signal             | 60 / minute |
@@ -201,7 +202,7 @@ to `POST /v1/extract` — the chat path never writes to `user_places`.
 > The SSE step-lifecycle fields `id` and `status` (ADR-102) are **not** part of
 > this non-stream shape — they appear only on `/v1/chat/stream` frames (below).
 
-`ToolResult` shape: `{ tool: "find_saved" | "suggest_places" | "discover_places", tool_call_id: string, payload: ConsultResult }`. `ConsultResult` carries `candidates` (each with `place`, `source ∈ {saved, suggested, discovered}`, optional namer `reason`), and an `empty_reason` literal when no candidates were produced (e.g. `no_location`, `no_match`).
+`ToolResult` shape: `{ tool: "find_saved" | "suggest_places" | "discover_places", tool_call_id: string, payload: ConsultResult }`. `ConsultResult` carries `candidates` (each with `place`, `source ∈ {saved, suggested, discovered}`, optional namer `reason`), an `empty_reason` literal when no candidates were produced (e.g. `no_location`, `no_match`), and a `recommendation_id` (a per-recommendation id minted by kebi). The client echoes `recommendation_id` back when the user accepts/rejects (`POST /v1/signal`) or saves (`POST /v1/user/places`) a candidate, so the signal attributes to that recommendation.
 
 ### `error`
 
@@ -453,6 +454,54 @@ records which sort minted it; clients treat it as opaque and stop when
 
 ---
 
+## POST /v1/user/places
+
+Save a place kebi recommended to the caller's library — the consult card's
+**"save it"** action. The place already exists in the catalog (it was just
+recommended), so this only links it to the caller. `user_id` is taken from
+`X-Gateway-User-Id`; a caller can only ever save into **their own** library.
+
+Saving also emits a **positive taste signal** — a *stronger* one than a
+link-share save: its own `saved_recommendation` interaction type, weighted
+heavier in the taste evidence and **not** counted toward the discovery-source
+distribution (kebi is not a channel the user discovers from).
+
+**Request:** JSON body + the `X-Gateway-Token` + `X-Gateway-User-Id` headers.
+
+```
+POST /v1/user/places
+```
+
+```json
+{
+  "place_core_id": "c0ffee00-1111-2222-3333-444455556666",
+  "recommendation_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+}
+```
+
+| Field               | Type     | Required | Notes                                                                                  |
+| ------------------- | -------- | -------- | -------------------------------------------------------------------------------------- |
+| `place_core_id`     | `string` | Yes      | `places.id` of the candidate (consult `tool_results → payload.candidates[].place.id`)  |
+| `recommendation_id` | `string` | Yes      | The id kebi minted on that consult result (`tool_results → payload.recommendation_id`) |
+
+`source` is **not** a field — the server stamps `kebi`. Unknown fields → 422.
+
+**Response (201):** `LibraryUserData` — the created user-state, the same
+shape as `user_data` in the library response (every `UserPlace` field
+**except `user_id`**).
+
+**Idempotent:** re-tapping save on an already-saved place returns **201**
+with the existing save and does **not** re-emit the taste signal — saving
+twice never double-trains taste.
+
+| Code  | When                                                                          |
+| ----- | ----------------------------------------------------------------------------- |
+| `201` | Saved (or already saved) — returns the user-state                             |
+| `404` | `place_core_id` is not in the catalog (`detail: place_not_found`)             |
+| `422` | Missing `place_core_id`/`recommendation_id`, or an unknown field              |
+
+---
+
 ## PATCH /v1/user/places/{user_place_id}
 
 Update one saved place's **user-state** — the Library pills and menu actions
@@ -644,6 +693,7 @@ All protected calls additionally send the `X-Gateway-Token` + `X-Gateway-User-Id
 | POST /v1/chat/stream        | SSE streaming chat                         | Same as POST /v1/chat                                        | reasoning_step + tool_result + message + done frames                                     |
 | POST /v1/extract            | Canonical extraction (save a place)        | raw_input                                                    | ExtractPlaceResponse                                                                     |
 | GET /v1/user/library        | Browse the user's saved places (Library)   | — (optional filter + `sort` + `limit`/`cursor` query params) | LibraryResponse (`places: SavedPlaceView[]`, `next_cursor`, `total`)                     |
+| POST /v1/user/places        | Save a recommended place ("save it")       | place_core_id, recommendation_id                             | LibraryUserData (created user-state, `201`; `404` if uncatalogued); emits taste signal  |
 | PATCH /v1/user/places/{id}  | Update a save's user-state (pills/menu)    | partial body: `visited`/`liked`/`approved`/`note`            | LibraryUserData (updated user-state; `200`/`404`)                                        |
 | DELETE /v1/user/places/{id} | Remove one saved place from the library    | — (path param only)                                          | 204 No Content (`404` if absent/not owned)                                               |
 | DELETE /v1/user/data        | Account-deletion sweep of AI data          | — (optional `scope` query param)                             | 204 No Content                                                                           |

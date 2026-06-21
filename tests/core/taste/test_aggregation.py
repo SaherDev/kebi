@@ -184,6 +184,70 @@ def test_location_context() -> None:
     assert counts.location.country == {"US": 2}
 
 
+def test_saved_recommendation_feeds_positive_tree_and_own_total() -> None:
+    """A saved_recommendation is a positive signal: it lands in the main tree
+    (categories/tags/location) and its own total, separate from save/accepted."""
+    rows = [
+        _row(
+            type="saved_recommendation",
+            categories=["restaurant"],
+            cuisine=["thai"],
+            city="Bangkok",
+        ),
+    ]
+    counts = aggregate_signal_counts(rows)
+
+    assert counts.totals.saved_recommendations == 1
+    assert counts.totals.saves == 0
+    assert counts.totals.accepted == 0
+    # Default weight (no weights map) is 1.
+    assert counts.categories == {"restaurant": 1}
+    assert counts.tags.cuisine == {"thai": 1}
+    assert counts.location.city == {"Bangkok": 1}
+
+
+def test_saved_recommendation_does_not_count_source() -> None:
+    """kebi is not a discovery channel — a saved_recommendation must not feed
+    the source distribution (only a plain link-share save does)."""
+    rows = [_row(type="saved_recommendation", source="kebi")]
+    counts = aggregate_signal_counts(rows)
+
+    assert counts.source == {}
+
+
+def test_weight_amplifies_evidence_tree_not_totals() -> None:
+    """A weight makes a saved_recommendation count heavier in the evidence tree
+    while the headline total stays a raw event count."""
+    rows = [
+        _row(
+            type="saved_recommendation",
+            categories=["restaurant"],
+            cuisine=["thai"],
+            city="Bangkok",
+        ),
+    ]
+    counts = aggregate_signal_counts(rows, weights={"saved_recommendation": 2})
+
+    # Evidence tree is doubled...
+    assert counts.categories == {"restaurant": 2}
+    assert counts.tags.cuisine == {"thai": 2}
+    assert counts.location.city == {"Bangkok": 2}
+    # ...but the total remains one event.
+    assert counts.totals.saved_recommendations == 1
+
+
+def test_weight_leaves_other_types_at_one() -> None:
+    """The weights map only affects the named type; save/accepted stay at 1."""
+    rows = [
+        _row(type="save", categories=["cafe"]),
+        _row(type="accepted", categories=["bar"]),
+        _row(type="saved_recommendation", categories=["restaurant"]),
+    ]
+    counts = aggregate_signal_counts(rows, weights={"saved_recommendation": 3})
+
+    assert counts.categories == {"cafe": 1, "bar": 1, "restaurant": 3}
+
+
 def test_accumulation_across_many_rows() -> None:
     """Existing keys must accumulate, not reset, as rows are added."""
     bangkok = {"city": "Bangkok", "country": "Thailand"}

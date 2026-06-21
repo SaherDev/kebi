@@ -238,6 +238,22 @@ class UserPlacesRepo:
         result = await self._session.execute(stmt)
         return {row[0] for row in result}
 
+    async def get_by_user_and_place(
+        self, user_id: str, place_id: str
+    ) -> UserPlace | None:
+        """Return the caller's existing save for `place_id`, or None.
+
+        Single-row lookup keyed on `(user_id, place_id)` — the idempotency
+        read behind `save_one`: a re-tap of "save it" finds the existing row
+        and returns it rather than inserting a duplicate.
+        """
+        stmt = select(_UserPlacesTable).where(
+            _u.user_id == user_id, _u.place_id == place_id
+        )
+        result = await self._session.execute(stmt)
+        row = result.mappings().first()
+        return _row_to_user_place(row) if row else None
+
     async def save_user_places(self, user_places: list[UserPlace]) -> list[UserPlace]:
         """INSERT or UPDATE on user_place_id primary key.
 

@@ -17,6 +17,16 @@ Format:
 
 ---
 
+## ADR-109: Saving a recommendation is its own endpoint and its own, heavier taste signal
+
+**Date:** 2026-06-21\
+**Status:** accepted\
+**Context:** The recommendation card's three actions — accept, save, reject — were all dead. Accept and reject had an endpoint but no way to attribute a response back to a recommendation, because the service never minted or returned that identifier. Save had no endpoint at all. And a save is stronger evidence of taste than passively cataloguing a link-shared place, yet the only save signal that existed treated both alike and counted the engine itself as a discovery source.\
+**Decision:** The service mints an identifier per recommendation and returns it with the candidates, so a later accept/reject/save attributes back to it; it is trusted from the client, not validated. Saving from a recommendation is a first-class library append — owner-scoped, idempotent, returning the caller's view as an explicit projection (ADR-105), not-found for an uncatalogued place. The append also emits a positive taste signal, but a *distinct* one: its own interaction type with a heavier, configurable weight, excluded from the discovery-source tally.\
+**Consequences:** All three actions become wireable end-to-end. The taste model gains a stronger positive that never pollutes the source distribution, at the cost of one additive interaction value (older rows unaffected). The new endpoint, the recommendation identifier in the payload, and the save's request/response shapes are new lines in the cross-repo contract. A removal still does not untrain taste, consistent with prior decisions. A dormant warming-blend constant, unused since its ranking service was retired, was removed.
+
+---
+
 ## ADR-108: Library sort is a sort-bound keyset cursor, not a free-form order param
 
 **Date:** 2026-06-10\

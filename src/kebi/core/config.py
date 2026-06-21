@@ -329,24 +329,16 @@ class TasteRegenConfig(BaseModel):
     early_signal_threshold: int = 10
 
 
-class WarmingBlendConfig(BaseModel):
-    """Warming-tier candidate-count ratio (feature 023).
+class SignalWeightsConfig(BaseModel):
+    """Per-signal evidence weight in taste aggregation.
 
-    Dormant since ADR-075 removed the consult service that consumed it;
-    retained as taste-model config. Values must sum to 1.0 — enforced below.
+    A weight is how many units of taste evidence one interaction contributes
+    to the category/tag/location tree. `saved_recommendation` (the user kept a
+    place kebi picked) is a stronger positive than a passive link-share save,
+    so it weighs more than the default of 1.
     """
 
-    discovered: float = 0.8
-    saved: float = 0.2
-
-    @model_validator(mode="after")
-    def _sum_to_one(self) -> "WarmingBlendConfig":
-        if abs((self.discovered + self.saved) - 1.0) > 1e-6:
-            raise ValueError(
-                f"warming_blend weights must sum to 1.0 "
-                f"(got discovered={self.discovered}, saved={self.saved})"
-            )
-        return self
+    saved_recommendation: int = 2
 
 
 class TasteModelConfig(BaseModel):
@@ -354,7 +346,7 @@ class TasteModelConfig(BaseModel):
 
     debounce_window_seconds: int = 30
     regen: TasteRegenConfig = TasteRegenConfig()
-    warming_blend: WarmingBlendConfig = WarmingBlendConfig()
+    signal_weights: SignalWeightsConfig = SignalWeightsConfig()
 
 
 class MemoryConfidenceConfig(BaseModel):

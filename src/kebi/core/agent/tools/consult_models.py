@@ -13,6 +13,7 @@ so nothing here persists in agent history.
 from __future__ import annotations
 
 from typing import Literal
+from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
@@ -59,7 +60,14 @@ class ConsultResult(BaseModel):
     given. So there is no "applied_hard_constraints" surfaced back:
     whatever the tool filtered by is exactly what the agent passed in,
     and the agent already knows it.
+
+    `recommendation_id` identifies this recommendation so the client can
+    attribute a later accept/reject/save signal back to it (`POST
+    /v1/signal`, `POST /v1/user/places`). It is minted here, once per
+    result, and returned in the tool payload; `place_core_id` on the chosen
+    candidate disambiguates which place within the result the user acted on.
     """
 
     candidates: list[ConsultCandidate] = Field(default_factory=list)
     empty_reason: Literal["no_saves", "no_match", "no_location", "error"] | None = None
+    recommendation_id: str = Field(default_factory=lambda: str(uuid4()))

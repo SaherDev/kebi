@@ -6,6 +6,8 @@ import uuid
 from collections.abc import Mapping
 from datetime import UTC, datetime
 
+from sqlalchemy.exc import IntegrityError
+
 from ._cursor import LibraryCursor
 from .models import (
     LibrarySort,
@@ -29,6 +31,19 @@ class DuplicateUserPlaceError(Exception):
         super().__init__(
             f"User already has {len(conflicts)} place(s) saved: {conflicts}"
         )
+
+
+class PlaceNotFoundError(Exception):
+    """Raised by save_one when place_id has no row in the catalog.
+
+    The insert trips the `user_places.place_id → places.id` foreign key —
+    the catalog is the source of truth, so the route maps this to a 404
+    rather than letting an IntegrityError surface as a 500.
+    """
+
+    def __init__(self, place_id: str) -> None:
+        self.place_id = place_id
+        super().__init__(f"No catalog place for id {place_id!r}")
 
 
 class UserPlacesService:
@@ -97,6 +112,43 @@ class UserPlacesService:
             for pid in place_ids
         ]
         return await self._user_places_repo.save_user_places(rows)
+
+    async def save_one(
+        self, user_id: str, place_id: str, source: PlaceSource
+    ) -> tuple[UserPlace, bool]:
+        """Save a single catalog place to the user's library, idempotently.
+
+        Backs the "save it" action on a recommendation card: the place is
+        already in the catalog, so this just links it. Returns
+        `(row, created)` — `created=False` when the user already holds a save
+        for `place_id` (a re-tap returns the existing row instead of raising,
+        and the caller skips re-emitting the positive taste signal); otherwise
+        inserts one `user_places` row and returns `(row, True)`.
+
+        Raises `PlaceNotFoundError` when `place_id` is absent from the catalog:
+        the insert trips the `place_id → places.id` foreign key, the source of
+        truth, so there is no separate existence pre-check.
+        """
+        existing = await self._user_places_repo.get_by_user_and_place(
+            user_id, place_id
+        )
+        if existing is not None:
+            return existing, False
+
+        row = UserPlace(
+            user_place_id=str(uuid.uuid4()),
+            user_id=user_id,
+            place_id=place_id,
+            approved=False,
+            source=source,
+            source_ref=None,
+            saved_at=datetime.now(UTC),
+        )
+        try:
+            saved = await self._user_places_repo.save_user_places([row])
+        except IntegrityError as exc:
+            raise PlaceNotFoundError(place_id) from exc
+        return saved[0], True
 
     async def browse(
         self,

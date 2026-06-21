@@ -8,6 +8,7 @@ from kebi.core.events.events import (
     PlaceSaved,
     RecommendationAccepted,
     RecommendationRejected,
+    RecommendationSaved,
     TurnCompleted,
 )
 from kebi.core.events.handlers import EventHandlers
@@ -66,6 +67,21 @@ class TestOnTasteSignal:
         await handlers.on_taste_signal(event)
         mock_taste_service.handle_signal.assert_awaited_once_with(
             user_id="u1", signal_type=InteractionType.REJECTED, place_core_id="p1"
+        )
+
+    async def test_recommendation_saved_maps_to_dedicated_type(
+        self, handlers: EventHandlers, mock_taste_service: MagicMock
+    ) -> None:
+        """Saving a recommendation is its own stronger signal — it maps to
+        SAVED_RECOMMENDATION, not the plain SAVE bucket."""
+        event = RecommendationSaved(
+            user_id="u1", recommendation_id="r1", place_core_id="p1"
+        )
+        await handlers.on_taste_signal(event)
+        mock_taste_service.handle_signal.assert_awaited_once_with(
+            user_id="u1",
+            signal_type=InteractionType.SAVED_RECOMMENDATION,
+            place_core_id="p1",
         )
 
     async def test_exception_does_not_raise(
