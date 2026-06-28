@@ -5,6 +5,7 @@ Per ADR-043, failures are logged and traced but never propagated.
 """
 
 import logging
+from collections.abc import Awaitable
 from typing import TYPE_CHECKING
 
 from kebi.core.events.events import (
@@ -21,6 +22,7 @@ from kebi.providers.tracing import TracingClient, get_tracing_client
 if TYPE_CHECKING:
     from kebi.core.memory.service import UserMemoryService
     from kebi.core.taste.service import TasteModelService
+    from kebi.core.user.intent_service import UserIntentService
 
 logger = logging.getLogger(__name__)
 
@@ -39,10 +41,12 @@ class EventHandlers:
         self,
         taste_service: "TasteModelService",
         memory_service: "UserMemoryService",
+        intent_service: "UserIntentService",
         tracer: TracingClient | None = None,
     ) -> None:
         self.taste_service = taste_service
         self.memory_service = memory_service
+        self.intent_service = intent_service
         self._tracer = tracer or get_tracing_client()
 
     async def on_taste_signal(self, event: DomainEvent) -> None:
@@ -97,19 +101,44 @@ class EventHandlers:
             self._tracer.flush()
 
     async def on_turn_completed(self, event: TurnCompleted) -> None:
-        """Hand the user message off to the memory service for buffered extraction.
+        """Run the per-turn background side-effects: buffered memory extraction
+        and recall-list persistence.
 
-        The service buffers per turn and only runs the LLM on every Nth
-        message (memory.extraction.debounce_messages). All exceptions are
-        caught here; ADR-043 forbids handler failures from surfacing.
+        The two are guarded independently so one failing never blocks the
+        other. Memory extraction buffers per turn and runs the LLM every Nth
+        message (memory.extraction.debounce_messages); intent persistence
+        records the turn when it is intent-bearing (ADR-110). All exceptions
+        are caught here; ADR-043 forbids handler failures from surfacing.
         """
-        try:
-            await self.memory_service.extract_and_save_facts(
+        await self._run_guarded(
+            "memory extraction",
+            event,
+            self.memory_service.extract_and_save_facts(
                 user_id=event.user_id,
                 user_message=event.user_message,
-            )
+            ),
+        )
+        await self._run_guarded(
+            "intent recording",
+            event,
+            self.intent_service.record_intent(
+                event.user_id,
+                event.user_message,
+                surfaced=event.surfaced_places,
+            ),
+        )
+
+    async def _run_guarded(
+        self,
+        label: str,
+        event: TurnCompleted,
+        coro: Awaitable[None],
+    ) -> None:
+        """Await one turn side-effect, swallowing+tracing any failure (ADR-043)."""
+        try:
+            await coro
             self._tracer.capture_message(
-                message="TurnCompleted event handled",
+                message=f"TurnCompleted {label} handled",
                 level="info",
                 metadata={"event_id": event.event_id},
                 user_id=event.user_id,
@@ -117,13 +146,14 @@ class EventHandlers:
             )
         except Exception as exc:
             logger.error(
-                "Failed to handle TurnCompleted: %s",
+                "Failed TurnCompleted %s: %s",
+                label,
                 exc,
                 exc_info=True,
                 extra={"user_id": event.user_id},
             )
             self._tracer.capture_message(
-                message=f"TurnCompleted handler error: {exc}",
+                message=f"TurnCompleted {label} error: {exc}",
                 level="error",
                 metadata={"event_id": event.event_id},
                 user_id=event.user_id,

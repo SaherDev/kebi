@@ -61,7 +61,13 @@ class TurnCompleted(DomainEvent):
     `user_message` to a per-user buffer and runs LLM fact extraction on
     every Nth turn (memory.extraction.debounce_messages). The agent layer
     is unaware of fact extraction; it just emits this event.
+
+    `surfaced_places` is the free agent-signal gate for the "what you
+    wanted" recall list (ADR-110): True when the turn actually produced
+    place results (a suggest/find/discover tool ran), which excludes
+    chit-chat and one-word confirmations that never trigger a place search.
     """
 
     event_type: str = "turn_completed"
     user_message: str
+    surfaced_places: bool = False

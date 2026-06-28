@@ -29,6 +29,7 @@ class TestOnTasteSignal:
         return EventHandlers(
             taste_service=mock_taste_service,
             memory_service=MagicMock(),
+            intent_service=MagicMock(record_intent=AsyncMock()),
             tracer=MagicMock(
                 generation=MagicMock(return_value=MagicMock()),
                 capture_message=MagicMock(),
@@ -95,7 +96,8 @@ class TestOnTasteSignal:
 
 
 class TestOnTurnCompleted:
-    """Tests for EventHandlers.on_turn_completed() — thin delegation layer."""
+    """Tests for EventHandlers.on_turn_completed() — runs memory extraction
+    and intent recording, each independently guarded (ADR-110)."""
 
     @pytest.fixture
     def mock_taste_service(self) -> MagicMock:
@@ -108,12 +110,22 @@ class TestOnTurnCompleted:
         return svc
 
     @pytest.fixture
+    def mock_intent_service(self) -> MagicMock:
+        svc = MagicMock()
+        svc.record_intent = AsyncMock()
+        return svc
+
+    @pytest.fixture
     def handlers(
-        self, mock_taste_service: MagicMock, mock_memory_service: MagicMock
+        self,
+        mock_taste_service: MagicMock,
+        mock_memory_service: MagicMock,
+        mock_intent_service: MagicMock,
     ) -> EventHandlers:
         return EventHandlers(
             taste_service=mock_taste_service,
             memory_service=mock_memory_service,
+            intent_service=mock_intent_service,
             tracer=MagicMock(
                 generation=MagicMock(return_value=MagicMock()),
                 capture_message=MagicMock(),
@@ -121,22 +133,62 @@ class TestOnTurnCompleted:
             ),
         )
 
-    async def test_delegates_to_service(
-        self, handlers: EventHandlers, mock_memory_service: MagicMock
+    async def test_runs_both_memory_and_intent(
+        self,
+        handlers: EventHandlers,
+        mock_memory_service: MagicMock,
+        mock_intent_service: MagicMock,
     ) -> None:
-        event = TurnCompleted(user_id="user-1", user_message="I'm vegan")
+        event = TurnCompleted(
+            user_id="user-1", user_message="ramen, no line", surfaced_places=True
+        )
         await handlers.on_turn_completed(event)
         mock_memory_service.extract_and_save_facts.assert_awaited_once_with(
             user_id="user-1",
-            user_message="I'm vegan",
+            user_message="ramen, no line",
+        )
+        mock_intent_service.record_intent.assert_awaited_once_with(
+            "user-1", "ramen, no line", surfaced=True
         )
 
-    async def test_swallows_service_exceptions(
-        self, handlers: EventHandlers, mock_memory_service: MagicMock
+    async def test_passes_surfaced_flag_through(
+        self, handlers: EventHandlers, mock_intent_service: MagicMock
     ) -> None:
-        """Per ADR-043, handler failures must never propagate."""
+        event = TurnCompleted(
+            user_id="user-1", user_message="hi", surfaced_places=False
+        )
+        await handlers.on_turn_completed(event)
+        mock_intent_service.record_intent.assert_awaited_once_with(
+            "user-1", "hi", surfaced=False
+        )
+
+    async def test_intent_failure_does_not_block_memory(
+        self,
+        handlers: EventHandlers,
+        mock_memory_service: MagicMock,
+        mock_intent_service: MagicMock,
+    ) -> None:
+        """The two side-effects are isolated — intent failing still runs memory."""
+        mock_intent_service.record_intent = AsyncMock(
+            side_effect=RuntimeError("db down")
+        )
+        event = TurnCompleted(
+            user_id="user-1", user_message="anything here", surfaced_places=True
+        )
+        await handlers.on_turn_completed(event)  # must not raise
+        mock_memory_service.extract_and_save_facts.assert_awaited_once()
+
+    async def test_memory_failure_does_not_block_intent(
+        self,
+        handlers: EventHandlers,
+        mock_memory_service: MagicMock,
+        mock_intent_service: MagicMock,
+    ) -> None:
         mock_memory_service.extract_and_save_facts = AsyncMock(
             side_effect=RuntimeError("redis down")
         )
-        event = TurnCompleted(user_id="user-1", user_message="anything")
+        event = TurnCompleted(
+            user_id="user-1", user_message="anything here", surfaced_places=True
+        )
         await handlers.on_turn_completed(event)  # must not raise
+        mock_intent_service.record_intent.assert_awaited_once()

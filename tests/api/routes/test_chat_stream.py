@@ -315,6 +315,57 @@ class TestChatStreamToolCallsUsed:
             app.dependency_overrides.pop(get_agent_graph, None)
 
 
+class TestChatStreamDispatchesIntentSignal:
+    """The stream path must pass `surfaced_places` on TurnCompleted so the
+    recall list is populated (ADR-110) — regression for the bug where the
+    stream endpoint dispatched without it and no intent was ever recorded."""
+
+    @staticmethod
+    def _graph(tool_results: list[dict[str, Any]] | None) -> MagicMock:
+        from langchain_core.messages import AIMessage
+
+        graph = MagicMock()
+
+        async def _astream(
+            payload: Any, config: Any, stream_mode: Any = None
+        ) -> AsyncGenerator[tuple[str, Any], None]:
+            values: dict[str, Any] = {
+                "messages": [AIMessage(content="here you go")],
+                "tool_calls_used": 1 if tool_results else 0,
+            }
+            if tool_results is not None:
+                values["tool_results"] = tool_results
+            yield ("values", values)
+
+        graph.astream = _astream
+        return graph
+
+    def _dispatched_event(self, svc: MagicMock, graph: MagicMock) -> Any:
+        app.dependency_overrides[get_chat_service] = lambda: svc
+        app.dependency_overrides[get_agent_graph] = lambda: graph
+        try:
+            TestClient(app).post("/v1/chat/stream", json={"message": "dinner nearby"})
+        finally:
+            app.dependency_overrides.pop(get_chat_service, None)
+            app.dependency_overrides.pop(get_agent_graph, None)
+        return svc._dispatcher.dispatch.await_args.args[0]
+
+    def test_surfaced_true_when_tool_results_present(
+        self, mock_service: MagicMock
+    ) -> None:
+        graph = self._graph([{"tool": "suggest_places", "payload": {}}])
+        event = self._dispatched_event(mock_service, graph)
+        assert event.surfaced_places is True
+        assert event.user_message == "dinner nearby"
+
+    def test_surfaced_false_when_no_tool_results(
+        self, mock_service: MagicMock
+    ) -> None:
+        graph = self._graph(None)
+        event = self._dispatched_event(mock_service, graph)
+        assert event.surfaced_places is False
+
+
 class TestChatStreamDisabledAgent:
     """Verify /v1/chat/stream returns 400 when agent is disabled or graph is None."""
 

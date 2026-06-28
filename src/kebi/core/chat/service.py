@@ -82,6 +82,9 @@ class ChatService:
         Voyage embed, candidate namer) nests under one parent and the
         total turn cost is sliceable by user and feature.
         """
+        # Initialized before the try so the `finally` can always read it,
+        # even if the agent stream raises before any tool ran (ADR-110).
+        tool_results: list[dict[str, Any]] = []
         async with feature_trace(
             "chat",
             user_id,
@@ -125,7 +128,6 @@ class ChatService:
                 # checkpoint has `tool_results=[]` — only `reasoning_steps`
                 # (human-readable summaries) persist as agent history.
                 final_state: dict[str, Any] = {}
-                tool_results: list[dict[str, Any]] = []
                 async with asyncio.timeout(_CHAT_WALL_CLOCK_SECONDS):
                     async for snapshot in self._agent_graph.astream(
                         payload, config=graph_config, stream_mode="values"
@@ -164,10 +166,13 @@ class ChatService:
                     tool_calls_used=final_state.get("tool_calls_used", 0),
                 )
             finally:
+                # A turn that surfaced place results is intent-bearing — the
+                # free signal that gates the recall list (ADR-110).
                 await self._dispatcher.dispatch(
                     TurnCompleted(
                         user_id=user_id,
                         user_message=request.message,
+                        surfaced_places=bool(tool_results),
                     )
                 )
 
