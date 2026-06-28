@@ -227,8 +227,15 @@ async def chat_stream(
                     yield _frame("message", {"content": final_message})
                 yield _frame("done", {"tool_calls_used": tool_calls_used})
             finally:
+                # A turn that surfaced place results is intent-bearing — the
+                # free signal that gates the recall list (ADR-110). Mirrors
+                # the non-stream path in ChatService._run_agent.
                 await service._dispatcher.dispatch(
-                    TurnCompleted(user_id=user_id, user_message=body.message)
+                    TurnCompleted(
+                        user_id=user_id,
+                        user_message=body.message,
+                        surfaced_places=bool(tool_results),
+                    )
                 )
 
     return StreamingResponse(generate(), media_type="text/event-stream")

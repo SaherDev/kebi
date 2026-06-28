@@ -41,6 +41,7 @@ from kebi.api.errors import register_error_handlers
 from kebi.api.rate_limit import limiter
 from kebi.api.routes.chat import router as chat_router
 from kebi.api.routes.extraction import router as extraction_router
+from kebi.api.routes.home import router as home_router
 from kebi.api.routes.signal import router as signal_router
 from kebi.api.routes.user import router as user_router
 
@@ -254,6 +255,7 @@ async def health() -> dict[str, str]:
 # router — auth is enforced uniformly by the parent dependency.
 protected_router.include_router(chat_router, prefix="")
 protected_router.include_router(extraction_router, prefix="")
+protected_router.include_router(home_router, prefix="")
 protected_router.include_router(signal_router, prefix="")
 protected_router.include_router(user_router, prefix="")
 app.include_router(public_router)

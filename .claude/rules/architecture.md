@@ -32,7 +32,7 @@
 ## Database Access
 
 - Write ownership split by domain: FastAPI writes AI data, NestJS writes product data
-- FastAPI writes: places, embeddings, taste_model, recommendations, user_memories, interaction_log
+- FastAPI writes: places, embeddings, taste_model, user_memories, interaction_log, user_intents
 - FastAPI reads: all tables as needed
 - NestJS writes: users, user_settings (product data, via TypeORM)
 - Migration ownership split by domain: Alembic in this repo owns places, embeddings, taste_model, recommendations, user_memories, interaction_log. TypeORM in the product repo manages users and user_settings. NestJS never touches AI tables.

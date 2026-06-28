@@ -27,6 +27,7 @@ from kebi.core.extraction.extraction_pipeline import (
 )
 from kebi.core.extraction.result_cache import ExtractionResultCache
 from kebi.core.extraction.service import ExtractionService
+from kebi.core.home import HomeService
 from kebi.core.memory.buffer import MessageBuffer
 from kebi.core.memory.extractor import MemoryExtractor
 from kebi.core.memory.repository import SQLAlchemyUserMemoryRepository
@@ -49,7 +50,11 @@ from kebi.core.places import (
 from kebi.core.signal.service import SignalService
 from kebi.core.taste.debounce import regen_debouncer
 from kebi.core.taste.service import TasteModelService
+from kebi.core.user.intent_service import UserIntentService
 from kebi.core.user.service import UserDataDeletionService
+from kebi.db.repositories.user_intent_repository import (
+    SQLAlchemyUserIntentRepository,
+)
 from kebi.db.session import _get_session_factory, get_session
 from kebi.providers import get_instructor_client
 from kebi.providers.cache import CacheBackend
@@ -156,6 +161,19 @@ def _build_message_buffer() -> MessageBuffer:
     )
 
 
+def get_user_intent_service() -> UserIntentService:
+    """FastAPI dependency providing UserIntentService (ADR-110).
+
+    Repo uses session_factory — each method opens its own session, so the
+    service is safe in both the request path (GET /v1/user/intents) and the
+    background turn-completed handler (intent persistence).
+    """
+    return UserIntentService(
+        repo=SQLAlchemyUserIntentRepository(_get_session_factory()),
+        config=get_config().user_intents,
+    )
+
+
 def get_user_memory_service() -> UserMemoryService:
     """FastAPI dependency providing UserMemoryService.
 
@@ -183,19 +201,21 @@ async def get_event_dispatcher(
     background_tasks: BackgroundTasks,
     taste_service: TasteModelService = Depends(get_taste_service),  # noqa: B008
     memory_service: UserMemoryService = Depends(get_user_memory_service),  # noqa: B008
+    intent_service: UserIntentService = Depends(get_user_intent_service),  # noqa: B008
 ) -> EventDispatcher:
     """FastAPI dependency providing a fully wired EventDispatcher (ADR-043).
 
-    Pulls `taste_service` and `memory_service` from the existing
-    `Depends(...)` factories so FastAPI's per-request dedup hands out the
-    same instances the rest of the request graph already uses (ADR-019).
-    Both services use session_factory internally — each repo method opens
+    Pulls `taste_service`, `memory_service`, and `intent_service` from the
+    existing `Depends(...)` factories so FastAPI's per-request dedup hands
+    out the same instances the rest of the request graph already uses
+    (ADR-019). All use session_factory internally — each repo method opens
     its own session, so background tasks don't depend on request session.
     `BackgroundTasks` stays request-scoped (FastAPI requirement).
     """
     handlers = EventHandlers(
         taste_service=taste_service,
         memory_service=memory_service,
+        intent_service=intent_service,
     )
 
     dispatcher = EventDispatcher(background_tasks=background_tasks)
@@ -366,9 +386,9 @@ def get_user_data_deletion_service(
 ) -> UserDataDeletionService:
     """FastAPI dependency providing UserDataDeletionService.
 
-    Sweeps the four user-scoped tables in one transaction (interactions,
-    user_memories, taste_model, user_places), then deletes the LangGraph
-    checkpoint thread, then cancels any pending taste-regen task. The
+    Sweeps the five user-scoped tables in one transaction (interactions,
+    user_memories, taste_model, user_intents, user_places), then deletes the
+    LangGraph checkpoint thread, then cancels any pending taste-regen task. The
     shared places/embeddings catalog is intentionally untouched (it is
     cross-user, not this user's data). Erases AI-owned data only — NestJS
     is responsible for deleting the user account itself. Hard-delete
@@ -773,6 +793,27 @@ def get_extraction_service(
 # Agent graph + ChatService — consume get_extraction_service so they live
 # below it.
 # ---------------------------------------------------------------------------
+
+
+def get_home_service(
+    taste_service: TasteModelService = Depends(get_taste_service),  # noqa: B008
+) -> HomeService:
+    """FastAPI dependency providing HomeService (ADR-111).
+
+    Wraps the process-wide `get_instructor_client("home_suggester")` client,
+    the shared Redis client, and the Nominatim geocoder (for the
+    coordinates→city fallback). `taste_service` is pulled from its existing
+    factory so the request graph reuses one instance (ADR-019). The service
+    fails open, so a missing Redis URL / unreachable geocoder degrades to the
+    static fallback rather than erroring.
+    """
+    return HomeService(
+        instructor_client=get_instructor_client("home_suggester"),
+        taste_service=taste_service,
+        geocoder=get_geocoding_client(),
+        redis=get_redis_client(get_env().REDIS_URL),
+        config=get_config().home,
+    )
 
 
 def get_candidate_namer_service() -> CandidateNamerService:

@@ -8,10 +8,12 @@ from kebi.api.deps import (
     GatewayIdentity,
     get_event_dispatcher,
     get_user_data_deletion_service,
+    get_user_intent_service,
     get_user_places_service,
     require_gateway_identity,
 )
 from kebi.api.rate_limit import limiter
+from kebi.api.schemas.intents import IntentsQuery, IntentsResponse
 from kebi.api.schemas.library import (
     LibraryQuery,
     LibraryResponse,
@@ -22,6 +24,7 @@ from kebi.api.schemas.library import (
 from kebi.core.events.dispatcher import EventDispatcher
 from kebi.core.events.events import RecommendationSaved
 from kebi.core.places import PlaceNotFoundError, PlaceSource, UserPlacesService
+from kebi.core.user.intent_service import UserIntentService
 from kebi.core.user.service import DataScope, UserDataDeletionService
 
 router = APIRouter()
@@ -66,6 +69,34 @@ async def get_user_library(
         sort=params.sort,
     )
     return LibraryResponse.from_page(places, next_cursor, total)
+
+
+@router.get("/user/intents", response_model=IntentsResponse)
+@limiter.limit("60/minute")
+async def get_user_intents(
+    request: Request,
+    identity: Annotated[GatewayIdentity, Depends(require_gateway_identity)],
+    params: Annotated[IntentsQuery, Query()],
+    service: UserIntentService = Depends(get_user_intent_service),  # noqa: B008
+) -> IntentsResponse:
+    """The caller's "what you wanted" recall list (the home screen history).
+
+    Returns one newest-first page of the user's past intent-bearing chat turns
+    — the natural-language text they typed, verbatim — plus an opaque
+    `next_cursor` for the next page (`null` on the last page). `created_at` is
+    a raw ISO-8601 instant; the client renders relative phrasing ("yesterday,
+    8:42") since only it knows the user's timezone. Tapping a row re-submits
+    its `text` to POST /v1/chat. An empty history returns `{"intents": [],
+    "next_cursor": null}`.
+
+    `user_id` comes only from the verified gateway identity — a caller can only
+    ever read their own intents (ADR-105). A malformed `cursor` surfaces as a
+    400 via the shared `ValueError` handler.
+    """
+    records, next_cursor = await service.list_intents(
+        identity.user_id, params.limit, params.cursor
+    )
+    return IntentsResponse.from_page(records, next_cursor)
 
 
 @router.post(
@@ -209,17 +240,19 @@ async def delete_user_data(
 ) -> None:
     """Selectively delete a user's AI-owned data.
 
-    Default (no `scope`): hard-deletes every trace — sweeps the four
+    Default (no `scope`): hard-deletes every trace — sweeps the five
     user-scoped tables (interactions, user_memories, taste_model,
-    user_places) in one transaction, deletes the LangGraph checkpoint
-    thread, and cancels any pending taste-regen task. The shared
+    user_intents, user_places) in one transaction, deletes the LangGraph
+    checkpoint thread, and cancels any pending taste-regen task. The shared
     places/embeddings catalog is left intact (cross-user, not this
     user's data). Idempotent — calling on an absent user is still 204.
 
-    `scope=chat_history`: clears only the LangGraph checkpoint thread
-    + pending taste-regen. Saves stay intact. Useful for resetting an
-    agent that learned a stale pattern (e.g. a URL that used to time
-    out) without losing the user's data.
+    `scope=chat_history`: clears the LangGraph checkpoint thread, pending
+    taste-regen, and the "what you wanted" recall list (user_intents),
+    which is surfaced conversation history (ADR-110). Saves, memories, and
+    the taste model stay intact. Useful for resetting an agent that learned
+    a stale pattern (e.g. a URL that used to time out) without losing the
+    user's data.
 
     Unknown scope values are rejected by FastAPI's enum validation
     with a 422 response — no manual error path needed.

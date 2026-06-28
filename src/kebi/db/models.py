@@ -85,6 +85,35 @@ class Interaction(Base):
     )
 
 
+class UserIntent(Base):
+    """Append-only store of the user's intent-bearing chat turns (ADR-110).
+
+    Backs the home screen's "what you wanted" recall list — the user's past
+    natural-language intents played back verbatim. Kept separate from the
+    `interactions` taste-signal log so its row count never perturbs the
+    taste-regen thresholds. No foreign key to users (Constitution VI:
+    cross-repo boundary). Cleared on both a full wipe and a chat-history
+    clear, since the list is surfaced conversation history.
+    """
+
+    __tablename__ = "user_intents"
+    __table_args__ = (
+        Index("ix_user_intents_user_created", "user_id", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(
+        String, primary_key=True, default=lambda: str(uuid4())
+    )
+    user_id: Mapped[str] = mapped_column(String, nullable=False)
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    metadata_: Mapped[dict | None] = mapped_column(  # type: ignore[type-arg]
+        "metadata", JSONB, nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
 class UserMemory(Base):
     """Append-only store of personal facts extracted from user messages.
 

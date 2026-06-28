@@ -370,6 +370,67 @@ class MemoryConfig(BaseModel):
     extraction: MemoryExtractionConfig = MemoryExtractionConfig()
 
 
+class HomeConfig(BaseModel):
+    """Home screen greeting + chips configuration (ADR-111).
+
+    `cache_ttl_seconds` bounds how long a generated greeting+chips payload
+    lives in Redis; the cache key's daypart segment guarantees a stale
+    "good morning" can never serve into the evening regardless of TTL.
+    `chip_min`/`chip_max` bound the generated chip list and the static
+    fallback emits exactly `chip_min` chips.
+    """
+
+    cache_ttl_seconds: int = 3600
+    chip_min: int = 3
+    chip_max: int = 4
+
+    @model_validator(mode="after")
+    def _bounds(self) -> "HomeConfig":
+        if self.cache_ttl_seconds < 1:
+            raise ValueError(
+                f"home.cache_ttl_seconds must be >= 1 (got {self.cache_ttl_seconds})"
+            )
+        if self.chip_min < 1 or self.chip_max < 1:
+            raise ValueError(
+                "home.chip_min / chip_max must be >= 1 "
+                f"(got chip_min={self.chip_min}, chip_max={self.chip_max})"
+            )
+        if self.chip_min > self.chip_max:
+            raise ValueError(
+                "home.chip_min must be <= chip_max "
+                f"(got chip_min={self.chip_min}, chip_max={self.chip_max})"
+            )
+        return self
+
+
+class UserIntentConfig(BaseModel):
+    """Write gates for the "what you wanted" recall list (ADR-110).
+
+    The agent-signal gate (a turn actually surfaced places) is the primary
+    filter applied at the call site; these are the cheap heuristic backstop.
+    `min_words` rejects terse turns, `stoplist` drops pure confirmations /
+    ordinals / pronoun replies, and `dedup_window_seconds` suppresses a new
+    intent that duplicates the user's most recent one within the window.
+    """
+
+    min_words: int = 3
+    stoplist: list[str] = []
+    dedup_window_seconds: int = 600
+
+    @model_validator(mode="after")
+    def _bounds(self) -> "UserIntentConfig":
+        if self.min_words < 1:
+            raise ValueError(
+                f"user_intents.min_words must be >= 1 (got {self.min_words})"
+            )
+        if self.dedup_window_seconds < 0:
+            raise ValueError(
+                "user_intents.dedup_window_seconds must be >= 0 "
+                f"(got {self.dedup_window_seconds})"
+            )
+        return self
+
+
 class ProviderEndpointConfig(BaseModel):
     """Non-secret provider config (base URL, etc.). API keys live in EnvConfig."""
 
@@ -737,6 +798,8 @@ class AppConfig(BaseModel):
     system_prompts: SystemPromptsConfig = SystemPromptsConfig()
     taste_model: TasteModelConfig = TasteModelConfig()
     memory: MemoryConfig = MemoryConfig()
+    home: HomeConfig = HomeConfig()
+    user_intents: UserIntentConfig = UserIntentConfig()
     agent: AgentConfig = AgentConfig()
     movement: MovementConfig = MovementConfig()
     pricing: PricingConfig
@@ -782,6 +845,14 @@ _REQUIRED_PROMPT_SLOTS: dict[str, list[str]] = {
         "{hard_constraints_block}",
         "{taste_block}",
         "{count}",
+    ],
+    "home_suggester": [
+        "{taste_block}",
+        "{location_block}",
+        "{time_block}",
+        "{weather_block}",
+        "{chip_min}",
+        "{chip_max}",
     ],
 }
 

@@ -48,6 +48,8 @@ keyed by the verified `X-Gateway-User-Id`.
 | POST /v1/chat               | 30 / minute |
 | POST /v1/chat/stream        | 30 / minute |
 | POST /v1/extract            | 10 / minute |
+| GET /v1/home                | 30 / minute |
+| GET /v1/user/intents        | 60 / minute |
 | GET /v1/user/library        | 60 / minute |
 | POST /v1/user/places        | 60 / minute |
 | PATCH /v1/user/places/{id}  | 60 / minute |
@@ -286,6 +288,66 @@ data: {"detail": "<error string>"}
 | ----- | ----------------------------------- |
 | `200` | Streaming started successfully      |
 | `400` | Agent disabled or graph unavailable |
+
+---
+
+## GET /v1/home
+
+The home screen's opening surface (ADR-111): a short, context-aware
+**greeting** plus a few tappable suggestion **chips**. Generated from the
+caller's taste signal and the client-supplied local context. Each chip's
+`text` is a pre-written intent — the client re-submits it to `POST /v1/chat`
+on tap, so a chip is a first message, not a separate action. `user_id` is
+taken from `X-Gateway-User-Id`.
+
+The payload is Redis-cached per coarse context bucket (so most opens are a
+cache hit; a taste regeneration refreshes it) and **fails open** — any
+generation/cache/geocode error returns a neutral greeting + generic chips, so
+the screen always renders and the call always returns `200`.
+
+**Request:** query params only (all optional). Plus the
+`X-Gateway-Token` + `X-Gateway-User-Id` headers.
+
+```
+GET /v1/home
+GET /v1/home?city=shimokitazawa&local_time=2026-06-28T21:41:00&weather=clear
+GET /v1/home?lat=35.6615&lng=139.6680&local_time=2026-06-28T21:41:00
+```
+
+| Param        | Type             | Notes                                                                                                                       |
+| ------------ | ---------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `lat`        | `float` (−90–90) | Device latitude. Used only to reverse-geocode a city name when `city` is absent — the server never originates location     |
+| `lng`        | `float` (−180–180)| Device longitude (paired with `lat`)                                                                                      |
+| `city`       | `string`         | Client-supplied city name; when present, skips reverse-geocoding                                                           |
+| `local_time` | ISO-8601         | Device local time. Drives the daypart (morning/afternoon/evening/late_night) — the client's timezone is canonical          |
+| `weather`    | `string`         | Coarse free-text hint (e.g. `clear`, `rain`); folded into a small band server-side. Omit when unknown                      |
+
+**Response (200):** `HomeResponse`
+
+```json
+{
+  "greeting": "it's late, drunk food?",
+  "chips": [
+    { "text": "ramen, no line" },
+    { "text": "drinks somewhere chill" },
+    { "text": "dessert, walking distance" },
+    { "text": "surprise me" }
+  ]
+}
+```
+
+| Field      | Type              | Notes                                                                                              |
+| ---------- | ----------------- | ------------------------------------------------------------------------------------------------- |
+| `greeting` | `string`          | Short context-aware line                                                                           |
+| `chips`    | `{ text }[]`      | 3–4 suggestion chips. `text` is both the display label and the intent re-submitted to `POST /v1/chat` |
+
+The chips emit **no** taste signal on their own — only an actual chat turn,
+save, or accept/reject trains taste. There is no chip-confirmation endpoint.
+
+| Code  | When                                                        |
+| ----- | ----------------------------------------------------------- |
+| `200` | Always on success — including the fail-open fallback        |
+| `422` | Unknown query param, or `lat`/`lng` out of range            |
 
 ---
 
@@ -587,6 +649,68 @@ DELETE /v1/user/places/{user_place_id}
 
 ---
 
+## GET /v1/user/intents
+
+The home screen's **"what you wanted"** list (ADR-110): the caller's recent
+intent-bearing chat turns, played back verbatim, newest-first. Tapping a row
+re-submits its `text` to `POST /v1/chat`. `user_id` is taken from
+`X-Gateway-User-Id`, so a caller can only ever read **their own** intents.
+
+Intents are persisted server-side from the chat turn when the turn actually
+surfaced places **and** passes a noise gate (minimum word count, a
+confirmation/ordinal stoplist, and de-duplication of an immediate repeat) — so
+chit-chat and one-word replies never appear here. There is no client write
+endpoint; the list is populated as a side effect of `POST /v1/chat`.
+
+**Request:** query params only (all optional). Plus the
+`X-Gateway-Token` + `X-Gateway-User-Id` headers.
+
+```
+GET /v1/user/intents
+GET /v1/user/intents?limit=20
+GET /v1/user/intents?limit=20&cursor=<next_cursor-from-prior-response>
+```
+
+| Param    | Type                      | Notes                                                                              |
+| -------- | ------------------------- | --------------------------------------------------------------------------------- |
+| `limit`  | `int` (1–100, default 20) | Max intents per page. Out-of-range → 422                                           |
+| `cursor` | `string`                  | Opaque cursor from a prior response's `next_cursor`. Omit for the first page. Malformed → 400 |
+
+**Response (200):** `IntentsResponse`
+
+```json
+{
+  "intents": [
+    {
+      "id": "9f1c2a3b-4d5e-6789-abcd-ef0123456789",
+      "text": "coffee, quiet, nowhere i've been",
+      "created_at": "2026-06-27T08:42:00Z"
+    }
+  ],
+  "next_cursor": "eyJ0cyI6…"
+}
+```
+
+| Field         | Type             | Notes                                                                                                            |
+| ------------- | ---------------- | -------------------------------------------------------------------------------------------------------------- |
+| `intents`     | `IntentItem[]`   | `{ id, text, created_at }`. `text` is the verbatim message; re-submit it to `POST /v1/chat` on tap              |
+| `next_cursor` | `string \| null` | Opaque keyset cursor. Pass it back as `?cursor=` for the next page. **`null` on the last page**                 |
+
+`created_at` is a **raw ISO-8601 instant** — relative phrasing ("yesterday,
+8:42") is the client's to render, since only the client knows the user's
+timezone. `user_id` is **not** echoed.
+
+**Empty state:** a user with no recalled intents returns
+`{ "intents": [], "next_cursor": null }` — the shape is guaranteed.
+
+| Code  | When                                                |
+| ----- | --------------------------------------------------- |
+| `200` | Success (including the empty history)               |
+| `400` | Malformed `cursor`                                  |
+| `422` | Unknown query param, or `limit` out of 1–100        |
+
+---
+
 ## DELETE /v1/user/data
 
 Hard-deletes a user's **AI-owned data**. Does NOT delete the user account — that lives in NestJS/Clerk. Called by the product repo's account-deletion flow after it deletes its own `users` / `user_settings` rows.
@@ -615,11 +739,15 @@ DELETE /v1/user/data?scope=chat_history
 1. `interactions` rows where `user_id = ?` (one DB transaction)
 2. `user_memories` rows where `user_id = ?`
 3. `taste_model` row for `user_id = ?`
-4. `user_places` rows where `user_id = ?` (same transaction as 1–3)
-5. LangGraph checkpoint thread for `thread_id = user_id`
-6. Any pending taste-regen task in the in-memory debouncer
+4. `user_intents` rows where `user_id = ?` (same transaction as 1–3)
+5. `user_places` rows where `user_id = ?` (same transaction as 1–4)
+6. LangGraph checkpoint thread for `thread_id = user_id`
+7. Any pending taste-regen task in the in-memory debouncer
 
-`scope=chat_history` performs only steps 5–6 (SQL untouched).
+`scope=chat_history` deletes the `user_intents` rows (step 4) + the checkpoint
+thread + the debouncer task (steps 6–7) — the recall list is surfaced
+conversation history (ADR-110), so "clear chat history" must clear it. The
+other SQL tables (saves, memories, taste model) are left untouched.
 
 > **Scope note:** the shared `places` catalog and its `embeddings` are
 > **not** in the sweep — those rows are cross-user place identities, not
@@ -691,6 +819,8 @@ All protected calls additionally send the `X-Gateway-Token` + `X-Gateway-User-Id
 | --------------------------- | ------------------------------------------ | ------------------------------------------------------------ | ---------------------------------------------------------------------------------------- |
 | POST /v1/chat               | Conversational turn (consult-family agent) | message, optional location, movement_profile                 | type (`agent`\|`error`), message, data (reasoning_steps + tool_results), tool_calls_used |
 | POST /v1/chat/stream        | SSE streaming chat                         | Same as POST /v1/chat                                        | reasoning_step + tool_result + message + done frames                                     |
+| GET /v1/home                | Home greeting + suggestion chips           | — (optional `lat`/`lng`/`city`/`local_time`/`weather` query) | HomeResponse (`greeting`, `chips: { text }[]`); fail-open, always `200`                  |
+| GET /v1/user/intents        | "What you wanted" recall list              | — (optional `limit`/`cursor` query params)                  | IntentsResponse (`intents: { id, text, created_at }[]`, `next_cursor`)                   |
 | POST /v1/extract            | Canonical extraction (save a place)        | raw_input                                                    | ExtractPlaceResponse                                                                     |
 | GET /v1/user/library        | Browse the user's saved places (Library)   | — (optional filter + `sort` + `limit`/`cursor` query params) | LibraryResponse (`places: SavedPlaceView[]`, `next_cursor`, `total`)                     |
 | POST /v1/user/places        | Save a recommended place ("save it")       | place_core_id, recommendation_id                             | LibraryUserData (created user-state, `201`; `404` if uncatalogued); emits taste signal  |
@@ -728,6 +858,7 @@ All protected calls additionally send the `X-Gateway-Token` + `X-Gateway-User-Id
 - `taste_model` — per-user taste profile
 - `interactions` — append-only behavioral signal log
 - `user_memories` — personal facts extracted from chat messages
+- `user_intents` — the home "what you wanted" recall list (ADR-110); intent-bearing chat turns
 
 > Dropped in ADR-078: v1 `places`/`embeddings` and `recommendations`.
 

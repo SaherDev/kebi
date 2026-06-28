@@ -15,6 +15,7 @@ from kebi.core.user.service import DataScope, UserDataDeletionService
 from kebi.db.models import (
     Interaction,
     TasteModel,
+    UserIntent,
     UserMemory,
 )
 
@@ -73,12 +74,13 @@ async def test_sweep_deletes_all_user_scoped_tables() -> None:
         Interaction.__tablename__,
         UserMemory.__tablename__,
         TasteModel.__tablename__,
+        UserIntent.__tablename__,
         "user_places",
     ]
 
 
 async def test_sweep_runs_inside_transaction() -> None:
-    """All 4 deletes must execute inside the same `session.begin()` block."""
+    """All 5 deletes must execute inside the same `session.begin()` block."""
     factory, session = _build_session_factory_mock()
     service = UserDataDeletionService(
         session_factory=factory,
@@ -93,7 +95,7 @@ async def test_sweep_runs_inside_transaction() -> None:
     begin_cm = session.begin.return_value
     begin_cm.__aenter__.assert_awaited_once()
     begin_cm.__aexit__.assert_awaited_once()
-    assert session.execute.await_count == 4
+    assert session.execute.await_count == 5
 
 
 async def test_checkpointer_adelete_thread_called_with_user_id() -> None:
@@ -125,7 +127,7 @@ async def test_checkpointer_none_logs_warning_and_continues() -> None:
 
     await service.delete_user_data("user_abc")
 
-    assert session.execute.await_count == 4
+    assert session.execute.await_count == 5
     assert "user_abc" not in debouncer._pending
 
 
@@ -191,7 +193,7 @@ async def test_idempotent_double_delete() -> None:
     await service.delete_user_data("user_abc")
     await service.delete_user_data("user_abc")
 
-    assert session.execute.await_count == 8
+    assert session.execute.await_count == 10
     assert checkpointer.adelete_thread.await_count == 2
 
 
@@ -277,9 +279,10 @@ async def test_adelete_thread_exhausted_retries_raises(monkeypatch: object) -> N
 # ---------------------------------------------------------------------------
 
 
-async def test_chat_history_scope_skips_sql_deletes() -> None:
-    """`scopes={chat_history}` must NOT touch the SQL tables — only the
-    LangGraph checkpoint thread + debouncer cancellation should fire."""
+async def test_chat_history_scope_deletes_only_user_intents() -> None:
+    """`scopes={chat_history}` clears the recall list (user_intents) — it is
+    surfaced conversation history (ADR-110) — plus the checkpoint thread +
+    debouncer, but leaves the other SQL tables (saves, memories, taste) alone."""
     factory, session = _build_session_factory_mock()
     checkpointer = AsyncMock()
     debouncer = RegenDebouncer()
@@ -293,9 +296,8 @@ async def test_chat_history_scope_skips_sql_deletes() -> None:
 
     await service.delete_user_data("user_abc", scopes={DataScope.chat_history})
 
-    # Session factory was never asked for a session.
-    factory.assert_not_called()
-    session.execute.assert_not_called()
+    # Exactly one SQL delete, targeting user_intents — nothing else.
+    assert _delete_targets(session) == [UserIntent.__tablename__]
 
     # Checkpoint thread + debouncer still cleared.
     checkpointer.adelete_thread.assert_awaited_once_with("user_abc")
@@ -357,6 +359,7 @@ async def test_all_scope_explicit_is_same_as_no_scope() -> None:
         Interaction.__tablename__,
         UserMemory.__tablename__,
         TasteModel.__tablename__,
+        UserIntent.__tablename__,
         "user_places",
     ]
 
@@ -375,4 +378,4 @@ async def test_scope_set_with_all_collapses_to_all() -> None:
         "user_abc", scopes={DataScope.all, DataScope.chat_history}
     )
 
-    assert len(_delete_targets(session)) == 4  # full sweep ran
+    assert len(_delete_targets(session)) == 5  # full sweep ran
