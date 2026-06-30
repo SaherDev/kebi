@@ -22,6 +22,7 @@ from kebi.core.places.models import (
 from kebi.core.places.user_places_service import (
     DuplicateUserPlaceError,
     PlaceNotFoundError,
+    SaveLimitExceededError,
     UserPlacesService,
 )
 
@@ -61,9 +62,7 @@ class TestBrowse:
         )
         svc = UserPlacesService(user_places_repo=repo)
 
-        page, next_cursor, total = await svc.browse(
-            "u1", SavedPlaceFilters(), limit=10
-        )
+        page, next_cursor, total = await svc.browse("u1", SavedPlaceFilters(), limit=10)
 
         assert page == []
         assert next_cursor is None
@@ -80,9 +79,7 @@ class TestBrowse:
         )
         svc = UserPlacesService(user_places_repo=repo)
 
-        page, next_cursor, total = await svc.browse(
-            "u1", SavedPlaceFilters(), limit=10
-        )
+        page, next_cursor, total = await svc.browse("u1", SavedPlaceFilters(), limit=10)
 
         assert len(page) == 1
         assert next_cursor is None
@@ -103,9 +100,7 @@ class TestBrowse:
         )
         svc = UserPlacesService(user_places_repo=repo)
 
-        page, next_cursor, total = await svc.browse(
-            "u1", SavedPlaceFilters(), limit=2
-        )
+        page, next_cursor, total = await svc.browse("u1", SavedPlaceFilters(), limit=2)
 
         assert [v.place.id for v in page] == ["p1", "p2"]  # trimmed to limit
         assert next_cursor is not None
@@ -124,9 +119,7 @@ class TestBrowse:
         )
         svc = UserPlacesService(user_places_repo=repo)
 
-        _, _, total = await svc.browse(
-            "u1", SavedPlaceFilters(visited=True), limit=10
-        )
+        _, _, total = await svc.browse("u1", SavedPlaceFilters(visited=True), limit=10)
 
         assert total == 42
         repo.count_by_user.assert_awaited_once_with("u1")
@@ -175,9 +168,7 @@ class TestBrowse:
         # anchor (lowered), not saved_at.
         t = _now()
         repo = MagicMock(
-            browse=AsyncMock(
-                return_value=[_view("u1", "p1", t), _view("u1", "p2", t)]
-            ),
+            browse=AsyncMock(return_value=[_view("u1", "p1", t), _view("u1", "p2", t)]),
             count_by_user=AsyncMock(return_value=2),
         )
         svc = UserPlacesService(user_places_repo=repo)
@@ -425,3 +416,89 @@ class TestSaveOne:
             await svc.save_one("u1", "ghost", PlaceSource.kebi)
 
         assert exc_info.value.place_id == "ghost"
+
+
+class TestSaveLimit:
+    async def test_count_saves_delegates_to_repo(self) -> None:
+        repo = MagicMock(count_by_user=AsyncMock(return_value=7))
+        svc = UserPlacesService(user_places_repo=repo)
+
+        assert await svc.count_saves("u1") == 7
+        repo.count_by_user.assert_awaited_once_with("u1")
+
+    async def test_none_limit_is_unlimited(self) -> None:
+        repo = MagicMock(
+            get_by_user_and_place=AsyncMock(return_value=None),
+            count_by_user=AsyncMock(return_value=9999),
+            save_user_places=AsyncMock(side_effect=lambda rows: rows),
+        )
+        svc = UserPlacesService(user_places_repo=repo)
+
+        _, created = await svc.save_one("u1", "p1", PlaceSource.kebi, save_limit=None)
+
+        assert created is True
+        repo.count_by_user.assert_not_called()  # unlimited skips the count
+
+    async def test_save_one_under_limit_succeeds(self) -> None:
+        repo = MagicMock(
+            get_by_user_and_place=AsyncMock(return_value=None),
+            count_by_user=AsyncMock(return_value=9),
+            save_user_places=AsyncMock(side_effect=lambda rows: rows),
+        )
+        svc = UserPlacesService(user_places_repo=repo)
+
+        _, created = await svc.save_one("u1", "p1", PlaceSource.kebi, save_limit=10)
+
+        assert created is True
+        repo.save_user_places.assert_awaited_once()
+
+    async def test_save_one_at_limit_raises(self) -> None:
+        repo = MagicMock(
+            get_by_user_and_place=AsyncMock(return_value=None),
+            count_by_user=AsyncMock(return_value=10),
+            save_user_places=AsyncMock(),
+        )
+        svc = UserPlacesService(user_places_repo=repo)
+
+        with pytest.raises(SaveLimitExceededError) as exc_info:
+            await svc.save_one("u1", "p1", PlaceSource.kebi, save_limit=10)
+
+        assert exc_info.value.current == 10
+        assert exc_info.value.limit == 10
+        repo.save_user_places.assert_not_called()  # nothing written at the cap
+
+    async def test_resave_existing_at_limit_does_not_raise(self) -> None:
+        """A re-tap on an already-saved place returns early — it never reaches
+        the cap check, so a maxed user can still re-tap their own saves."""
+        existing = _user_place("u1", "p1")
+        repo = MagicMock(
+            get_by_user_and_place=AsyncMock(return_value=existing),
+            count_by_user=AsyncMock(return_value=10),
+            save_user_places=AsyncMock(),
+        )
+        svc = UserPlacesService(user_places_repo=repo)
+
+        row, created = await svc.save_one("u1", "p1", PlaceSource.kebi, save_limit=10)
+
+        assert created is False
+        assert row is existing
+        repo.count_by_user.assert_not_called()
+
+    async def test_save_places_batch_overflow_raises_before_write(self) -> None:
+        repo = MagicMock(
+            get_existing_place_ids=AsyncMock(return_value=set()),
+            count_by_user=AsyncMock(return_value=9),
+            save_user_places=AsyncMock(side_effect=lambda rows: rows),
+        )
+        svc = UserPlacesService(user_places_repo=repo)
+
+        # 9 held + 3 new > limit of 10 → whole batch rejected, nothing written.
+        with pytest.raises(SaveLimitExceededError):
+            await svc.save_places(
+                user_id="u1",
+                places=[_core("p1"), _core("p2"), _core("p3")],
+                source=PlaceSource.tiktok,
+                source_ref="https://tiktok.com/x",
+                save_limit=10,
+            )
+        repo.save_user_places.assert_not_called()

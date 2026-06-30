@@ -46,12 +46,47 @@ class PlaceNotFoundError(Exception):
         super().__init__(f"No catalog place for id {place_id!r}")
 
 
+class SaveLimitExceededError(Exception):
+    """Raised by the save path when a write would exceed the user's plan cap.
+
+    The cap is a plan-tier entitlement the gateway passes per request
+    (`save_limit`); kebi enforces it here because only kebi can count the
+    user's saves (they live in this repo's DB; NestJS never touches it —
+    Constitution §V). This is the single chokepoint for both write
+    endpoints (`POST /v1/extract` and `POST /v1/user/places`), so neither
+    can bypass the cap.
+    """
+
+    def __init__(self, user_id: str, current: int, limit: int) -> None:
+        self.current = current
+        self.limit = limit
+        super().__init__(f"User {user_id!r} at save limit: {current}/{limit}")
+
+
 class UserPlacesService:
     def __init__(
         self,
         user_places_repo: UserPlacesRepoProtocol,
     ) -> None:
         self._user_places_repo = user_places_repo
+
+    async def count_saves(self, user_id: str) -> int:
+        """Total saves the user holds — the plan-cap counter and library hero
+        count both read this single source.
+        """
+        return await self._user_places_repo.count_by_user(user_id)
+
+    async def _enforce_save_limit(
+        self, user_id: str, save_limit: int | None, incoming: int
+    ) -> None:
+        """Raise `SaveLimitExceededError` if saving `incoming` rows would push
+        the user past `save_limit`. No-op when `save_limit is None` (unlimited).
+        """
+        if save_limit is None:
+            return
+        current = await self._user_places_repo.count_by_user(user_id)
+        if current + incoming > save_limit:
+            raise SaveLimitExceededError(user_id, current, save_limit)
 
     async def save_places(
         self,
@@ -60,6 +95,7 @@ class UserPlacesService:
         source: PlaceSource,
         source_ref: str | None,
         source_labels: Mapping[str, str | None] | None = None,
+        save_limit: int | None = None,
     ) -> list[UserPlace]:
         """Link `places` to `user_id` in user_places.
 
@@ -96,6 +132,10 @@ class UserPlacesService:
             conflicts = [pid for pid in place_ids if pid in existing_ids]
             raise DuplicateUserPlaceError(conflicts=conflicts)
 
+        # Plan-cap check after dedup — every remaining id is a genuinely new
+        # save, so it counts against the limit.
+        await self._enforce_save_limit(user_id, save_limit, len(place_ids))
+
         labels = source_labels or {}
         now = datetime.now(UTC)
         rows = [
@@ -114,7 +154,11 @@ class UserPlacesService:
         return await self._user_places_repo.save_user_places(rows)
 
     async def save_one(
-        self, user_id: str, place_id: str, source: PlaceSource
+        self,
+        user_id: str,
+        place_id: str,
+        source: PlaceSource,
+        save_limit: int | None = None,
     ) -> tuple[UserPlace, bool]:
         """Save a single catalog place to the user's library, idempotently.
 
@@ -129,11 +173,13 @@ class UserPlacesService:
         the insert trips the `place_id → places.id` foreign key, the source of
         truth, so there is no separate existence pre-check.
         """
-        existing = await self._user_places_repo.get_by_user_and_place(
-            user_id, place_id
-        )
+        existing = await self._user_places_repo.get_by_user_and_place(user_id, place_id)
         if existing is not None:
             return existing, False
+
+        # Only a genuinely new save counts against the cap — a re-tap on an
+        # already-saved place returned above without reaching here.
+        await self._enforce_save_limit(user_id, save_limit, 1)
 
         row = UserPlace(
             user_place_id=str(uuid.uuid4()),

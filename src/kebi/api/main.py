@@ -218,7 +218,16 @@ app.add_middleware(
     allow_origins=_cors_origins,
     allow_credentials=False,
     allow_methods=["GET", "POST", "DELETE"],
-    allow_headers=["X-Gateway-Token", "X-Gateway-User-Id", "Content-Type"],
+    allow_headers=[
+        "X-Gateway-Token",
+        "X-Gateway-User-Id",
+        "X-Gateway-Taste-Enabled",
+        "X-Gateway-Discovery-Enabled",
+        "X-Gateway-Save-Limit",
+        "X-Gateway-Consults-Per-Day",
+        "X-Gateway-Advanced-Models-Enabled",
+        "Content-Type",
+    ],
 )
 
 # Two routers under the same /v1 prefix. `public_router` carries only

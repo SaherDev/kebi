@@ -93,9 +93,7 @@ async def test_run_invokes_agent_graph_and_returns_agent_type() -> None:
     )
     service = _make_service(agent_graph=graph)
 
-    result = await service.run(
-        ChatRequest(message="show me my saves"), user_id="u1"
-    )
+    result = await service.run(ChatRequest(message="show me my saves"), user_id="u1")
 
     assert result.type == "agent"
     assert result.message == "here's what I found"
@@ -212,3 +210,38 @@ async def test_run_no_location_threads_none() -> None:
 
     payload = graph.astream.call_args.args[0]
     assert payload["user_location"] is None
+
+
+async def test_taste_disabled_skips_compose_and_passes_empty() -> None:
+    """When taste_enabled is False (default), the taste profile is never read
+    and an empty summary reaches the agent payload."""
+    taste = AsyncMock()
+    taste.get_taste_profile = AsyncMock(
+        return_value=MagicMock(taste_profile_summary=["should not be read"])
+    )
+    graph = AsyncMock()
+    graph.astream = _mock_astream(
+        [{"messages": [AIMessage(content="ok")], "reasoning_steps": []}]
+    )
+    service = _make_service(taste_service=taste, agent_graph=graph)
+
+    await service.run(ChatRequest(message="hi"), user_id="u", taste_enabled=False)
+
+    taste.get_taste_profile.assert_not_called()
+    payload = graph.astream.call_args.args[0]
+    assert payload["taste_profile_summary"] == ""
+
+
+async def test_taste_enabled_composes_summary() -> None:
+    """When taste_enabled is True, the taste profile is read and composed."""
+    taste = AsyncMock()
+    taste.get_taste_profile = AsyncMock(return_value=None)
+    graph = AsyncMock()
+    graph.astream = _mock_astream(
+        [{"messages": [AIMessage(content="ok")], "reasoning_steps": []}]
+    )
+    service = _make_service(taste_service=taste, agent_graph=graph)
+
+    await service.run(ChatRequest(message="hi"), user_id="u", taste_enabled=True)
+
+    taste.get_taste_profile.assert_awaited_once_with("u")

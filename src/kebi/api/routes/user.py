@@ -23,7 +23,12 @@ from kebi.api.schemas.library import (
 )
 from kebi.core.events.dispatcher import EventDispatcher
 from kebi.core.events.events import RecommendationSaved
-from kebi.core.places import PlaceNotFoundError, PlaceSource, UserPlacesService
+from kebi.core.places import (
+    PlaceNotFoundError,
+    PlaceSource,
+    SaveLimitExceededError,
+    UserPlacesService,
+)
 from kebi.core.user.intent_service import UserIntentService
 from kebi.core.user.service import DataScope, UserDataDeletionService
 
@@ -130,14 +135,26 @@ async def save_user_place(
     a caller can only ever save into their own library. Returns the created
     (or existing) user-state as `LibraryUserData` (never the raw domain model
     — ADR-105).
+
+    Returns 403 `save_limit_reached` when the caller's plan-tier `save_limit`
+    (forwarded by the gateway) is already met — the gateway maps it to the
+    upgrade prompt. A re-tap on an already-saved place never counts against
+    the cap, so it succeeds even at the limit.
     """
     try:
         user_place, created = await service.save_one(
-            identity.user_id, body.place_core_id, PlaceSource.kebi
+            identity.user_id,
+            body.place_core_id,
+            PlaceSource.kebi,
+            save_limit=identity.save_limit,
         )
     except PlaceNotFoundError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="place_not_found"
+        ) from exc
+    except SaveLimitExceededError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="save_limit_reached"
         ) from exc
 
     if created:

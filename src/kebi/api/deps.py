@@ -13,6 +13,7 @@ from fastapi import BackgroundTasks, Depends, Header, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from kebi.core.agent.tools.candidate_namer import CandidateNamerService
+from kebi.core.chat.consult_quota import ConsultQuotaService
 from kebi.core.chat.service import ChatService
 from kebi.core.config import AppConfig, ExtractionConfig, get_config, get_env
 from kebi.core.events.dispatcher import EventDispatcher
@@ -94,15 +95,44 @@ class GatewayIdentity:
     Constructed only inside `require_gateway_identity` after the shared
     secret check passes. Routes treat the `user_id` field as ground truth
     — body-level / path-level `user_id` is no longer accepted.
+
+    Plan-tier entitlements travel on the same trusted header channel as the
+    identity (the gateway owns plans; kebi enforces). They are gateway-
+    asserted facts about the caller — never read from the request body,
+    which the end-user could forge. kebi receives raw capabilities, never
+    the plan name, so repricing never touches this repo.
+
+    Defaults are restrictive: booleans default `False` (fail closed — a
+    missing header denies the paid feature); int limits default `None`
+    (= unlimited), because kebi must stay pricing-agnostic and cannot
+    invent the free-tier numbers. The `None`-means-unlimited choice fails
+    *open* for `consults_per_day` — the slowapi per-minute limit is the
+    only backstop if the gateway omits it.
     """
 
     user_id: str
+    taste_enabled: bool = False
+    discovery_enabled: bool = False
+    save_limit: int | None = None
+    consults_per_day: int | None = None
+    advanced_models_enabled: bool = False
 
 
 def require_gateway_identity(
     request: Request,
     x_gateway_token: str = Header(..., alias="X-Gateway-Token"),
     x_gateway_user_id: str = Header(..., alias="X-Gateway-User-Id"),
+    x_gateway_taste_enabled: bool = Header(False, alias="X-Gateway-Taste-Enabled"),
+    x_gateway_discovery_enabled: bool = Header(
+        False, alias="X-Gateway-Discovery-Enabled"
+    ),
+    x_gateway_save_limit: int | None = Header(None, alias="X-Gateway-Save-Limit"),
+    x_gateway_consults_per_day: int | None = Header(
+        None, alias="X-Gateway-Consults-Per-Day"
+    ),
+    x_gateway_advanced_models_enabled: bool = Header(
+        False, alias="X-Gateway-Advanced-Models-Enabled"
+    ),
 ) -> GatewayIdentity:
     """Verify the gateway shared secret and return the forwarded identity.
 
@@ -118,7 +148,14 @@ def require_gateway_identity(
         raise HTTPException(status_code=401, detail="unauthorized")
     if not _USER_ID_PATTERN.match(x_gateway_user_id):
         raise HTTPException(status_code=400, detail="bad_user_id")
-    identity = GatewayIdentity(user_id=x_gateway_user_id)
+    identity = GatewayIdentity(
+        user_id=x_gateway_user_id,
+        taste_enabled=x_gateway_taste_enabled,
+        discovery_enabled=x_gateway_discovery_enabled,
+        save_limit=x_gateway_save_limit,
+        consults_per_day=x_gateway_consults_per_day,
+        advanced_models_enabled=x_gateway_advanced_models_enabled,
+    )
     # Stash on request.state so middleware (rate limiter, request-id
     # logger) can reach it without re-resolving the dep chain.
     request.state.identity = identity
@@ -829,6 +866,7 @@ def get_candidate_namer_service() -> CandidateNamerService:
 
 
 def get_agent_graph(
+    identity: GatewayIdentity = Depends(require_gateway_identity),  # noqa: B008
     checkpointer: Any = Depends(get_agent_checkpointer),  # noqa: B008
     hybrid_search: HybridSearchService = Depends(get_hybrid_search_service),  # noqa: B008
     places_search_factory: SearchServiceFactory = Depends(  # noqa: B008
@@ -848,6 +886,13 @@ def get_agent_graph(
     extraction pipeline pattern, ADR-072). `CandidateNamerService` is
     process-safe but is still resolved through `Depends()` so the
     wiring stays in one place.
+
+    Two plan-tier entitlements shape the graph per request:
+    `discovery_enabled` decides whether the external-provider tools are
+    bound; `advanced_models_enabled` selects the higher-quality
+    orchestrator model via the config-driven `orchestrator_advanced`
+    role (no model names hardcoded). `get_langchain_chat_model` is
+    cached per role string, so both model tiers stay warm.
     """
     if checkpointer is None:
         return None
@@ -855,15 +900,38 @@ def get_agent_graph(
     from kebi.core.agent.tools import build_tools
     from kebi.providers.llm import get_langchain_chat_model
 
-    llm = get_langchain_chat_model("orchestrator")
+    # Advanced tier selects the `orchestrator_advanced` role (emitted at boot
+    # from the orchestrator block's `advanced` option). Fall back to the
+    # standard orchestrator if a deploy did not configure one, so a missing
+    # `advanced` key degrades gracefully rather than 500-ing the turn.
+    orchestrator_role = "orchestrator"
+    if identity.advanced_models_enabled and "orchestrator_advanced" in (
+        get_config().models
+    ):
+        orchestrator_role = "orchestrator_advanced"
+    llm = get_langchain_chat_model(orchestrator_role)
     resolver_llm = get_langchain_chat_model("location_resolver")
     return build_graph(
         llm,
-        build_tools(hybrid_search, candidate_namer, places_search_factory),
+        build_tools(
+            hybrid_search,
+            candidate_namer,
+            places_search_factory,
+            discovery_enabled=identity.discovery_enabled,
+        ),
         checkpointer,
         resolver_llm,
         get_geocoding_client(),
     )
+
+
+def get_consult_quota_service() -> ConsultQuotaService:
+    """FastAPI dependency providing the Redis-backed consult quota service.
+
+    Shares the process-wide async Redis client (connection pool reused
+    across requests, ADR-019).
+    """
+    return ConsultQuotaService(redis=get_redis_client(get_env().REDIS_URL))
 
 
 async def get_chat_service(

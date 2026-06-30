@@ -82,11 +82,23 @@ def override_gateway_identity() -> None:
     business behavior, not auth, so we hand them a fixed identity by
     overriding the dependency. Auth-specific tests opt back into the
     real dep via `app.dependency_overrides.pop(...)`.
+
+    The default test identity is a full-access (top-tier) user — every
+    plan-tier entitlement granted — so existing behavior tests run as if
+    unrestricted. The dataclass field defaults stay restrictive; tests
+    that exercise gating set the relevant entitlement explicitly.
     """
     from kebi.api import deps
 
     app.dependency_overrides[deps.require_gateway_identity] = (
-        lambda: deps.GatewayIdentity(user_id="user_test_dummy_123456789012345")
+        lambda: deps.GatewayIdentity(
+            user_id="user_test_dummy_123456789012345",
+            taste_enabled=True,
+            discovery_enabled=True,
+            save_limit=None,
+            consults_per_day=None,
+            advanced_models_enabled=True,
+        )
     )
 
 

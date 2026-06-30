@@ -69,8 +69,16 @@ models:
   # token while staying in the function-calling-leading Claude family — so
   # prompt caching below still applies. Set AGENT_MODEL=claude-sonnet to A/B
   # back to Sonnet without a deploy.
+  #
+  # `advanced` (optional) names the option the top plan tier gets — the
+  # `advanced_models_enabled` entitlement makes `get_agent_graph` select
+  # logical role `orchestrator_advanced`, which boot resolution emits from
+  # this same option list (no duplicate model block). Sonnet, not Opus: a
+  # real quality lift over the Haiku base while staying cost-bounded
+  # against the tier's unlimited consults — retune by repointing `advanced`.
   orchestrator:
     default: claude-haiku
+    advanced: claude-sonnet
     claude-sonnet:
       provider: anthropic
       model: claude-sonnet-4-6

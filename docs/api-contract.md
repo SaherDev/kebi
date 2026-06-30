@@ -38,6 +38,40 @@ is the only route that bypasses this check.
 Both repos must hold the same `GATEWAY_SHARED_SECRET` byte-for-byte;
 rotate by setting the new value on both sides during the same deploy.
 
+### Plan-tier entitlements (gateway header contract) — ADR-112
+
+NestJS owns plans/billing; kebi owns no users or plans. The gateway forwards
+the caller's **capabilities** (never the plan name) as headers on the same
+trusted channel as the identity. kebi enforces them. Repricing or renaming a
+tier is a gateway-only change — kebi never sees it.
+
+| Header                              | Value          | Missing →            | Gates                                              |
+| ----------------------------------- | -------------- | -------------------- | ------------------------------------------------- |
+| `X-Gateway-Taste-Enabled`           | `true`/`false` | `false` (fail closed)| Taste-model personalization on `/v1/chat`         |
+| `X-Gateway-Discovery-Enabled`       | `true`/`false` | `false` (fail closed)| `suggest_places` + `discover_places` agent tools  |
+| `X-Gateway-Save-Limit`              | integer        | absent = unlimited   | Max saved places (`/v1/extract`, `/v1/user/places`)|
+| `X-Gateway-Consults-Per-Day`        | integer        | absent = unlimited   | Daily consult quota on `/v1/chat`(+`/stream`)     |
+| `X-Gateway-Advanced-Models-Enabled` | `true`/`false` | `false` (fail closed)| Higher-quality orchestrator model on consults     |
+
+Asymmetry by design (ADR-112): the boolean feature flags **fail closed** (a
+missing header denies the paid feature); the numeric limits **fail open** to
+unlimited (a missing header means no cap), so kebi never has to hard-code the
+free-tier numbers. The gateway is expected to always send the limits for
+capped tiers.
+
+Enforcement outcomes the gateway should map to an upgrade prompt:
+- **Consult quota** — `POST /v1/chat` returns `200` with `type:"error"`,
+  `data.reason:"daily_limit_reached"`. `POST /v1/chat/stream` emits an `error`
+  frame `{ "detail": "daily_limit_reached" }` then `done`. (Checked at entry —
+  a maxed user spends no model cost.)
+- **Save cap (button)** — `POST /v1/user/places` returns `403`
+  `{ "detail": "save_limit_reached" }`. A re-tap on an already-saved place is
+  idempotent and never counts against the cap, so it succeeds even at the limit.
+- **Save cap (extraction)** — `POST /v1/extract` returns its terminal envelope
+  with `status:"failed"`, `failure_reason:"save_limit_reached"`. Checked
+  **before** the pipeline runs, so a user with a full library spends no
+  extraction work; a user with room keeps the whole in-flight result.
+
 ### Per-user rate limits
 
 Per-user buckets enforced via slowapi. Excess → HTTP 429. Buckets are
@@ -218,6 +252,8 @@ to `POST /v1/extract` — the chat path never writes to `user_places`.
 
 `data.detail` is an internal string for logs — safe to ignore in the UI. All downstream exceptions are caught and surfaced as `type="error"` with **HTTP 200** (not 5xx).
 
+When the caller's daily consult quota (`X-Gateway-Consults-Per-Day`) is exhausted, the same `type="error"` shape carries a structured reason instead: `data.reason:"daily_limit_reached"` (HTTP 200). The agent does not run. Map it to an upgrade prompt — see "Plan-tier entitlements" above.
+
 **HTTP Status Codes:**
 
 | Code  | When                                         |
@@ -283,6 +319,8 @@ On error mid-stream:
 event: error
 data: {"detail": "<error string>"}
 ```
+
+If the daily consult quota is exhausted, the stream opens (HTTP 200) and immediately emits a terminal `error` frame with `{"detail": "daily_limit_reached"}` followed by `done` — no reasoning or message frames. Map it to an upgrade prompt.
 
 | Code  | When                                |
 | ----- | ----------------------------------- |
@@ -396,12 +434,14 @@ Canonical product-facing extraction endpoint (ADR-073). The product repo calls t
 | `results`         | `ExtractPlaceItem[]`                   | `{ place: PlaceCore, confidence: float (0–1) }`. **No per-item `status`** — ADR-071 saves every picker candidate with `approved=False`; the user curates later in the product UI. **No `evidence`** — ADR-093 moved the audit trail to an object-storage ledger so it no longer rides the response |
 | `raw_input`       | `string \| null`                       | The original user-supplied string, verbatim                                                                                                                                                                                                                                                        |
 | `request_id`      | `string \| null`                       | Correlation id                                                                                                                                                                                                                                                                                     |
-| `failure_reason`  | `string \| null`                       | Populated only when `status == "failed"` (e.g. `unsupported_url`)                                                                                                                                                                                                                                  |
+| `failure_reason`  | `string \| null`                       | Populated only when `status == "failed"`. One of `unsupported_url`, `empty_input`, `no_candidates`, `all_below_threshold`, `candidate_limit_exceeded`, `pipeline_error`, `save_limit_reached`                                                                                                        |
 | `failure_message` | `string \| null`                       | Human-readable diagnostic, only when `status == "failed"`                                                                                                                                                                                                                                          |
 
 ADR-081: the extract response is unchanged. The name the place was shown as in the source post (e.g. a TikTok card title "Mirror Temple", resolver-cleaned of list numbering) is **not** returned here — it is persisted per save on `user_places.source_label` and surfaced when the user's saved places are read. Independently, a confidently-matched source label is added to the shared `place.place_name_aliases` (which feeds search); low-confidence labels stay per-user-only and never enter shared search.
 
 ADR-074: results are cached by canonical URL — a repeat submission of the same URL by another user skips the pipeline and links the cached places to that user (~50 ms vs ~30 s).
+
+ADR-112: if the caller's `X-Gateway-Save-Limit` is already met, extraction returns `status:"failed"`, `failure_reason:"save_limit_reached"` **before** running the pipeline (no LLM/vision/transcription spend). A user below the limit gets their whole in-flight result even if it nudges them over — the cap is a "you're full, stop" gate, not a per-place counter.
 
 **Latency profile:** text → <1 s; caption-only URL → 2–5 s; video needing yt-dlp + Whisper + vision → 30–60 s (synchronous; show a progress indicator).
 
@@ -559,6 +599,7 @@ twice never double-trains taste.
 | Code  | When                                                                          |
 | ----- | ----------------------------------------------------------------------------- |
 | `201` | Saved (or already saved) — returns the user-state                             |
+| `403` | `X-Gateway-Save-Limit` already met (`detail: save_limit_reached`) — map to upgrade. A re-tap on an already-saved place is exempt and still returns `201` |
 | `404` | `place_core_id` is not in the catalog (`detail: place_not_found`)             |
 | `422` | Missing `place_core_id`/`recommendation_id`, or an unknown field              |
 
