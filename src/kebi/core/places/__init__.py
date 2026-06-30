@@ -70,6 +70,7 @@ from .user_places_repo import UserPlacesRepo
 from .user_places_service import (
     DuplicateUserPlaceError,
     PlaceNotFoundError,
+    SaveLimitExceededError,
     UserPlacesService,
 )
 
@@ -139,6 +140,7 @@ __all__ = [
     # errors
     "DuplicateUserPlaceError",
     "PlaceNotFoundError",
+    "SaveLimitExceededError",
     "GeocodingError",
     # constants
     "EMBEDDING_DIMENSIONS",

@@ -40,6 +40,8 @@ def build_tools(
     hybrid_search: HybridSearchService,
     candidate_namer: CandidateNamerService,
     places_search_factory: SearchServiceFactory,
+    *,
+    discovery_enabled: bool = True,
 ) -> list[BaseTool]:
     """Build the agent's tool list, binding request-scoped services.
 
@@ -54,12 +56,18 @@ def build_tools(
     `candidate_namer` wraps the process-wide Instructor client and is
     safe to share — it is accepted explicitly here so the factory
     stays the single seam for the agent's collaborators.
+
+    `discovery_enabled` is the plan-tier gate: `find_saved` (the user's
+    own library, zero external cost) is always available; the two
+    external-provider tools (`suggest_places`, `discover_places`, which
+    hit Google Places at real marginal cost) are withheld for tiers that
+    do not pay for new-place discovery.
     """
-    return [
-        build_find_saved_tool(hybrid_search),
-        build_suggest_places_tool(candidate_namer, places_search_factory),
-        build_discover_places_tool(places_search_factory),
-    ]
+    tools: list[BaseTool] = [build_find_saved_tool(hybrid_search)]
+    if discovery_enabled:
+        tools.append(build_suggest_places_tool(candidate_namer, places_search_factory))
+        tools.append(build_discover_places_tool(places_search_factory))
+    return tools
 
 
 __all__ = [

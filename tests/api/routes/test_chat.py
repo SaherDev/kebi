@@ -5,9 +5,10 @@ from unittest.mock import AsyncMock
 import pytest
 from fastapi.testclient import TestClient
 
-from kebi.api.deps import get_chat_service
+from kebi.api.deps import get_chat_service, get_consult_quota_service
 from kebi.api.main import app
 from kebi.api.schemas.chat import ChatResponse
+from kebi.core.chat.consult_quota import ConsultQuotaService
 from kebi.core.chat.service import ChatService
 
 
@@ -123,3 +124,43 @@ class TestChatRouteValidation:
             json={},
         )
         assert response.status_code == 422
+
+
+class TestChatRouteConsultQuota:
+    """The daily consult quota short-circuits before the agent runs."""
+
+    def test_quota_exhausted_returns_error_with_reason(
+        self, mock_chat_service: AsyncMock
+    ) -> None:
+        denying_quota = AsyncMock(spec=ConsultQuotaService)
+        denying_quota.check_and_increment = AsyncMock(return_value=False)
+        app.dependency_overrides[get_chat_service] = lambda: mock_chat_service
+        app.dependency_overrides[get_consult_quota_service] = lambda: denying_quota
+        try:
+            response = TestClient(app).post("/v1/chat", json={"message": "hi"})
+            assert response.status_code == 200
+            data = response.json()
+            assert data["type"] == "error"
+            assert data["data"]["reason"] == "daily_limit_reached"
+            # The agent must not run once the quota is spent.
+            mock_chat_service.run.assert_not_awaited()
+        finally:
+            app.dependency_overrides.pop(get_chat_service, None)
+            app.dependency_overrides.pop(get_consult_quota_service, None)
+
+    def test_within_quota_runs_agent(self, mock_chat_service: AsyncMock) -> None:
+        allowing_quota = AsyncMock(spec=ConsultQuotaService)
+        allowing_quota.check_and_increment = AsyncMock(return_value=True)
+        mock_chat_service.run.return_value = ChatResponse(
+            type="agent", message="ok", data={"reasoning_steps": []}
+        )
+        app.dependency_overrides[get_chat_service] = lambda: mock_chat_service
+        app.dependency_overrides[get_consult_quota_service] = lambda: allowing_quota
+        try:
+            response = TestClient(app).post("/v1/chat", json={"message": "hi"})
+            assert response.status_code == 200
+            assert response.json()["type"] == "agent"
+            mock_chat_service.run.assert_awaited_once()
+        finally:
+            app.dependency_overrides.pop(get_chat_service, None)
+            app.dependency_overrides.pop(get_consult_quota_service, None)

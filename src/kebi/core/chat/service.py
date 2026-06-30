@@ -53,14 +53,21 @@ class ChatService:
         self._config = config
         self._agent_graph = agent_graph
 
-    async def run(self, request: ChatRequest, *, user_id: str) -> ChatResponse:
+    async def run(
+        self, request: ChatRequest, *, user_id: str, taste_enabled: bool = False
+    ) -> ChatResponse:
         """Delegate to `_run_agent` — the only dispatch path (ADR-065).
 
-        `user_id` is passed explicitly by the route after gateway-identity
-        verification — never read from the request body.
+        `user_id` and `taste_enabled` are passed explicitly by the route
+        after gateway-identity verification — never read from the request
+        body. `taste_enabled` is the plan-tier gate: when false the taste
+        model is not composed into the turn (free tier gets no taste
+        personalization).
         """
         try:
-            return await self._run_agent(request, user_id=user_id)
+            return await self._run_agent(
+                request, user_id=user_id, taste_enabled=taste_enabled
+            )
         except Exception:
             logger.exception("ChatService.run failed")
             return ChatResponse(
@@ -70,7 +77,7 @@ class ChatService:
             )
 
     async def _run_agent(
-        self, request: ChatRequest, *, user_id: str
+        self, request: ChatRequest, *, user_id: str, taste_enabled: bool = False
     ) -> ChatResponse:
         """Invoke the compiled agent graph and map its final state to ChatResponse.
 
@@ -92,9 +99,12 @@ class ChatService:
             extra={"endpoint": "/v1/chat"},
         ):
             try:
-                # Pre-agent prep runs in parallel.
+                # Pre-agent prep runs in parallel. Taste compose is gated by
+                # the plan tier — skip the read entirely when not entitled.
                 taste_summary, memory_summary = await asyncio.gather(
-                    self._compose_taste_summary(user_id),
+                    self._compose_taste_summary(user_id)
+                    if taste_enabled
+                    else _empty_summary(),
                     self._compose_memory_summary(user_id),
                 )
 
@@ -193,10 +203,13 @@ class ChatService:
         return "\n".join(memory_list)
 
 
+async def _empty_summary() -> str:
+    """Awaitable stand-in for a skipped compose, so the gather stays uniform."""
+    return ""
+
+
 def _last_ai_message(messages: list[Any]) -> AIMessage | None:
     for m in reversed(messages):
         if isinstance(m, AIMessage):
             return m
     return None
-
-

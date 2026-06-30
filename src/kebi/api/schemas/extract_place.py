@@ -83,6 +83,7 @@ FailureReason = Literal[
     "all_below_threshold",
     "candidate_limit_exceeded",
     "pipeline_error",
+    "save_limit_reached",
 ]
 
 

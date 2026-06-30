@@ -111,6 +111,8 @@ class PlaceWipeServiceProtocol(Protocol):
 
 
 class UserPlacesServiceProtocol(Protocol):
+    async def count_saves(self, user_id: str) -> int: ...
+
     async def save_places(
         self,
         user_id: str,
@@ -118,6 +120,7 @@ class UserPlacesServiceProtocol(Protocol):
         source: PlaceSource,
         source_ref: str | None,
         source_labels: Mapping[str, str | None] | None = None,
+        save_limit: int | None = None,
     ) -> list[UserPlace]: ...
 
     async def browse(
@@ -130,7 +133,11 @@ class UserPlacesServiceProtocol(Protocol):
     ) -> tuple[list[SavedPlaceView], str | None, int]: ...
 
     async def save_one(
-        self, user_id: str, place_id: str, source: PlaceSource
+        self,
+        user_id: str,
+        place_id: str,
+        source: PlaceSource,
+        save_limit: int | None = None,
     ) -> tuple[UserPlace, bool]: ...
 
     async def update_status(

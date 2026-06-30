@@ -22,6 +22,7 @@ from kebi.api.deps import (
     GatewayIdentity,
     get_agent_graph,
     get_chat_service,
+    get_consult_quota_service,
     require_gateway_identity,
 )
 from kebi.api.rate_limit import limiter
@@ -29,6 +30,7 @@ from kebi.api.schemas.chat import ChatRequest, ChatResponse
 from kebi.core.agent._trace_context import feature_trace
 from kebi.core.agent.invocation import build_turn_payload
 from kebi.core.agent.messages import extract_text_content
+from kebi.core.chat.consult_quota import ConsultQuotaService
 from kebi.core.chat.service import ChatService
 from kebi.core.config import get_env
 from kebi.core.events.events import TurnCompleted
@@ -69,6 +71,7 @@ async def chat(
     body: ChatRequest = Body(...),  # noqa: B008
     identity: GatewayIdentity = Depends(require_gateway_identity),  # noqa: B008
     service: ChatService = Depends(get_chat_service),  # noqa: B008
+    quota: ConsultQuotaService = Depends(get_consult_quota_service),  # noqa: B008
 ) -> ChatResponse:
     """Unified chat endpoint — classify intent and dispatch to correct pipeline.
 
@@ -77,13 +80,27 @@ async def chat(
             movement profile. `user_id` is NOT a body field — it is
             forwarded by the gateway as `X-Gateway-User-Id` and resolved
             via `require_gateway_identity`.
-        identity: Verified gateway identity (carries `user_id`).
+        identity: Verified gateway identity (carries `user_id` plus the
+            plan-tier entitlements: `consults_per_day` quota and
+            `taste_enabled`).
         service: Injected ChatService instance.
+        quota: Redis-backed daily consult quota enforcer.
 
     Returns:
-        ChatResponse with type, message, and optional data payload.
+        ChatResponse with type, message, and optional data payload. When the
+        daily consult quota is exhausted, an `error` response carrying
+        `data={"reason": "daily_limit_reached"}` so the gateway can surface
+        the upgrade prompt.
     """
-    return await service.run(body, user_id=identity.user_id)
+    if not await quota.check_and_increment(identity.user_id, identity.consults_per_day):
+        return ChatResponse(
+            type="error",
+            message="You've reached today's consult limit.",
+            data={"reason": "daily_limit_reached"},
+        )
+    return await service.run(
+        body, user_id=identity.user_id, taste_enabled=identity.taste_enabled
+    )
 
 
 @router.post("/chat/stream", status_code=200)
@@ -94,6 +111,7 @@ async def chat_stream(
     identity: GatewayIdentity = Depends(require_gateway_identity),  # noqa: B008
     service: ChatService = Depends(get_chat_service),  # noqa: B008
     agent_graph: Any = Depends(get_agent_graph),  # noqa: B008
+    quota: ConsultQuotaService = Depends(get_consult_quota_service),  # noqa: B008
 ) -> StreamingResponse:
     """SSE streaming chat endpoint — emits reasoning_step frames then final message.
 
@@ -139,7 +157,23 @@ async def chat_stream(
         )
 
     user_id = identity.user_id
-    taste_summary = await service._compose_taste_summary(user_id)
+
+    # Daily consult quota — checked before any taste read or agent work, so a
+    # maxed user spends nothing. Short-circuit with a terminal SSE error so
+    # the client stays on the event-stream contract (mirrors the structured
+    # `daily_limit_reached` reason on the non-stream path).
+    if not await quota.check_and_increment(user_id, identity.consults_per_day):
+
+        async def _limited() -> AsyncGenerator[str, None]:
+            yield _frame("error", {"detail": "daily_limit_reached"})
+            yield _frame("done", {"tool_calls_used": 0})
+
+        return StreamingResponse(_limited(), media_type="text/event-stream")
+
+    # Taste compose is plan-gated (free tier gets no taste personalization).
+    taste_summary = (
+        await service._compose_taste_summary(user_id) if identity.taste_enabled else ""
+    )
     memory_summary = await service._compose_memory_summary(user_id)
 
     payload = build_turn_payload(

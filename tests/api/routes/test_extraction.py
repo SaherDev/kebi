@@ -68,6 +68,7 @@ class TestExtractRoute:
         mock_service.run.assert_awaited_once_with(
             raw_input="https://tiktok.com/@x/video/123",
             user_id="user_test_dummy_123456789012345",
+            save_limit=None,
         )
 
     def test_post_extract_returns_failed_envelope(self) -> None:

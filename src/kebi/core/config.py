@@ -98,11 +98,19 @@ class OrchestratorOptionsConfig(BaseModel):
         return self
 
 
+# Selector keys inside the orchestrator block — every other key is a model
+# option. `default` picks the standard-tier orchestrator; `advanced`
+# (optional) names the option the top plan tier gets, exposed as the
+# separate `orchestrator_advanced` role so it survives boot resolution
+# instead of being collapsed away with the other options.
+_ORCH_RESERVED_KEYS = frozenset({"default", "advanced"})
+
+
 def _split_orchestrator_block(raw_orch: dict[str, Any]) -> OrchestratorOptionsConfig:
     """Parse the YAML orchestrator block into OrchestratorOptionsConfig.
 
-    `default` is the only reserved key; every other key is an option name
-    mapping to an `LLMRoleConfig`-shaped dict.
+    `default` and `advanced` are reserved selector keys; every other key is
+    an option name mapping to an `LLMRoleConfig`-shaped dict.
     """
     if "default" not in raw_orch:
         raise ValueError(
@@ -110,7 +118,7 @@ def _split_orchestrator_block(raw_orch: dict[str, Any]) -> OrchestratorOptionsCo
             "its option keys"
         )
     default = raw_orch["default"]
-    options = {k: v for k, v in raw_orch.items() if k != "default"}
+    options = {k: v for k, v in raw_orch.items() if k not in _ORCH_RESERVED_KEYS}
     return OrchestratorOptionsConfig(default=default, options=options)
 
 
@@ -121,18 +129,25 @@ def _resolve_orchestrator(
     `LLMRoleConfig` dict (ADR-068).
 
     No-op if the block is already flat (i.e. has top-level `provider`/`model`).
-    Mutates `raw_models["orchestrator"]` in place and returns the same dict.
+    Mutates `raw_models` in place and returns it.
 
     - `agent_model` is None  → use `default`.
     - `agent_model` matches an option key → use that option.
     - `agent_model` is set but unknown → log a warning and fall back to
       `default`. Boot continues so a typo in env vars does not kill prod.
     - `default` missing or pointing at a missing option → raises.
+
+    When the block names an `advanced` option, that option is emitted as the
+    separate `orchestrator_advanced` role (selected per request for the
+    `advanced_models_enabled` plan tier). It references one of the existing
+    options — no duplicate model definition. A missing `advanced` key just
+    means the role is not defined (the agent path falls back to standard).
     """
     orch = raw_models.get("orchestrator")
     if not isinstance(orch, dict) or "provider" in orch:
         return raw_models
 
+    advanced_key = orch.get("advanced")
     parsed = _split_orchestrator_block(orch)
     chosen = parsed.default
     if agent_model is not None:
@@ -147,6 +162,13 @@ def _resolve_orchestrator(
                 parsed.default,
             )
     raw_models["orchestrator"] = parsed.options[chosen].model_dump()
+    if advanced_key is not None:
+        if advanced_key not in parsed.options:
+            raise ValueError(
+                f"orchestrator.advanced={advanced_key!r} not found in options "
+                f"{sorted(parsed.options)}"
+            )
+        raw_models["orchestrator_advanced"] = parsed.options[advanced_key].model_dump()
     return raw_models
 
 
@@ -473,11 +495,7 @@ class ToolTimeoutsConfig(BaseModel):
 
     @model_validator(mode="after")
     def _positive_integers(self) -> "ToolTimeoutsConfig":
-        if (
-            self.find_saved < 1
-            or self.suggest_places < 1
-            or self.discover_places < 1
-        ):
+        if self.find_saved < 1 or self.suggest_places < 1 or self.discover_places < 1:
             raise ValueError(
                 "agent.tool_timeouts_seconds fields must be >= 1 "
                 f"(got find_saved={self.find_saved}, "

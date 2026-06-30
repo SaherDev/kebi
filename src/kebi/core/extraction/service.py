@@ -149,6 +149,7 @@ class ExtractionService:
         user_id: str,
         request_id: str | None = None,
         limit: int | None = None,
+        save_limit: int | None = None,
     ) -> ExtractPlaceResponse:
         """Run the extraction pipeline inline and return a terminal envelope.
 
@@ -159,6 +160,16 @@ class ExtractionService:
         On hit, skip pipeline + upsert and just link the cached
         `PlaceCore`s to this user. On miss, run the pipeline and
         write the result to the cache before returning.
+
+        `save_limit` is the caller's plan-tier save cap (forwarded by the
+        gateway; `None` = unlimited). Enforced as an early guard before any
+        pipeline or cache work, so a user with no remaining room never burns
+        LLM/vision/transcription spend on a place they can't keep. The guard
+        rejects when the library is already full; it is the enforcement point
+        for this endpoint (the cache-hit path swallows save-time exceptions
+        to fall back to the pipeline, which would make a deeper raise
+        unreliable). The strict per-write chokepoint in `UserPlacesService`
+        still governs the `POST /v1/user/places` single-save path.
         """
         if not raw_input or not raw_input.strip():
             raise ValueError("raw_input cannot be empty")
@@ -166,6 +177,20 @@ class ExtractionService:
         parsed = parse_input(raw_input)
         source = source_from_url(parsed.url)
         rid = request_id or uuid4().hex
+
+        if (
+            save_limit is not None
+            and await self._user_places.count_saves(user_id) >= save_limit
+        ):
+            return _failed_response(
+                raw_input,
+                rid,
+                reason="save_limit_reached",
+                message=(
+                    "You've reached your saved-places limit. Upgrade to save "
+                    "more, or remove a place first."
+                ),
+            )
 
         # Phase 4.5 subtask 2: open one Langfuse trace per extraction.
         # Every paid call inside (LLM resolver, picker, vision, Whisper,
@@ -229,9 +254,7 @@ class ExtractionService:
                 and response.status == "completed"
                 and response.results
             ):
-                await self._result_cache.set(
-                    source, parsed.url, response.results
-                )
+                await self._result_cache.set(source, parsed.url, response.results)
 
             return response
 
@@ -437,17 +460,14 @@ class ExtractionService:
         # wrong) match must not poison global search. The per-user
         # `source_label` is ungated (it's the user's own memory) and is
         # threaded separately via `source_labels` below.
-        confident_threshold = (
-            get_config().extraction.confidence.confident_threshold
-        )
+        confident_threshold = get_config().extraction.confidence.confident_threshold
         alias_source = (source or PlaceSource.manual).value
         cores = [
             candidate_to_core(
                 c,
                 aliases=(
                     [PlaceNameAlias(value=c.source_label, source=alias_source)]
-                    if c.source_label
-                    and c.confidence >= confident_threshold
+                    if c.source_label and c.confidence >= confident_threshold
                     else None
                 ),
             )

@@ -49,5 +49,14 @@ async def extract_place(
     `user_id` is resolved from the verified gateway identity — not a
     body field — so a caller cannot link a place to someone else's
     account.
+
+    The caller's plan-tier `save_limit` (forwarded by the gateway) is
+    enforced before the pipeline runs: a user with a full library gets a
+    terminal `status="failed"`, `failure_reason="save_limit_reached"`
+    response and spends no extraction quota.
     """
-    return await service.run(raw_input=body.raw_input, user_id=identity.user_id)
+    return await service.run(
+        raw_input=body.raw_input,
+        user_id=identity.user_id,
+        save_limit=identity.save_limit,
+    )
