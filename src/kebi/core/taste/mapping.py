@@ -28,7 +28,13 @@ _LIST_DIMENSIONS: dict[TagType, str] = {
 
 
 def place_to_interaction_row(
-    type: str, core: PlaceCore, source: str | None
+    type: str,
+    core: PlaceCore,
+    source: str | None,
+    *,
+    approved: bool = True,
+    visited: bool = False,
+    liked: bool | None = None,
 ) -> InteractionRow:
     dims: dict[str, list[str]] = {name: [] for name in _LIST_DIMENSIONS.values()}
     price: str | None = None
@@ -51,6 +57,7 @@ def place_to_interaction_row(
     loc = core.location
     return InteractionRow(
         type=type,
+        place_core_id=core.id,
         categories=[
             c.value if hasattr(c, "value") else str(c) for c in core.categories
         ],
@@ -66,4 +73,7 @@ def place_to_interaction_row(
         city=loc.city if loc else None,
         country=loc.country if loc else None,
         source=source,
+        approved=approved,
+        visited=visited,
+        liked=liked,
     )

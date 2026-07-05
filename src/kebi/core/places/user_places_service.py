@@ -193,7 +193,10 @@ class UserPlacesService:
             user_place_id=str(uuid.uuid4()),
             user_id=user_id,
             place_id=place_id,
-            approved=False,
+            # Deliberately saving a place kebi recommended is itself a curation
+            # act — it lands approved (not needs-review) so it trains taste
+            # immediately (ADR-115), unlike a passive link-share batch save.
+            approved=True,
             note=note,
             source=source,
             source_ref=None,

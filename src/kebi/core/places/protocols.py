@@ -44,6 +44,10 @@ class PlacesRepoProtocol(Protocol):
 class UserPlacesRepoProtocol(Protocol):
     async def get_by_user(self, user_id: str) -> list[UserPlace]: ...
 
+    async def pill_state(
+        self, user_id: str
+    ) -> list[tuple[str, bool, bool, bool | None]]: ...
+
     async def browse(
         self,
         user_id: str,

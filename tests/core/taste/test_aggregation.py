@@ -1,17 +1,33 @@
-"""Tests for aggregate_signal_counts (ADR-077, places vocabulary)."""
+"""Tests for aggregate_signal_counts — the pill-overlay conviction ladder.
+
+A passive link-share `save` trains nothing on its own; a `saved_recommendation`
+carries a base weight; the Library pills `visited`/`liked=True` add graduated
+bonuses on top of a saved place; `approved=False` excludes a place entirely;
+`liked=False` routes it to the rejected branch and overrides any positive; and a
+place is emitted as evidence once even across two origin rows (ADR-115).
+"""
 
 from __future__ import annotations
 
 from kebi.core.taste.aggregation import aggregate_signal_counts
 from kebi.core.taste.schemas import InteractionRow
 
-# ---------------------------------------------------------------------------
-# Helper
-# ---------------------------------------------------------------------------
+# The config defaults (config/app.yaml taste_model.signal_weights).
+WEIGHTS = {
+    "save": 0,
+    "accepted": 1,
+    "saved_recommendation": 2,
+    "visited": 2,
+    "liked": 3,
+    "liked_negative": 3,
+    "rejected": 1,
+}
 
 
 def _row(
     type: str = "save",
+    *,
+    place_core_id: str | None = None,
     categories: list[str] | None = None,
     cuisine: list[str] | None = None,
     dietary: list[str] | None = None,
@@ -25,9 +41,13 @@ def _row(
     city: str | None = None,
     country: str | None = None,
     source: str | None = None,
+    approved: bool = True,
+    visited: bool = False,
+    liked: bool | None = None,
 ) -> InteractionRow:
     return InteractionRow(
         type=type,
+        place_core_id=place_core_id,
         categories=categories or ["restaurant"],
         cuisine=cuisine or [],
         dietary=dietary or [],
@@ -41,261 +61,220 @@ def _row(
         city=city,
         country=country,
         source=source,
+        approved=approved,
+        visited=visited,
+        liked=liked,
     )
 
 
 # ---------------------------------------------------------------------------
-# Tests
+# The conviction ladder — one saved place at each rung
 # ---------------------------------------------------------------------------
 
 
 def test_empty_rows() -> None:
-    counts = aggregate_signal_counts([])
+    counts = aggregate_signal_counts([], weights=WEIGHTS)
 
     assert counts.totals.saves == 0
-    assert counts.totals.accepted == 0
-    assert counts.totals.rejected == 0
     assert counts.categories == {}
     assert counts.source == {}
-    assert counts.tags.cuisine == {}
-    assert counts.location.city == {}
 
 
-def test_save_only() -> None:
-    rows = [
-        _row(
-            type="save",
-            categories=["restaurant"],
-            source="tiktok",
-            cuisine=["italian"],
-            price="moderate",
-        ),
-        _row(
-            type="save",
-            categories=["restaurant", "bar"],
-            source="manual",
-            cuisine=["japanese"],
-            price="expensive",
-        ),
-    ]
-    counts = aggregate_signal_counts(rows)
-
-    assert counts.totals.saves == 2
-    assert counts.totals.accepted == 0
-    assert counts.categories == {"restaurant": 2, "bar": 1}
-    assert counts.source == {"tiktok": 1, "manual": 1}
-    assert counts.tags.cuisine == {"italian": 1, "japanese": 1}
-    assert counts.tags.price == {"moderate": 1, "expensive": 1}
-
-
-def test_mixed_types() -> None:
-    rows = [
-        _row(type="save", categories=["restaurant"]),
-        _row(type="accepted", categories=["cafe"]),
-        _row(type="rejected", categories=["bar"]),
-    ]
-    counts = aggregate_signal_counts(rows)
+def test_neutral_link_share_save_trains_nothing() -> None:
+    """A passive save, approved but not visited/liked, is weight 0 — it records
+    its source and total but adds no evidence to the tree."""
+    rows = [_row(type="save", categories=["restaurant"], source="tiktok")]
+    counts = aggregate_signal_counts(rows, weights=WEIGHTS)
 
     assert counts.totals.saves == 1
-    assert counts.totals.accepted == 1
-    assert counts.totals.rejected == 1
-
-    # Positive types feed the main tree
-    assert counts.categories == {"restaurant": 1, "cafe": 1}
-
-    # Rejected feeds the rejected branch, not the main tree
-    assert "bar" not in counts.categories
-    assert counts.rejected.categories == {"bar": 1}
+    assert counts.source == {"tiktok": 1}
+    assert counts.categories == {}  # weight 0 — no evidence
 
 
-def test_rejection_feeds_rejected_branch() -> None:
+def test_saved_recommendation_neutral_is_base_two() -> None:
+    rows = [_row(type="saved_recommendation", categories=["restaurant"])]
+    counts = aggregate_signal_counts(rows, weights=WEIGHTS)
+
+    assert counts.totals.saved_recommendations == 1
+    assert counts.categories == {"restaurant": 2}
+
+
+def test_save_plus_liked_is_three() -> None:
+    """A link-share you loved outweighs a neutral saved_recommendation (2)."""
+    rows = [_row(type="save", categories=["restaurant"], liked=True)]
+    counts = aggregate_signal_counts(rows, weights=WEIGHTS)
+
+    assert counts.categories == {"restaurant": 3}
+
+
+def test_save_plus_visited_and_liked_is_five() -> None:
+    rows = [
+        _row(type="save", categories=["restaurant"], visited=True, liked=True),
+    ]
+    counts = aggregate_signal_counts(rows, weights=WEIGHTS)
+
+    assert counts.categories == {"restaurant": 5}
+
+
+def test_saved_recommendation_visited_and_liked_is_seven() -> None:
+    """Top of the ladder: kebi picked it, you went, you loved it."""
     rows = [
         _row(
-            type="rejected",
+            type="saved_recommendation",
             categories=["restaurant"],
-            cuisine=["american"],
-            atmosphere=["casual"],
+            visited=True,
+            liked=True,
         ),
     ]
-    counts = aggregate_signal_counts(rows)
+    counts = aggregate_signal_counts(rows, weights=WEIGHTS)
 
-    assert counts.totals.rejected == 1
+    assert counts.categories == {"restaurant": 7}
 
-    # Main tree empty
+
+def test_accepted_is_base_one() -> None:
+    rows = [_row(type="accepted", categories=["bar"])]
+    counts = aggregate_signal_counts(rows, weights=WEIGHTS)
+
+    assert counts.totals.accepted == 1
+    assert counts.categories == {"bar": 1}
+
+
+# ---------------------------------------------------------------------------
+# Curation gate + negatives
+# ---------------------------------------------------------------------------
+
+
+def test_unapproved_place_is_excluded_even_when_liked() -> None:
+    """approved=False is the curation gate — a needs-review place is not
+    evidence, positive or negative, regardless of pills."""
+    rows = [
+        _row(
+            type="saved_recommendation",
+            categories=["restaurant"],
+            approved=False,
+            liked=True,
+        ),
+    ]
+    counts = aggregate_signal_counts(rows, weights=WEIGHTS)
+
+    assert counts.totals.saved_recommendations == 1  # event still counted
+    assert counts.categories == {}
+    assert counts.rejected.categories == {}
+
+
+def test_disliked_place_feeds_rejected_and_overrides_base() -> None:
+    """liked=False on a saved_recommendation: the base-2 positive is discarded
+    and the place lands only in the rejected branch."""
+    rows = [
+        _row(
+            type="saved_recommendation",
+            categories=["restaurant"],
+            cuisine=["thai"],
+            liked=False,
+        ),
+    ]
+    counts = aggregate_signal_counts(rows, weights=WEIGHTS)
+
     assert counts.categories == {}
     assert counts.tags.cuisine == {}
-    assert counts.tags.atmosphere == {}
-
-    # Rejected branch populated
-    assert counts.rejected.categories == {"restaurant": 1}
-    assert counts.rejected.tags.cuisine == {"american": 1}
-    assert counts.rejected.tags.atmosphere == {"casual": 1}
+    assert counts.rejected.categories == {"restaurant": 3}  # liked_negative
+    assert counts.rejected.tags.cuisine == {"thai": 3}
 
 
-def test_source_counted_only_for_saves() -> None:
+def test_rejected_rec_feeds_rejected_branch() -> None:
+    rows = [_row(type="rejected", categories=["bar"], atmosphere=["loud"])]
+    counts = aggregate_signal_counts(rows, weights=WEIGHTS)
+
+    assert counts.totals.rejected == 1
+    assert counts.categories == {}
+    assert counts.rejected.categories == {"bar": 1}
+    assert counts.rejected.tags.atmosphere == {"loud": 1}
+
+
+# ---------------------------------------------------------------------------
+# Source, dedup, accumulation
+# ---------------------------------------------------------------------------
+
+
+def test_source_counted_only_for_link_share_saves() -> None:
     rows = [
-        _row(type="save", source="tiktok"),
+        _row(type="save", source="tiktok", liked=True),
+        _row(type="saved_recommendation", source="kebi"),
         _row(type="accepted", source="instagram"),
     ]
-    counts = aggregate_signal_counts(rows)
+    counts = aggregate_signal_counts(rows, weights=WEIGHTS)
 
-    # Only the save's source is counted
     assert counts.source == {"tiktok": 1}
-    assert "instagram" not in counts.source
 
 
-def test_multi_value_tag_dimensions_accumulate() -> None:
+def test_evidence_deduped_once_per_place_totals_count_both() -> None:
+    """A place carrying both a link-share `save` and a later
+    `saved_recommendation` row (same place_core_id) is emitted as evidence once
+    — preferring the stronger saved_recommendation base — while both events
+    still count in totals."""
     rows = [
-        _row(type="save", feature=["outdoor_seating", "dog_friendly"]),
-        _row(type="accepted", feature=["outdoor_seating"], time=["late_night"]),
-    ]
-    counts = aggregate_signal_counts(rows)
-
-    assert counts.tags.feature == {"outdoor_seating": 2, "dog_friendly": 1}
-    assert counts.tags.time == {"late_night": 1}
-
-
-def test_price_single_value_counted() -> None:
-    rows = [
-        _row(type="save", price="budget"),
-        _row(type="save", price="budget"),
-        _row(type="save", price="moderate"),
-        _row(type="save", price=None),  # None skipped
-    ]
-    counts = aggregate_signal_counts(rows)
-
-    assert counts.tags.price == {"budget": 2, "moderate": 1}
-
-
-def test_location_context() -> None:
-    rows = [
-        _row(
-            type="save",
-            neighborhood="Williamsburg",
-            city="New York",
-            country="US",
-        ),
-        _row(type="accepted", city="New York", country="US"),
-    ]
-    counts = aggregate_signal_counts(rows)
-
-    assert counts.location.neighborhood == {"Williamsburg": 1}
-    assert counts.location.city == {"New York": 2}
-    assert counts.location.country == {"US": 2}
-
-
-def test_saved_recommendation_feeds_positive_tree_and_own_total() -> None:
-    """A saved_recommendation is a positive signal: it lands in the main tree
-    (categories/tags/location) and its own total, separate from save/accepted."""
-    rows = [
+        _row(type="save", place_core_id="p1", categories=["restaurant"]),
         _row(
             type="saved_recommendation",
+            place_core_id="p1",
             categories=["restaurant"],
-            cuisine=["thai"],
-            city="Bangkok",
         ),
     ]
-    counts = aggregate_signal_counts(rows)
+    counts = aggregate_signal_counts(rows, weights=WEIGHTS)
 
+    assert counts.totals.saves == 1
     assert counts.totals.saved_recommendations == 1
-    assert counts.totals.saves == 0
-    assert counts.totals.accepted == 0
-    # Default weight (no weights map) is 1.
-    assert counts.categories == {"restaurant": 1}
-    assert counts.tags.cuisine == {"thai": 1}
-    assert counts.location.city == {"Bangkok": 1}
-
-
-def test_saved_recommendation_does_not_count_source() -> None:
-    """kebi is not a discovery channel — a saved_recommendation must not feed
-    the source distribution (only a plain link-share save does)."""
-    rows = [_row(type="saved_recommendation", source="kebi")]
-    counts = aggregate_signal_counts(rows)
-
-    assert counts.source == {}
-
-
-def test_weight_amplifies_evidence_tree_not_totals() -> None:
-    """A weight makes a saved_recommendation count heavier in the evidence tree
-    while the headline total stays a raw event count."""
-    rows = [
-        _row(
-            type="saved_recommendation",
-            categories=["restaurant"],
-            cuisine=["thai"],
-            city="Bangkok",
-        ),
-    ]
-    counts = aggregate_signal_counts(rows, weights={"saved_recommendation": 2})
-
-    # Evidence tree is doubled...
+    # Evidence applied once, at the saved_recommendation base (2), not 0+2.
     assert counts.categories == {"restaurant": 2}
-    assert counts.tags.cuisine == {"thai": 2}
-    assert counts.location.city == {"Bangkok": 2}
-    # ...but the total remains one event.
-    assert counts.totals.saved_recommendations == 1
-
-
-def test_weight_leaves_other_types_at_one() -> None:
-    """The weights map only affects the named type; save/accepted stay at 1."""
-    rows = [
-        _row(type="save", categories=["cafe"]),
-        _row(type="accepted", categories=["bar"]),
-        _row(type="saved_recommendation", categories=["restaurant"]),
-    ]
-    counts = aggregate_signal_counts(rows, weights={"saved_recommendation": 3})
-
-    assert counts.categories == {"cafe": 1, "bar": 1, "restaurant": 3}
 
 
 def test_accumulation_across_many_rows() -> None:
-    """Existing keys must accumulate, not reset, as rows are added."""
-    bangkok = {"city": "Bangkok", "country": "Thailand"}
-    tokyo = {"city": "Tokyo", "country": "Japan"}
-
+    """Keys accumulate across rows; the ladder composes per place."""
     rows = [
         _row(
-            type="save",
+            type="saved_recommendation",
             categories=["cafe"],
-            source="tiktok",
             cuisine=["thai"],
-            atmosphere=["trendy"],
-            feature=["brunch"],
-            **bangkok,
+            city="Bangkok",
         ),
         _row(
             type="save",
             categories=["restaurant"],
-            source="tiktok",
-            cuisine=["thai"],
-            feature=["group_friendly"],
-            **bangkok,
+            liked=True,
+            city="Bangkok",
         ),
-        _row(
-            type="save",
-            categories=["restaurant"],
-            source="tiktok",
-            feature=["scenic_view"],
-            **bangkok,
-        ),
-        _row(
-            type="save",
-            categories=["hotel"],
-            source="instagram",
-            **tokyo,
-        ),
+        _row(type="accepted", categories=["restaurant"], city="Tokyo"),
+    ]
+    counts = aggregate_signal_counts(rows, weights=WEIGHTS)
+
+    assert counts.totals.saved_recommendations == 1
+    assert counts.totals.saves == 1
+    assert counts.totals.accepted == 1
+    # cafe: 2 (saved_rec), restaurant: 3 (liked save) + 1 (accepted) = 4
+    assert counts.categories == {"cafe": 2, "restaurant": 4}
+    assert counts.tags.cuisine == {"thai": 2}
+    assert counts.location.city == {"Bangkok": 5, "Tokyo": 1}
+
+
+def test_price_single_value_weighted() -> None:
+    rows = [
+        _row(type="saved_recommendation", price="budget"),
+        _row(type="accepted", price="budget"),
+    ]
+    counts = aggregate_signal_counts(rows, weights=WEIGHTS)
+
+    # budget: 2 (saved_rec) + 1 (accepted) = 3
+    assert counts.tags.price == {"budget": 3}
+
+
+def test_default_weights_save_neutral_accepted_one() -> None:
+    """With no weights map, the built-in fallbacks apply: a bare `save` is
+    evidence-neutral (get('save', 0) == 0) while `accepted` is 1."""
+    rows = [
+        _row(type="save", categories=["cafe"]),
+        _row(type="accepted", categories=["bar"]),
     ]
     counts = aggregate_signal_counts(rows)
 
-    assert counts.totals.saves == 4
-    assert counts.categories == {"cafe": 1, "restaurant": 2, "hotel": 1}
-    assert counts.source == {"tiktok": 3, "instagram": 1}
-    assert counts.location.city == {"Bangkok": 3, "Tokyo": 1}
-    assert counts.location.country == {"Thailand": 3, "Japan": 1}
-    assert counts.tags.cuisine == {"thai": 2}
-    assert counts.tags.atmosphere == {"trendy": 1}
-    assert counts.tags.feature == {
-        "brunch": 1,
-        "group_friendly": 1,
-        "scenic_view": 1,
-    }
+    assert counts.categories == {"bar": 1}
+    assert "cafe" not in counts.categories

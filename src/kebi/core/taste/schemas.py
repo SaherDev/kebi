@@ -39,6 +39,7 @@ class InteractionRow(BaseModel):
     """
 
     type: str
+    place_core_id: str | None = None  # for once-per-place evidence dedup
     categories: list[str] = Field(default_factory=list)
     cuisine: list[str] = Field(default_factory=list)
     dietary: list[str] = Field(default_factory=list)
@@ -52,6 +53,11 @@ class InteractionRow(BaseModel):
     city: str | None = None
     country: str | None = None
     source: str | None = None  # UserPlace.source, save-only at aggregation
+    # Snapshot of the saved place's current Library pills (save-type rows only;
+    # ignored for accepted/rejected). Defaults are the neutral, eligible state.
+    approved: bool = True
+    visited: bool = False
+    liked: bool | None = None
 
 
 class SummaryLine(BaseModel):

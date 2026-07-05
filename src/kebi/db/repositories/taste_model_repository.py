@@ -25,6 +25,7 @@ class TasteModelRepository(Protocol):
         signal_counts: dict[str, Any],
         summary: list[dict[str, Any]],
         log_count: int,
+        pill_fingerprint: str | None = None,
     ) -> None: ...
 
     async def log_interaction(
@@ -35,9 +36,7 @@ class TasteModelRepository(Protocol):
         metadata: dict[str, Any] | None = None,
     ) -> None: ...
 
-    async def get_interactions(
-        self, user_id: str
-    ) -> list[RawInteraction]: ...
+    async def get_interactions(self, user_id: str) -> list[RawInteraction]: ...
 
     async def count_interactions(self, user_id: str) -> int: ...
 
@@ -58,6 +57,7 @@ class SQLAlchemyTasteModelRepository:
         signal_counts: dict[str, Any],
         summary: list[dict[str, Any]],
         log_count: int,
+        pill_fingerprint: str | None = None,
     ) -> None:
         async with self._session_factory() as session:
             stmt = (
@@ -68,6 +68,7 @@ class SQLAlchemyTasteModelRepository:
                     taste_profile_summary=summary,
                     generated_at=func.now(),
                     generated_from_log_count=log_count,
+                    pill_fingerprint=pill_fingerprint,
                 )
                 .on_conflict_do_update(
                     index_elements=["user_id"],
@@ -76,6 +77,7 @@ class SQLAlchemyTasteModelRepository:
                         "taste_profile_summary": summary,
                         "generated_at": func.now(),
                         "generated_from_log_count": log_count,
+                        "pill_fingerprint": pill_fingerprint,
                     },
                 )
             )
@@ -116,11 +118,7 @@ class SQLAlchemyTasteModelRepository:
             result = await session.execute(stmt)
             return [
                 RawInteraction(
-                    type=(
-                        row.type.value
-                        if hasattr(row.type, "value")
-                        else row.type
-                    ),
+                    type=(row.type.value if hasattr(row.type, "value") else row.type),
                     place_core_id=row.place_id,
                 )
                 for row in result
