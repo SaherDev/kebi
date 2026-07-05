@@ -68,9 +68,23 @@ def _object(pid: str) -> PlaceObject:
     )
 
 
+def _idless_object(pid: str) -> PlaceObject:
+    """A provider-fetched object exactly as the client returns it: a
+    provider_id but no catalog id (the row is only assigned one on persist).
+    This is the shape that produced the null-`place.id` bug."""
+    return PlaceObject(
+        id=None,
+        provider_id=f"google:{pid}",
+        place_name=f"Place {pid}",
+        location=LocationContext(lat=1.0, address="Test St"),
+        rating=4.5,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Warm path
 # ---------------------------------------------------------------------------
+
 
 class TestWarmPath:
     async def test_returns_db_hits_with_cache_overlay(self) -> None:
@@ -99,6 +113,7 @@ class TestWarmPath:
 # ---------------------------------------------------------------------------
 # Cold path (Google fallback)
 # ---------------------------------------------------------------------------
+
 
 class TestColdPath:
     async def test_falls_back_to_google_when_db_empty(self) -> None:
@@ -189,8 +204,109 @@ class TestColdPath:
 
 
 # ---------------------------------------------------------------------------
+# Cold-path catalog-id reconciliation — the freshly-discovered place must
+# carry the id the upsert just minted, not escape with id=None.
+# ---------------------------------------------------------------------------
+
+
+class TestColdPathIdReconciliation:
+    async def test_cold_path_stamps_minted_id_onto_result(self) -> None:
+        """A Google object arrives with id=None; the upsert mints a catalog id;
+        find() returns the object carrying that id (keyed by provider_id)."""
+        google_result = _idless_object("g1")
+        repo = MagicMock(
+            find=AsyncMock(return_value=[]),
+            get_by_provider_ids=AsyncMock(return_value={}),
+        )
+        cache = MagicMock(mget=AsyncMock(return_value={}), mset=AsyncMock())
+        client = MagicMock(
+            search=AsyncMock(return_value=[google_result]),
+            get_by_ids=AsyncMock(return_value=[]),
+        )
+        upsert = MagicMock(
+            upsert_and_embed=AsyncMock(return_value=[_core("g1")]),
+        )
+        svc = _make_service(
+            repo=repo, cache=cache, client=client, upsert_service=upsert
+        )
+
+        results = await svc.find(PlaceQuery(place_names=["cafe"]), limit=5)
+
+        assert len(results) == 1
+        assert results[0].id == "g1"  # was None on the way in
+        assert results[0].provider_id == "google:g1"
+
+    async def test_cold_path_caches_stamped_objects(self) -> None:
+        """The cache is warmed with id-bearing objects, not the id-less ones,
+        so later cache hits carry the id too."""
+        repo = MagicMock(
+            find=AsyncMock(return_value=[]),
+            get_by_provider_ids=AsyncMock(return_value={}),
+        )
+        cache = MagicMock(mget=AsyncMock(return_value={}), mset=AsyncMock())
+        client = MagicMock(
+            search=AsyncMock(return_value=[_idless_object("g1")]),
+            get_by_ids=AsyncMock(return_value=[]),
+        )
+        upsert = MagicMock(
+            upsert_and_embed=AsyncMock(return_value=[_core("g1")]),
+        )
+        svc = _make_service(
+            repo=repo, cache=cache, client=client, upsert_service=upsert
+        )
+
+        await svc.find(PlaceQuery(place_names=["cafe"]), limit=5)
+
+        cached = cache.mset.call_args.args[0]
+        assert [p.id for p in cached] == ["g1"]
+
+    async def test_cold_path_matches_by_provider_id_not_position(self) -> None:
+        """Upsert RETURNING order is not guaranteed — ids must be matched by
+        provider_id. A shuffled upsert return still stamps correctly."""
+        results_in = [_idless_object("a"), _idless_object("b")]
+        repo = MagicMock(
+            find=AsyncMock(return_value=[]),
+            get_by_provider_ids=AsyncMock(return_value={}),
+        )
+        cache = MagicMock(mget=AsyncMock(return_value={}), mset=AsyncMock())
+        client = MagicMock(
+            search=AsyncMock(return_value=results_in),
+            get_by_ids=AsyncMock(return_value=[]),
+        )
+        # Returned in reverse order relative to the input.
+        upsert = MagicMock(
+            upsert_and_embed=AsyncMock(return_value=[_core("b"), _core("a")]),
+        )
+        svc = _make_service(
+            repo=repo, cache=cache, client=client, upsert_service=upsert
+        )
+
+        results = await svc.find(PlaceQuery(place_names=["x"]), limit=5)
+
+        by_provider = {r.provider_id: r.id for r in results}
+        assert by_provider == {"google:a": "a", "google:b": "b"}
+
+    async def test_get_by_ids_stamps_fetched_objects(self) -> None:
+        """The by-id cold branch reconciles the same way: a fetched id-less
+        object comes back carrying its catalog id."""
+        cache = MagicMock(mget=AsyncMock(return_value={}), mset=AsyncMock())
+        client = MagicMock(
+            get_by_ids=AsyncMock(return_value=[_idless_object("b")]),
+        )
+        upsert = MagicMock(
+            upsert_and_embed=AsyncMock(return_value=[_core("b")]),
+        )
+        svc = _make_service(cache=cache, client=client, upsert_service=upsert)
+
+        result = await svc.get_by_ids(["google:b"])
+
+        assert result["google:b"].id == "b"
+
+
+# ---------------------------------------------------------------------------
 # Stale-row handling in find()
 # ---------------------------------------------------------------------------
+
 
 class TestFindEnrichment:
     async def test_full_cache_hit_skips_provider(self) -> None:
@@ -257,9 +373,7 @@ class TestFindEnrichment:
         )
         client = MagicMock(
             search=AsyncMock(return_value=[]),
-            get_by_ids=AsyncMock(
-                return_value=[_object("b"), _object("c")]
-            ),
+            get_by_ids=AsyncMock(return_value=[_object("b"), _object("c")]),
         )
         upsert = MagicMock(upsert_and_embed=AsyncMock(return_value=[]))
         svc = _make_service(
@@ -391,6 +505,7 @@ class TestFindEnrichment:
 # ---------------------------------------------------------------------------
 # Post-TTL recovery — DB location wiped + cache expired.
 # ---------------------------------------------------------------------------
+
 
 class TestPostTTLRecovery:
     async def test_full_recovery_db_wiped_cache_empty(self) -> None:
@@ -529,6 +644,7 @@ class TestPostTTLRecovery:
 # DB-vs-cache divergence: which side wins for each field.
 # ---------------------------------------------------------------------------
 
+
 class TestFieldOwnership:
     async def test_db_wins_for_curated_fields(self) -> None:
         """name, aliases, tags, categories come from DB even when cache differs."""
@@ -606,6 +722,7 @@ class TestFieldOwnership:
 # find() — query passthrough and ordering invariants.
 # ---------------------------------------------------------------------------
 
+
 class TestFindContract:
     async def test_limit_forwarded_to_repo(self) -> None:
         """The `limit` arg propagates verbatim to repo.find."""
@@ -617,9 +734,11 @@ class TestFindContract:
 
         repo.find.assert_awaited_once()
         _, kwargs = repo.find.call_args
-        passed_limit = repo.find.call_args.args[1] if len(
-            repo.find.call_args.args
-        ) > 1 else kwargs.get("limit")
+        passed_limit = (
+            repo.find.call_args.args[1]
+            if len(repo.find.call_args.args) > 1
+            else kwargs.get("limit")
+        )
         assert passed_limit == 42
 
     async def test_query_forwarded_to_repo(self) -> None:
@@ -710,6 +829,7 @@ class TestFindContract:
 # ---------------------------------------------------------------------------
 # get_by_ids
 # ---------------------------------------------------------------------------
+
 
 class TestGetByIds:
     async def test_full_cache_hit_skips_provider(self) -> None:

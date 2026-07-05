@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import logging
 
-from ._place_utils import overlay_with_cache
+from ._place_utils import overlay_with_cache, stamp_catalog_identity
 from .models import PlaceCore, PlaceObject, PlaceQuery
 from .protocols import (
     PlacesCacheProtocol,
@@ -74,14 +74,12 @@ class PlacesSearchService:
             return cached
 
         fetched = await self._client.get_by_ids(missing)
-        await self._persist_external(fetched)
+        stamped = await self._persist_external(fetched)
 
-        fetched_map = {p.provider_id: p for p in fetched if p.provider_id}
+        fetched_map = {p.provider_id: p for p in stamped if p.provider_id}
         return {**cached, **fetched_map}
 
-    async def get_cores_by_ids(
-        self, place_core_ids: list[str]
-    ) -> dict[str, PlaceCore]:
+    async def get_cores_by_ids(self, place_core_ids: list[str]) -> dict[str, PlaceCore]:
         """Resolve persisted catalog rows by internal ``places.id``.
 
         DB-only: no cache overlay, no provider fallback, no upsert. This is
@@ -106,17 +104,26 @@ class PlacesSearchService:
     ) -> list[PlaceObject]:
         """Cold path: client.search → upsert (via service) → cache → return."""
         results = await self._client.search(query, limit)
-        await self._persist_external(results)
-        return results
+        return await self._persist_external(results)
 
-    async def _persist_external(self, places: list[PlaceObject]) -> None:
-        """Persist a batch of provider-fetched places: upsert DB + write cache.
+    async def _persist_external(self, places: list[PlaceObject]) -> list[PlaceObject]:
+        """Persist a batch of provider-fetched places and return them with ids.
 
         Shared by the by-query cold path (``_external_fallback``) and the
         by-id cold path (``get_by_ids``). No-op on empty input so callers
         can stay branchless.
+
+        The upsert mints/returns each row's catalog ``id``; those ids are
+        stamped back onto the returned objects (keyed by ``provider_id``)
+        before they are cached and handed to the caller. Otherwise a
+        freshly-discovered place escapes with ``id=None`` and downstream
+        save/signal — which key strictly on ``places.id`` — cannot attribute
+        it. Caching the stamped objects keeps the cache warm with ids too.
         """
         if not places:
-            return
-        await self._upsert.upsert_and_embed([p.to_core() for p in places])
-        await self._cache.mset(places)
+            return places
+        persisted = await self._upsert.upsert_and_embed([p.to_core() for p in places])
+        cores_by_provider = {c.provider_id: c for c in persisted if c.provider_id}
+        stamped = stamp_catalog_identity(places, cores_by_provider)
+        await self._cache.mset(stamped)
+        return stamped
