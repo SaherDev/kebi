@@ -12,6 +12,12 @@ Policies (per-column):
                             new categories appended. Never removed.
     tags                    dedup by value — existing wins on conflict;
                             new values are appended. Never removed.
+    icon                    sticky — first non-empty wins. The consult
+                            write-through constantly re-upserts icon-less
+                            candidates over existing rows, so a None
+                            candidate must never clear a real icon; and
+                            first-wins keeps the icon stable across
+                            repeated extractions of the same venue.
     location                sticky whole-blob — first non-NULL wins.
     id, provider_id         existing wins (identity is fixed once set).
     created_at              existing wins.
@@ -47,6 +53,7 @@ def merge_place(existing: PlaceCore | None, candidate: PlaceCore) -> PlaceCore:
                 existing.categories, candidate.categories
             ),
             "tags": _dedup_by_value(existing.tags, candidate.tags),
+            "icon": existing.icon or candidate.icon,
             "location": existing.location or candidate.location,
             "refreshed_at": (
                 candidate.refreshed_at

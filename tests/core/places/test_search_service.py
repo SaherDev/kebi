@@ -1042,3 +1042,64 @@ class TestDistanceSortThreading:
         await svc.find(self._DIST_QUERY, limit=1)
         client.search.assert_awaited_once()
         assert client.search.call_args.args[0].sort_by == "distance"
+
+
+class TestIconHintStamping:
+    """icon_hint rides the cold-path write-through (ADR-117)."""
+
+    async def test_cold_path_stamps_icon_hint_before_persist(self) -> None:
+        repo = MagicMock(
+            find=AsyncMock(return_value=[]),
+            get_by_provider_ids=AsyncMock(return_value={}),
+        )
+        client = MagicMock(
+            search=AsyncMock(return_value=[_idless_object("g1")]),
+            get_by_ids=AsyncMock(return_value=[]),
+        )
+        upsert = MagicMock(upsert_and_embed=AsyncMock(return_value=[_core("g1")]))
+        svc = _make_service(repo=repo, client=client, upsert_service=upsert)
+
+        results = await svc.find(
+            PlaceQuery(place_names=["Dubai Fountain"], icon_hint="⛲"), limit=1
+        )
+
+        persisted_cores = upsert.upsert_and_embed.call_args.args[0]
+        assert persisted_cores[0].icon == "⛲"
+        assert results[0].icon == "⛲"
+
+    async def test_icon_hint_does_not_override_provider_icon(self) -> None:
+        provider_obj = _idless_object("g1").model_copy(update={"icon": "🍜"})
+        client = MagicMock(
+            search=AsyncMock(return_value=[provider_obj]),
+            get_by_ids=AsyncMock(return_value=[]),
+        )
+        repo = MagicMock(
+            find=AsyncMock(return_value=[]),
+            get_by_provider_ids=AsyncMock(return_value={}),
+        )
+        upsert = MagicMock(upsert_and_embed=AsyncMock(return_value=[_core("g1")]))
+        svc = _make_service(repo=repo, client=client, upsert_service=upsert)
+
+        await svc.find(
+            PlaceQuery(place_names=["Ramen Bar"], icon_hint="⛲"), limit=1
+        )
+
+        persisted_cores = upsert.upsert_and_embed.call_args.args[0]
+        assert persisted_cores[0].icon == "🍜"
+
+    async def test_warm_path_ignores_icon_hint(self) -> None:
+        # DB hit → no cold path, no write with the hint. The stored icon
+        # (None here) is what comes back; fill-only happens on cold only.
+        repo = MagicMock(
+            find=AsyncMock(return_value=[_core("a")]),
+            get_by_provider_ids=AsyncMock(return_value={}),
+        )
+        upsert = MagicMock(upsert_and_embed=AsyncMock(return_value=[]))
+        svc = _make_service(repo=repo, upsert_service=upsert)
+
+        results = await svc.find(
+            PlaceQuery(place_names=["Place a"], icon_hint="⛲"), limit=1
+        )
+
+        upsert.upsert_and_embed.assert_not_awaited()
+        assert results[0].icon is None

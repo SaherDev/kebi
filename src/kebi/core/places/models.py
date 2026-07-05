@@ -269,6 +269,18 @@ class PlaceQuery(PlaceCatalogFilters):
     # client hints (ignored for DB queries)
     open_now: bool | None = None  # only return currently open places
 
+    # Write-side annotation, not a filter: when the search cold path
+    # persists a provider-fresh result for this query, it stamps this
+    # icon on the row so a caller-known icon rides the one normal upsert
+    # (fill-only merge keeps it sticky). Meaningful only for lookups that
+    # target one specific place by name (the suggest validation path).
+    icon_hint: str | None = None
+
+    @field_validator("icon_hint")
+    @classmethod
+    def _normalize_icon_hint(cls, v: str | None) -> str | None:
+        return normalize_icon(v)
+
     @model_validator(mode="after")
     def _validate_geo_location(self) -> PlaceQuery:
         loc = self.location
@@ -286,6 +298,26 @@ class PlaceQuery(PlaceCatalogFilters):
                 "location.radius_m is required when lat or lng is provided"
             )
         return self
+
+
+def normalize_icon(raw: str | None) -> str | None:
+    """Normalize an LLM-emitted place icon to a single emoji, or None.
+
+    Icons come from model output (picker / namer / backfill), so junk is
+    expected: prose, empty strings, ASCII words. Anything containing an
+    ASCII character is rejected — emoji (including ZWJ sequences and
+    variation selectors) are entirely non-ASCII, while hallucinated text
+    is not. The length cap bounds multi-codepoint sequences (flag pairs,
+    skin tones, ZWJ families) without admitting sentences.
+    """
+    if raw is None:
+        return None
+    cleaned = raw.strip()
+    if not cleaned or len(cleaned) > 8:
+        return None
+    if any(ch.isascii() for ch in cleaned):
+        return None
+    return cleaned
 
 
 class PlaceCore(BaseModel):
@@ -314,6 +346,15 @@ class PlaceCore(BaseModel):
     place_name_aliases: list[PlaceNameAlias] = Field(default_factory=list)
     categories: list[PlaceCategory] = Field(default_factory=list)
     tags: list[PlaceTag] = Field(default_factory=list)
+    # Single emoji capturing the place's identity (🗼, ⛲, 🌴), LLM-picked
+    # where an LLM already sees the place. Nullable by design: LLM-less
+    # paths leave it None and the client falls back to its category map.
+    icon: str | None = None
+
+    @field_validator("icon")
+    @classmethod
+    def _normalize_icon(cls, v: str | None) -> str | None:
+        return normalize_icon(v)
 
     # location (Google-derived; wiped by nightly cron after 30 days per ToS)
     location: LocationContext | None = None

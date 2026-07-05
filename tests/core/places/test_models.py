@@ -17,6 +17,7 @@ from kebi.core.places.models import (
     PlaceTag,
     SavedPlaceView,
     UserPlace,
+    normalize_icon,
 )
 
 
@@ -183,6 +184,46 @@ class TestPlaceQuery:
             assert q.location is None
 
 
+class TestNormalizeIcon:
+    def test_keeps_single_emoji(self) -> None:
+        assert normalize_icon("🌴") == "🌴"
+
+    def test_keeps_multi_codepoint_emoji(self) -> None:
+        # Variation selector (🏖️) and flag pairs are > 1 codepoint.
+        assert normalize_icon("🏖️") == "🏖️"
+        assert normalize_icon("🇹🇭") == "🇹🇭"
+
+    def test_strips_whitespace(self) -> None:
+        assert normalize_icon(" ⛲ ") == "⛲"
+
+    def test_rejects_none_and_empty(self) -> None:
+        assert normalize_icon(None) is None
+        assert normalize_icon("") is None
+        assert normalize_icon("   ") is None
+
+    def test_rejects_ascii_words(self) -> None:
+        assert normalize_icon("palm") is None
+        assert normalize_icon("a🌴") is None
+
+    def test_rejects_overlong_sequences(self) -> None:
+        assert normalize_icon("🌴🌴🌴🌴🌴🌴🌴🌴🌴") is None
+
+
+class TestPlaceCoreIcon:
+    def test_defaults_to_none(self) -> None:
+        assert PlaceCore(place_name="Cafe X").icon is None
+
+    def test_validator_normalizes_junk_to_none(self) -> None:
+        assert PlaceCore(place_name="Cafe X", icon="not an emoji").icon is None
+
+    def test_validator_keeps_valid_icon(self) -> None:
+        assert PlaceCore(place_name="Cafe X", icon="🗼").icon == "🗼"
+
+    def test_to_core_carries_icon(self) -> None:
+        obj = PlaceObject(place_name="Cafe X", icon="🍜")
+        assert obj.to_core().icon == "🍜"
+
+
 class TestSavedPlaceView:
     def test_construction(self) -> None:
         place = PlaceCore(place_name="Cafe X")
@@ -195,3 +236,14 @@ class TestSavedPlaceView:
         )
         view = SavedPlaceView(place=place, user_data=up)
         assert view.place.place_name == "Cafe X"
+
+
+class TestPlaceQueryIconHint:
+    def test_defaults_to_none(self) -> None:
+        assert PlaceQuery().icon_hint is None
+
+    def test_junk_hint_normalized_to_none(self) -> None:
+        assert PlaceQuery(icon_hint="palm tree").icon_hint is None
+
+    def test_valid_hint_kept(self) -> None:
+        assert PlaceQuery(icon_hint="🌴").icon_hint == "🌴"

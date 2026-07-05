@@ -156,6 +156,22 @@ class TestMergePlace:
         merged = merge_place(existing, candidate)
         assert merged.refreshed_at == old
 
+    def test_icon_is_sticky_first_non_empty(self) -> None:
+        existing = _core(icon="🌴")
+        candidate = _core(icon="🏖️")
+        merged = merge_place(existing, candidate)
+        assert merged.icon == "🌴"
+
+    def test_icon_filled_when_existing_missing(self) -> None:
+        merged = merge_place(_core(icon=None), _core(icon="⛲"))
+        assert merged.icon == "⛲"
+
+    def test_icon_none_candidate_never_clears_existing(self) -> None:
+        # The consult write-through re-upserts icon-less cores constantly;
+        # they must not erase a previously picked icon.
+        merged = merge_place(_core(icon="🗼"), _core(icon=None))
+        assert merged.icon == "🗼"
+
     def test_candidate_with_null_tags_does_not_clobber_existing(self) -> None:
         existing = _core(
             tags=[PlaceTag(type="vibe", value="chill", source="google")]
