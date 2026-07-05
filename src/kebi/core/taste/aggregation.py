@@ -2,16 +2,21 @@
 
 aggregate_signal_counts() is a pure function — no I/O.
 
-Positive types (save, accepted, saved_recommendation) feed the main tree.
-Negative types (rejected) feed the rejected branch.
-Source is counted for plain link-share saves only.
+Evidence is conviction-ranked. `accepted` feeds the main tree at the base
+weight. Saved places (`save` / `saved_recommendation`) are governed by their
+Library-pill snapshot: a passive link-share `save` is worth nothing on its own
+(weight 0 — we save a lot but with low conviction), a `saved_recommendation`
+carries a base weight, and `visited` / `liked=True` add graduated bonuses on
+top, so a place you approved, went to, and loved outweighs everything. An
+un-approved (needs-review) place is not evidence at all — `approved` is a
+curation gate, not a sentiment. `liked=False` is a real negative and routes the
+place to the rejected branch, overriding any positive. `rejected` recs feed the
+rejected branch too. Totals stay raw event counts; source is counted for plain
+link-share saves only, unweighted. A place is emitted as evidence once even if
+it carries both a `save` and a later `saved_recommendation` row.
 
-`weights` lets a positive type contribute more than one unit of evidence per
-interaction: a `saved_recommendation` (the user kept a place kebi picked) is a
-stronger taste signal than a passive link-share `save`, so it counts heavier
-in the evidence tree. Totals stay raw event counts; only the category/tag/
-location evidence is weighted. The default (no weights) leaves every type at
-one — existing behaviour is unchanged.
+`weights` maps each lever (`save`, `accepted`, `saved_recommendation`,
+`visited`, `liked`, `liked_negative`, `rejected`) to its evidence units.
 
 Vocabulary is places-native: flat `categories`, typed tag dimensions
 (cuisine/price/atmosphere/...), and location context. All count containers
@@ -75,8 +80,8 @@ class SignalCounts(BaseModel):
 # Helpers
 # ---------------------------------------------------------------------------
 
-_POSITIVE_TYPES = {"save", "accepted", "saved_recommendation"}
-_NEGATIVE_TYPES = {"rejected"}
+# Saved-place rows: governed by the pill snapshot (approved/visited/liked).
+_SAVE_TYPES = {"save", "saved_recommendation"}
 
 
 def _increment(d: dict[str, int], key: str | None, n: int = 1) -> None:
@@ -111,6 +116,22 @@ def _add_location(target: LocationCounts, row: InteractionRow, n: int = 1) -> No
     _increment(target.country, row.country, n)
 
 
+def _apply_positive(counts: SignalCounts, row: InteractionRow, n: int) -> None:
+    """Add a row's attributes to the main evidence tree, weighted by `n`."""
+    for cat in row.categories:
+        _increment(counts.categories, cat, n)
+    _add_tags(counts.tags, row, n)
+    _add_location(counts.location, row, n)
+
+
+def _apply_rejected(counts: SignalCounts, row: InteractionRow, n: int) -> None:
+    """Add a row's attributes to the rejected branch, weighted by `n`."""
+    for cat in row.categories:
+        _increment(counts.rejected.categories, cat, n)
+    _add_tags(counts.rejected.tags, row, n)
+    _add_location(counts.rejected.location, row, n)
+
+
 # ---------------------------------------------------------------------------
 # Main aggregation function
 # ---------------------------------------------------------------------------
@@ -121,19 +142,21 @@ def aggregate_signal_counts(
 ) -> SignalCounts:
     """Pure function: aggregate interaction rows into SignalCounts. No I/O.
 
-    `weights` maps an interaction type to the evidence units it contributes
-    per row (default 1). It amplifies only the category/tag/location tree —
-    totals stay raw event counts and `source` stays one unit per save — so a
-    heavier `saved_recommendation` weighs more on taste without distorting the
-    headline counts.
+    `weights` maps each lever to the evidence units it contributes. Totals stay
+    raw event counts and `source` stays one unit per save; only the category/
+    tag/location tree is weighted. See the module docstring for the conviction
+    ladder governing saved places via their pill snapshot.
     """
     weights = weights or {}
     counts = SignalCounts()
+    seen_evidence: set[str] = set()
 
-    for row in rows:
-        weight = weights.get(row.type, 1)
+    # Process `saved_recommendation` before `save` so the once-per-place
+    # dedup keeps the stronger origin's base weight (stable otherwise).
+    ordered = sorted(rows, key=lambda r: 0 if r.type == "saved_recommendation" else 1)
 
-        # --- Totals (raw event counts, unweighted) ---
+    for row in ordered:
+        # --- Totals (raw event counts, one per interaction row) ---
         match row.type:
             case "save":
                 counts.totals.saves += 1
@@ -144,23 +167,40 @@ def aggregate_signal_counts(
             case "rejected":
                 counts.totals.rejected += 1
 
-        if row.type in _POSITIVE_TYPES:
-            # Main tree — weighted by the signal's evidence strength
-            for cat in row.categories:
-                _increment(counts.categories, cat, weight)
-            _add_tags(counts.tags, row, weight)
-            _add_location(counts.location, row, weight)
-
+        if row.type in _SAVE_TYPES:
             # Source is link-share-save only (kebi is not a discovery channel),
-            # and unweighted — one save, one source observation.
+            # unweighted — one save, one source observation. Counted regardless
+            # of curation/sentiment.
             if row.type == "save":
                 _increment(counts.source, row.source)
 
-        elif row.type in _NEGATIVE_TYPES:
-            # Rejected branch
-            for cat in row.categories:
-                _increment(counts.rejected.categories, cat, weight)
-            _add_tags(counts.rejected.tags, row, weight)
-            _add_location(counts.rejected.location, row, weight)
+            # Curation gate: a needs-review place is not evidence at all.
+            if not row.approved:
+                continue
+            # One evidence emission per saved place — a place may carry both a
+            # link-share `save` and a later `saved_recommendation` row.
+            if row.place_core_id is not None:
+                if row.place_core_id in seen_evidence:
+                    continue
+                seen_evidence.add(row.place_core_id)
+
+            # A disliked place is a negative and overrides any positive base.
+            if row.liked is False:
+                _apply_rejected(counts, row, weights.get("liked_negative", 3))
+                continue
+
+            weight = weights.get(row.type, 0)
+            if row.visited:
+                weight += weights.get("visited", 0)
+            if row.liked is True:
+                weight += weights.get("liked", 0)
+            if weight > 0:
+                _apply_positive(counts, row, weight)
+
+        elif row.type == "accepted":
+            _apply_positive(counts, row, weights.get("accepted", 1))
+
+        elif row.type == "rejected":
+            _apply_rejected(counts, row, weights.get("rejected", 1))
 
     return counts

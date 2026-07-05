@@ -17,10 +17,12 @@ from fastapi.testclient import TestClient
 
 from kebi.api.deps import (
     GatewayIdentity,
+    get_event_dispatcher,
     get_user_places_service,
     require_gateway_identity,
 )
 from kebi.api.routes.user import router as user_router
+from kebi.core.events.events import LibraryStateChanged
 from kebi.core.places import PlaceSource, UserPlace, UserPlacesService
 
 _TEST_USER_ID = "user_test_dummy_123456789012345"
@@ -38,13 +40,17 @@ def _updated(**overrides: object) -> UserPlace:
     return UserPlace(**base)  # type: ignore[arg-type]
 
 
-def _make_app(service: UserPlacesService) -> TestClient:
+def _make_app(
+    service: UserPlacesService, dispatcher: AsyncMock | None = None
+) -> TestClient:
     app = FastAPI()
     app.include_router(user_router, prefix="/v1")
     app.dependency_overrides[get_user_places_service] = lambda: service
     app.dependency_overrides[require_gateway_identity] = lambda: GatewayIdentity(
         user_id=_TEST_USER_ID
     )
+    if dispatcher is not None:
+        app.dependency_overrides[get_event_dispatcher] = lambda: dispatcher
     return TestClient(app, raise_server_exceptions=False)
 
 
@@ -114,6 +120,42 @@ def test_patch_unknown_field_returns_422(svc: AsyncMock) -> None:
 
     assert response.status_code == 422
     svc.update_status.assert_not_awaited()
+
+
+def test_patch_pill_change_dispatches_library_state_changed(svc: AsyncMock) -> None:
+    """A taste-relevant pill edit retrains taste (ADR-115)."""
+    dispatcher = AsyncMock()
+    client = _make_app(svc, dispatcher)
+
+    client.patch("/v1/user/places/up-1", json={"liked": True})
+
+    dispatcher.dispatch.assert_awaited_once()
+    event = dispatcher.dispatch.await_args.args[0]
+    assert isinstance(event, LibraryStateChanged)
+    assert event.user_id == _TEST_USER_ID
+
+
+def test_patch_note_only_does_not_dispatch(svc: AsyncMock) -> None:
+    """A note does not affect taste — no retrain on a note-only edit."""
+    dispatcher = AsyncMock()
+    client = _make_app(svc, dispatcher)
+
+    response = client.patch("/v1/user/places/up-1", json={"note": "great ramen"})
+
+    assert response.status_code == 200
+    dispatcher.dispatch.assert_not_awaited()
+
+
+def test_patch_404_does_not_dispatch(svc: AsyncMock) -> None:
+    """Nothing matched → no state changed → no retrain, even for a pill field."""
+    svc.update_status = AsyncMock(return_value=None)
+    dispatcher = AsyncMock()
+    client = _make_app(svc, dispatcher)
+
+    response = client.patch("/v1/user/places/up-missing", json={"visited": True})
+
+    assert response.status_code == 404
+    dispatcher.dispatch.assert_not_awaited()
 
 
 def test_patch_absent_or_not_owned_returns_404(svc: AsyncMock) -> None:

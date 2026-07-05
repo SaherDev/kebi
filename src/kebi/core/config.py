@@ -352,15 +352,28 @@ class TasteRegenConfig(BaseModel):
 
 
 class SignalWeightsConfig(BaseModel):
-    """Per-signal evidence weight in taste aggregation.
+    """Per-signal evidence weight in taste aggregation (the conviction ladder).
 
-    A weight is how many units of taste evidence one interaction contributes
-    to the category/tag/location tree. `saved_recommendation` (the user kept a
-    place kebi picked) is a stronger positive than a passive link-share save,
-    so it weighs more than the default of 1.
+    A weight is how many units of taste evidence a signal contributes to the
+    category/tag/location tree. A passive link-share `save` is worth nothing on
+    its own (`save: 0`); a `saved_recommendation` carries a base weight; the
+    Library pills `visited` and `liked` add graduated bonuses on top of a saved
+    place's base, while `liked_negative` weights a disliked place into the
+    rejected branch. Defaults order the ladder visited+liked ≫ liked > saved_
+    recommendation > accepted.
     """
 
+    save: int = 0
+    accepted: int = 1
     saved_recommendation: int = 2
+    visited: int = 2
+    liked: int = 3
+    liked_negative: int = 3
+    rejected: int = 1
+
+    def as_mapping(self) -> dict[str, int]:
+        """Flat lever→weight map passed to aggregate_signal_counts."""
+        return self.model_dump()
 
 
 class TasteModelConfig(BaseModel):

@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 
 from kebi.core.events.events import (
     DomainEvent,
+    LibraryStateChanged,
     PlaceSaved,
     RecommendationAccepted,
     RecommendationRejected,
@@ -60,9 +61,7 @@ class EventHandlers:
             # Build (signal_type, place_core_id) pairs from the event shape
             pairs: list[tuple[InteractionType, str]] = []
             if isinstance(event, PlaceSaved):
-                pairs = [
-                    (InteractionType.SAVE, pcid) for pcid in event.place_core_ids
-                ]
+                pairs = [(InteractionType.SAVE, pcid) for pcid in event.place_core_ids]
             elif isinstance(
                 event,
                 RecommendationAccepted | RecommendationRejected | RecommendationSaved,
@@ -90,6 +89,38 @@ class EventHandlers:
                 exc,
                 exc_info=True,
                 extra={"user_id": event.user_id, "event_type": event.event_type},
+            )
+            self._tracer.capture_message(
+                message=f"{event.event_type} handler error: {exc}",
+                level="error",
+                metadata={"event_id": event.event_id},
+                user_id=event.user_id,
+                session_id=event.user_id,
+            )
+            self._tracer.flush()
+
+    async def on_library_state_changed(self, event: LibraryStateChanged) -> None:
+        """Retrain taste when a saved place's pills change (ADR-115).
+
+        Schedules a debounced regen without writing an interaction row — the
+        pills are read as current snapshot state at regen time. Failures are
+        swallowed and traced (ADR-043): a pill toggle must never fail the PATCH.
+        """
+        try:
+            self.taste_service.schedule_regen(event.user_id)
+            self._tracer.capture_message(
+                message=f"{event.event_type} handled",
+                level="info",
+                metadata={"event_id": event.event_id},
+                user_id=event.user_id,
+                session_id=event.user_id,
+            )
+        except Exception as exc:
+            logger.error(
+                "Failed to schedule regen on library change: %s",
+                exc,
+                exc_info=True,
+                extra={"user_id": event.user_id},
             )
             self._tracer.capture_message(
                 message=f"{event.event_type} handler error: {exc}",

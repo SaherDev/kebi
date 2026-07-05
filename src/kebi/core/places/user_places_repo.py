@@ -81,6 +81,22 @@ class UserPlacesRepo:
         result = await self._session.execute(stmt)
         return [_row_to_user_place(row._mapping) for row in result]
 
+    async def pill_state(
+        self, user_id: str
+    ) -> list[tuple[str, bool, bool, bool | None]]:
+        """Lightweight taste-relevant projection: (place_id, approved, visited,
+        liked) for every save the user holds.
+
+        Feeds the taste regen stale-guard's pill fingerprint — a change to any
+        of these columns must trigger a re-aggregation, but `note`/`source`/
+        timestamps do not affect taste, so they are deliberately excluded.
+        """
+        stmt = select(_u.place_id, _u.approved, _u.visited, _u.liked).where(
+            _u.user_id == user_id
+        )
+        result = await self._session.execute(stmt)
+        return [(r.place_id, r.approved, r.visited, r.liked) for r in result]
+
     async def browse(
         self,
         user_id: str,

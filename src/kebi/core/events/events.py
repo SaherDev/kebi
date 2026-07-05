@@ -54,6 +54,20 @@ class RecommendationSaved(DomainEvent):
     place_core_id: str
 
 
+class LibraryStateChanged(DomainEvent):
+    """Event: a saved place's Library pills changed (visited/liked/approved).
+
+    Pills are mutable snapshot state, not events, so this carries no place or
+    interaction payload — it only nudges taste to re-aggregate the user's
+    current pill snapshot (ADR-115). Note-only edits do not emit it, since a
+    note does not affect taste. The pill-fingerprint stale-guard makes a no-op
+    change (e.g. re-setting the same value) short-circuit, so emitting on any
+    pill-field touch is safe.
+    """
+
+    event_type: str = "library_state_changed"
+
+
 class TurnCompleted(DomainEvent):
     """Event: A user turn finished (success, clarification, or error).
 

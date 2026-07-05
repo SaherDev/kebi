@@ -264,6 +264,10 @@ async def get_event_dispatcher(
     ):
         dispatcher.register_handler(event_type, handlers.on_taste_signal)
     dispatcher.register_handler(
+        "library_state_changed",
+        handlers.on_library_state_changed,  # type: ignore[arg-type]
+    )
+    dispatcher.register_handler(
         "turn_completed",
         handlers.on_turn_completed,  # type: ignore[arg-type]
     )

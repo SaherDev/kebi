@@ -378,7 +378,7 @@ class TestSaveOne:
         assert created is True
         assert row.user_id == "u1"
         assert row.place_id == "p1"
-        assert row.approved is False  # recommended saves start un-curated
+        assert row.approved is True  # a deliberate rec-save is already curated
         assert row.source == PlaceSource.kebi
         assert row.source_ref is None
         repo.get_by_user_and_place.assert_awaited_once_with("u1", "p1")

@@ -22,7 +22,7 @@ from kebi.api.schemas.library import (
     UserPlaceStatusPatch,
 )
 from kebi.core.events.dispatcher import EventDispatcher
-from kebi.core.events.events import RecommendationSaved
+from kebi.core.events.events import LibraryStateChanged, RecommendationSaved
 from kebi.core.places import (
     PlaceNotFoundError,
     PlaceSource,
@@ -177,6 +177,7 @@ async def update_user_place(
     body: UserPlaceStatusPatch,
     identity: Annotated[GatewayIdentity, Depends(require_gateway_identity)],
     service: UserPlacesService = Depends(get_user_places_service),  # noqa: B008
+    event_dispatcher: EventDispatcher = Depends(get_event_dispatcher),  # noqa: B008
 ) -> LibraryUserData:
     """Update one saved place's user-state — the Library pills and menu
     actions (been there / liked / approved / note).
@@ -190,6 +191,10 @@ async def update_user_place(
     `(user_place_id, user_id)`, where `user_id` comes only from the verified
     gateway identity. A caller can only ever mutate their own save.
 
+    A change to a taste-relevant pill (visited / liked / approved) emits
+    `LibraryStateChanged`, which retrains taste from the new snapshot (ADR-115).
+    A note-only edit does not — a note does not affect taste.
+
     Returns the updated user-state (`LibraryUserData`, never the raw domain
     model — ADR-105). When nothing matched — the save does not exist *or*
     belongs to another user — returns 404; the two cases are deliberately
@@ -202,6 +207,9 @@ async def update_user_place(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="saved_place_not_found"
         )
+
+    if body.model_fields_set & {"visited", "liked", "approved"}:
+        await event_dispatcher.dispatch(LibraryStateChanged(user_id=identity.user_id))
     return LibraryUserData.from_user_place(updated)
 
 

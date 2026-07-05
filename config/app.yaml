@@ -425,11 +425,20 @@ taste_model:
   regen:
     min_signals: 3
     early_signal_threshold: 10
-  # Evidence weight per interaction in taste aggregation (default 1).
-  # Saving a place kebi recommended is a stronger positive than a passive
-  # link-share save, so it weighs heavier on the taste tree.
+  # Evidence weight per signal in taste aggregation (the conviction ladder).
+  # A passive link-share `save` trains nothing on its own; a saved
+  # recommendation carries a base weight; the Library pills `visited`/`liked`
+  # add graduated bonuses on top, and `liked_negative` weights a disliked place
+  # into the rejected branch. Ladder: visited+liked >> liked > saved_rec >
+  # accepted. `approved` is a curation gate (not a weight).
   signal_weights:
+    save: 0
+    accepted: 1
     saved_recommendation: 2
+    visited: 2
+    liked: 3
+    liked_negative: 3
+    rejected: 1
 
 # ---------------------------------------------------------------------------
 # User Memory Configuration

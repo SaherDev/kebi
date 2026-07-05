@@ -38,6 +38,7 @@ def _make_service(
     search.get_cores_by_ids = AsyncMock(return_value=cores or {})
     up_repo = AsyncMock()
     up_repo.get_by_user = AsyncMock(return_value=user_places or [])
+    up_repo.pill_state = AsyncMock(return_value=[])
 
     service = TasteModelService(
         session_factory,
@@ -146,6 +147,22 @@ class TestHandleSignal:
             assert debouncer.schedule.call_args.kwargs["user_id"] == "user1"
 
 
+class TestScheduleRegen:
+    def test_schedules_debounce_without_logging_a_row(self) -> None:
+        """A pill change retrains taste via re-aggregation — it must NOT append
+        an interaction row (pills are snapshot state, not events; ADR-115)."""
+        repo = _make_repo_mock()
+        service = _make_service(repo)
+
+        with patch("kebi.core.taste.debounce.regen_debouncer") as debouncer:
+            debouncer.schedule = MagicMock()
+            service.schedule_regen("user1")
+
+            debouncer.schedule.assert_called_once()
+            assert debouncer.schedule.call_args.kwargs["user_id"] == "user1"
+        repo.log_interaction.assert_not_awaited()
+
+
 class TestRunRegen:
     async def test_min_signals_guard_skips(self) -> None:
         repo = _make_repo_mock()
@@ -156,21 +173,48 @@ class TestRunRegen:
         repo.upsert_regen.assert_not_awaited()
 
     async def test_stale_guard_skips(self) -> None:
+        from kebi.core.taste.service import _pill_fingerprint
+
         repo = _make_repo_mock()
         repo.get_interactions.return_value = [_raw() for _ in range(5)]
 
         taste_model = MagicMock()
         taste_model.generated_from_log_count = 5  # same as len(raw)
+        # ...and the pill snapshot is unchanged (pill_state mock returns []).
+        taste_model.pill_fingerprint = _pill_fingerprint([])
         repo.get_by_user_id.return_value = taste_model
 
         service = _make_service(repo)
         await service._run_regen("user1")
         repo.upsert_regen.assert_not_awaited()
 
+    async def test_stale_guard_runs_when_pill_fingerprint_changed(self) -> None:
+        """Same log count but a changed pill snapshot must still regen — this is
+        what makes a like/visit/approve retrain taste (ADR-115)."""
+        repo = _make_repo_mock()
+        repo.get_interactions.return_value = [_raw("accepted") for _ in range(5)]
+
+        taste_model = MagicMock()
+        taste_model.generated_from_log_count = 5  # same as len(raw)
+        taste_model.pill_fingerprint = "stale-digest"  # differs from current
+        repo.get_by_user_id.return_value = taste_model
+
+        with patch("kebi.core.taste.service.get_llm") as mock_get_llm:
+            mock_llm = AsyncMock()
+            mock_llm.complete.return_value = json.dumps(
+                _sample_artifacts().model_dump()
+            )
+            mock_get_llm.return_value = mock_llm
+            service = _make_service(repo, cores={"p1": _core("p1")})
+            await service._run_regen("user1")
+
+        repo.upsert_regen.assert_awaited_once()
+
     @patch("kebi.core.taste.service.get_llm")
     async def test_happy_path(self, mock_get_llm: MagicMock) -> None:
+        # Five accepted recs for one place → restaurant evidence 5 (weight 1).
         repo = _make_repo_mock()
-        repo.get_interactions.return_value = [_raw() for _ in range(5)]
+        repo.get_interactions.return_value = [_raw("accepted") for _ in range(5)]
         repo.get_by_user_id.return_value = None
 
         mock_llm = AsyncMock()
@@ -186,6 +230,7 @@ class TestRunRegen:
         kwargs = repo.upsert_regen.call_args.kwargs
         assert kwargs["user_id"] == "user1"
         assert kwargs["log_count"] == 5
+        assert kwargs["pill_fingerprint"] is not None
         assert len(kwargs["summary"]) > 0
         # places vocabulary persisted
         assert kwargs["signal_counts"]["categories"] == {"restaurant": 5}

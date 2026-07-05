@@ -49,6 +49,12 @@ class TasteModel(Base):
     generated_from_log_count: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0
     )
+    # Digest of the user's Library-pill snapshot at last regen. Pills are
+    # mutable state that write no interaction row, so this — alongside
+    # generated_from_log_count — lets the stale-guard detect a like/visit/
+    # approve change. Nullable: a NULL never matches a computed digest, so the
+    # first post-migration regen always runs once, then stabilises.
+    pill_fingerprint: Mapped[str | None] = mapped_column(String, nullable=True)
 
 
 class Interaction(Base):
@@ -97,9 +103,7 @@ class UserIntent(Base):
     """
 
     __tablename__ = "user_intents"
-    __table_args__ = (
-        Index("ix_user_intents_user_created", "user_id", "created_at"),
-    )
+    __table_args__ = (Index("ix_user_intents_user_created", "user_id", "created_at"),)
 
     id: Mapped[str] = mapped_column(
         String, primary_key=True, default=lambda: str(uuid4())
