@@ -40,6 +40,14 @@ class CandidateName(BaseModel):
 
     name: str = Field(min_length=1)
     reason: str = Field(min_length=1)
+    icon: str | None = Field(
+        default=None,
+        description=(
+            "One emoji capturing this place's identity (🗼 iconic tower, "
+            "⛲ fountain, 🌴 palm-defined place). Omit when nothing beats "
+            "the generic category default — never 📍 or 📸."
+        ),
+    )
 
 
 class CandidateNames(BaseModel):

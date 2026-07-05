@@ -46,10 +46,16 @@ Produce up to {count} candidates. Fewer is fine — quality and fit beat quantit
 Return a JSON object matching this schema:
 {{
   "candidates": [
-    {{ "name": "<canonical place name>", "reason": "<one short sentence on why this fits the intent + location + constraints>" }},
+    {{ "name": "<canonical place name>", "reason": "<one short sentence on why this fits the intent + location + constraints>", "icon": "<one emoji or null>" }},
     ...
   ]
 }}
+
+`icon` is the single emoji that captures THIS place's identity — not its
+category bucket: a famous tower → 🗼, a fountain → ⛲, a palm-defined
+waterfront → 🌴, a ramen shop → 🍜, a cat cafe → 🐱. Prefer the most
+specific emoji that exists; use null when nothing beats the generic
+category default. NEVER use filler icons: no 📍, no 📸.
 
 # Anti-examples (do not do this)
 
