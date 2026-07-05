@@ -124,6 +124,7 @@ returned inside chat responses as `tool_results`.
     { "type": "cuisine", "value": "Japanese", "source": "google" },
     { "type": "atmosphere", "value": "casual", "source": "llm" }
   ],
+  "icon": "🍜",
   "location": {
     "lat": 13.778,
     "lng": 100.541,
@@ -145,6 +146,7 @@ returned inside chat responses as `tool_results`.
 | `place_name_aliases` | `{ value, source }[]`       | Alternative names from non-canonical writers (TikTok caption, user note, LLM)                                                                                                                                            |
 | `categories`         | `string[]`                  | `PlaceCategory` enum values, e.g. `"restaurant"`, `"cafe"`, `"bar"`                                                                                                                                                      |
 | `tags`               | `{ type, value, source }[]` | `type` ∈ `cuisine \| dietary \| feature \| atmosphere \| service \| price \| accessibility \| time \| season` (or an LLM free-text type); `value` is an enum or free-text; `source` e.g. `"google" \| "llm" \| "tiktok"` |
+| `icon`               | `string \| null`            | Single emoji for the place's identity (🗼, ⛲, 🌴), LLM-picked where an LLM already sees the place (ADR-117). **Nullable by design** — LLM-less paths (provider discovery) leave it `null`; the client falls back to its own category→emoji mapping |
 | `location`           | `LocationContext \| null`   | `{ lat, lng, address, neighborhood, city, country }` — any field may be `null`                                                                                                                                           |
 | `created_at`         | `ISO-8601 string \| null`   | Catalog row creation                                                                                                                                                                                                     |
 | `refreshed_at`       | `ISO-8601 string \| null`   | Last provider refresh                                                                                                                                                                                                    |

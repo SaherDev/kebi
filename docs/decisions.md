@@ -17,6 +17,16 @@ Format:
 
 ---
 
+## ADR-117: Places carry a model-picked identity icon; category mapping is the client's fallback
+
+**Date:** 2026-07-05\
+**Status:** accepted\
+**Context:** The product client derives each place's display icon from a category→emoji table. Categories describe what bucket a place is in, not what the place *is*, so anything outside the well-bucketed food/retail space renders generically: an iconic tower, a famous fountain, and a palm-shaped waterfront all collapse to the same camera/pin glyph. No table keyed on category can fix this — the right icon comes from the place's identity, which the models in the pipeline already reason about. Adding a dedicated icon-picking model call everywhere would fix quality at the cost of adding latency and spend to paths deliberately designed to run without one.\
+**Decision:** The place catalog owns a per-place icon — a single emoji — chosen by a model **only at the points where a model already sees the place**: extraction's per-place classification, and the consult path's candidate naming. Paths with no model in the loop (provider-driven discovery, raw provider write-through) do not gain one; there the icon is null on the wire and the client's existing category mapping remains the explicit fallback, so the field is nullable by contract. The icon merges fill-only: the first real pick sticks, an icon-less rewrite can never erase one, and a later pick never flip-flops the display. There is deliberately **no second write path**: the consult path forwards its pick alongside the validation lookup, so the search write-through persists it on the same single save every place already gets — a place that predates the pick keeps its stored null and shows the icon in the response only. The icon contributes nothing to the embedding text. The handful of rows predating the field entirely are updated once by hand; places whose best icon is the category default deliberately stay null.\
+**Consequences:** Identity-defining places stop rendering as generic camera pins wherever place data is shown — library, extraction results, chat recommendations — with zero additional model calls in the serving path. The client keeps its category mapping, now as a documented fallback rather than the primary mechanism, so the two repos split the responsibility along a clear line: kebi supplies specific, the client supplies generic. Accepted trade-offs: discovery-surfaced places show fallback icons until a model path touches them, a place that existed before its first pick keeps null in the catalog until one does, and a mediocre first pick persists until a deliberate quality sweep — all correctable later by a targeted update, none blocking.
+
+---
+
 ## ADR-115: Library judgments train taste as a snapshot overlay; the passive save is demoted
 
 **Date:** 2026-07-05\
