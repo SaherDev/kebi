@@ -193,6 +193,9 @@ class ValidatedCandidate:
     tags: list[PlaceTag]
     confidence: float
     evidence: list[Evidence]
+    # Picker-chosen display emoji (already normalized); survives the
+    # reconcile pass like categories/tags and lands on PlaceCore.icon.
+    icon: str | None = None
     subcategory: str | None = None
     location: LocationContext | None = None
     # The name this place was shown as in the source post (the raw

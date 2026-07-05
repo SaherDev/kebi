@@ -255,3 +255,9 @@ def test_reconcile_keeps_picker_categories_when_present() -> None:
         ExtractionContext(url=None, user_id="u1"),
     )
     assert out[0].categories == [PlaceCategory.cafe]
+
+
+def test_candidate_to_core_carries_icon() -> None:
+    c = _vc()
+    c.icon = "🍕"
+    assert candidate_to_core(c).icon == "🍕"
