@@ -119,6 +119,26 @@ def test_save_stamps_kebi_source_and_gateway_identity(
     assert source is PlaceSource.kebi
 
 
+def test_save_passes_note_to_service(svc: AsyncMock, dispatcher: AsyncMock) -> None:
+    """A client-supplied note is forwarded to the service verbatim."""
+    client = _make_app(svc, dispatcher)
+
+    client.post("/v1/user/places", json=_body(note="cozy spot to work"))
+
+    assert svc.save_one.await_args.kwargs["note"] == "cozy spot to work"
+
+
+def test_save_note_defaults_to_none_when_omitted(
+    svc: AsyncMock, dispatcher: AsyncMock
+) -> None:
+    """No note in the body → the service is called with note=None."""
+    client = _make_app(svc, dispatcher)
+
+    client.post("/v1/user/places", json=_body())
+
+    assert svc.save_one.await_args.kwargs["note"] is None
+
+
 def test_save_dispatches_recommendation_saved_signal_on_new_save(
     svc: AsyncMock, dispatcher: AsyncMock
 ) -> None:
@@ -150,25 +170,19 @@ def test_resave_is_idempotent_and_skips_signal(
     dispatcher.dispatch.assert_not_awaited()
 
 
-def test_save_unknown_place_returns_404(
-    svc: AsyncMock, dispatcher: AsyncMock
-) -> None:
+def test_save_unknown_place_returns_404(svc: AsyncMock, dispatcher: AsyncMock) -> None:
     """place_core_id absent from the catalog → 404, no signal dispatched."""
     svc.save_one = AsyncMock(side_effect=PlaceNotFoundError("ghost"))
     client = _make_app(svc, dispatcher)
 
-    response = client.post(
-        "/v1/user/places", json=_body(place_core_id="ghost")
-    )
+    response = client.post("/v1/user/places", json=_body(place_core_id="ghost"))
 
     assert response.status_code == 404
     assert response.json()["detail"] == "place_not_found"
     dispatcher.dispatch.assert_not_awaited()
 
 
-def test_save_unknown_field_returns_422(
-    svc: AsyncMock, dispatcher: AsyncMock
-) -> None:
+def test_save_unknown_field_returns_422(svc: AsyncMock, dispatcher: AsyncMock) -> None:
     client = _make_app(svc, dispatcher)
 
     response = client.post("/v1/user/places", json=_body(bogus=True))
@@ -182,9 +196,7 @@ def test_save_missing_place_core_id_returns_422(
 ) -> None:
     client = _make_app(svc, dispatcher)
 
-    response = client.post(
-        "/v1/user/places", json={"recommendation_id": _REC_ID}
-    )
+    response = client.post("/v1/user/places", json={"recommendation_id": _REC_ID})
 
     assert response.status_code == 422
     svc.save_one.assert_not_awaited()

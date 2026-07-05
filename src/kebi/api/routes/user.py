@@ -146,6 +146,7 @@ async def save_user_place(
             identity.user_id,
             body.place_core_id,
             PlaceSource.kebi,
+            note=body.note,
             save_limit=identity.save_limit,
         )
     except PlaceNotFoundError as exc:

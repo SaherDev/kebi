@@ -104,10 +104,13 @@ class SaveUserPlaceRequest(BaseModel):
     exists in the catalog (it was just recommended), so the save just links it
     to the caller. `recommendation_id` is the id kebi minted on the consult
     result the place came from — it attributes the `saved_recommendation`
-    taste signal back to that recommendation. `source` is not accepted from
-    the client — the route stamps `PlaceSource.kebi`. `user_id` is
-    intentionally absent (gateway identity, ADR-105). `extra="forbid"` rejects
-    unknown keys with a 422.
+    taste signal back to that recommendation. `note` is optional free text the
+    client stores on the save (e.g. the recommendation's reason it is showing,
+    or the user's own words) — the reason is not persisted server-side, so the
+    client is the only party that holds it at save time. `source` is not
+    accepted from the client — the route stamps `PlaceSource.kebi`. `user_id`
+    is intentionally absent (gateway identity, ADR-105). `extra="forbid"`
+    rejects unknown keys with a 422.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -117,6 +120,14 @@ class SaveUserPlaceRequest(BaseModel):
     )
     recommendation_id: str = Field(
         ..., description="id of the recommendation the place was saved from"
+    )
+    note: str | None = Field(
+        None,
+        description=(
+            "Optional note to store on the save — e.g. the recommendation's "
+            "reason, or the user's own text. Applied only when the save is "
+            "created; a re-tap leaves an existing note untouched."
+        ),
     )
 
 
