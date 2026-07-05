@@ -158,6 +158,7 @@ class UserPlacesService:
         user_id: str,
         place_id: str,
         source: PlaceSource,
+        note: str | None = None,
         save_limit: int | None = None,
     ) -> tuple[UserPlace, bool]:
         """Save a single catalog place to the user's library, idempotently.
@@ -168,6 +169,13 @@ class UserPlacesService:
         for `place_id` (a re-tap returns the existing row instead of raising,
         and the caller skips re-emitting the positive taste signal); otherwise
         inserts one `user_places` row and returns `(row, True)`.
+
+        `note` is stored verbatim on the new row when creating — the client
+        supplies it (e.g. the recommendation's reason it is showing, or the
+        user's own text), since the reason is not persisted server-side. It is
+        applied only on creation: a re-tap returns the existing row untouched,
+        so a later hand-edited note is never clobbered by a re-save. `None`
+        stores no note.
 
         Raises `PlaceNotFoundError` when `place_id` is absent from the catalog:
         the insert trips the `place_id → places.id` foreign key, the source of
@@ -186,6 +194,7 @@ class UserPlacesService:
             user_id=user_id,
             place_id=place_id,
             approved=False,
+            note=note,
             source=source,
             source_ref=None,
             saved_at=datetime.now(UTC),

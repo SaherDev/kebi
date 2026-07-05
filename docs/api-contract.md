@@ -577,14 +577,16 @@ POST /v1/user/places
 ```json
 {
   "place_core_id": "c0ffee00-1111-2222-3333-444455556666",
-  "recommendation_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+  "recommendation_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "note": "cozy spot to work, great coffee"
 }
 ```
 
-| Field               | Type     | Required | Notes                                                                                  |
-| ------------------- | -------- | -------- | -------------------------------------------------------------------------------------- |
-| `place_core_id`     | `string` | Yes      | `places.id` of the candidate (consult `tool_results → payload.candidates[].place.id`)  |
-| `recommendation_id` | `string` | Yes      | The id kebi minted on that consult result (`tool_results → payload.recommendation_id`) |
+| Field               | Type            | Required | Notes                                                                                  |
+| ------------------- | --------------- | -------- | -------------------------------------------------------------------------------------- |
+| `place_core_id`     | `string`        | Yes      | `places.id` of the candidate (consult `tool_results → payload.candidates[].place.id`)  |
+| `recommendation_id` | `string`        | Yes      | The id kebi minted on that consult result (`tool_results → payload.recommendation_id`) |
+| `note`              | `string`/`null` | No       | Free text stored on the save — e.g. the recommendation's reason the client is showing, or the user's own words. The reason is **not** persisted server-side, so the client supplies it here. Applied **only on create**; a re-tap leaves an existing note untouched (edit later via `PATCH`). Omit or `null` for no note |
 
 `source` is **not** a field — the server stamps `kebi`. Unknown fields → 422.
 
@@ -864,7 +866,7 @@ All protected calls additionally send the `X-Gateway-Token` + `X-Gateway-User-Id
 | GET /v1/user/intents        | "What you wanted" recall list              | — (optional `limit`/`cursor` query params)                  | IntentsResponse (`intents: { id, text, created_at }[]`, `next_cursor`)                   |
 | POST /v1/extract            | Canonical extraction (save a place)        | raw_input                                                    | ExtractPlaceResponse                                                                     |
 | GET /v1/user/library        | Browse the user's saved places (Library)   | — (optional filter + `sort` + `limit`/`cursor` query params) | LibraryResponse (`places: SavedPlaceView[]`, `next_cursor`, `total`)                     |
-| POST /v1/user/places        | Save a recommended place ("save it")       | place_core_id, recommendation_id                             | LibraryUserData (created user-state, `201`; `404` if uncatalogued); emits taste signal  |
+| POST /v1/user/places        | Save a recommended place ("save it")       | place_core_id, recommendation_id, optional `note`            | LibraryUserData (created user-state, `201`; `404` if uncatalogued); emits taste signal  |
 | PATCH /v1/user/places/{id}  | Update a save's user-state (pills/menu)    | partial body: `visited`/`liked`/`approved`/`note`            | LibraryUserData (updated user-state; `200`/`404`)                                        |
 | DELETE /v1/user/places/{id} | Remove one saved place from the library    | — (path param only)                                          | 204 No Content (`404` if absent/not owned)                                               |
 | DELETE /v1/user/data        | Account-deletion sweep of AI data          | — (optional `scope` query param)                             | 204 No Content                                                                           |
