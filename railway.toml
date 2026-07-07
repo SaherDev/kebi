@@ -2,9 +2,12 @@
 builder = "railpack"
 
 [deploy]
-# Bind "::" (IPv6) — Railway private networking (.railway.internal) resolves
-# to IPv6 only; binding 0.0.0.0 makes NestJS get ECONNREFUSED.
-startCommand = "PYTHONPATH=/app/src poetry run uvicorn kebi.api.main:app --host :: --port $PORT"
+# Empty --host = dual-stack (asyncio binds one IPv4 + one IPv6 socket).
+# Railway needs BOTH: private networking (.railway.internal) resolves to IPv6
+# only (0.0.0.0 → gateway ECONNREFUSED), while the deploy healthcheck probes
+# over IPv4 ("::" alone → replicas never become healthy; asyncio sets
+# IPV6_V6ONLY on the socket).
+startCommand = "PYTHONPATH=/app/src poetry run uvicorn kebi.api.main:app --host '' --port $PORT"
 healthcheckPath = "/v1/health"
 restartPolicyType = "on_failure"
 restartPolicyMaxRetries = 3
