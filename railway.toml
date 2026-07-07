@@ -2,7 +2,9 @@
 builder = "railpack"
 
 [deploy]
-startCommand = "PYTHONPATH=/app/src poetry run uvicorn kebi.api.main:app --host 0.0.0.0 --port $PORT"
+# Bind "::" (IPv6) — Railway private networking (.railway.internal) resolves
+# to IPv6 only; binding 0.0.0.0 makes NestJS get ECONNREFUSED.
+startCommand = "PYTHONPATH=/app/src poetry run uvicorn kebi.api.main:app --host :: --port $PORT"
 healthcheckPath = "/v1/health"
 restartPolicyType = "on_failure"
 restartPolicyMaxRetries = 3
