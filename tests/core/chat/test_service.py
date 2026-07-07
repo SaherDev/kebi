@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 from langchain_core.messages import AIMessage
@@ -11,11 +13,36 @@ from kebi.core.agent.reasoning import ReasoningStep
 from kebi.core.chat.service import ChatService
 
 
+def _mock_astream(
+    values: list[dict[str, Any]] | None = None,
+    *,
+    raises: Exception | None = None,
+) -> MagicMock:
+    """Build a MagicMock standing in for `graph.astream(...)`.
+
+    The service calls `graph.astream(payload, config=..., stream_mode="values")`
+    and consumes the async iterator. Each test passes a list of state
+    snapshots to yield; a raising stream is supported via `raises` to
+    exercise the error path.
+    """
+    snapshots = values or [{"messages": [], "reasoning_steps": []}]
+
+    def _factory(*_args: Any, **_kwargs: Any) -> AsyncIterator[dict[str, Any]]:
+        async def _gen() -> AsyncIterator[dict[str, Any]]:
+            if raises is not None:
+                raise raises
+            for v in snapshots:
+                yield v
+
+        return _gen()
+
+    return MagicMock(side_effect=_factory)
+
+
 def _make_service(
     taste_service: AsyncMock | None = None,
     memory_service: AsyncMock | None = None,
     agent_graph: AsyncMock | None = None,
-    places_service: AsyncMock | None = None,
 ) -> ChatService:
     """Build a ChatService with all deps mocked."""
     from kebi.core.config import get_config
@@ -29,16 +56,15 @@ def _make_service(
     if memory_service is None:
         memory_service = AsyncMock()
         memory_service.load_memories = AsyncMock(return_value=[])
-    if places_service is None:
-        places_service = AsyncMock()
-        places_service.resolve_location_label = AsyncMock(return_value=None)
     if agent_graph is None:
         graph = AsyncMock()
-        graph.ainvoke = AsyncMock(
-            return_value={
-                "messages": [AIMessage(content="default response")],
-                "reasoning_steps": [],
-            }
+        graph.astream = _mock_astream(
+            [
+                {
+                    "messages": [AIMessage(content="default response")],
+                    "reasoning_steps": [],
+                }
+            ]
         )
         agent_graph = graph
 
@@ -46,13 +72,9 @@ def _make_service(
     dispatcher.dispatch = AsyncMock()
 
     return ChatService(
-        extraction_service=MagicMock(),
-        consult_service=MagicMock(),
-        recall_service=MagicMock(),
         event_dispatcher=dispatcher,
         memory_service=memory_service,
         taste_service=taste_service,
-        places_service=places_service,
         config=cfg_copy,
         agent_graph=agent_graph,
     )
@@ -61,151 +83,165 @@ def _make_service(
 async def test_run_invokes_agent_graph_and_returns_agent_type() -> None:
     """ChatService.run() invokes the agent graph and returns type='agent'."""
     graph = AsyncMock()
-    graph.ainvoke = AsyncMock(
-        return_value={
-            "messages": [AIMessage(content="here's what I found")],
-            "reasoning_steps": [],
-        }
+    graph.astream = _mock_astream(
+        [
+            {
+                "messages": [AIMessage(content="here's what I found")],
+                "reasoning_steps": [],
+            }
+        ]
     )
     service = _make_service(agent_graph=graph)
 
-    result = await service.run(ChatRequest(user_id="u1", message="show me my saves"))
+    result = await service.run(ChatRequest(message="show me my saves"), user_id="u1")
 
     assert result.type == "agent"
     assert result.message == "here's what I found"
-    graph.ainvoke.assert_awaited_once()
+    graph.astream.assert_called_once()
 
 
 async def test_run_filters_reasoning_steps_to_user_visible() -> None:
     """Only user-visible ReasoningStep objects survive the serialization filter."""
     user_step = ReasoningStep(
         step="agent.tool_decision",
-        summary="chose recall",
+        title="thinking",
+        summary="responding directly",
         source="agent",
-        tool_name=None,
         visibility="user",
     )
     debug_step = ReasoningStep(
-        step="recall.mode",
-        summary="mode=hybrid",
-        source="tool",
-        tool_name="recall",
+        step="max_errors_detail",
+        summary="exceeded max_errors",
+        source="fallback",
         visibility="debug",
     )
 
     graph = AsyncMock()
-    graph.ainvoke = AsyncMock(
-        return_value={
-            "messages": [AIMessage(content="response")],
-            "reasoning_steps": [user_step, debug_step],
-        }
+    graph.astream = _mock_astream(
+        [
+            {
+                "messages": [AIMessage(content="response")],
+                "reasoning_steps": [user_step, debug_step],
+            }
+        ]
     )
     service = _make_service(agent_graph=graph)
 
-    result = await service.run(ChatRequest(user_id="u1", message="hi"))
+    result = await service.run(ChatRequest(message="hi"), user_id="u1")
 
     assert result.data is not None
     assert len(result.data["reasoning_steps"]) == 1
-    assert result.data["reasoning_steps"][0]["step"] == "agent.tool_decision"
+    dumped = result.data["reasoning_steps"][0]
+    assert dumped["step"] == "agent.tool_decision"
+    # title (action) + summary (result) are both in the /v1/chat JSON (ADR-103).
+    assert dumped["title"] == "thinking"
+    assert dumped["summary"] == "responding directly"
+    # The non-stream JSON contract is unchanged: the SSE-only lifecycle markers
+    # (ADR-102) are excluded entirely, not surfaced as null.
+    assert "id" not in dumped
+    assert "status" not in dumped
 
 
 async def test_run_passes_user_id_as_thread_id() -> None:
-    """graph.ainvoke is called with configurable.thread_id == request.user_id."""
+    """graph.astream is called with configurable.thread_id == identity user_id."""
     graph = AsyncMock()
-    graph.ainvoke = AsyncMock(
-        return_value={"messages": [AIMessage(content="ok")], "reasoning_steps": []}
+    graph.astream = _mock_astream(
+        [{"messages": [AIMessage(content="ok")], "reasoning_steps": []}]
     )
     service = _make_service(agent_graph=graph)
 
-    await service.run(ChatRequest(user_id="u-agent", message="test"))
+    await service.run(ChatRequest(message="test"), user_id="u-agent")
 
-    call = graph.ainvoke.call_args
+    call = graph.astream.call_args
     assert call.kwargs["config"]["configurable"]["thread_id"] == "u-agent"
 
 
 async def test_run_returns_error_on_graph_exception() -> None:
-    """Unexpected exception during ainvoke surfaces as type='error'."""
+    """Unexpected exception during astream surfaces as type='error'."""
     graph = AsyncMock()
-    graph.ainvoke = AsyncMock(side_effect=RuntimeError("boom"))
+    graph.astream = _mock_astream(raises=RuntimeError("boom"))
 
     service = _make_service(agent_graph=graph)
-    result = await service.run(ChatRequest(user_id="u", message="hi"))
+    result = await service.run(ChatRequest(message="hi"), user_id="u")
 
     assert result.type == "error"
 
 
 # ---------------------------------------------------------------------------
-# location_label resolution (PR: fix consult out-of-region suggestions)
+# location passthrough — the request location is the user's actual location
 # ---------------------------------------------------------------------------
 
 
-async def test_run_resolves_location_label_when_location_present() -> None:
-    """ChatService passes lat/lng to PlacesService.resolve_location_label and
-    threads the result into the agent payload as `location_label`."""
-    from kebi.api.schemas.consult import Location
+async def test_run_threads_raw_user_location() -> None:
+    """Raw lat/lng is threaded into the agent payload as `user_location` —
+    the request location is the user's actual location, the resolution
+    anchor for the resolve_location node."""
+    from kebi.api.schemas.chat import Location
 
     graph = AsyncMock()
-    graph.ainvoke = AsyncMock(
-        return_value={"messages": [AIMessage(content="ok")], "reasoning_steps": []}
+    graph.astream = _mock_astream(
+        [{"messages": [AIMessage(content="ok")], "reasoning_steps": []}]
     )
-    places_mock = AsyncMock()
-    places_mock.resolve_location_label = AsyncMock(return_value="Magdeburg, Germany")
 
-    service = _make_service(agent_graph=graph, places_service=places_mock)
+    service = _make_service(agent_graph=graph)
 
     await service.run(
         ChatRequest(
-            user_id="u",
             message="ramen for date night",
             location=Location(lat=52.12, lng=11.62),
-        )
+        ),
+        user_id="u",
     )
 
-    places_mock.resolve_location_label.assert_awaited_once_with(lat=52.12, lng=11.62)
-    payload = graph.ainvoke.call_args.args[0]
-    assert payload["location_label"] == "Magdeburg, Germany"
-    assert payload["location"] == {"lat": 52.12, "lng": 11.62}
+    payload = graph.astream.call_args.args[0]
+    assert payload["user_location"] == {"lat": 52.12, "lng": 11.62}
 
 
-async def test_run_skips_label_resolution_when_no_location() -> None:
-    """No location in request → no geocode call → location_label is None."""
+async def test_run_no_location_threads_none() -> None:
+    """No location in request → payload user_location is None."""
     graph = AsyncMock()
-    graph.ainvoke = AsyncMock(
-        return_value={"messages": [AIMessage(content="ok")], "reasoning_steps": []}
+    graph.astream = _mock_astream(
+        [{"messages": [AIMessage(content="ok")], "reasoning_steps": []}]
     )
-    places_mock = AsyncMock()
-    places_mock.resolve_location_label = AsyncMock()
 
-    service = _make_service(agent_graph=graph, places_service=places_mock)
+    service = _make_service(agent_graph=graph)
 
-    await service.run(ChatRequest(user_id="u", message="hi"))
+    await service.run(ChatRequest(message="hi"), user_id="u")
 
-    places_mock.resolve_location_label.assert_not_awaited()
-    payload = graph.ainvoke.call_args.args[0]
-    assert payload["location_label"] is None
+    payload = graph.astream.call_args.args[0]
+    assert payload["user_location"] is None
 
 
-async def test_run_uses_none_label_when_geocode_fails() -> None:
-    """resolve_location_label returns None on failure → payload carries None."""
-    from kebi.api.schemas.consult import Location
-
+async def test_taste_disabled_skips_compose_and_passes_empty() -> None:
+    """When taste_enabled is False (default), the taste profile is never read
+    and an empty summary reaches the agent payload."""
+    taste = AsyncMock()
+    taste.get_taste_profile = AsyncMock(
+        return_value=MagicMock(taste_profile_summary=["should not be read"])
+    )
     graph = AsyncMock()
-    graph.ainvoke = AsyncMock(
-        return_value={"messages": [AIMessage(content="ok")], "reasoning_steps": []}
+    graph.astream = _mock_astream(
+        [{"messages": [AIMessage(content="ok")], "reasoning_steps": []}]
     )
-    places_mock = AsyncMock()
-    places_mock.resolve_location_label = AsyncMock(return_value=None)
+    service = _make_service(taste_service=taste, agent_graph=graph)
 
-    service = _make_service(agent_graph=graph, places_service=places_mock)
+    await service.run(ChatRequest(message="hi"), user_id="u", taste_enabled=False)
 
-    await service.run(
-        ChatRequest(
-            user_id="u",
-            message="hi",
-            location=Location(lat=0.0, lng=0.0),
-        )
+    taste.get_taste_profile.assert_not_called()
+    payload = graph.astream.call_args.args[0]
+    assert payload["taste_profile_summary"] == ""
+
+
+async def test_taste_enabled_composes_summary() -> None:
+    """When taste_enabled is True, the taste profile is read and composed."""
+    taste = AsyncMock()
+    taste.get_taste_profile = AsyncMock(return_value=None)
+    graph = AsyncMock()
+    graph.astream = _mock_astream(
+        [{"messages": [AIMessage(content="ok")], "reasoning_steps": []}]
     )
+    service = _make_service(taste_service=taste, agent_graph=graph)
 
-    payload = graph.ainvoke.call_args.args[0]
-    assert payload["location_label"] is None
-    assert payload["location"] == {"lat": 0.0, "lng": 0.0}
+    await service.run(ChatRequest(message="hi"), user_id="u", taste_enabled=True)
+
+    taste.get_taste_profile.assert_awaited_once_with("u")

@@ -6,9 +6,15 @@ across turns but is bounded by `agent.state_message_cap` to keep the
 checkpointer blob from growing without limit. Every other field has
 plain-overwrite semantics (FR-021).
 
-`last_recall_results` and `reasoning_steps` reset on every turn via
+`reasoning_steps` and `location_clarification` reset on every turn via
 `build_turn_payload` in invocation.py — see that module for the single
 construction site.
+
+`working_location` is the exception to plain-overwrite: it carries across
+turns. `build_turn_payload` passes the `LOCATION_INHERIT` sentinel and the
+`merge_working_location` reducer maps that to "keep the prior turn's value",
+so the location the agent resolved last turn survives unless the
+`resolve_location` node explicitly replaces it.
 """
 
 from __future__ import annotations
@@ -21,7 +27,6 @@ from langgraph.graph.message import add_messages
 from typing_extensions import TypedDict
 
 from kebi.core.agent.reasoning import ReasoningStep
-from kebi.core.places.models import PlaceObject
 
 logger = logging.getLogger(__name__)
 
@@ -82,6 +87,27 @@ def add_messages_capped(left: Any, right: Any) -> list[BaseMessage]:
     return merged
 
 
+# Sentinel passed by `build_turn_payload` into `working_location`. The
+# `merge_working_location` reducer maps it to "keep the value carried from
+# the previous turn" — making carry-forward explicit instead of relying on
+# key omission, which a future editor could silently break.
+LOCATION_INHERIT = "__inherit__"
+
+
+def merge_working_location(current: Any, update: Any) -> dict[str, Any] | None:
+    """Reducer for `state["working_location"]`.
+
+    `build_turn_payload` passes `LOCATION_INHERIT` every turn, so the prior
+    turn's resolved value (restored by the checkpointer) survives untouched.
+    The `resolve_location` node passes a resolved location dict — or `None`
+    to clear it — and that replaces the carried value. The sentinel is
+    transient: the reducer consumes it, so it never lands in the checkpoint.
+    """
+    if update == LOCATION_INHERIT:
+        return cast("dict[str, Any] | None", current)
+    return cast("dict[str, Any] | None", update)
+
+
 class AgentState(TypedDict):
     """Per-turn state flowing through the LangGraph agent.
 
@@ -90,14 +116,23 @@ class AgentState(TypedDict):
       taste_profile_summary — behavior-derived preference bullets (per turn).
       memory_summary      — user-stated facts (per turn).
       user_id             — immutable per turn; used as the checkpointer thread_id.
-      location            — {lat, lng} or None.
-      location_label      — "Magdeburg, Germany" or None; resolved server-side
-                            via reverse-geocode cache so the agent can reason
-                            about the user's city (coords alone are too low-
-                            info for the LLM to reverse-geocode in its head).
-      last_recall_results — set by recall_tool (M5), read by consult_tool (M5);
-                            reset to None on every new user message.
-      reasoning_steps     — agent + tool trace; reset to [] on every new user
+      user_location       — the user's actual location from the request,
+                            {lat, lng} or None; set every turn.
+      working_location    — the location this turn operates against, a
+                            `WorkingLocation.model_dump()` or None; carries
+                            across turns via `merge_working_location`.
+      location_clarification — reason string when the working location could
+                            not be resolved (ambiguous / insufficient); None
+                            otherwise. Reset to None each turn.
+      movement_profile    — the user's mobility profile from the request
+                            (`MovementProfile.model_dump()`) or None when the
+                            request omitted it. Plain overwrite, **no
+                            reducer**: it is re-supplied verbatim every turn
+                            from the request, so — unlike `working_location`,
+                            which carries via `merge_working_location` — it
+                            must NOT persist. A turn that omits it must see
+                            None, not a stale value from an earlier turn.
+      reasoning_steps     — agent trace; reset to [] on every new user
                             message; no reducer (plain overwrite, FR-021).
       steps_taken         — incremented by agent_node; bounds should_continue.
       error_count         — incremented by tool error handlers (M9); bounds
@@ -110,10 +145,17 @@ class AgentState(TypedDict):
     taste_profile_summary: str
     memory_summary: str
     user_id: str
-    location: dict[str, float] | None
-    location_label: str | None
-    last_recall_results: list[PlaceObject] | None
+    user_location: dict[str, Any] | None
+    working_location: Annotated[dict[str, Any] | None, merge_working_location]
+    location_clarification: str | None
+    movement_profile: dict[str, Any] | None
     reasoning_steps: list[ReasoningStep]
+    # Structured tool-result payloads produced during the current turn.
+    # Populated by `finalize_node` from the about-to-be-stripped
+    # `ToolMessage`s, so the client can render the consult-family
+    # candidates without re-parsing the prose. Reset to [] each turn via
+    # `build_turn_payload` (plain overwrite, no reducer).
+    tool_results: list[dict[str, Any]]
     steps_taken: int
     error_count: int
     tool_calls_used: int

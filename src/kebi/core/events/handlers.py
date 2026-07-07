@@ -1,19 +1,20 @@
 """Event handlers for domain events (ADR-058 simplified).
 
-One taste handler (`on_taste_signal`) covers all 4 taste event types.
+One taste handler (`on_taste_signal`) covers all taste event types.
 Per ADR-043, failures are logged and traced but never propagated.
 """
 
 import logging
+from collections.abc import Awaitable
 from typing import TYPE_CHECKING
 
 from kebi.core.events.events import (
-    ChipConfirmed,
     DomainEvent,
-    OnboardingSignal,
+    LibraryStateChanged,
     PlaceSaved,
     RecommendationAccepted,
     RecommendationRejected,
+    RecommendationSaved,
     TurnCompleted,
 )
 from kebi.db.models import InteractionType
@@ -22,13 +23,15 @@ from kebi.providers.tracing import TracingClient, get_tracing_client
 if TYPE_CHECKING:
     from kebi.core.memory.service import UserMemoryService
     from kebi.core.taste.service import TasteModelService
+    from kebi.core.user.intent_service import UserIntentService
 
 logger = logging.getLogger(__name__)
 
-# Map event_type → (InteractionType, how to get place_ids)
+# Map event_type → InteractionType for single-place recommendation signals.
 _TASTE_EVENT_MAP: dict[str, InteractionType] = {
     "recommendation_accepted": InteractionType.ACCEPTED,
     "recommendation_rejected": InteractionType.REJECTED,
+    "recommendation_saved": InteractionType.SAVED_RECOMMENDATION,
 }
 
 
@@ -39,45 +42,45 @@ class EventHandlers:
         self,
         taste_service: "TasteModelService",
         memory_service: "UserMemoryService",
+        intent_service: "UserIntentService",
         tracer: TracingClient | None = None,
     ) -> None:
         self.taste_service = taste_service
         self.memory_service = memory_service
+        self.intent_service = intent_service
         self._tracer = tracer or get_tracing_client()
 
     async def on_taste_signal(self, event: DomainEvent) -> None:
         """Unified handler for all taste-related events.
 
         Dispatches to handle_signal with the correct InteractionType.
-        Handles PlaceSaved (multiple place_ids), RecommendationAccepted,
-        RecommendationRejected, and OnboardingSignal.
+        Handles PlaceSaved (multiple place_core_ids), RecommendationAccepted,
+        RecommendationRejected, and RecommendationSaved.
         """
         try:
-            # Build (signal_type, place_id) pairs from the event shape
+            # Build (signal_type, place_core_id) pairs from the event shape
             pairs: list[tuple[InteractionType, str]] = []
             if isinstance(event, PlaceSaved):
-                pairs = [(InteractionType.SAVE, pid) for pid in event.place_ids]
-            elif isinstance(event, OnboardingSignal):
-                st = (
-                    InteractionType.ONBOARDING_CONFIRM
-                    if event.confirmed
-                    else InteractionType.ONBOARDING_DISMISS
-                )
-                pairs = [(st, event.place_id)]
-            elif isinstance(event, RecommendationAccepted | RecommendationRejected):
-                pairs = [(_TASTE_EVENT_MAP[event.event_type], event.place_id)]
+                pairs = [(InteractionType.SAVE, pcid) for pcid in event.place_core_ids]
+            elif isinstance(
+                event,
+                RecommendationAccepted | RecommendationRejected | RecommendationSaved,
+            ):
+                pairs = [(_TASTE_EVENT_MAP[event.event_type], event.place_core_id)]
 
-            for signal_type, place_id in pairs:
+            for signal_type, place_core_id in pairs:
                 await self.taste_service.handle_signal(
                     user_id=event.user_id,
                     signal_type=signal_type,
-                    place_id=place_id,
+                    place_core_id=place_core_id,
                 )
 
             self._tracer.capture_message(
                 message=f"{event.event_type} handled",
                 level="info",
-                metadata={"event_id": event.event_id, "user_id": event.user_id},
+                metadata={"event_id": event.event_id},
+                user_id=event.user_id,
+                session_id=event.user_id,
             )
         except Exception as exc:
             logger.error(
@@ -90,72 +93,101 @@ class EventHandlers:
             self._tracer.capture_message(
                 message=f"{event.event_type} handler error: {exc}",
                 level="error",
-                metadata={"event_id": event.event_id, "user_id": event.user_id},
-            )
-            self._tracer.flush()
-
-    async def on_chip_confirmed(self, event: DomainEvent) -> None:
-        """Handle ChipConfirmed — force an immediate taste-profile rewrite.
-
-        Chip confirmation is an explicit user action; debouncing would make
-        the summary rewrite feel disconnected from the action. Bypasses the
-        debouncer via run_regen_now. Failures are logged via tracing per
-        ADR-025 but never re-raised (ADR-043).
-        """
-        if not isinstance(event, ChipConfirmed):
-            return
-        try:
-            await self.taste_service.run_regen_now(event.user_id)
-            self._tracer.capture_message(
-                message="chip_confirmed_regen handled",
-                level="info",
-                metadata={
-                    "event_id": event.event_id,
-                    "user_id": event.user_id,
-                },
-            )
-        except Exception as exc:
-            logger.error(
-                "Failed chip_confirmed_regen for user %s: %s",
-                event.user_id,
-                exc,
-                exc_info=True,
-                extra={"user_id": event.user_id, "event_type": event.event_type},
-            )
-            self._tracer.capture_message(
-                message=f"chip_confirmed_regen error: {exc}",
-                level="error",
-                metadata={"event_id": event.event_id, "user_id": event.user_id},
-            )
-            self._tracer.flush()
-
-    async def on_turn_completed(self, event: TurnCompleted) -> None:
-        """Hand the user message off to the memory service for buffered extraction.
-
-        The service buffers per turn and only runs the LLM on every Nth
-        message (memory.extraction.debounce_messages). All exceptions are
-        caught here; ADR-043 forbids handler failures from surfacing.
-        """
-        try:
-            await self.memory_service.extract_and_save_facts(
+                metadata={"event_id": event.event_id},
                 user_id=event.user_id,
-                user_message=event.user_message,
+                session_id=event.user_id,
             )
+            self._tracer.flush()
+
+    async def on_library_state_changed(self, event: LibraryStateChanged) -> None:
+        """Retrain taste when a saved place's pills change (ADR-115).
+
+        Schedules a debounced regen without writing an interaction row — the
+        pills are read as current snapshot state at regen time. Failures are
+        swallowed and traced (ADR-043): a pill toggle must never fail the PATCH.
+        """
+        try:
+            self.taste_service.schedule_regen(event.user_id)
             self._tracer.capture_message(
-                message="TurnCompleted event handled",
+                message=f"{event.event_type} handled",
                 level="info",
-                metadata={"event_id": event.event_id, "user_id": event.user_id},
+                metadata={"event_id": event.event_id},
+                user_id=event.user_id,
+                session_id=event.user_id,
             )
         except Exception as exc:
             logger.error(
-                "Failed to handle TurnCompleted: %s",
+                "Failed to schedule regen on library change: %s",
                 exc,
                 exc_info=True,
                 extra={"user_id": event.user_id},
             )
             self._tracer.capture_message(
-                message=f"TurnCompleted handler error: {exc}",
+                message=f"{event.event_type} handler error: {exc}",
                 level="error",
-                metadata={"event_id": event.event_id, "user_id": event.user_id},
+                metadata={"event_id": event.event_id},
+                user_id=event.user_id,
+                session_id=event.user_id,
+            )
+            self._tracer.flush()
+
+    async def on_turn_completed(self, event: TurnCompleted) -> None:
+        """Run the per-turn background side-effects: buffered memory extraction
+        and recall-list persistence.
+
+        The two are guarded independently so one failing never blocks the
+        other. Memory extraction buffers per turn and runs the LLM every Nth
+        message (memory.extraction.debounce_messages); intent persistence
+        records the turn when it is intent-bearing (ADR-110). All exceptions
+        are caught here; ADR-043 forbids handler failures from surfacing.
+        """
+        await self._run_guarded(
+            "memory extraction",
+            event,
+            self.memory_service.extract_and_save_facts(
+                user_id=event.user_id,
+                user_message=event.user_message,
+            ),
+        )
+        await self._run_guarded(
+            "intent recording",
+            event,
+            self.intent_service.record_intent(
+                event.user_id,
+                event.user_message,
+                surfaced=event.surfaced_places,
+            ),
+        )
+
+    async def _run_guarded(
+        self,
+        label: str,
+        event: TurnCompleted,
+        coro: Awaitable[None],
+    ) -> None:
+        """Await one turn side-effect, swallowing+tracing any failure (ADR-043)."""
+        try:
+            await coro
+            self._tracer.capture_message(
+                message=f"TurnCompleted {label} handled",
+                level="info",
+                metadata={"event_id": event.event_id},
+                user_id=event.user_id,
+                session_id=event.user_id,
+            )
+        except Exception as exc:
+            logger.error(
+                "Failed TurnCompleted %s: %s",
+                label,
+                exc,
+                exc_info=True,
+                extra={"user_id": event.user_id},
+            )
+            self._tracer.capture_message(
+                message=f"TurnCompleted {label} error: {exc}",
+                level="error",
+                metadata={"event_id": event.event_id},
+                user_id=event.user_id,
+                session_id=event.user_id,
             )
             self._tracer.flush()

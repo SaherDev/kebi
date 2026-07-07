@@ -25,8 +25,9 @@ class TikTokCaptionEnricher(SourceFilteredEnricher):
     endpoint and trip the circuit breaker on guaranteed failures.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, *, http: httpx.AsyncClient) -> None:
         super().__init__(allowed_sources={PlaceSource.tiktok})
+        self._http = http
 
     async def _run(self, context: ExtractionContext) -> None:
         if context.caption is not None:
@@ -46,13 +47,12 @@ class TikTokCaptionEnricher(SourceFilteredEnricher):
             context.platform = "tiktok"
 
     async def _fetch_caption(self, url: str) -> str | None:
-        async with httpx.AsyncClient() as client:
-            response = await client.get(
-                _OEMBED_URL,
-                params={"url": url},
-                timeout=_TIMEOUT_SECONDS,
-            )
-            response.raise_for_status()
+        response = await self._http.get(
+            _OEMBED_URL,
+            params={"url": url},
+            timeout=_TIMEOUT_SECONDS,
+        )
+        response.raise_for_status()
 
         data = response.json()
         return data.get("title") or None

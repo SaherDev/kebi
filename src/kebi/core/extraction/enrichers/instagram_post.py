@@ -26,7 +26,8 @@ from typing import Any
 
 import httpx
 
-from kebi.core.config import get_env
+from kebi.core.agent._trace_context import traced_call
+from kebi.core.config import get_config, get_env
 from kebi.core.extraction.source_filtered_enricher import SourceFilteredEnricher
 from kebi.core.extraction.types import (
     Evidence,
@@ -62,6 +63,8 @@ class InstagramPostEnricher(SourceFilteredEnricher):
 
     def __init__(
         self,
+        *,
+        http: httpx.AsyncClient,
         token: str | None = None,
         timeout_seconds: float = _DEFAULT_TIMEOUT_SECONDS,
     ) -> None:
@@ -71,6 +74,7 @@ class InstagramPostEnricher(SourceFilteredEnricher):
         # explicitly if they want.
         self._token = token
         self._timeout_seconds = timeout_seconds
+        self._http = http
 
     def _resolve_token(self) -> str | None:
         return self._token or get_env().APIFY_TOKEN
@@ -79,13 +83,12 @@ class InstagramPostEnricher(SourceFilteredEnricher):
         token = self._resolve_token()
         if not token:
             logger.info(
-                "InstagramPostEnricher skipped — APIFY_TOKEN not configured "
-                "(url=%s)",
+                "InstagramPostEnricher skipped — APIFY_TOKEN not configured (url=%s)",
                 context.url,
             )
             return
 
-        post = await self._fetch_post(context.url, token)  # type: ignore[arg-type]
+        post = await self._fetch_post(context.url, token, context.user_id)  # type: ignore[arg-type]
         if post is None:
             return
 
@@ -135,31 +138,45 @@ class InstagramPostEnricher(SourceFilteredEnricher):
                         producer=Producer.PHOTO_DETECTOR,
                         medium=Medium.IMAGE,
                         snippet=None,
-                        metadata=(
-                            ("image_count", len(context.image_urls)),
-                        ),
+                        metadata=(("image_count", len(context.image_urls)),),
                     )
                 )
 
     async def _fetch_post(
-        self, url: str, token: str
+        self, url: str, token: str, user_id: str | None = None
     ) -> dict[str, Any] | None:
         body = {"username": [url], "resultsLimit": 1}
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
+        async with traced_call(
+            "apify.instagram_post",
+            "extraction",
+            user_id=user_id,
+            extra={
+                "actor": "apify/instagram-post-scraper",
+                "input_url": url,
+            },
+        ) as t:
+            response = await self._http.post(
                 _APIFY_ENDPOINT,
                 params={"token": token},
                 json=body,
                 timeout=self._timeout_seconds,
             )
             response.raise_for_status()
-        data = response.json()
-        if not isinstance(data, list) or not data:
-            return None
-        first = data[0]
-        if not isinstance(first, dict):
-            return None
-        return first
+            data = response.json()
+            items: list[dict[str, Any]] = (
+                data if isinstance(data, list) else []
+            )
+            item_count = int(
+                response.headers.get("x-apify-pagination-total", len(items))
+            )
+            t.cost_usd = get_config().pricing.external.apify.cost_for(
+                "instagram_post", item_count
+            )
+            t.output = {"item_count": item_count}
+            if not items:
+                return None
+            first = items[0]
+            return first if isinstance(first, dict) else None
 
 
 def _extract_image_urls(post: dict[str, Any]) -> list[str]:

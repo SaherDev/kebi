@@ -20,7 +20,9 @@ def _system_text(msg: SystemMessage) -> str:
     """Extract the text from a SystemMessage regardless of caching format."""
     if isinstance(msg.content, str):
         return msg.content
-    return "".join(block["text"] for block in msg.content if block.get("type") == "text")
+    return "".join(
+        block["text"] for block in msg.content if block.get("type") == "text"
+    )
 
 
 def _base_state(**overrides: object) -> dict:
@@ -30,7 +32,6 @@ def _base_state(**overrides: object) -> dict:
         "memory_summary": "MEMORY-SUBSTITUTED",
         "user_id": "u1",
         "location": None,
-        "last_recall_results": None,
         "reasoning_steps": [],
         "steps_taken": 0,
         "error_count": 0,
@@ -79,6 +80,31 @@ async def test_agent_node_renders_prompt_with_both_slots_substituted(
     assert "MEMORY-SUBSTITUTED" in text
 
 
+async def test_agent_node_caches_static_head_as_separate_block(
+    captured_llm: MagicMock,
+) -> None:
+    """With caching enabled (the default config), the system message splits
+    into a cached static head carrying the cache breakpoint and an uncached
+    per-turn dynamic tail (ADR-100). The head must be slot-free and identical
+    across turns; the per-turn values live only in the tail."""
+    node = make_agent_node(captured_llm, [])
+    await node(_base_state())
+
+    system = captured_llm.ainvoke.call_args.args[0][0]
+    assert isinstance(system, SystemMessage)
+    blocks = system.content
+    assert isinstance(blocks, list) and len(blocks) == 2
+    head, tail = blocks
+    assert head["cache_control"] == {"type": "ephemeral"}
+    assert "cache_control" not in tail
+    # Static head is slot-free and free of per-turn user values; the tail
+    # carries the substituted taste/memory.
+    assert "{" not in head["text"]
+    assert "TASTE-SUBSTITUTED" not in head["text"]
+    assert "TASTE-SUBSTITUTED" in tail["text"]
+    assert "MEMORY-SUBSTITUTED" in tail["text"]
+
+
 async def test_agent_node_sends_system_plus_messages(captured_llm: MagicMock) -> None:
     node = make_agent_node(captured_llm, [])
     state = _base_state(messages=[HumanMessage(content="hello")])
@@ -104,6 +130,41 @@ async def test_agent_node_appends_ai_message(captured_llm: MagicMock) -> None:
     assert len(msgs) == 1
     assert isinstance(msgs[0], AIMessage)
     assert msgs[0].content == "mocked agent response"
+
+
+async def test_agent_node_terminal_answer_step_is_debug(
+    captured_llm: MagicMock,
+) -> None:
+    """The orchestrator's own thinking is debug (ADR-103): the terminal answer
+    is identical to the `message` frame, so emitting it as a user step would
+    duplicate the answer in the thinking panel."""
+    node = make_agent_node(captured_llm, [])
+    update = await node(_base_state())
+    step = update["reasoning_steps"][-1]
+    assert step.step == "agent.tool_decision"
+    assert step.title == "thinking"
+    assert step.visibility == "debug"
+
+
+async def test_agent_node_tool_call_step_is_also_debug(
+    captured_llm: MagicMock,
+) -> None:
+    """Between-tool monologue is debug too — the tool steps narrate the work, so
+    the orchestrator never produces a user-visible row (ADR-103, option b)."""
+
+    async def _with_tool_call(_messages: Any) -> AIMessage:
+        return AIMessage(
+            content="Let me look that up",
+            tool_calls=[{"id": "c1", "name": "find_saved", "args": {}}],
+        )
+
+    captured_llm.ainvoke = MagicMock(side_effect=_with_tool_call)
+    node = make_agent_node(captured_llm, [])
+    update = await node(_base_state())
+    step = update["reasoning_steps"][-1]
+    assert step.step == "agent.tool_decision"
+    assert step.title == "thinking"
+    assert step.visibility == "debug"
 
 
 async def test_agent_node_empty_summaries_still_renders(

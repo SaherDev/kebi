@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from langchain_core.messages import AIMessage
 from langgraph.checkpoint.memory import InMemorySaver
+
+from kebi.core.agent.location import LocationResolution
 
 
 @pytest.fixture
@@ -40,3 +42,52 @@ def mock_llm() -> MagicMock:
 def no_tools() -> list[Any]:
     """Empty tool list — structural tests don't exercise real tools."""
     return []
+
+
+@pytest.fixture
+def mock_resolver_llm() -> MagicMock:
+    """Fake location-resolver chat model.
+
+    `.with_structured_output(...)` returns a runnable whose `.ainvoke`
+    yields a preconfigured `LocationResolution`. Tests override via
+    `mock_resolver_llm._structured.ainvoke.side_effect`.
+    """
+    llm = MagicMock()
+    structured = MagicMock()
+
+    async def _default(_messages: Any) -> LocationResolution:
+        return LocationResolution(
+            source="user_actual",
+            needs_clarification=True,
+            clarification_reason="no location",
+        )
+
+    structured.ainvoke = MagicMock(side_effect=_default)
+    llm.with_structured_output = MagicMock(return_value=structured)
+    llm._structured = structured
+    return llm
+
+
+@pytest.fixture
+def mock_geocoding_client() -> MagicMock:
+    """Fake NominatimGeocodingClient — forward/reverse/search are AsyncMocks
+    returning `GeocodeResult`s (ADR-084)."""
+    from kebi.core.places.nominatim_geocoding_client import GeocodeResult
+
+    client = MagicMock()
+    client.forward = AsyncMock(
+        return_value=GeocodeResult(lat=13.75, lng=100.5, place_type="city")
+    )
+    client.search = AsyncMock(
+        return_value=GeocodeResult(lat=13.75, lng=100.5, place_type="city")
+    )
+    client.reverse = AsyncMock(
+        return_value=GeocodeResult(
+            lat=13.75,
+            lng=100.5,
+            country="Thailand",
+            city="Bangkok",
+            place_type="city",
+        )
+    )
+    return client

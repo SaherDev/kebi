@@ -1,80 +1,90 @@
-# Taste Model Architecture (ADR-058)
+# Taste Model Architecture (ADR-077)
 
-The taste model builds a per-user preference profile from behavioral signals. Each interaction (save, accept, reject, onboarding confirm/dismiss) is logged as an append-only row. Signal counts are aggregated from all interactions, and an LLM generates two artifacts: a structured summary (3-6 lines) and taste chips (3-8 UI labels). Both are grounded in signal_counts — every item references a specific path and value in the aggregation.
+The taste model builds a per-user preference profile from behavioral signals. Each interaction (save, accept, reject) is logged as an append-only row keyed by the shared `places` catalog identity. Signal counts are aggregated from all interactions in the places-catalog vocabulary, and an LLM generates a structured summary (3-6 lines) grounded in signal_counts — every item references a specific path and value in the aggregation. (The chip artifact and signal tier were removed in ADR-076; the legacy place vocabulary was replaced in ADR-077.)
 
 ## Data Flow
 
 ```
-User Action (save place / accept rec / reject rec / onboarding)
+User Action (save place / accept rec / reject rec)
     │
     ▼
 EventDispatcher → on_taste_signal()
     │
     ▼
 TasteModelService.handle_signal()
-    ├── INSERT interaction row (append-only)
+    ├── INSERT interaction row (append-only; place_id = places.id)
     └── Schedule debounced regen (30s window)
             │
             ▼ (after debounce expires)
         _run_regen(user_id)
-            ├── get_interactions_with_places() → list[InteractionRow]
-            ├── aggregate_signal_counts() → SignalCounts (pure, no I/O)
+            ├── get_interactions() → list[RawInteraction]  (type + place_id, no JOIN)
             ├── Min-signals guard (skip if < 3 interactions)
-            ├── Stale guard (skip if log_count unchanged)
+            ├── Stale guard (skip if raw log_count unchanged)
+            ├── _resolve_rows():  open session_factory →
+            │     ├── PlacesSearchService.get_cores_by_ids(ids)  (DB-only, no Google)
+            │     ├── UserPlacesRepo.get_by_user(user_id)        (save source)
+            │     └── place_to_interaction_row(...)  (skip orphans / TTL-wiped)
+            ├── aggregate_signal_counts() → SignalCounts (pure, no I/O)
             ├── LLM call (GPT-4o-mini via provider abstraction)
-            │   └── JSON mode → TasteArtifacts (summary + chips)
+            │   └── JSON mode → TasteArtifacts (summary)
             ├── validate_grounded() → drop ungrounded items
-            └── upsert_regen() → persist signal_counts + summary + chips
+            └── upsert_regen() → persist signal_counts + summary
 ```
+
+Place resolution goes through the catalog's single source-of-truth service via a **DB-only** read (`get_cores_by_ids`) — no provider fallback, no cache mutation, no provider cost. This is deliberately distinct from discovery reads (`find` / `get_by_ids`) that fall back to Google. It runs inside the background regen's own short-lived session opened from `session_factory` (ADR-072: no new long-lived shared dependency).
 
 ## Storage
 
 ```
 taste_model (PostgreSQL, keyed by user_id):
-├── signal_counts    JSONB  — structured aggregation of all interactions
+├── signal_counts    JSONB  — places-catalog-vocabulary aggregation of all interactions
 ├── taste_profile_summary  JSONB  — list of SummaryLine (text, signal_count, source_field, source_value)
-├── chips            JSONB  — list of Chip (label, source_field, source_value, signal_count)
 ├── generated_at     TIMESTAMPTZ
-└── generated_from_log_count  INT  — stale-summary guard
+└── generated_from_log_count  INT  — stale-summary guard (raw interaction count)
 
 interactions (PostgreSQL, append-only):
 ├── id         BIGSERIAL PK
 ├── user_id    TEXT
-├── type       ENUM (save, accepted, rejected, onboarding_confirm, onboarding_dismiss)
-├── place_id   TEXT FK → places.id
+├── type       ENUM (save, accepted, rejected)
+├── place_id   TEXT  — places.id, nullable, NO FK (survives catalog TTL-wipe)
 └── created_at TIMESTAMPTZ
 ```
+
+`place_id` carries the shared cross-user `places.id` (one row per real place), which is what makes future "users with similar taste" collaboration possible. No FK: accepted/rejected recs may reference places never in `user_places`, and a CASCADE FK would destroy behavioral history when the nightly catalog wipe removes a place. Pre-cutover orphan rows (legacy place ids) were purged once by migration `c7d8e9f0a1b2`.
 
 ## Aggregation Rules
 
 | Interaction Type | Feeds | Notes |
 |-----------------|-------|-------|
-| save | Main tree + source | Source counted for saves only |
+| save | Main tree + source | Source from `user_places.source`, saves only |
 | accepted | Main tree | No source tracking |
 | rejected | Rejected branch | Separate from main tree |
-| onboarding_confirm | Main tree | Same as save, no source |
-| onboarding_dismiss | Rejected branch | Same as rejected |
+
+`source` is the per-user save provenance (`UserPlace.source`), not a property of the shared place. Categories, typed tags, and location come from the shared `PlaceCore`.
 
 ## Signal Counts Shape
 
 ```json
 {
-  "totals": {"saves": N, "accepted": N, "rejected": N, "onboarding_confirmed": N, "onboarding_dismissed": N},
-  "place_type": {"food_and_drink": N, ...},
-  "subcategory": {"food_and_drink": {"restaurant": N, "cafe": N}, ...},
+  "totals": {"saves": N, "accepted": N, "rejected": N},
+  "categories": {"restaurant": N, "bar": N, ...},
   "source": {"tiktok": N, "instagram": N, ...},
-  "tags": {"date-spot": N, ...},
-  "attributes": {
+  "tags": {
     "cuisine": {"japanese": N, ...},
-    "price_hint": {"mid": N, ...},
-    "ambiance": {"casual": N, ...},
     "dietary": {"vegan": N, ...},
-    "good_for": {"date": N, ...},
-    "location_context": {"neighborhood": {"Shibuya": N}, "city": {...}, "country": {...}}
+    "feature": {"outdoor_seating": N, ...},
+    "atmosphere": {"cozy": N, ...},
+    "service": {"serves_brunch": N, ...},
+    "price": {"moderate": N, ...},
+    "time": {"late_night": N, ...},
+    "season": {"summer": N, ...}
   },
-  "rejected": {"subcategory": {...}, "attributes": {...}}
+  "location": {"neighborhood": {"Shibuya": N}, "city": {...}, "country": {...}},
+  "rejected": {"categories": {...}, "tags": {...}, "location": {...}}
 }
 ```
+
+Every container stays a nested `dict[str, int]` so the grounding validator's dotted-path walk (`regen._resolve_path`) resolves `source_field` values like `categories`, `tags.price`, `location.city`, `rejected.categories` unchanged.
 
 ## Debounce
 
@@ -84,8 +94,8 @@ Process-local `dict[user_id, asyncio.Task]`. Each new signal cancels the pending
 
 `format_summary_for_agent(lines)` joins the structured summary back to bullet text:
 ```
-- Favors bar subcategory under food_and_drink. [8 signals]
+- Favors bar category. [8 signals]
 - Primary save source is TikTok. [18 signals]
 ```
 
-The agent sees readable text; structure is internal.
+The agent sees readable text; structure is internal. `signal_counts` is never exposed externally — no API contract change.

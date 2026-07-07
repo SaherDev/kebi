@@ -1,6 +1,7 @@
 """LLM provider factory - resolves configured LLM clients by role."""
 
 import base64
+import functools
 from collections.abc import AsyncGenerator
 from typing import Any, Protocol, cast, runtime_checkable
 
@@ -14,7 +15,6 @@ from openai.types.chat import ChatCompletionChunk, ChatCompletionMessageParam
 from pydantic import BaseModel, ValidationError
 
 from kebi.core.config import get_config, get_env
-from kebi.providers.tracing import get_tracing_client
 from kebi.providers.transcription import GroqWhisperClient, TranscriptionProtocol
 
 # --- Protocols ---
@@ -30,17 +30,41 @@ _VISION_SYSTEM_PROMPT = (
 
 
 class VisionExtractorProtocol(Protocol):
-    async def extract_place_names(self, frames: list[bytes]) -> list[str]: ...
+    async def extract_place_names(
+        self, frames: list[bytes]
+    ) -> tuple[list[str], dict[str, int] | None]:
+        """Return extracted place names and a Langfuse-shaped usage dict.
+
+        Usage dict format: `{"input": prompt_tokens, "output":
+        completion_tokens, "total": total_tokens}` — directly assignable
+        to `TracedCall.usage` by the caller. `None` when the underlying
+        SDK doesn't surface a usage object (some streaming paths /
+        future providers).
+        """
+        ...
 
 
 class OpenAIVisionExtractor:
-    """OpenAI vision implementation — GPT-4o-mini, base64 PNG frames, bottom-third crop."""
+    """OpenAI vision implementation — GPT-4o-mini, base64 PNG full frames.
+
+    Tracing lives in the caller (Phase 4.5 subtask 2). This client just
+    makes the call and returns names + usage so the enricher can attach
+    them to its own span — keeps `user_id` / `source` attribution at the
+    enricher boundary where ExtractionContext is in scope.
+    """
 
     def __init__(self, model: str, api_key: str | None = None) -> None:
         self._model = model
         self._client = openai.AsyncOpenAI(api_key=api_key)
 
-    async def extract_place_names(self, frames: list[bytes]) -> list[str]:
+    @property
+    def model(self) -> str:
+        """Configured model name. The caller stamps it on its tracing span."""
+        return self._model
+
+    async def extract_place_names(
+        self, frames: list[bytes]
+    ) -> tuple[list[str], dict[str, int] | None]:
         image_content = [
             {
                 "type": "image_url",
@@ -51,13 +75,6 @@ class OpenAIVisionExtractor:
             }
             for frame in frames
         ]
-
-        tracer = get_tracing_client()
-        span = tracer.generation(
-            name="vision_frames_enricher",
-            input={"frame_count": len(frames)},
-            model=self._model,
-        )
 
         messages: list[Any] = [
             {"role": "system", "content": _VISION_SYSTEM_PROMPT},
@@ -76,23 +93,26 @@ class OpenAIVisionExtractor:
                 ],
             },
         ]
-        try:
-            response = await self._client.chat.completions.create(
-                model=self._model,
-                max_tokens=512,
-                messages=messages,
-            )
-            text = response.choices[0].message.content or ""
-            names = [
-                line.strip().lstrip("•-–").strip()
-                for line in text.splitlines()
-                if line.strip()
-            ]
-            span.end(output={"name_count": len(names)})
-            return names
-        except Exception as exc:
-            span.end(output={"error": str(exc)})
-            raise
+        response = await self._client.chat.completions.create(
+            model=self._model,
+            max_tokens=512,
+            messages=messages,
+        )
+        text = response.choices[0].message.content or ""
+        names = [
+            line.strip().lstrip("•-–").strip()
+            for line in text.splitlines()
+            if line.strip()
+        ]
+        usage = response.usage
+        usage_dict: dict[str, int] | None = None
+        if usage is not None:
+            usage_dict = {
+                "input": usage.prompt_tokens,
+                "output": usage.completion_tokens,
+                "total": usage.total_tokens,
+            }
+        return names, usage_dict
 
 
 @runtime_checkable
@@ -266,7 +286,6 @@ class InstructorClient:
         except ValidationError:
             raise
 
-
 # --- Factory ---
 
 
@@ -330,6 +349,7 @@ def get_llm(role: str) -> LLMClientProtocol:
     raise ValueError(f"Unsupported provider: {provider}")
 
 
+@functools.cache
 def get_langchain_chat_model(role: str) -> Any:
     """Return a LangChain-compatible chat model for the given logical role.
 
@@ -340,6 +360,11 @@ def get_langchain_chat_model(role: str) -> Any:
     `config/app.yaml` entries under `models.<role>` and constructs the
     matching LangChain `Chat*` model. Feature 028 M6 uses this for the
     orchestrator.
+
+    Process-wide singleton per `role` (cache key). The underlying
+    Anthropic/OpenAI SDK clients hold connection pools that are only
+    useful if reused across requests. Tests clear via the autouse
+    fixture in tests/conftest.py.
 
     Raises:
         ValueError: If the configured provider has no LangChain adapter yet.
@@ -380,11 +405,17 @@ def get_langchain_chat_model(role: str) -> Any:
     )
 
 
+@functools.cache
 def get_instructor_client(role: str) -> InstructorClient:
     """Get Instructor-patched client for structured extraction.
 
     Resolves provider and model from config/app.yaml under the 'models' key.
     Currently only supports OpenAI provider.
+
+    Process-wide singleton per `role` (cache key). The underlying
+    openai.AsyncOpenAI client holds a connection pool that is only
+    useful if reused across requests. Tests clear via the autouse
+    fixture in tests/conftest.py.
 
     Args:
         role: Logical role (e.g., 'extractor')

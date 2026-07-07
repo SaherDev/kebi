@@ -26,11 +26,27 @@ async def test_append_returns_count() -> None:
     assert count == 3
     assert redis_mock.eval.await_count == 1
     call_args = redis_mock.eval.await_args
-    # Lua script, 1 key, then key, message, ttl
+    # Lua script, 1 key, then key, message, ttl, max_buffer_len
     assert call_args.args[1] == 1
     assert call_args.args[2] == "memory:turns:user-1"
     assert call_args.args[3] == "hello"
     assert call_args.args[4] == "600"
+    # _MAX_BUFFER_LEN is appended as the fifth arg.
+    assert call_args.args[5] == "50"
+
+
+async def test_append_truncates_oversized_message_client_side() -> None:
+    """Per-message length cap (1000 chars) is enforced before RPUSH."""
+    redis_mock = _make_redis_mock(eval_returns=1)
+    buffer = MessageBuffer(redis=redis_mock, ttl_seconds=600)
+
+    huge = "x" * 50_000
+    await buffer.append("user-1", huge)
+
+    call_args = redis_mock.eval.await_args
+    pushed = call_args.args[3]
+    assert len(pushed) == 1000
+    assert pushed == "x" * 1000
 
 
 async def test_drain_returns_messages_and_clears() -> None:

@@ -14,8 +14,9 @@ from typing import TYPE_CHECKING, cast
 
 from pydantic import BaseModel, Field
 
+from kebi.core.agent._trace_context import traced_call
 from kebi.core.memory.schemas import PersonalFact
-from kebi.providers.tracing import TracingClient, get_tracing_client
+from kebi.providers.tracing import get_tracing_client
 
 if TYPE_CHECKING:
     from kebi.providers.llm import InstructorClient
@@ -43,46 +44,44 @@ class _FactsResponse(BaseModel):
 class MemoryExtractor:
     """Single LLM call over a batch of user messages → list[PersonalFact]."""
 
-    def __init__(
-        self,
-        instructor_client: InstructorClient,
-        tracer: TracingClient | None = None,
-    ) -> None:
+    def __init__(self, instructor_client: InstructorClient) -> None:
         self._client = instructor_client
-        self._tracer = tracer or get_tracing_client()
 
     async def extract(self, message: str, user_id: str) -> list[PersonalFact]:
         """Run extraction on the joined message batch.
 
-        Returns an empty list on any failure (logged + traced). Filters out
-        any non-`stated` source the LLM might emit defensively.
+        Standalone Langfuse trace so a future refactor that detaches the
+        TurnCompleted dispatch into a background task still records cost.
         """
-        span = self._tracer.generation(
-            name="memory_extractor",
-            input={"message": message},
+        async with traced_call(
+            "memory_extractor.llm",
+            "memory_extractor",
+            role="memory_extractor",
             user_id=user_id,
-        )
-        try:
-            response = await self._client.extract(
-                response_model=_FactsResponse,
-                messages=[
-                    {"role": "system", "content": _SYSTEM_PROMPT},
-                    {"role": "user", "content": message},
-                ],
-            )
+            input={"message": message},
+            standalone=True,
+        ) as t:
+            try:
+                response = await self._client.extract(
+                    response_model=_FactsResponse,
+                    messages=[
+                        {"role": "system", "content": _SYSTEM_PROMPT},
+                        {"role": "user", "content": message},
+                    ],
+                )
+            except Exception as exc:
+                logger.warning("memory extraction failed: %s", exc, exc_info=True)
+                t.fail(exc)
+                get_tracing_client().capture_message(
+                    message=f"memory_extractor error: {exc}",
+                    level="error",
+                    metadata={"user_id": user_id},
+                    user_id=user_id,
+                )
+                return []
             facts = [
                 fact for fact in cast(_FactsResponse, response).facts
                 if fact.source == "stated"
             ]
-            span.end(output={"count": len(facts)})
+            t.output = {"count": len(facts)}
             return facts
-        except Exception as exc:
-            logger.warning("memory extraction failed: %s", exc, exc_info=True)
-            span.end(output={"error": str(exc)}, level="ERROR")
-            self._tracer.capture_message(
-                message=f"memory_extractor error: {exc}",
-                level="error",
-                metadata={"user_id": user_id},
-                user_id=user_id,
-            )
-            return []

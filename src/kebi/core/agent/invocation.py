@@ -1,9 +1,9 @@
 """Per-turn AgentState payload builder (feature 027 M3, FR-022).
 
-Single construction site for per-turn state updates. Resets both transient
-fields (`last_recall_results`, `reasoning_steps`) in lockstep so they
-cannot drift across turns. Any future invocation site (streaming endpoint,
-retry path) must route through this helper.
+Single construction site for per-turn state updates. Resets the transient
+`reasoning_steps` field so it cannot drift across turns. Any future
+invocation site (streaming endpoint, retry path) must route through this
+helper.
 """
 
 from __future__ import annotations
@@ -12,45 +12,55 @@ from typing import Any
 
 from langchain_core.messages import HumanMessage
 
+from kebi.core.agent.state import LOCATION_INHERIT
+
 
 def build_turn_payload(
     message: str,
     user_id: str,
     taste_profile_summary: str,
     memory_summary: str,
-    location: dict[str, float] | None = None,
-    location_label: str | None = None,
+    user_location: dict[str, Any] | None = None,
+    movement_profile: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build the per-turn state update for `graph.ainvoke(...)`.
 
     LangGraph's default state-merge semantics overwrite non-reducer fields
     with whatever the incoming payload contains. For `messages` (reducer:
     add_messages), a single-element list appends to history. For
-    `last_recall_results` and `reasoning_steps` (no reducer), passing
-    `None` / `[]` resets them.
+    `reasoning_steps` (no reducer), passing `[]` resets it.
+
+    `working_location` is passed the `LOCATION_INHERIT` sentinel, not a real
+    value. Its reducer (`merge_working_location`) maps the sentinel to "keep
+    the prior turn's value", so the location resolved last turn carries
+    forward unless the `resolve_location` node replaces it. This is the
+    explicit carry-forward contract — do not "complete" this dict with a
+    concrete `working_location`, it would clobber the carried value.
 
     Args:
       message: user-supplied input for this turn.
       user_id: checkpointer thread_id; identifies the conversation.
       taste_profile_summary: behavior-derived preference bullets.
       memory_summary: user-stated facts with confidence scores.
-      location: optional {lat, lng} context.
-      location_label: optional "City, Country" label resolved server-side
-        from `location`. Gives the agent a city name to reason about —
-        coords alone are too low-info for the LLM.
+      user_location: the user's actual location, optional {lat, lng}.
+      movement_profile: the user's mobility profile, optional. Plain overwrite
+        — re-supplied every turn from the request, never carried (contrast
+        `working_location`); a turn that omits it resets state to None.
 
     Returns:
       dict payload suitable for `graph.ainvoke(payload, config=...)`.
     """
     return {
         "messages": [HumanMessage(content=message)],
-        "last_recall_results": None,
         "reasoning_steps": [],
+        "tool_results": [],
         "taste_profile_summary": taste_profile_summary,
         "memory_summary": memory_summary,
         "user_id": user_id,
-        "location": location,
-        "location_label": location_label,
+        "user_location": user_location,
+        "working_location": LOCATION_INHERIT,
+        "location_clarification": None,
+        "movement_profile": movement_profile,
         "steps_taken": 0,
         "error_count": 0,
         "tool_calls_used": 0,

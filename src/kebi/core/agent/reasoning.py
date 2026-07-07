@@ -1,7 +1,8 @@
 """ReasoningStep — one entry in the agent's reasoning trace (feature 027 M3, ADR-062).
 
-Re-exported by `api/schemas/consult.py` so `ConsultResponse.reasoning_steps`
-continues to type-check under the richer schema (FR-024).
+ADR-075 removed the recall and consult tools, so no reasoning step is
+ever tool-sourced anymore. `source` is now only `agent` or `fallback`
+and the `tool_name` field is gone.
 """
 
 from __future__ import annotations
@@ -9,44 +10,45 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field
 
 
 class ReasoningStep(BaseModel):
     """One entry in the agent's reasoning trace.
 
     Consumers filter by `visibility` to decide what lands in the JSON
-    payload vs what stays in Langfuse/SSE debug. See the M5 catalog in
-    `docs/plans/2026-04-21-agent-tool-migration.md` for step names.
+    payload vs what stays in Langfuse/SSE debug.
 
-    Invariant: `tool_name` is set iff `source == "tool"`. A tool step
-    without a tool_name is a bug; a non-tool step with a tool_name is
-    a bug. Enforced by the model_validator below.
+    `duration_ms` is populated by the agent/fallback node from timestamp
+    deltas. Non-null in persisted steps; a lingering `None` is a bug.
 
-    `duration_ms` is populated either by the service (when it measured
-    the underlying operation directly) or by the wrapper's emit closure
-    from timestamp deltas (`core/agent/tools/_emit.py`). Non-null in
-    persisted steps; a lingering `None` is a bug.
+    The two human fields are a pair the client renders as two lines: `title`
+    is the bold action line (what the step is *doing* — "searched nearby"),
+    `summary` is the result line under it (what it *found* — "5 spots — …").
+    `title` is short, lowercase, no colon, not first person, and carries the
+    verb so `summary` never repeats it. The same `title` rides both the
+    `active` and `done` frames (the action is known before the result);
+    `summary` is null on `active` and filled on `done`.
+
+    SSE step-lifecycle (ADR-102): the same step is streamed twice, keyed
+    by a stable `id` — an `active` frame when it starts (`summary` and
+    `duration_ms` null → the frontend shows a skeleton) and a `done` frame
+    when it completes (same `id`, `summary` + `duration_ms` filled). The
+    `id` and `status` fields are stream-only lifecycle markers: they are
+    `None` on every persisted step (the non-stream `POST /v1/chat` path
+    returns steps that are implicitly complete) and set only by the
+    `stream_emit` helpers as frames go out. `summary` is therefore
+    `str | None` — null appears ONLY on an `active` wire frame, never on a
+    persisted/`done` step.
     """
 
     step: str
-    summary: str
-    source: Literal["tool", "agent", "fallback"]
-    tool_name: Literal["recall", "save", "consult"] | None = None
+    title: str = ""
+    summary: str | None = None
+    source: Literal["agent", "fallback"]
     visibility: Literal["user", "debug"] = "user"
     timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
     duration_ms: float | None = None
-
-    @model_validator(mode="after")
-    def _source_tool_name_consistency(self) -> ReasoningStep:
-        if self.source == "tool" and self.tool_name is None:
-            raise ValueError(
-                f"ReasoningStep(source='tool') requires tool_name; got None "
-                f"(step={self.step!r})"
-            )
-        if self.source != "tool" and self.tool_name is not None:
-            raise ValueError(
-                f"ReasoningStep(source={self.source!r}) forbids tool_name; "
-                f"got {self.tool_name!r} (step={self.step!r})"
-            )
-        return self
+    # Stream-only lifecycle markers (None on persisted steps).
+    id: str | None = None
+    status: Literal["active", "done"] | None = None

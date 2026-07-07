@@ -7,6 +7,7 @@ import logging
 
 import httpx
 
+from kebi.core.agent._trace_context import traced_call
 from kebi.core.extraction.source_filtered_enricher import SourceFilteredEnricher
 from kebi.core.extraction.types import (
     ExtractionContext,
@@ -45,11 +46,15 @@ class VisionImagesEnricher(SourceFilteredEnricher):
     full evidence trail.
     """
 
-    def __init__(self, vision_extractor: VisionExtractorProtocol) -> None:
-        super().__init__(
-            allowed_sources={PlaceSource.tiktok, PlaceSource.instagram}
-        )
+    def __init__(
+        self,
+        *,
+        vision_extractor: VisionExtractorProtocol,
+        http: httpx.AsyncClient,
+    ) -> None:
+        super().__init__(allowed_sources={PlaceSource.tiktok, PlaceSource.instagram})
         self._vision_extractor = vision_extractor
+        self._http = http
 
     async def _run(self, context: ExtractionContext) -> None:
         if not context.is_photo_post or not context.image_urls:
@@ -61,9 +66,7 @@ class VisionImagesEnricher(SourceFilteredEnricher):
                 timeout=_TOTAL_TIMEOUT_SECONDS,
             )
         except TimeoutError:
-            logger.warning(
-                "VisionImagesEnricher timed out for url=%s", context.url
-            )
+            logger.warning("VisionImagesEnricher timed out for url=%s", context.url)
         except Exception as exc:
             logger.warning(
                 "VisionImagesEnricher failed for url=%s: %s", context.url, exc
@@ -71,18 +74,28 @@ class VisionImagesEnricher(SourceFilteredEnricher):
 
     async def _fetch_and_extract(self, context: ExtractionContext) -> None:
         urls = context.image_urls[:_MAX_IMAGES]
-        async with httpx.AsyncClient(
-            timeout=_PER_REQUEST_TIMEOUT_SECONDS, follow_redirects=True
-        ) as client:
-            results = await asyncio.gather(
-                *(self._download(client, u) for u in urls),
-                return_exceptions=True,
-            )
+        results = await asyncio.gather(
+            *(self._download(self._http, u) for u in urls),
+            return_exceptions=True,
+        )
         images: list[bytes] = [r for r in results if isinstance(r, bytes) and r]
         if not images:
             return
 
-        names = await self._vision_extractor.extract_place_names(images)
+        # Phase 4.5 subtask 2: per-enricher span so vision_images cost
+        # is distinct from vision_frames in Langfuse views.
+        async with traced_call(
+            "extraction.vision_images",
+            "extraction",
+            role="vision_frames",
+            user_id=context.user_id,
+            extra={"image_count": len(images)},
+        ) as t:
+            names, usage = await self._vision_extractor.extract_place_names(images)
+            if usage is not None:
+                t.usage = usage
+            t.output = {"name_count": len(names)}
+
         for name in names:
             if name:
                 context.known_places.append(
@@ -94,15 +107,28 @@ class VisionImagesEnricher(SourceFilteredEnricher):
                     )
                 )
 
-    async def _download(
-        self, client: httpx.AsyncClient, url: str
-    ) -> bytes | None:
+    async def _download(self, client: httpx.AsyncClient, url: str) -> bytes | None:
+        # Apify / TikTok rehydration JSON is attacker-influenced: a
+        # malicious page could list internal IPs (169.254.169.254,
+        # RFC1918) as carousel CDN URLs. `safe_get` enforces the host
+        # allowlist and re-validates each redirect hop, so a 302 into
+        # private space raises rather than completing.
+        from kebi.core.extraction.url_safety import CDN_ALLOWLIST, safe_get
+
         try:
-            response = await client.get(url)
+            response = await safe_get(
+                client,
+                url,
+                allowed_suffixes=CDN_ALLOWLIST,
+                timeout=_PER_REQUEST_TIMEOUT_SECONDS,
+            )
             response.raise_for_status()
             return response.content
-        except Exception as exc:
-            logger.debug(
-                "VisionImagesEnricher download failed for %s: %s", url, exc
+        except PermissionError as exc:
+            logger.warning(
+                "VisionImagesEnricher refused disallowed URL %s: %s", url, exc
             )
+            return None
+        except Exception as exc:
+            logger.debug("VisionImagesEnricher download failed for %s: %s", url, exc)
             return None

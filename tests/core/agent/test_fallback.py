@@ -18,7 +18,6 @@ def _base_state(**overrides: object) -> dict:
         "memory_summary": "",
         "user_id": "u1",
         "location": None,
-        "last_recall_results": None,
         "reasoning_steps": [],
         "steps_taken": 0,
         "error_count": 0,
@@ -48,19 +47,26 @@ def test_fallback_node_emits_user_visible_step_on_max_steps() -> None:
     assert isinstance(step, ReasoningStep)
     assert step.step == "fallback"
     assert step.source == "fallback"
-    assert step.tool_name is None
-    assert str(cfg.max_steps) in step.summary
+    # User-facing copy is plain narration — the technical step count lives on
+    # the paired debug step, not the user summary.
+    assert str(cfg.max_steps) not in step.summary
+    debug_steps = [s for s in steps if s.visibility == "debug"]
+    assert any(str(cfg.max_steps) in d.summary for d in debug_steps)
 
 
 def test_fallback_node_emits_user_visible_step_on_max_errors() -> None:
     cfg = get_config().agent
     update = fallback_node(_base_state(error_count=cfg.max_errors))
-    user_steps = [s for s in update["reasoning_steps"] if s.visibility == "user"]
+    steps = update["reasoning_steps"]
+    user_steps = [s for s in steps if s.visibility == "user"]
     assert len(user_steps) == 1
     step = user_steps[0]
     assert step.step == "fallback"
     assert step.source == "fallback"
-    assert "errors" in step.summary.lower()
+    # Plain user copy; the technical `max_errors` cause rides the debug step.
+    assert step.summary
+    debug_steps = [s for s in steps if s.visibility == "debug"]
+    assert any("max_errors" in d.summary for d in debug_steps)
 
 
 def test_fallback_node_preserves_existing_reasoning_steps() -> None:
@@ -103,9 +109,7 @@ def test_fallback_emits_langfuse_span_with_error_type_max_errors() -> None:
     ):
         fallback_node(_base_state(error_count=cfg.max_errors))
 
-    mock_tracer.generation.assert_called_once_with(
-        "agent_fallback", user_id="u1"
-    )
+    mock_tracer.generation.assert_called_once_with("agent_fallback", user_id="u1")
     mock_span.end.assert_called_once()
     call_kwargs = mock_span.end.call_args.kwargs
     assert call_kwargs["output"]["error_type"] == "max_errors"

@@ -1,4 +1,4 @@
-"""Taste model repository — Protocol + SQLAlchemy implementation (ADR-058).
+"""Taste model repository — Protocol + SQLAlchemy implementation (ADR-077).
 
 Each method opens its own session via session_factory so it works in any
 context (request, background task, debouncer).
@@ -12,9 +12,8 @@ from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from kebi.core.places.models import PlaceAttributes
-from kebi.core.taste.schemas import InteractionRow
-from kebi.db.models import Interaction, InteractionType, Place, TasteModel
+from kebi.core.taste.schemas import RawInteraction
+from kebi.db.models import Interaction, InteractionType, TasteModel
 
 
 class TasteModelRepository(Protocol):
@@ -25,29 +24,21 @@ class TasteModelRepository(Protocol):
         user_id: str,
         signal_counts: dict[str, Any],
         summary: list[dict[str, Any]],
-        chips: list[dict[str, Any]],
         log_count: int,
+        pill_fingerprint: str | None = None,
     ) -> None: ...
 
     async def log_interaction(
         self,
         user_id: str,
         interaction_type: InteractionType,
-        place_id: str | None,
+        place_core_id: str | None,
         metadata: dict[str, Any] | None = None,
     ) -> None: ...
 
-    async def get_interactions_with_places(
-        self, user_id: str
-    ) -> list[InteractionRow]: ...
+    async def get_interactions(self, user_id: str) -> list[RawInteraction]: ...
 
     async def count_interactions(self, user_id: str) -> int: ...
-
-    async def merge_chip_statuses(
-        self,
-        user_id: str,
-        updated_chips: list[dict[str, Any]],
-    ) -> None: ...
 
 
 class SQLAlchemyTasteModelRepository:
@@ -65,8 +56,8 @@ class SQLAlchemyTasteModelRepository:
         user_id: str,
         signal_counts: dict[str, Any],
         summary: list[dict[str, Any]],
-        chips: list[dict[str, Any]],
         log_count: int,
+        pill_fingerprint: str | None = None,
     ) -> None:
         async with self._session_factory() as session:
             stmt = (
@@ -75,18 +66,18 @@ class SQLAlchemyTasteModelRepository:
                     user_id=user_id,
                     signal_counts=signal_counts,
                     taste_profile_summary=summary,
-                    chips=chips,
                     generated_at=func.now(),
                     generated_from_log_count=log_count,
+                    pill_fingerprint=pill_fingerprint,
                 )
                 .on_conflict_do_update(
                     index_elements=["user_id"],
                     set_={
                         "signal_counts": signal_counts,
                         "taste_profile_summary": summary,
-                        "chips": chips,
                         "generated_at": func.now(),
                         "generated_from_log_count": log_count,
+                        "pill_fingerprint": pill_fingerprint,
                     },
                 )
             )
@@ -97,51 +88,41 @@ class SQLAlchemyTasteModelRepository:
         self,
         user_id: str,
         interaction_type: InteractionType,
-        place_id: str | None,
+        place_core_id: str | None,
         metadata: dict[str, Any] | None = None,
     ) -> None:
         async with self._session_factory() as session:
+            # DB column stays `place_id`; it holds the places.id value.
             interaction = Interaction(
                 user_id=user_id,
                 type=interaction_type,
-                place_id=place_id,
+                place_id=place_core_id,
                 metadata_=metadata,
             )
             session.add(interaction)
             await session.commit()
 
-    async def get_interactions_with_places(self, user_id: str) -> list[InteractionRow]:
+    async def get_interactions(self, user_id: str) -> list[RawInteraction]:
+        """Raw interaction rows (type + place_core_id), ordered by created_at.
+
+        Place data is NOT joined here — the service resolves place_core_id
+        against the places catalog (ADR-077). The `interactions.place_id`
+        column carries the `places.id` value.
+        """
         async with self._session_factory() as session:
             stmt = (
-                select(
-                    Interaction.type,
-                    Place.place_type,
-                    Place.subcategory,
-                    Place.source,
-                    Place.tags,
-                    Place.attributes,
-                )
-                .join(Place, Interaction.place_id == Place.id)
+                select(Interaction.type, Interaction.place_id)
                 .where(Interaction.user_id == user_id)
                 .order_by(Interaction.created_at)
             )
             result = await session.execute(stmt)
-            rows: list[InteractionRow] = []
-            for row in result:
-                attrs = PlaceAttributes(**(row.attributes or {}))
-                rows.append(
-                    InteractionRow(
-                        type=(
-                            row.type.value if hasattr(row.type, "value") else row.type
-                        ),
-                        place_type=row.place_type,
-                        subcategory=row.subcategory,
-                        source=row.source,
-                        tags=row.tags or [],
-                        attributes=attrs,
-                    )
+            return [
+                RawInteraction(
+                    type=(row.type.value if hasattr(row.type, "value") else row.type),
+                    place_core_id=row.place_id,
                 )
-            return rows
+                for row in result
+            ]
 
     async def count_interactions(self, user_id: str) -> int:
         async with self._session_factory() as session:
@@ -152,32 +133,3 @@ class SQLAlchemyTasteModelRepository:
             )
             result = await session.execute(stmt)
             return result.scalar_one()
-
-    async def merge_chip_statuses(
-        self,
-        user_id: str,
-        updated_chips: list[dict[str, Any]],
-    ) -> None:
-        """Replace the stored chips JSONB array for a user in one transaction.
-
-        Caller is responsible for having already merged status/selection_round
-        into the chip dicts (see core.taste.chip_merge.merge_chip_statuses).
-        No-op if no taste_model row exists yet (cold user).
-        """
-        async with self._session_factory() as session:
-            stmt = (
-                pg_insert(TasteModel)
-                .values(
-                    user_id=user_id,
-                    chips=updated_chips,
-                    taste_profile_summary=[],
-                    signal_counts={},
-                    generated_from_log_count=0,
-                )
-                .on_conflict_do_update(
-                    index_elements=["user_id"],
-                    set_={"chips": updated_chips},
-                )
-            )
-            await session.execute(stmt)
-            await session.commit()

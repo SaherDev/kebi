@@ -6,7 +6,11 @@ from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, StateGraph
 
-from kebi.core.agent.state import AgentState
+from kebi.core.agent.state import (
+    LOCATION_INHERIT,
+    AgentState,
+    merge_working_location,
+)
 
 
 def test_agent_state_typed_dict_shape() -> None:
@@ -16,14 +20,68 @@ def test_agent_state_typed_dict_shape() -> None:
         "taste_profile_summary": "likes ramen",
         "memory_summary": "vegetarian",
         "user_id": "u1",
-        "location": {"lat": 13.7, "lng": 100.5},
-        "last_recall_results": None,
+        "user_location": {"lat": 13.7, "lng": 100.5},
+        "working_location": None,
+        "location_clarification": None,
+        "movement_profile": None,
         "reasoning_steps": [],
         "steps_taken": 0,
         "error_count": 0,
+        "tool_calls_used": 0,
     }
     assert state["user_id"] == "u1"
-    assert state["last_recall_results"] is None
+    assert state["reasoning_steps"] == []
+
+
+async def test_movement_profile_does_not_persist_across_turns() -> None:
+    """`movement_profile` has no reducer — it is re-supplied every turn from
+    the request. A turn that omits it must overwrite to None, never inherit a
+    stale profile (contrast `working_location`, which carries on purpose).
+    """
+    checkpointer = InMemorySaver()
+
+    async def passthrough(state: AgentState) -> dict:
+        return {"messages": [AIMessage(content="ok")]}
+
+    graph: StateGraph = StateGraph(AgentState)
+    graph.add_node("passthrough", passthrough)
+    graph.set_entry_point("passthrough")
+    graph.add_edge("passthrough", END)
+    app = graph.compile(checkpointer=checkpointer)
+    config = {"configurable": {"thread_id": "u1"}}
+
+    state1 = await app.ainvoke(
+        {
+            "messages": [HumanMessage(content="one")],
+            "movement_profile": {"available_modes": ["driving"]},
+        },
+        config=config,
+    )
+    assert state1["movement_profile"] == {"available_modes": ["driving"]}
+
+    # Turn 2 omits movement_profile (frontend stopped sending it).
+    state2 = await app.ainvoke(
+        {
+            "messages": [HumanMessage(content="two")],
+            "movement_profile": None,
+        },
+        config=config,
+    )
+    assert state2["movement_profile"] is None
+
+
+def test_merge_working_location_inherit_keeps_carried_value() -> None:
+    """The reducer is the explicit carry-forward contract: LOCATION_INHERIT
+    preserves the prior turn's value; any other update replaces it.
+    """
+    carried = {"country": "Japan", "city": "Tokyo", "lat": 35.6, "lng": 139.7}
+    # Sentinel → keep what was carried by the checkpointer.
+    assert merge_working_location(carried, LOCATION_INHERIT) == carried
+    # A resolved location → replace.
+    resolved = {"country": "France", "city": "Lyon", "lat": 45.7, "lng": 4.8}
+    assert merge_working_location(carried, resolved) == resolved
+    # An explicit None → clear.
+    assert merge_working_location(carried, None) is None
 
 
 async def test_add_messages_reducer_appends_across_invocations() -> None:
@@ -49,8 +107,7 @@ async def test_add_messages_reducer_appends_across_invocations() -> None:
             "taste_profile_summary": "",
             "memory_summary": "",
             "user_id": "u1",
-            "location": None,
-            "last_recall_results": None,
+            "user_location": None,
             "reasoning_steps": [],
             "steps_taken": 0,
             "error_count": 0,
@@ -62,7 +119,6 @@ async def test_add_messages_reducer_appends_across_invocations() -> None:
     state2 = await app.ainvoke(
         {
             "messages": [HumanMessage(content="two")],
-            "last_recall_results": None,
             "reasoning_steps": [],
         },
         config=config,

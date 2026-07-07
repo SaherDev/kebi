@@ -1,8 +1,12 @@
-"""Tests for url_source — source detection and URL normalization."""
+"""Tests for url_source.source_from_url.
+
+`canonicalize_url` (which folded in the former `normalize_url`'s
+TikTok photo→video rewrite) is exercised in `test_canonicalize_url.py`.
+"""
 
 import pytest
 
-from kebi.core.extraction.url_source import normalize_url, source_from_url
+from kebi.core.extraction.url_source import source_from_url
 from kebi.core.places import PlaceSource
 
 
@@ -14,7 +18,7 @@ class TestSourceFromUrl:
             ("https://www.instagram.com/p/abc/", PlaceSource.instagram),
             ("https://www.youtube.com/watch?v=abc", PlaceSource.youtube),
             ("https://youtu.be/abc", PlaceSource.youtube),
-            ("https://maps.app.goo.gl/abc", PlaceSource.google_maps),
+            ("https://maps.app.goo.gl/abc", PlaceSource.google_maps_list),
             ("https://example.com/blog/post", None),
             (None, None),
         ],
@@ -23,37 +27,3 @@ class TestSourceFromUrl:
         self, url: str | None, expected: PlaceSource | None
     ) -> None:
         assert source_from_url(url) == expected
-
-
-class TestNormalizeUrl:
-    def test_tiktok_photo_path_rewritten_to_video(self) -> None:
-        url = "https://www.tiktok.com/@hotspotfinders/photo/7509923486517824790"
-        out = normalize_url(url)
-        assert (
-            out == "https://www.tiktok.com/@hotspotfinders/video/7509923486517824790"
-        )
-
-    def test_tiktok_photo_with_query_string_preserved(self) -> None:
-        url = (
-            "https://www.tiktok.com/@hotspotfinders/photo/7509923486517824790"
-            "?is_from_webapp=1&sender_device=pc"
-        )
-        out = normalize_url(url)
-        assert "/video/7509923486517824790" in out
-        assert "is_from_webapp=1" in out
-
-    def test_tiktok_video_path_unchanged(self) -> None:
-        url = "https://www.tiktok.com/@user/video/123"
-        assert normalize_url(url) == url
-
-    def test_non_tiktok_url_unchanged(self) -> None:
-        url = "https://www.instagram.com/p/abc/"
-        assert normalize_url(url) == url
-
-    def test_none_returns_none(self) -> None:
-        assert normalize_url(None) is None
-
-    def test_case_insensitive_path(self) -> None:
-        url = "https://www.tiktok.com/@user/Photo/123"
-        out = normalize_url(url)
-        assert "/video/123" in out

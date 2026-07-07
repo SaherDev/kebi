@@ -1,101 +1,67 @@
-You generate two artifacts from a user's behavioral signal counts:
+You generate one artifact from a user's behavioral signal counts:
 1. summary — 3 to 6 bullet lines describing patterns
-2. chips — 3 to 6 short display labels for the UI
 
 Input is JSON following this shape:
 {
   "totals": {"saves": int, "accepted": int, "rejected": int},
-  "place_type": {"<place_type>": count},
-  "subcategory": {"<place_type>": {"<subcategory>": count}},
+  "categories": {"<category>": count},
   "source": {"<source>": count},
-  "tags": {"<tag>": count},
-  "attributes": {
+  "tags": {
     "cuisine": {"<value>": count},
-    "price_hint": {"<value>": count},
-    "ambiance": {"<value>": count},
     "dietary": {"<value>": count},
-    "good_for": {"<value>": count},
-    "location_context": {
-      "neighborhood": {"<value>": count},
-      "city": {"<value>": count},
-      "country": {"<value>": count}
-    }
+    "feature": {"<value>": count},
+    "atmosphere": {"<value>": count},
+    "service": {"<value>": count},
+    "price": {"<value>": count},
+    "time": {"<value>": count},
+    "season": {"<value>": count}
+  },
+  "location": {
+    "neighborhood": {"<value>": count},
+    "city": {"<value>": count},
+    "country": {"<value>": count}
   },
   "rejected": {
-    "subcategory": {"<place_type>": {"<subcategory>": count}},
-    "attributes": { same shape as attributes }
-  },
-  "confirmed_chips": [
-    {"source_field": "<path>", "source_value": "<value>"}
-  ],
-  "rejected_chips": [
-    {"source_field": "<path>", "source_value": "<value>"}
-  ]
+    "categories": {"<category>": count},
+    "tags": { same shape as tags },
+    "location": { same shape as location }
+  }
 }
 
-confirmed_chips and rejected_chips are optional. When omitted or empty the prompt produces purely behavioral summary and chips (unchanged from the baseline). When populated, these arrays represent explicit user preferences that override probabilistic language.
-
 Rules for summary:
-- Each summary item has: text (the human-readable pattern), signal_count (integer), source_field (JSON path in the input), source_value (the value at that path, or null for aggregate claims).
+- Each summary item has: text (the human-readable pattern), signal_count (integer), source_field (JSON path in the input), source_value (the key at that path, or null for aggregate claims).
 - signal_count must appear verbatim in the input JSON. Do not invent numbers.
-- Use exact field values from signal_counts (subcategory names, cuisine names, source names).
+- Use exact field values from signal_counts (category names, tag values, source names).
 - If totals.saves < {early_signal_threshold}, prefix each text with "Early signal:".
 - One pattern per item. No preamble in text fields.
-
-Rules for summary items matching chip selection:
-- You MUST emit one summary item for EVERY entry in confirmed_chips. Never skip them.
-- confirmed_chips entries → assertive positive language, text MUST end with " [confirmed]". Example: "Ramen is a core preference. [confirmed]".
-- rejected_chips entries MUST NOT appear in the summary. They are tracked separately on the chip array (with status="rejected") and consumed by the ranker — narrating them here produces ambiguous double-negative sentences (e.g. "not interested in X" + "[rejected]" reads as a logical contradiction). Leave them out of the summary entirely.
-- The entries that appear in confirmed_chips and rejected_chips are NOT present in the signal_counts tree — they have been moved to their explicit arrays. Do not synthesize a sentence for them from the tree.
-- Non-matching items (only present in signal_counts) keep the existing behavioral language (probabilistic, grounded in counts).
 - Do not produce negative-language sentences from low signal counts alone — negatives come only from the rejected signal_counts branch.
-
-Rules for chips:
-- Each chip is a short label for a UI button (2 to 4 words).
-- Chip must be grounded in signal_counts — source_field is the JSON path, source_value is the value at that path.
-- Cover multiple place types when data supports it (food, things to do, shopping, services, accommodation).
-- Skip any field with signal_count < 3.
-- Order chips by strongest signal first.
-- Each chip output object MUST include a "status" field:
-  - If the chip's (source_field, source_value) matches confirmed_chips → "status": "confirmed".
-  - If it matches rejected_chips → "status": "rejected".
-  - Otherwise → "status": "pending".
-- Always preserve every confirmed_chips and rejected_chips entry in the output chips array with the correct status, even if its signal_count is below the normal threshold. The service layer owns selection_round — do not emit it.
-- Each chip MUST include a "query" field: a short natural-language message (max 10 words) the user could tap to send to Kebi. The query should feel like a casual ask that reflects the chip's taste dimension. Do not repeat the chip label verbatim — make it conversational. Examples: "Bar enthusiast" → "Best bars near me tonight", "Bangkok regular" → "What's good in Bangkok right now?", "Museum enthusiast" → "Best museums to visit nearby".
 
 Output strict JSON. No markdown, no prose wrapper.
 
 Example 1 — food and nightlife user:
 INPUT:
-{"totals": {"saves": 28, "accepted": 11, "rejected": 6}, "place_type": {"food_and_drink": 24, "things_to_do": 3, "accommodation": 1}, "subcategory": {"food_and_drink": {"bar": 8, "restaurant": 6, "cafe": 5, "bakery": 3}, "things_to_do": {"nightlife": 2}}, "source": {"tiktok": 18, "instagram": 6, "manual": 4}, "attributes": {"cuisine": {"izakaya": 8, "ramen": 6}, "price_hint": {"low": 9, "mid": 15, "high": 4}, "location_context": {"neighborhood": {"Shibuya": 9, "Shimokitazawa": 5}}}, "rejected": {"subcategory": {"accommodation": {"hotel": 3}}}}
+{"totals": {"saves": 28, "accepted": 11, "rejected": 6}, "categories": {"bar": 8, "restaurant": 6, "cafe": 5, "bakery": 3, "nightclub": 2, "hotel": 1}, "source": {"tiktok": 18, "instagram": 6, "manual": 4}, "tags": {"cuisine": {"japanese": 8, "ramen": 6}, "price": {"budget": 9, "moderate": 15, "expensive": 4}, "atmosphere": {"lively": 7, "cozy": 4}}, "location": {"neighborhood": {"Shibuya": 9, "Shimokitazawa": 5}}, "rejected": {"categories": {"hotel": 3}}}
 
 OUTPUT:
-{"summary": [{"text": "Favors bar subcategory under food_and_drink.", "signal_count": 8, "source_field": "subcategory.food_and_drink", "source_value": "bar"}, {"text": "Primary save source is TikTok.", "signal_count": 18, "source_field": "source", "source_value": "tiktok"}, {"text": "Prefers mid price_hint over high.", "signal_count": 15, "source_field": "attributes.price_hint", "source_value": "mid"}, {"text": "Saves cluster in Shibuya neighborhood.", "signal_count": 9, "source_field": "attributes.location_context.neighborhood", "source_value": "Shibuya"}, {"text": "Rejects hotel accommodation.", "signal_count": 3, "source_field": "rejected.subcategory.accommodation", "source_value": "hotel"}], "chips": [{"label": "Izakaya lover", "source_field": "attributes.cuisine", "source_value": "izakaya", "signal_count": 8, "query": "Find me a great izakaya nearby"}, {"label": "Bar enthusiast", "source_field": "subcategory.food_and_drink", "source_value": "bar", "signal_count": 8, "query": "Best bars near me tonight"}, {"label": "Shibuya regular", "source_field": "attributes.location_context.neighborhood", "source_value": "Shibuya", "signal_count": 9, "query": "What's good in Shibuya right now?"}, {"label": "Finds places on TikTok", "source_field": "source", "source_value": "tiktok", "signal_count": 18, "query": "Show me trending TikTok-discovered spots"}, {"label": "Budget-friendly", "source_field": "attributes.price_hint", "source_value": "mid", "signal_count": 15, "query": "Good places that won't break the bank"}]}
+{"summary": [{"text": "Favors bar category.", "signal_count": 8, "source_field": "categories", "source_value": "bar"}, {"text": "Primary save source is TikTok.", "signal_count": 18, "source_field": "source", "source_value": "tiktok"}, {"text": "Prefers moderate price over expensive.", "signal_count": 15, "source_field": "tags.price", "source_value": "moderate"}, {"text": "Saves cluster in Shibuya neighborhood.", "signal_count": 9, "source_field": "location.neighborhood", "source_value": "Shibuya"}, {"text": "Rejects hotel category.", "signal_count": 3, "source_field": "rejected.categories", "source_value": "hotel"}]}
 
 Example 2 — museum traveler:
 INPUT:
-{"totals": {"saves": 67, "accepted": 22, "rejected": 3}, "place_type": {"things_to_do": 58, "food_and_drink": 9}, "subcategory": {"things_to_do": {"museum": 28, "cultural_site": 22, "experience": 8}, "food_and_drink": {"restaurant": 9}}, "source": {"manual": 52, "link": 15}, "attributes": {"price_hint": {"mid": 40, "high": 18}, "location_context": {"city": {"Rome": 15, "Paris": 14, "Madrid": 12, "Vienna": 10, "Berlin": 8}}}, "rejected": {}}
+{"totals": {"saves": 67, "accepted": 22, "rejected": 3}, "categories": {"museum": 28, "art_gallery": 22, "historical_site": 8, "restaurant": 9}, "source": {"manual": 52, "google_maps_list": 15}, "tags": {"price": {"moderate": 40, "expensive": 18}}, "location": {"city": {"Rome": 15, "Paris": 14, "Madrid": 12, "Vienna": 10, "Berlin": 8}}, "rejected": {}}
 
 OUTPUT:
-{"summary": [{"text": "Favors museum subcategory under things_to_do.", "signal_count": 28, "source_field": "subcategory.things_to_do", "source_value": "museum"}, {"text": "Favors cultural_site subcategory under things_to_do.", "signal_count": 22, "source_field": "subcategory.things_to_do", "source_value": "cultural_site"}, {"text": "Prefers mid price_hint over high.", "signal_count": 40, "source_field": "attributes.price_hint", "source_value": "mid"}, {"text": "Saves cluster in Rome, Paris, Madrid.", "signal_count": 41, "source_field": "totals", "source_value": null}], "chips": [{"label": "Museum enthusiast", "source_field": "subcategory.things_to_do", "source_value": "museum", "signal_count": 28, "query": "Best museums to visit nearby"}, {"label": "Cultural sites", "source_field": "subcategory.things_to_do", "source_value": "cultural_site", "signal_count": 22, "query": "Find cultural sites worth visiting"}, {"label": "Rome regular", "source_field": "attributes.location_context.city", "source_value": "Rome", "signal_count": 15, "query": "Hidden gems to visit in Rome"}, {"label": "Premium taste", "source_field": "attributes.price_hint", "source_value": "mid", "signal_count": 40, "query": "Great spots with solid value"}]}
+{"summary": [{"text": "Favors museum category.", "signal_count": 28, "source_field": "categories", "source_value": "museum"}, {"text": "Favors art_gallery category.", "signal_count": 22, "source_field": "categories", "source_value": "art_gallery"}, {"text": "Prefers moderate price over expensive.", "signal_count": 40, "source_field": "tags.price", "source_value": "moderate"}, {"text": "Active traveler across many saves.", "signal_count": 67, "source_field": "totals", "source_value": null}]}
 
 Example 3 — sparse user:
 INPUT:
-{"totals": {"saves": 3, "accepted": 0, "rejected": 0}, "place_type": {"food_and_drink": 4}, "subcategory": {"food_and_drink": {"cafe": 3, "restaurant": 1}}, "source": {"instagram": 3}, "attributes": {"cuisine": {"coffee": 3}}, "rejected": {}}
+{"totals": {"saves": 3, "accepted": 0, "rejected": 0}, "categories": {"cafe": 3, "restaurant": 1}, "source": {"instagram": 3}, "tags": {"cuisine": {"coffee": 3}}, "location": {}, "rejected": {}}
 
 OUTPUT:
-{"summary": [{"text": "Early signal: cafe subcategory under food_and_drink.", "signal_count": 3, "source_field": "subcategory.food_and_drink", "source_value": "cafe"}, {"text": "Early signal: primary save source is Instagram.", "signal_count": 3, "source_field": "source", "source_value": "instagram"}, {"text": "Early signal: coffee cuisine preference.", "signal_count": 3, "source_field": "attributes.cuisine", "source_value": "coffee"}], "chips": [{"label": "Coffee lover", "source_field": "attributes.cuisine", "source_value": "coffee", "signal_count": 3, "query": "Best coffee spots near me"}, {"label": "Cafe enthusiast", "source_field": "subcategory.food_and_drink", "source_value": "cafe", "signal_count": 3, "query": "Find a great cafe to sit in"}]}
+{"summary": [{"text": "Early signal: cafe category.", "signal_count": 3, "source_field": "categories", "source_value": "cafe"}, {"text": "Early signal: primary save source is Instagram.", "signal_count": 3, "source_field": "source", "source_value": "instagram"}, {"text": "Early signal: coffee cuisine preference.", "signal_count": 3, "source_field": "tags.cuisine", "source_value": "coffee"}]}
 
 Example 4 — shopping user:
 INPUT:
-{"totals": {"saves": 52, "accepted": 20, "rejected": 2}, "place_type": {"shopping": 44, "food_and_drink": 8}, "subcategory": {"shopping": {"boutique": 18, "market": 14, "specialty_store": 8, "bookstore": 4}, "food_and_drink": {"cafe": 8}}, "source": {"tiktok": 30, "instagram": 18}, "attributes": {"price_hint": {"low": 25, "mid": 20}, "location_context": {"neighborhood": {"Shimokitazawa": 15, "Harajuku": 10}}}, "rejected": {}}
+{"totals": {"saves": 52, "accepted": 20, "rejected": 2}, "categories": {"boutique": 18, "night_market": 14, "specialty_shop": 8, "bookstore": 4, "cafe": 8}, "source": {"tiktok": 30, "instagram": 18}, "tags": {"price": {"budget": 25, "moderate": 20}, "atmosphere": {"trendy": 12}}, "location": {"neighborhood": {"Shimokitazawa": 15, "Harajuku": 10}}, "rejected": {}}
 
 OUTPUT:
-{"summary": [{"text": "Favors boutique subcategory under shopping.", "signal_count": 18, "source_field": "subcategory.shopping", "source_value": "boutique"}, {"text": "Favors market subcategory under shopping.", "signal_count": 14, "source_field": "subcategory.shopping", "source_value": "market"}, {"text": "Primary save source is TikTok.", "signal_count": 30, "source_field": "source", "source_value": "tiktok"}, {"text": "Prefers low price_hint over mid.", "signal_count": 25, "source_field": "attributes.price_hint", "source_value": "low"}, {"text": "Saves cluster in Shimokitazawa neighborhood.", "signal_count": 15, "source_field": "attributes.location_context.neighborhood", "source_value": "Shimokitazawa"}], "chips": [{"label": "Boutique shopper", "source_field": "subcategory.shopping", "source_value": "boutique", "signal_count": 18, "query": "Find unique boutiques near me"}, {"label": "Market lover", "source_field": "subcategory.shopping", "source_value": "market", "signal_count": 14, "query": "Best local markets to explore"}, {"label": "Budget-friendly", "source_field": "attributes.price_hint", "source_value": "low", "signal_count": 25, "query": "Good spots that won't break the bank"}, {"label": "Shimokitazawa regular", "source_field": "attributes.location_context.neighborhood", "source_value": "Shimokitazawa", "signal_count": 15, "query": "What's good in Shimokitazawa right now?"}, {"label": "Finds places on TikTok", "source_field": "source", "source_value": "tiktok", "signal_count": 30, "query": "Show me trending TikTok-discovered spots"}]}
-
-Example 5 — user has confirmed some chips and rejected others (feature 023):
-INPUT:
-{"totals": {"saves": 5, "accepted": 3, "rejected": 1}, "place_type": {"food_and_drink": 4}, "subcategory": {"food_and_drink": {"cafe": 1}}, "source": {"instagram": 1}, "attributes": {"cuisine": {"thai": 2}}, "rejected": {}, "confirmed_chips": [{"source_field": "source", "source_value": "tiktok"}, {"source_field": "subcategory.food_and_drink", "source_value": "restaurant"}], "rejected_chips": [{"source_field": "attributes.location_context.city", "source_value": "Bangkok"}]}
-
-OUTPUT:
-{"summary": [{"text": "TikTok is a core save source. [confirmed]", "signal_count": 4, "source_field": "source", "source_value": "tiktok"}, {"text": "Restaurant is a core food_and_drink preference. [confirmed]", "signal_count": 3, "source_field": "subcategory.food_and_drink", "source_value": "restaurant"}, {"text": "Early signal: prefers Thai cuisine.", "signal_count": 2, "source_field": "attributes.cuisine", "source_value": "thai"}], "chips": [{"label": "TikTok discoveries", "source_field": "source", "source_value": "tiktok", "signal_count": 4, "query": "Show me trending TikTok-discovered spots", "status": "confirmed"}, {"label": "Restaurant fan", "source_field": "subcategory.food_and_drink", "source_value": "restaurant", "signal_count": 3, "query": "Find a great restaurant nearby", "status": "confirmed"}, {"label": "Bangkok", "source_field": "attributes.location_context.city", "source_value": "Bangkok", "signal_count": 3, "query": "What's worth visiting in Bangkok?", "status": "rejected"}, {"label": "Thai cuisine", "source_field": "attributes.cuisine", "source_value": "thai", "signal_count": 2, "query": "Best Thai food near me", "status": "pending"}]}
+{"summary": [{"text": "Favors boutique category.", "signal_count": 18, "source_field": "categories", "source_value": "boutique"}, {"text": "Favors night_market category.", "signal_count": 14, "source_field": "categories", "source_value": "night_market"}, {"text": "Primary save source is TikTok.", "signal_count": 30, "source_field": "source", "source_value": "tiktok"}, {"text": "Prefers budget price over moderate.", "signal_count": 25, "source_field": "tags.price", "source_value": "budget"}, {"text": "Saves cluster in Shimokitazawa neighborhood.", "signal_count": 15, "source_field": "location.neighborhood", "source_value": "Shimokitazawa"}]}

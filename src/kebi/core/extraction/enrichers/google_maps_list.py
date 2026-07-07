@@ -1,4 +1,4 @@
-"""Google Maps shared-list enricher (Apify-backed) — pure text producer.
+"""Google Maps shared-list enricher (Apify-backed) — pure name producer.
 
 Google Maps shared lists (`maps.app.goo.gl/<short>` that resolves to a
 URL with `!3e3` in its data parameter) cannot be scraped from plain
@@ -7,13 +7,12 @@ Apify `parseforge/google-maps-shared-list-scraper` actor, which runs
 the scrape and returns each list entry with its name, lat/lng,
 rating, and category.
 
-This enricher is a **pure text producer** — it appends each Apify
-item's name to `context.known_places` and stops. The pipeline's NER
-finalizer (`LLMNEREnricher`) reads that list as another text source
-and emits structured `CandidatePlace`s with inferred `place_type`,
-`subcategory`, `cuisine`, and other attributes. That's the same
-path subtitle/whisper text takes — one consolidator owns the "name
-→ structured PlaceCreate" step.
+This enricher is a **pure name producer** — it appends each Apify
+item's name to `context.known_places` and stops. The pre-search
+resolver cleans those names, the pipeline searches each via
+`PlacesSearchService`, and the post-search `LLMPlacePicker` classifies
+the real hits into structured candidates with inferred categories and
+tags (places vocabulary).
 
 Notes:
 - Apify returns a Google Maps internal FID (`0x...:0x...`), not a
@@ -31,7 +30,8 @@ from typing import Any
 
 import httpx
 
-from kebi.core.config import get_env
+from kebi.core.agent._trace_context import traced_call
+from kebi.core.config import get_config, get_env
 from kebi.core.extraction.source_filtered_enricher import SourceFilteredEnricher
 from kebi.core.extraction.types import (
     ExtractionContext,
@@ -54,7 +54,7 @@ _DEFAULT_MAX_PLACES = 100
 class GoogleMapsListEnricher(SourceFilteredEnricher):
     """Pulls a Google Maps shared list via the Apify scraper actor.
 
-    Gated to `PlaceSource.google_maps`. Skips silently when the Apify
+    Gated to `PlaceSource.google_maps_list`. Skips silently when the Apify
     token isn't configured (no candidates appended; the rest of the
     cascade keeps running). Exceptions propagate to the surrounding
     `CircuitBreakerEnricher` so a degraded Apify doesn't keep retrying
@@ -63,15 +63,18 @@ class GoogleMapsListEnricher(SourceFilteredEnricher):
 
     def __init__(
         self,
+        *,
+        http: httpx.AsyncClient,
         token: str | None = None,
         timeout_seconds: float = _DEFAULT_TIMEOUT_SECONDS,
     ) -> None:
-        super().__init__(allowed_sources={PlaceSource.google_maps})
+        super().__init__(allowed_sources={PlaceSource.google_maps_list})
         # Lazy-resolve the token so tests can construct the enricher
         # without touching the env, but production callers can pass it
         # explicitly if they want.
         self._token = token
         self._timeout_seconds = timeout_seconds
+        self._http = http
 
     def _resolve_token(self) -> str | None:
         return self._token or get_env().APIFY_TOKEN
@@ -80,13 +83,12 @@ class GoogleMapsListEnricher(SourceFilteredEnricher):
         token = self._resolve_token()
         if not token:
             logger.info(
-                "GoogleMapsListEnricher skipped — APIFY_TOKEN not configured "
-                "(url=%s)",
+                "GoogleMapsListEnricher skipped — APIFY_TOKEN not configured (url=%s)",
                 context.url,
             )
             return
 
-        items = await self._fetch_list(context.url, token)  # type: ignore[arg-type]
+        items = await self._fetch_list(context.url, token, context.user_id)  # type: ignore[arg-type]
         for item in items:
             name = item.get("name") or item.get("title")
             if name:
@@ -100,7 +102,9 @@ class GoogleMapsListEnricher(SourceFilteredEnricher):
                     )
                 )
 
-    async def _fetch_list(self, url: str, token: str) -> list[dict[str, Any]]:
+    async def _fetch_list(
+        self, url: str, token: str, user_id: str | None = None
+    ) -> list[dict[str, Any]]:
         body = {
             "listUrls": [url],
             "outputFormat": "json",
@@ -110,16 +114,32 @@ class GoogleMapsListEnricher(SourceFilteredEnricher):
             # without it.
             "proxyConfiguration": {"useApifyProxy": False},
         }
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
+        async with traced_call(
+            "apify.google_maps_list",
+            "extraction",
+            user_id=user_id,
+            extra={
+                "actor": "parseforge/google-maps-shared-list-scraper",
+                "input_url": url,
+            },
+        ) as t:
+            response = await self._http.post(
                 _APIFY_ENDPOINT,
                 params={"token": token},
                 json=body,
                 timeout=self._timeout_seconds,
             )
             response.raise_for_status()
-        data = response.json()
-        if not isinstance(data, list):
-            return []
-        return data
-
+            data = response.json()
+            items: list[dict[str, Any]] = data if isinstance(data, list) else []
+            # Apify sync endpoint returns no run-id header; item count comes
+            # from x-apify-pagination-total (verified 2026-05-24). Cost =
+            # per_result × count from config.
+            item_count = int(
+                response.headers.get("x-apify-pagination-total", len(items))
+            )
+            t.cost_usd = get_config().pricing.external.apify.cost_for(
+                "google_maps_list", item_count
+            )
+            t.output = {"item_count": item_count}
+            return items

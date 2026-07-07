@@ -1,19 +1,32 @@
-"""Pure signal_counts aggregation from interaction rows (ADR-058).
+"""Pure signal_counts aggregation from interaction rows (ADR-077).
 
 aggregate_signal_counts() is a pure function — no I/O.
 
-Positive types (save, accepted) feed the main tree.
-Negative types (rejected) feed the rejected branch.
-Source is counted for saves only.
+Evidence is conviction-ranked. `accepted` feeds the main tree at the base
+weight. Saved places (`save` / `saved_recommendation`) are governed by their
+Library-pill snapshot: a passive link-share `save` is worth nothing on its own
+(weight 0 — we save a lot but with low conviction), a `saved_recommendation`
+carries a base weight, and `visited` / `liked=True` add graduated bonuses on
+top, so a place you approved, went to, and loved outweighs everything. An
+un-approved (needs-review) place is not evidence at all — `approved` is a
+curation gate, not a sentiment. `liked=False` is a real negative and routes the
+place to the rejected branch, overriding any positive. `rejected` recs feed the
+rejected branch too. Totals stay raw event counts; source is counted for plain
+link-share saves only, unweighted. A place is emitted as evidence once even if
+it carries both a `save` and a later `saved_recommendation` row.
 
-`chip_confirm` interactions are written with `place_id=NULL` and never
-appear in `get_interactions_with_places`, so they don't flow through
-this aggregator — their effect on the taste profile is captured via
-`taste_model.chips[].status` and passed to the regen prompt as
-`confirmed_chips` / `rejected_chips` arrays (feature 023).
+`weights` maps each lever (`save`, `accepted`, `saved_recommendation`,
+`visited`, `liked`, `liked_negative`, `rejected`) to its evidence units.
+
+Vocabulary is places-native: flat `categories`, typed tag dimensions
+(cuisine/price/atmosphere/...), and location context. All count containers
+stay nested `dict[str, int]` so the grounding validator's dotted-path walk
+(regen._resolve_path) works unchanged.
 """
 
 from __future__ import annotations
+
+from collections.abc import Mapping
 
 from pydantic import BaseModel, Field
 
@@ -28,37 +41,38 @@ class TotalCounts(BaseModel):
     saves: int = 0
     accepted: int = 0
     rejected: int = 0
+    saved_recommendations: int = 0
 
 
-class LocationContextCounts(BaseModel):
+class LocationCounts(BaseModel):
     neighborhood: dict[str, int] = Field(default_factory=dict)
     city: dict[str, int] = Field(default_factory=dict)
     country: dict[str, int] = Field(default_factory=dict)
 
 
-class AttributeCounts(BaseModel):
+class TagCounts(BaseModel):
     cuisine: dict[str, int] = Field(default_factory=dict)
-    price_hint: dict[str, int] = Field(default_factory=dict)
-    ambiance: dict[str, int] = Field(default_factory=dict)
     dietary: dict[str, int] = Field(default_factory=dict)
-    good_for: dict[str, int] = Field(default_factory=dict)
-    location_context: LocationContextCounts = Field(
-        default_factory=LocationContextCounts
-    )
+    feature: dict[str, int] = Field(default_factory=dict)
+    atmosphere: dict[str, int] = Field(default_factory=dict)
+    service: dict[str, int] = Field(default_factory=dict)
+    price: dict[str, int] = Field(default_factory=dict)
+    time: dict[str, int] = Field(default_factory=dict)
+    season: dict[str, int] = Field(default_factory=dict)
 
 
 class RejectedCounts(BaseModel):
-    subcategory: dict[str, dict[str, int]] = Field(default_factory=dict)
-    attributes: AttributeCounts = Field(default_factory=AttributeCounts)
+    categories: dict[str, int] = Field(default_factory=dict)
+    tags: TagCounts = Field(default_factory=TagCounts)
+    location: LocationCounts = Field(default_factory=LocationCounts)
 
 
 class SignalCounts(BaseModel):
     totals: TotalCounts = Field(default_factory=TotalCounts)
-    place_type: dict[str, int] = Field(default_factory=dict)
-    subcategory: dict[str, dict[str, int]] = Field(default_factory=dict)
+    categories: dict[str, int] = Field(default_factory=dict)
     source: dict[str, int] = Field(default_factory=dict)
-    tags: dict[str, int] = Field(default_factory=dict)
-    attributes: AttributeCounts = Field(default_factory=AttributeCounts)
+    tags: TagCounts = Field(default_factory=TagCounts)
+    location: LocationCounts = Field(default_factory=LocationCounts)
     rejected: RejectedCounts = Field(default_factory=RejectedCounts)
 
 
@@ -66,41 +80,56 @@ class SignalCounts(BaseModel):
 # Helpers
 # ---------------------------------------------------------------------------
 
-_POSITIVE_TYPES = {"save", "accepted"}
-_NEGATIVE_TYPES = {"rejected"}
+# Saved-place rows: governed by the pill snapshot (approved/visited/liked).
+_SAVE_TYPES = {"save", "saved_recommendation"}
 
 
-def _increment(d: dict[str, int], key: str | None) -> None:
-    """Increment count for key in a dict[str, int], skipping None."""
+def _increment(d: dict[str, int], key: str | None, n: int = 1) -> None:
+    """Add `n` to the count for `key` in a dict[str, int], skipping None."""
     if key is not None:
-        d[key] = d.get(key, 0) + 1
+        d[key] = d.get(key, 0) + n
 
 
-def _increment_nested(
-    d: dict[str, dict[str, int]], outer_key: str | None, inner_key: str | None
-) -> None:
-    """Increment count in a nested dict[str, dict[str, int]]."""
-    if outer_key is not None and inner_key is not None:
-        if outer_key not in d:
-            d[outer_key] = {}
-        d[outer_key][inner_key] = d[outer_key].get(inner_key, 0) + 1
+def _add_tags(target: TagCounts, row: InteractionRow, n: int = 1) -> None:
+    """Increment typed-tag counts from an interaction row by weight `n`."""
+    for c in row.cuisine:
+        _increment(target.cuisine, c, n)
+    for v in row.dietary:
+        _increment(target.dietary, v, n)
+    for v in row.feature:
+        _increment(target.feature, v, n)
+    for v in row.atmosphere:
+        _increment(target.atmosphere, v, n)
+    for v in row.service:
+        _increment(target.service, v, n)
+    _increment(target.price, row.price, n)
+    for v in row.time:
+        _increment(target.time, v, n)
+    for v in row.season:
+        _increment(target.season, v, n)
 
 
-def _add_attributes(target: AttributeCounts, row: InteractionRow) -> None:
-    """Increment attribute counts from an interaction row."""
-    attrs = row.attributes
-    _increment(target.cuisine, attrs.cuisine)
-    _increment(target.price_hint, attrs.price_hint)
-    _increment(target.ambiance, attrs.ambiance)
-    for d in attrs.dietary:
-        _increment(target.dietary, d)
-    for g in attrs.good_for:
-        _increment(target.good_for, g)
-    if attrs.location_context:
-        lc = attrs.location_context
-        _increment(target.location_context.neighborhood, lc.neighborhood)
-        _increment(target.location_context.city, lc.city)
-        _increment(target.location_context.country, lc.country)
+def _add_location(target: LocationCounts, row: InteractionRow, n: int = 1) -> None:
+    """Increment location-context counts from an interaction row by weight `n`."""
+    _increment(target.neighborhood, row.neighborhood, n)
+    _increment(target.city, row.city, n)
+    _increment(target.country, row.country, n)
+
+
+def _apply_positive(counts: SignalCounts, row: InteractionRow, n: int) -> None:
+    """Add a row's attributes to the main evidence tree, weighted by `n`."""
+    for cat in row.categories:
+        _increment(counts.categories, cat, n)
+    _add_tags(counts.tags, row, n)
+    _add_location(counts.location, row, n)
+
+
+def _apply_rejected(counts: SignalCounts, row: InteractionRow, n: int) -> None:
+    """Add a row's attributes to the rejected branch, weighted by `n`."""
+    for cat in row.categories:
+        _increment(counts.rejected.categories, cat, n)
+    _add_tags(counts.rejected.tags, row, n)
+    _add_location(counts.rejected.location, row, n)
 
 
 # ---------------------------------------------------------------------------
@@ -108,37 +137,70 @@ def _add_attributes(target: AttributeCounts, row: InteractionRow) -> None:
 # ---------------------------------------------------------------------------
 
 
-def aggregate_signal_counts(rows: list[InteractionRow]) -> SignalCounts:
-    """Pure function: aggregate interaction rows into SignalCounts. No I/O."""
-    counts = SignalCounts()
+def aggregate_signal_counts(
+    rows: list[InteractionRow], weights: Mapping[str, int] | None = None
+) -> SignalCounts:
+    """Pure function: aggregate interaction rows into SignalCounts. No I/O.
 
-    for row in rows:
-        # --- Totals ---
+    `weights` maps each lever to the evidence units it contributes. Totals stay
+    raw event counts and `source` stays one unit per save; only the category/
+    tag/location tree is weighted. See the module docstring for the conviction
+    ladder governing saved places via their pill snapshot.
+    """
+    weights = weights or {}
+    counts = SignalCounts()
+    seen_evidence: set[str] = set()
+
+    # Process `saved_recommendation` before `save` so the once-per-place
+    # dedup keeps the stronger origin's base weight (stable otherwise).
+    ordered = sorted(rows, key=lambda r: 0 if r.type == "saved_recommendation" else 1)
+
+    for row in ordered:
+        # --- Totals (raw event counts, one per interaction row) ---
         match row.type:
             case "save":
                 counts.totals.saves += 1
             case "accepted":
                 counts.totals.accepted += 1
+            case "saved_recommendation":
+                counts.totals.saved_recommendations += 1
             case "rejected":
                 counts.totals.rejected += 1
 
-        if row.type in _POSITIVE_TYPES:
-            # Main tree
-            _increment(counts.place_type, row.place_type)
-            _increment_nested(counts.subcategory, row.place_type, row.subcategory)
-            for tag in row.tags:
-                _increment(counts.tags, tag)
-            _add_attributes(counts.attributes, row)
-
-            # Source is save-only
+        if row.type in _SAVE_TYPES:
+            # Source is link-share-save only (kebi is not a discovery channel),
+            # unweighted — one save, one source observation. Counted regardless
+            # of curation/sentiment.
             if row.type == "save":
                 _increment(counts.source, row.source)
 
-        elif row.type in _NEGATIVE_TYPES:
-            # Rejected branch
-            _increment_nested(
-                counts.rejected.subcategory, row.place_type, row.subcategory
-            )
-            _add_attributes(counts.rejected.attributes, row)
+            # Curation gate: a needs-review place is not evidence at all.
+            if not row.approved:
+                continue
+            # One evidence emission per saved place — a place may carry both a
+            # link-share `save` and a later `saved_recommendation` row.
+            if row.place_core_id is not None:
+                if row.place_core_id in seen_evidence:
+                    continue
+                seen_evidence.add(row.place_core_id)
+
+            # A disliked place is a negative and overrides any positive base.
+            if row.liked is False:
+                _apply_rejected(counts, row, weights.get("liked_negative", 3))
+                continue
+
+            weight = weights.get(row.type, 0)
+            if row.visited:
+                weight += weights.get("visited", 0)
+            if row.liked is True:
+                weight += weights.get("liked", 0)
+            if weight > 0:
+                _apply_positive(counts, row, weight)
+
+        elif row.type == "accepted":
+            _apply_positive(counts, row, weights.get("accepted", 1))
+
+        elif row.type == "rejected":
+            _apply_rejected(counts, row, weights.get("rejected", 1))
 
     return counts

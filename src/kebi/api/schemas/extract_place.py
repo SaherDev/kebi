@@ -8,59 +8,46 @@ states live on the envelope only. ADR-063 documents the split.
 
 `raw_input` carries the original user-supplied string verbatim (no trimming,
 no URL canonicalization, no case-folding). Replaces the pre-M0.5 `source_url`
-field on this envelope. Note: `PlaceObject.source_url` (the URL the place was
-extracted from, a per-place field) is unrelated and unchanged.
+field on this envelope. Note: `UserPlace.source_ref` (the per-row pointer to
+the place's origin) is a separate column on a different table and unrelated
+to this envelope-level rename.
 """
 
 from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-from kebi.core.places import PlaceObject
-
-
-class EvidenceDTO(BaseModel):
-    """One piece of evidence in a candidate's audit trail.
-
-    `producer` identifies which enricher contributed (`llm_ner`,
-    `vision_frames`, `video_metadata`, `whisper_audio`, ...).
-    `medium` identifies where in pipeline state the evidence lived
-    (`caption`, `transcript`, `frame`, `image`, `list`, ...).
-    `snippet` is the actual content (truncated to 200 chars) when
-    available; `metadata` carries producer-specific extras.
-    """
-
-    producer: str
-    medium: str
-    snippet: str | None = None
-    metadata: dict[str, str | int | float | bool] = Field(default_factory=dict)
+from kebi.core.places import PlaceCore
 
 
 class ExtractPlaceItem(BaseModel):
     """One row in the extract response.
 
-    Per-place outcome values:
-    - "saved"        — newly written to the permanent store; confidence
-                       ≥ `confident_threshold` (ADR-057).
-    - "needs_review" — newly written, but confidence falls in the tentative
-                       band (between `save_threshold` and
-                       `confident_threshold`); UI should prompt the user to
-                       confirm or delete (ADR-057).
-    - "duplicate"    — already existed; `place` is the existing row.
+    Per ADR-071, the extraction flow saves every candidate the picker
+    emits — there is no per-item branching at save time. The response
+    is a flat list of places now associated with the user; whether a
+    given place was newly linked or already saved is an internal
+    detail (UserPlacesService rejects duplicate links and the service
+    catches the conflict to avoid creating a second row).
 
     Pipeline-level states (`pending`, `failed`) live on the response
     envelope, never on items (ADR-063).
 
-    `evidence` is the audit trail — every producer/medium pair that
-    contributed to this candidate, in extraction order. Empty list for
-    legacy callers; non-empty for any candidate produced by the
-    Evidence-aware pipeline.
+    `place` is a `PlaceCore` (identity + static fields), not a
+    `PlaceObject`. Extraction does not populate live fields (rating,
+    hours, popularity, business_status) — those are filled in later by
+    the places read/enrichment path. Returning `PlaceCore` here is
+    the honest shape; pretending to be `PlaceObject` just padded the
+    response with always-null fields.
+
+    Evidence (the audit trail of producers/media that contributed to
+    each candidate) used to ride this item. It now writes to an
+    object-storage ledger so the product repo never sees it — see
+    `core/extraction/evidence_bucket.py`.
     """
 
-    place: PlaceObject
+    place: PlaceCore
     confidence: float
-    status: Literal["saved", "needs_review", "duplicate"]
-    evidence: list[EvidenceDTO] = Field(default_factory=list)
 
     @field_validator("confidence")
     @classmethod
@@ -71,10 +58,22 @@ class ExtractPlaceItem(BaseModel):
 
 
 class ExtractPlaceRequest(BaseModel):
-    """Request body for extract-place endpoint."""
+    """Request body for extract-place endpoint.
 
-    user_id: str = Field(description="User ID (validated by NestJS)")
-    raw_input: str = Field(description="TikTok URL or plain text")
+    `user_id` is intentionally absent — the caller's identity is supplied
+    by the gateway as `X-Gateway-User-Id` and verified by
+    `require_gateway_identity`. The route passes it explicitly to the
+    service layer.
+
+    `raw_input` is length-capped at 8000 chars — large enough for a
+    plain-text place description with notes; small enough to refuse
+    pathological payloads at the boundary before paying for any
+    enrichment.
+    """
+
+    raw_input: str = Field(
+        min_length=1, max_length=8000, description="TikTok URL or plain text"
+    )
 
 
 FailureReason = Literal[
@@ -84,6 +83,7 @@ FailureReason = Literal[
     "all_below_threshold",
     "candidate_limit_exceeded",
     "pipeline_error",
+    "save_limit_reached",
 ]
 
 

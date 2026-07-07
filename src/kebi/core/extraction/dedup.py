@@ -1,10 +1,16 @@
-"""Validated-candidate deduplication.
+"""Validated-candidate deduplication by namespaced `provider_id`.
 
-`dedup_validated_by_provider_id` collapses two `ValidatedCandidate`s
-that share a `provider_id` (namespaced `{provider}:{external_id}`).
-Evidence is unioned, confidence becomes max(group), and the
-corroboration bonus is applied when the merged evidence has more than
-one distinct (producer, medium) pair (capped at `max_score`).
+`dedup_by_provider_id` collapses two `ValidatedCandidate`s that share a
+`provider_id` (e.g. when two enrichment levels both surfaced the same
+Google place). Evidence is unioned, confidence becomes max(group),
+and the corroboration bonus is applied when the merged evidence has
+more than one distinct (producer, medium) pair (capped at `max_score`).
+
+Categories and tags from later picks are merged into the carrier so
+no contribution is lost. The carrier (first candidate in the group)
+keeps `place_name`, `subcategory`, and `location` — these reflect the
+v2 search result they came from and don't differ between picks of the
+same place.
 """
 
 from __future__ import annotations
@@ -14,14 +20,53 @@ from kebi.core.extraction.types import (
     Evidence,
     ValidatedCandidate,
 )
-from kebi.core.places import PlaceAttributes
-from kebi.core.places.repository import build_provider_id
+from kebi.core.places import PlaceCategory, PlaceTag
+
+
+def dedup_by_provider_id(
+    results: list[ValidatedCandidate],
+    confidence_config: ConfidenceConfig,
+) -> list[ValidatedCandidate]:
+    """Collapse validated candidates sharing a `provider_id`."""
+    if len(results) <= 1:
+        return results
+
+    by_provider_id: dict[str, list[ValidatedCandidate]] = {}
+    order: list[str] = []
+    for result in results:
+        pid = result.provider_id
+        if pid not in by_provider_id:
+            by_provider_id[pid] = []
+            order.append(pid)
+        by_provider_id[pid].append(result)
+
+    winners: list[ValidatedCandidate] = []
+    for pid in order:
+        group = by_provider_id[pid]
+        if len(group) == 1:
+            winners.append(group[0])
+            continue
+
+        winner = group[0]
+        rest = group[1:]
+        winner.evidence = _merge_evidence(winner.evidence, *(r.evidence for r in rest))
+        winner.categories = _merge_categories(
+            winner.categories, *(r.categories for r in rest)
+        )
+        winner.tags = _merge_tags(winner.tags, *(r.tags for r in rest))
+        winner.confidence = max(r.confidence for r in group)
+        distinct_pairs = len({(e.producer, e.medium) for e in winner.evidence})
+        if distinct_pairs >= 2:
+            winner.confidence = min(
+                winner.confidence + confidence_config.corroboration_bonus,
+                confidence_config.max_score,
+            )
+        winners.append(winner)
+
+    return winners
 
 
 def _merge_evidence(*lists: list[Evidence]) -> list[Evidence]:
-    """Concatenate evidence lists preserving first-seen order, dropping
-    duplicates so each `(producer, medium, snippet)` triple appears at
-    most once. Equality is structural (Evidence is frozen)."""
     seen: set[Evidence] = set()
     merged: list[Evidence] = []
     for source in lists:
@@ -32,83 +77,28 @@ def _merge_evidence(*lists: list[Evidence]) -> list[Evidence]:
     return merged
 
 
-def _provider_id(vc: ValidatedCandidate) -> str | None:
-    return build_provider_id(vc.provider, vc.external_id)
+def _merge_categories(
+    *lists: list[PlaceCategory],
+) -> list[PlaceCategory]:
+    """Order-preserving union of category lists."""
+    seen: set[PlaceCategory] = set()
+    merged: list[PlaceCategory] = []
+    for source in lists:
+        for cat in source:
+            if cat not in seen:
+                seen.add(cat)
+                merged.append(cat)
+    return merged
 
 
-def dedup_validated_by_provider_id(
-    results: list[ValidatedCandidate],
-    confidence_config: ConfidenceConfig,
-) -> list[ValidatedCandidate]:
-    """Collapse validated candidates sharing a `provider_id`.
-
-    Evidence is unioned across the group. Confidence becomes max(group);
-    the corroboration bonus is added when the merged evidence has more
-    than one distinct `(producer, medium)` pair (capped at `max_score`).
-    The first candidate in the group keeps the role of "carrier" — its
-    place_name, place_type, etc. survive. Attribute fields the carrier
-    left blank are inherited from the rest. `provider_id=None` results
-    pass through unchanged.
-    """
-    if len(results) <= 1:
-        return results
-
-    no_id: list[ValidatedCandidate] = []
-    by_provider_id: dict[str, list[ValidatedCandidate]] = {}
-
-    for result in results:
-        pid = _provider_id(result)
-        if pid is None:
-            no_id.append(result)
-        else:
-            by_provider_id.setdefault(pid, []).append(result)
-
-    winners: list[ValidatedCandidate] = []
-    for group in by_provider_id.values():
-        if len(group) == 1:
-            winners.append(group[0])
-            continue
-
-        winner = group[0]
-        rest = group[1:]
-        winner.evidence = _merge_evidence(
-            winner.evidence, *(r.evidence for r in rest)
-        )
-        winner.attributes = _merge_attributes(
-            winner.attributes, *(r.attributes for r in rest)
-        )
-        winner.confidence = max(r.confidence for r in group)
-        distinct_pairs = len({(e.producer, e.medium) for e in winner.evidence})
-        if distinct_pairs >= 2:
-            winner.confidence = min(
-                winner.confidence + confidence_config.corroboration_bonus,
-                confidence_config.max_score,
-            )
-        winners.append(winner)
-
-    return no_id + winners
-
-
-def _merge_attributes(
-    winner: PlaceAttributes, *losers: PlaceAttributes
-) -> PlaceAttributes:
-    """Return a `PlaceAttributes` where any field the winner left empty is
-    backfilled from the first loser that has a non-empty value.
-
-    "Empty" means `None` for scalars / nested models, and an empty list for
-    list fields. The merge is shallow — nested models (like
-    `location_context`) are copied over whole, not field-merged.
-    """
-    merged: dict[str, object] = winner.model_dump()
-    for loser in losers:
-        loser_dict = loser.model_dump()
-        for key, val in loser_dict.items():
-            if _is_empty(merged.get(key)) and not _is_empty(val):
-                merged[key] = val
-    return PlaceAttributes.model_validate(merged)
-
-
-def _is_empty(value: object) -> bool:
-    if value is None:
-        return True
-    return isinstance(value, list | tuple | dict) and len(value) == 0
+def _merge_tags(*lists: list[PlaceTag]) -> list[PlaceTag]:
+    """Order-preserving union of tag lists, deduped on (type, value)."""
+    seen: set[tuple[str, str]] = set()
+    merged: list[PlaceTag] = []
+    for source in lists:
+        for tag in source:
+            key = (str(tag.type), str(tag.value))
+            if key not in seen:
+                seen.add(key)
+                merged.append(tag)
+    return merged

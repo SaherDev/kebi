@@ -21,20 +21,28 @@ class TestAgentConfigDefaults:
         assert c.max_steps == 10
         assert c.max_errors == 3
         assert c.checkpointer_ttl_seconds == 86400
-        assert c.tool_timeouts_seconds.recall == 5
-        assert c.tool_timeouts_seconds.consult == 10
-        assert c.tool_timeouts_seconds.save == 60
+        assert c.tool_timeouts_seconds.find_saved == 8
+        assert c.find_saved.default_limit == 10
+        assert c.find_saved.max_limit == 25
 
     def test_app_config_exposes_agent_with_defaults(self) -> None:
         cfg = get_config()
         assert cfg.agent.max_steps == 10
         assert cfg.agent.max_errors == 3
-        assert cfg.agent.tool_timeouts_seconds.recall == 5
+        assert cfg.agent.tool_timeouts_seconds.find_saved == 8
 
     def test_app_yaml_registers_agent_prompt(self) -> None:
         cfg = get_config()
         assert "agent" in cfg.prompts
         assert cfg.prompts["agent"].file == "agent.txt"
+
+    def test_app_yaml_registers_extraction_prompts(self) -> None:
+        """ADR-080: resolver + classifier prompts load from config."""
+        cfg = get_config()
+        assert cfg.prompts["place_resolver"].file == "place_resolver.txt"
+        assert cfg.prompts["place_classifier"].file == "place_classifier.txt"
+        assert cfg.prompts["place_resolver"].content.strip()
+        assert "search_candidates" in cfg.prompts["place_classifier"].content
 
 
 class TestAgentConfigValidators:
@@ -54,21 +62,11 @@ class TestAgentConfigValidators:
 class TestToolTimeoutsConfigValidators:
     def test_defaults(self) -> None:
         t = ToolTimeoutsConfig()
-        assert t.recall == 5
-        assert t.consult == 10
-        assert t.save == 60
+        assert t.find_saved == 8
 
-    def test_rejects_zero_recall(self) -> None:
+    def test_rejects_zero_find_saved(self) -> None:
         with pytest.raises(ValidationError):
-            ToolTimeoutsConfig(recall=0)
-
-    def test_rejects_zero_consult(self) -> None:
-        with pytest.raises(ValidationError):
-            ToolTimeoutsConfig(consult=0)
-
-    def test_rejects_zero_save(self) -> None:
-        with pytest.raises(ValidationError):
-            ToolTimeoutsConfig(save=0)
+            ToolTimeoutsConfig(find_saved=0)
 
 
 class TestAgentPromptLoading:
@@ -122,11 +120,18 @@ class TestAgentPromptSlotValidation:
         finally:
             config_module.find_project_root = original  # type: ignore[assignment]
 
-    def test_both_slots_present_loads_successfully(self, tmp_path: Path) -> None:
+    def test_all_required_slots_present_loads_successfully(
+        self, tmp_path: Path
+    ) -> None:
         prompts_dir = tmp_path / "config" / "prompts"
         prompts_dir.mkdir(parents=True)
+        # ADR-084 added {location_context} and {movement_context} to the
+        # agent prompt's required slots.
         (prompts_dir / "agent.txt").write_text(
-            "Taste: {taste_profile_summary}\nMemory: {memory_summary}"
+            "Location: {location_context}\n"
+            "Movement: {movement_context}\n"
+            "Taste: {taste_profile_summary}\n"
+            "Memory: {memory_summary}"
         )
 
         import kebi.core.config as config_module
@@ -138,6 +143,7 @@ class TestAgentPromptSlotValidation:
             assert "agent" in loaded
             assert "{taste_profile_summary}" in loaded["agent"].content
             assert "{memory_summary}" in loaded["agent"].content
+            assert "{movement_context}" in loaded["agent"].content
         finally:
             config_module.find_project_root = original  # type: ignore[assignment]
 

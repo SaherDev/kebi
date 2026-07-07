@@ -3,13 +3,37 @@
 Resolves configured embedder clients by role (ADR-020, ADR-038, ADR-040).
 """
 
+import asyncio
+import functools
 import logging
+import time
 from typing import Protocol, cast, runtime_checkable
 
 from kebi.core.config import get_config, get_env
-from kebi.providers.tracing import get_tracing_client
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Voyage rate-limit circuit breaker (process-wide)
+# ---------------------------------------------------------------------------
+#
+# The Voyage SDK retries internally via tenacity (1s → 2s → 4s → 8s) before
+# raising RateLimitError, eating ~15s on every save when rate-limited. The
+# breaker traps the first failure and short-circuits every subsequent call
+# for `embeddings.rate_limit_cooldown_seconds`, so a rate-limited
+# environment doesn't pay the retry tax per request.
+#
+# Only the runtime cooldown timestamp is module-global (process-wide so
+# the breaker survives across distinct embedder instances). Tuning values
+# (`hard_timeout_seconds`, `rate_limit_cooldown_seconds`) live in
+# config/app.yaml under `embeddings:` and are read per-call.
+#
+# `embed_and_store` already swallows RuntimeError as non-fatal (see
+# places/embedding_service.py), so the breaker is purely a latency
+# optimization — correctness behavior is unchanged.
+
+_VOYAGE_COOLDOWN_UNTIL: float = 0.0
 
 
 # --- Protocol ---
@@ -55,7 +79,14 @@ class VoyageEmbedder:
             raise
 
     async def embed(self, texts: list[str], input_type: str) -> list[list[float]]:
-        """Embed texts using Voyage 4-lite with Langfuse tracing (ADR-025).
+        """Embed texts using Voyage with Langfuse tracing (ADR-025).
+
+        Wrapped with a process-wide rate-limit circuit breaker. While
+        the breaker is tripped, this method short-circuits and raises a
+        RuntimeError immediately — no Voyage SDK call, no waiting on the
+        SDK's internal `tenacity` retry chain (which costs ~15s on
+        rate-limit responses). Tuning lives in `config/app.yaml` under
+        `embeddings.{hard_timeout_seconds, rate_limit_cooldown_seconds}`.
 
         Args:
             texts: One or more text strings to embed
@@ -65,33 +96,106 @@ class VoyageEmbedder:
             List of 1024-dimensional embedding vectors
 
         Raises:
-            RuntimeError: If embedding call fails
+            RuntimeError: If the call fails or the breaker is tripped. The
+                caller (`places.EmbeddingService.embed_and_store`)
+                catches this and treats it as non-fatal.
         """
         if not texts:
             raise ValueError("texts cannot be empty")
 
-        tracer = get_tracing_client()
-        span = tracer.generation(name="voyage_embed", model=self._model, input=texts)
+        global _VOYAGE_COOLDOWN_UNTIL
 
-        try:
-            result = await self._client.embed(
-                texts, model=self._model, input_type=input_type
+        cfg = get_config().embeddings
+        hard_timeout = cfg.hard_timeout_seconds
+        cooldown = cfg.rate_limit_cooldown_seconds
+
+        # 1. Fast-fail while the breaker is tripped — no SDK call, no wait.
+        now = time.monotonic()
+        if now < _VOYAGE_COOLDOWN_UNTIL:
+            cools_in = _VOYAGE_COOLDOWN_UNTIL - now
+            raise RuntimeError(
+                "Voyage circuit-breaker tripped (rate-limited or timeouts); "
+                f"cooling down for {cools_in:.1f}s. Skipping embed call."
             )
-            span.end()
-            return cast(list[list[float]], result.embeddings)
+
+        # `current_tool` is set by the agent tool that ultimately triggered
+        # this embed (find_saved → query, extraction → document). The
+        # feature dimension follows from whether a tool is in scope.
+        from kebi.core.agent._trace_context import current_tool, traced_call
+
+        tool = current_tool.get()
+        feature = "agent_tool" if tool else "extraction"
+        try:
+            async with traced_call(
+                "voyage_embed",
+                feature,
+                role="embedder",
+                input=texts,
+                extra={"input_type": input_type, "batch_size": len(texts)},
+            ) as t:
+                # 2. Hard timeout so the SDK's tenacity retry chain can't eat
+                #    15s of latency on rate-limit responses.
+                result = await asyncio.wait_for(
+                    self._client.embed(
+                        texts, model=self._model, input_type=input_type
+                    ),
+                    timeout=hard_timeout,
+                )
+                total = int(getattr(result, "total_tokens", 0) or 0)
+                if total:
+                    t.usage = {"input": total, "output": 0, "total": total}
+                    rate = get_config().pricing.embeddings.get(
+                        self._model.replace("-", "_")
+                    )
+                    if rate is not None:
+                        t.cost_usd = rate.cost_for(total)
+                return cast(list[list[float]], result.embeddings)
+        except TimeoutError as e:
+            _VOYAGE_COOLDOWN_UNTIL = time.monotonic() + cooldown
+            logger.warning(
+                "Voyage embed timed out after %.1fs; tripping circuit "
+                "breaker for %.0fs. Place rows will save without embeddings.",
+                hard_timeout,
+                cooldown,
+            )
+            raise RuntimeError(f"Voyage embed timed out after {hard_timeout}s") from e
         except Exception as e:
-            span.end(output={"error": str(e)}, level="ERROR")
+            # Trip the breaker only on rate-limit signals — other errors
+            # (transient network, model error) shouldn't lock everyone out.
+            if _looks_like_rate_limit(e):
+                _VOYAGE_COOLDOWN_UNTIL = time.monotonic() + cooldown
+                logger.warning(
+                    "Voyage rate-limit detected; tripping circuit breaker for %.0fs.",
+                    cooldown,
+                )
             logger.error("Embedding failed: %s", e)
             raise RuntimeError(f"Failed to embed texts: {e}") from e
+
+
+def _looks_like_rate_limit(exc: BaseException) -> bool:
+    """Best-effort detection of Voyage rate-limit errors without importing
+    `voyageai.error` at module top (keeps the import optional).
+    """
+    name = type(exc).__name__
+    if name in ("RateLimitError", "TooManyRequestsError"):
+        return True
+    msg = str(exc).lower()
+    return "rate limit" in msg or "rate-limit" in msg or "429" in msg
 
 
 # --- Factory ---
 
 
+@functools.cache
 def get_embedder() -> EmbedderProtocol:
     """Get embedder client for the configured role.
 
     Resolves provider and model from config/app.yaml under the 'models.embedder' key.
+
+    Process-wide singleton (one client per process). The underlying SDK
+    client (e.g. voyageai.AsyncClient) holds a connection pool that is
+    only useful if reused across requests. Tests that swap config call
+    `.cache_clear()` via the autouse fixture in tests/conftest.py.
 
     Returns:
         Embedder client implementing EmbedderProtocol

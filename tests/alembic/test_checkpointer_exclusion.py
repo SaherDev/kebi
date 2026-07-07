@@ -19,7 +19,7 @@ def test_library_tables_excluded() -> None:
 
 
 def test_non_library_tables_pass_through() -> None:
-    for name in ("places", "users", "user_memories", "recommendations"):
+    for name in ("users", "user_memories", "taste_model", "interactions"):
         assert (
             include_object(
                 object=None, name=name, type_="table", reflected=True, compare_to=None

@@ -15,7 +15,6 @@ def _base_state(steps_taken: int = 0, error_count: int = 0) -> AgentState:
         "error_count": error_count,
         "steps_taken": steps_taken,
         "reasoning_steps": [],
-        "last_recall_results": None,
         "user_id": "u1",
         "taste_profile_summary": "",
         "memory_summary": "",

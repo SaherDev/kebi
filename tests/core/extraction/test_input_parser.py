@@ -59,12 +59,23 @@ def test_http_url() -> None:
     assert result.input_type == "url_with_text"
 
 
-def test_url_with_query_params() -> None:
-    """Test parsing URL with query parameters."""
+def test_url_with_query_params_stripped_for_recognized_host() -> None:
+    """parse_input runs the URL through canonicalize_url, so tracking
+    params on recognized hosts (tiktok / instagram / youtube) are
+    stripped before the URL is returned. ADR-074 cache keying needs
+    this to actually hit on viral content."""
     result = parse_input("https://tiktok.com/v/123?param=value text")
-    assert result.url == "https://tiktok.com/v/123?param=value"
+    assert result.url == "https://tiktok.com/v/123"
     assert result.supplementary_text == "text"
     assert result.input_type == "url_with_text"
+
+
+def test_url_with_query_params_preserved_for_unknown_host() -> None:
+    """Unknown hosts pass through unchanged — universal tracking-param
+    stripping is a follow-up."""
+    result = parse_input("https://example.com/x?param=value text")
+    assert result.url == "https://example.com/x?param=value"
+    assert result.supplementary_text == "text"
 
 
 def test_multiple_urls_uses_first() -> None:

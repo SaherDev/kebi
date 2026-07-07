@@ -1,22 +1,24 @@
 """POST /v1/signal — behavioral signal endpoint (replaces /v1/feedback).
 
-Accepts a discriminated union on `signal_type`:
-- recommendation_accepted / recommendation_rejected (feature 022, ADR-060)
-- chip_confirm (feature 023)
+Accepts recommendation_accepted / recommendation_rejected (feature 022,
+ADR-060).
 
 Route is a thin facade (ADR-034) — all dispatch lives in SignalService.
 """
 
-from fastapi import APIRouter, Body, Depends, HTTPException, status
+from fastapi import APIRouter, Body, Depends, Request, status
 
-from kebi.api.deps import get_signal_service
+from kebi.api.deps import (
+    GatewayIdentity,
+    get_signal_service,
+    require_gateway_identity,
+)
+from kebi.api.rate_limit import limiter
 from kebi.api.schemas.signal import (
-    ChipConfirmSignalRequest,
-    RecommendationSignalRequest,
     SignalRequest,
     SignalResponse,
 )
-from kebi.core.signal.service import RecommendationNotFoundError, SignalService
+from kebi.core.signal.service import SignalService
 
 router = APIRouter()
 
@@ -24,34 +26,26 @@ router = APIRouter()
 @router.post(
     "/signal", response_model=SignalResponse, status_code=status.HTTP_202_ACCEPTED
 )
+@limiter.limit("60/minute")
 async def post_signal(
-    request: SignalRequest = Body(..., discriminator="signal_type"),  # noqa: B008
+    request: Request,
+    body: SignalRequest = Body(...),  # noqa: B008
+    identity: GatewayIdentity = Depends(require_gateway_identity),  # noqa: B008
     signal_service: SignalService = Depends(get_signal_service),  # noqa: B008
 ) -> SignalResponse:
-    """Handle behavioral signals — recommendation accept/reject or chip_confirm.
+    """Handle a recommendation accept/reject signal.
 
-    Pydantic handles discriminator-based variant dispatch; unknown values
-    produce 422 automatically. The route dispatches to SignalService with
-    the variant's load-bearing fields.
+    Pydantic rejects unknown `signal_type` values with 422 automatically.
+    The route dispatches to SignalService with the request's fields. The
+    recommendation_id is trusted, not DB-validated (ADR-078).
+
+    `user_id` is resolved from the verified gateway identity — never the
+    request body — so a caller cannot poison another user's taste model.
     """
-    try:
-        if isinstance(request, ChipConfirmSignalRequest):
-            await signal_service.handle_signal(
-                signal_type=request.signal_type,
-                user_id=request.user_id,
-                chip_metadata=request.metadata,
-            )
-        elif isinstance(request, RecommendationSignalRequest):
-            await signal_service.handle_signal(
-                signal_type=request.signal_type,
-                user_id=request.user_id,
-                recommendation_id=request.recommendation_id,
-                place_id=request.place_id,
-            )
-    except RecommendationNotFoundError:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Recommendation not found",
-        ) from None
-
+    await signal_service.handle_signal(
+        signal_type=body.signal_type,
+        user_id=identity.user_id,
+        recommendation_id=body.recommendation_id,
+        place_core_id=body.place_core_id,
+    )
     return SignalResponse()

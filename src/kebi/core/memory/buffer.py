@@ -17,8 +17,22 @@ if TYPE_CHECKING:
 
 _BUFFER_KEY_PREFIX = "memory:turns:"
 
+# Per-message and per-buffer caps. A single message can't push more than
+# 1000 chars into the buffer (longer is truncated). The buffer itself
+# holds at most 50 messages — once full, further appends are dropped
+# atomically inside Redis. Both numbers are headroom over the normal
+# debounce_messages=5 threshold (config/app.yaml) so a healthy user is
+# never close to them; they exist to bound adversarial growth, not to
+# shape product behavior.
+_MAX_MESSAGE_CHARS = 1000
+_MAX_BUFFER_LEN = 50
+
 
 _APPEND_LUA = """
+local cur = redis.call('LLEN', KEYS[1])
+if tonumber(cur) >= tonumber(ARGV[3]) then
+  return tonumber(cur)
+end
 redis.call('RPUSH', KEYS[1], ARGV[1])
 redis.call('EXPIRE', KEYS[1], ARGV[2])
 return redis.call('LLEN', KEYS[1])
@@ -47,15 +61,22 @@ class MessageBuffer:
         return f"{_BUFFER_KEY_PREFIX}{user_id}"
 
     async def append(self, user_id: str, message: str) -> int:
-        """Append a message and return the new buffer length."""
+        """Append a message and return the new buffer length.
+
+        Per-message length is capped client-side; the per-buffer length
+        cap is enforced atomically inside the Lua script so concurrent
+        appends from multiple replicas cannot overshoot.
+        """
+        clipped = message[:_MAX_MESSAGE_CHARS]
         result = await cast(
             Any,
             self._redis.eval(
                 _APPEND_LUA,
                 1,
                 self._key(user_id),
-                message,
+                clipped,
                 str(self._ttl_seconds),
+                str(_MAX_BUFFER_LEN),
             ),
         )
         return int(result)

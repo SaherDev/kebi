@@ -5,9 +5,10 @@ from unittest.mock import AsyncMock
 import pytest
 from fastapi.testclient import TestClient
 
-from kebi.api.deps import get_chat_service
+from kebi.api.deps import get_chat_service, get_consult_quota_service
 from kebi.api.main import app
 from kebi.api.schemas.chat import ChatResponse
+from kebi.core.chat.consult_quota import ConsultQuotaService
 from kebi.core.chat.service import ChatService
 
 
@@ -26,80 +27,13 @@ def client(mock_chat_service: AsyncMock) -> TestClient:
 
 
 class TestChatRouteHappyPath:
-    """Verify POST /v1/chat returns 200 for each intent type."""
-
-    def test_consult_intent_returns_200_with_type(
-        self, client: TestClient, mock_chat_service: AsyncMock
-    ) -> None:
-        """Response shape for consult intent."""
-        mock_chat_service.run.return_value = ChatResponse(
-            type="consult",
-            message="Try Nara Eatery",
-            data={
-                "results": [
-                    {
-                        "place": {"place_name": "Nara Eatery"},
-                        "confidence": 0.87,
-                        "source": "saved",
-                    }
-                ],
-                "reasoning_steps": [],
-            },
-        )
-
-        response = client.post(
-            "/v1/chat",
-            json={"user_id": "user_1", "message": "cheap dinner nearby"},
-        )
-
-        assert response.status_code == 200
-        data = response.json()
-        assert data["type"] == "consult"
-        assert data["message"] == "Try Nara Eatery"
-        assert data["data"] is not None
-
-    def test_extract_place_intent_returns_200_with_type(
-        self, client: TestClient, mock_chat_service: AsyncMock
-    ) -> None:
-        """Response shape for extract-place intent."""
-        mock_chat_service.run.return_value = ChatResponse(
-            type="extract-place",
-            message="Saved: Ichiran Ramen",
-            data={"places": []},
-        )
-
-        response = client.post(
-            "/v1/chat",
-            json={"user_id": "user_1", "message": "https://tiktok.com/video/123"},
-        )
-
-        assert response.status_code == 200
-        data = response.json()
-        assert data["type"] == "extract-place"
-
-    def test_recall_intent_returns_200_with_type(
-        self, client: TestClient, mock_chat_service: AsyncMock
-    ) -> None:
-        """Response shape for recall intent."""
-        mock_chat_service.run.return_value = ChatResponse(
-            type="recall",
-            message="Found 1 place matching your search.",
-            data={"results": [], "total": 0, "empty_state": False},
-        )
-
-        response = client.post(
-            "/v1/chat",
-            json={"user_id": "user_1", "message": "that ramen place I saved"},
-        )
-
-        assert response.status_code == 200
-        data = response.json()
-        assert data["type"] == "recall"
+    """Verify POST /v1/chat returns 200. ADR-075: the agent is a
+    zero-tool Q&A surface — only `type="agent"` (or `"error"`)."""
 
     def test_agent_intent_returns_200_with_type(
         self, client: TestClient, mock_chat_service: AsyncMock
     ) -> None:
-        """Response shape for agent response (ADR-065: replaces legacy assistant)."""
+        """Response shape for agent response (ADR-065/ADR-075)."""
         mock_chat_service.run.return_value = ChatResponse(
             type="agent",
             message="Tipping is not expected in Japan.",
@@ -108,69 +42,34 @@ class TestChatRouteHappyPath:
 
         response = client.post(
             "/v1/chat",
-            json={"user_id": "user_1", "message": "is tipping expected in Japan?"},
+            json={"message": "is tipping expected in Japan?"},
         )
 
         assert response.status_code == 200
         data = response.json()
         assert data["type"] == "agent"
+        assert data["message"] == "Tipping is not expected in Japan."
 
     def test_chat_with_location_passes_through(
         self, client: TestClient, mock_chat_service: AsyncMock
     ) -> None:
         """POST /v1/chat accepts optional location field."""
         mock_chat_service.run.return_value = ChatResponse(
-            type="consult",
-            message="Try Nara Eatery",
-            data={
-                "results": [
-                    {
-                        "place": {"place_name": "Nara Eatery"},
-                        "confidence": 0.87,
-                        "source": "saved",
-                    }
-                ],
-                "reasoning_steps": [],
-            },
+            type="agent",
+            message="Magdeburg is known for its cathedral.",
+            data={"reasoning_steps": []},
         )
 
         response = client.post(
             "/v1/chat",
             json={
-                "user_id": "user_1",
-                "message": "cheap dinner nearby",
+                "message": "what's this city known for",
                 "location": {"lat": 13.7563, "lng": 100.5018},
             },
         )
 
         assert response.status_code == 200
         mock_chat_service.run.assert_called_once()
-
-
-class TestChatRouteClarification:
-    """Phase 4 / US2 — T015: Verify clarification response from route."""
-
-    def test_clarification_response_returns_null_data(
-        self, client: TestClient, mock_chat_service: AsyncMock
-    ) -> None:
-        """Route returns type='clarification' with null data for ambiguous input."""
-        mock_chat_service.run.return_value = ChatResponse(
-            type="clarification",
-            message=(
-                "Are you looking for a saved place called Fuji or a recommendation?"
-            ),
-            data=None,
-        )
-
-        response = client.post(
-            "/v1/chat",
-            json={"user_id": "user_1", "message": "fuji"},
-        )
-
-        assert response.status_code == 200
-        data = response.json()
-        assert data["type"] == "clarification"
-        assert data["data"] is None
 
 
 class TestChatRouteToolCallsUsed:
@@ -188,7 +87,7 @@ class TestChatRouteToolCallsUsed:
 
         response = client.post(
             "/v1/chat",
-            json={"user_id": "user_1", "message": "find me ramen"},
+            json={"message": "find me ramen"},
         )
 
         assert response.status_code == 200
@@ -206,7 +105,7 @@ class TestChatRouteToolCallsUsed:
 
         response = client.post(
             "/v1/chat",
-            json={"user_id": "user_1", "message": "hello"},
+            json={"message": "hello"},
         )
 
         assert response.status_code == 200
@@ -217,20 +116,51 @@ class TestChatRouteToolCallsUsed:
 class TestChatRouteValidation:
     """Verify request validation for POST /v1/chat."""
 
-    def test_missing_user_id_returns_422(self) -> None:
-        """Missing user_id field is rejected with 422."""
-        test_client = TestClient(app)
-        response = test_client.post(
-            "/v1/chat",
-            json={"message": "cheap dinner"},
-        )
-        assert response.status_code == 422
-
     def test_missing_message_returns_422(self) -> None:
         """Missing message field is rejected with 422."""
         test_client = TestClient(app)
         response = test_client.post(
             "/v1/chat",
-            json={"user_id": "user_1"},
+            json={},
         )
         assert response.status_code == 422
+
+
+class TestChatRouteConsultQuota:
+    """The daily consult quota short-circuits before the agent runs."""
+
+    def test_quota_exhausted_returns_error_with_reason(
+        self, mock_chat_service: AsyncMock
+    ) -> None:
+        denying_quota = AsyncMock(spec=ConsultQuotaService)
+        denying_quota.check_and_increment = AsyncMock(return_value=False)
+        app.dependency_overrides[get_chat_service] = lambda: mock_chat_service
+        app.dependency_overrides[get_consult_quota_service] = lambda: denying_quota
+        try:
+            response = TestClient(app).post("/v1/chat", json={"message": "hi"})
+            assert response.status_code == 200
+            data = response.json()
+            assert data["type"] == "error"
+            assert data["data"]["reason"] == "daily_limit_reached"
+            # The agent must not run once the quota is spent.
+            mock_chat_service.run.assert_not_awaited()
+        finally:
+            app.dependency_overrides.pop(get_chat_service, None)
+            app.dependency_overrides.pop(get_consult_quota_service, None)
+
+    def test_within_quota_runs_agent(self, mock_chat_service: AsyncMock) -> None:
+        allowing_quota = AsyncMock(spec=ConsultQuotaService)
+        allowing_quota.check_and_increment = AsyncMock(return_value=True)
+        mock_chat_service.run.return_value = ChatResponse(
+            type="agent", message="ok", data={"reasoning_steps": []}
+        )
+        app.dependency_overrides[get_chat_service] = lambda: mock_chat_service
+        app.dependency_overrides[get_consult_quota_service] = lambda: allowing_quota
+        try:
+            response = TestClient(app).post("/v1/chat", json={"message": "hi"})
+            assert response.status_code == 200
+            assert response.json()["type"] == "agent"
+            mock_chat_service.run.assert_awaited_once()
+        finally:
+            app.dependency_overrides.pop(get_chat_service, None)
+            app.dependency_overrides.pop(get_consult_quota_service, None)

@@ -12,8 +12,10 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from kebi.core.agent.location import MovementMode, Reach
 
 logger = logging.getLogger(__name__)
 
@@ -96,11 +98,19 @@ class OrchestratorOptionsConfig(BaseModel):
         return self
 
 
+# Selector keys inside the orchestrator block — every other key is a model
+# option. `default` picks the standard-tier orchestrator; `advanced`
+# (optional) names the option the top plan tier gets, exposed as the
+# separate `orchestrator_advanced` role so it survives boot resolution
+# instead of being collapsed away with the other options.
+_ORCH_RESERVED_KEYS = frozenset({"default", "advanced"})
+
+
 def _split_orchestrator_block(raw_orch: dict[str, Any]) -> OrchestratorOptionsConfig:
     """Parse the YAML orchestrator block into OrchestratorOptionsConfig.
 
-    `default` is the only reserved key; every other key is an option name
-    mapping to an `LLMRoleConfig`-shaped dict.
+    `default` and `advanced` are reserved selector keys; every other key is
+    an option name mapping to an `LLMRoleConfig`-shaped dict.
     """
     if "default" not in raw_orch:
         raise ValueError(
@@ -108,7 +118,7 @@ def _split_orchestrator_block(raw_orch: dict[str, Any]) -> OrchestratorOptionsCo
             "its option keys"
         )
     default = raw_orch["default"]
-    options = {k: v for k, v in raw_orch.items() if k != "default"}
+    options = {k: v for k, v in raw_orch.items() if k not in _ORCH_RESERVED_KEYS}
     return OrchestratorOptionsConfig(default=default, options=options)
 
 
@@ -119,18 +129,25 @@ def _resolve_orchestrator(
     `LLMRoleConfig` dict (ADR-068).
 
     No-op if the block is already flat (i.e. has top-level `provider`/`model`).
-    Mutates `raw_models["orchestrator"]` in place and returns the same dict.
+    Mutates `raw_models` in place and returns it.
 
     - `agent_model` is None  → use `default`.
     - `agent_model` matches an option key → use that option.
     - `agent_model` is set but unknown → log a warning and fall back to
       `default`. Boot continues so a typo in env vars does not kill prod.
     - `default` missing or pointing at a missing option → raises.
+
+    When the block names an `advanced` option, that option is emitted as the
+    separate `orchestrator_advanced` role (selected per request for the
+    `advanced_models_enabled` plan tier). It references one of the existing
+    options — no duplicate model definition. A missing `advanced` key just
+    means the role is not defined (the agent path falls back to standard).
     """
     orch = raw_models.get("orchestrator")
     if not isinstance(orch, dict) or "provider" in orch:
         return raw_models
 
+    advanced_key = orch.get("advanced")
     parsed = _split_orchestrator_block(orch)
     chosen = parsed.default
     if agent_model is not None:
@@ -145,6 +162,13 @@ def _resolve_orchestrator(
                 parsed.default,
             )
     raw_models["orchestrator"] = parsed.options[chosen].model_dump()
+    if advanced_key is not None:
+        if advanced_key not in parsed.options:
+            raise ValueError(
+                f"orchestrator.advanced={advanced_key!r} not found in options "
+                f"{sorted(parsed.options)}"
+            )
+        raw_models["orchestrator_advanced"] = parsed.options[advanced_key].model_dump()
     return raw_models
 
 
@@ -235,7 +259,7 @@ class ExtractionConfig(BaseModel):
         "price_range",
         "lat",
         "lng",
-        "source_url",
+        "source_ref",
         "validated_at",
         "confidence",
         "source",
@@ -243,6 +267,11 @@ class ExtractionConfig(BaseModel):
     confidence: ConfidenceConfig = ConfidenceConfig()
     circuit_breaker_threshold: int = 3
     circuit_breaker_cooldown: float = 900.0
+    # ADR-074: TTL for the URL-keyed extraction result cache. 30 days
+    # — long enough to capture viral spread of a TikTok / Instagram /
+    # YouTube share; short enough that edited or deleted content
+    # washes out within a month.
+    result_cache_ttl_seconds: int = 30 * 24 * 60 * 60
     vision: ExtractionVisionConfig = ExtractionVisionConfig()
     whisper: ExtractionWhisperConfig = ExtractionWhisperConfig()
     subtitle: ExtractionSubtitleConfig = ExtractionSubtitleConfig()
@@ -279,6 +308,12 @@ class EmbeddingsConfig(BaseModel):
     list and emits each available value separated by
     `description_separator`. Retrieval evals can re-tune field order and
     inclusion by editing the config and re-embedding — no code change.
+
+    `hard_timeout_seconds` / `rate_limit_cooldown_seconds` tune the
+    process-wide circuit breaker in `providers/embeddings.VoyageEmbedder`:
+    the SDK's internal `tenacity` retry chain takes ~15s to exhaust on
+    rate-limit responses, so the breaker hard-times-out individual calls
+    and short-circuits subsequent ones for `rate_limit_cooldown_seconds`.
     """
 
     dimensions: int = 1024
@@ -297,6 +332,9 @@ class EmbeddingsConfig(BaseModel):
         "city",
         "country",
     ]
+    # Voyage rate-limit circuit breaker tuning.
+    hard_timeout_seconds: float = 3.0
+    rate_limit_cooldown_seconds: float = 60.0
 
 
 class SystemPromptsConfig(BaseModel):
@@ -306,24 +344,6 @@ class SystemPromptsConfig(BaseModel):
     )
 
 
-class ConsultConfig(BaseModel):
-    max_alternatives: int = 2
-    placeholder_photo_url: str = "https://placehold.co/800x450.webp"
-    response_timeout_seconds: int = 10
-    default_radius_m: int = 1500
-    nearby_radius_m: int = 500
-    walking_radius_m: int = 1000
-    named_location_radius_m: int = 10000
-
-
-class RecallConfig(BaseModel):
-    max_results: int = 10
-    rrf_k: int = 60
-    candidate_multiplier: int = 2
-    min_rrf_score: float = 0.01
-    max_cosine_distance: float = 0.65
-
-
 class TasteRegenConfig(BaseModel):
     """Regen thresholds for taste profile regeneration."""
 
@@ -331,37 +351,37 @@ class TasteRegenConfig(BaseModel):
     early_signal_threshold: int = 10
 
 
-class WarmingBlendConfig(BaseModel):
-    """Warming-tier candidate-count ratio (feature 023).
+class SignalWeightsConfig(BaseModel):
+    """Per-signal evidence weight in taste aggregation (the conviction ladder).
 
-    Applied in `ConsultService.consult` when the user's signal_tier is
-    "warming". Values must sum to 1.0 — enforced below.
+    A weight is how many units of taste evidence a signal contributes to the
+    category/tag/location tree. A passive link-share `save` is worth nothing on
+    its own (`save: 0`); a `saved_recommendation` carries a base weight; the
+    Library pills `visited` and `liked` add graduated bonuses on top of a saved
+    place's base, while `liked_negative` weights a disliked place into the
+    rejected branch. Defaults order the ladder visited+liked ≫ liked > saved_
+    recommendation > accepted.
     """
 
-    discovered: float = 0.8
-    saved: float = 0.2
+    save: int = 0
+    accepted: int = 1
+    saved_recommendation: int = 2
+    visited: int = 2
+    liked: int = 3
+    liked_negative: int = 3
+    rejected: int = 1
 
-    @model_validator(mode="after")
-    def _sum_to_one(self) -> "WarmingBlendConfig":
-        if abs((self.discovered + self.saved) - 1.0) > 1e-6:
-            raise ValueError(
-                f"warming_blend weights must sum to 1.0 "
-                f"(got discovered={self.discovered}, saved={self.saved})"
-            )
-        return self
+    def as_mapping(self) -> dict[str, int]:
+        """Flat lever→weight map passed to aggregate_signal_counts."""
+        return self.model_dump()
 
 
 class TasteModelConfig(BaseModel):
-    """Taste model configuration (ADR-058: signal_counts + LLM summary + chips)."""
+    """Taste model configuration (ADR-058: signal_counts + LLM summary)."""
 
     debounce_window_seconds: int = 30
     regen: TasteRegenConfig = TasteRegenConfig()
-    chip_threshold: int = 2
-    chip_max_count: int = 8
-    chip_selection_stages: dict[str, int] = Field(
-        default_factory=lambda: {"round_1": 5, "round_2": 20, "round_3": 50}
-    )
-    warming_blend: WarmingBlendConfig = WarmingBlendConfig()
+    signal_weights: SignalWeightsConfig = SignalWeightsConfig()
 
 
 class MemoryConfidenceConfig(BaseModel):
@@ -385,6 +405,67 @@ class MemoryConfig(BaseModel):
     extraction: MemoryExtractionConfig = MemoryExtractionConfig()
 
 
+class HomeConfig(BaseModel):
+    """Home screen greeting + chips configuration (ADR-111).
+
+    `cache_ttl_seconds` bounds how long a generated greeting+chips payload
+    lives in Redis; the cache key's daypart segment guarantees a stale
+    "good morning" can never serve into the evening regardless of TTL.
+    `chip_min`/`chip_max` bound the generated chip list and the static
+    fallback emits exactly `chip_min` chips.
+    """
+
+    cache_ttl_seconds: int = 3600
+    chip_min: int = 3
+    chip_max: int = 4
+
+    @model_validator(mode="after")
+    def _bounds(self) -> "HomeConfig":
+        if self.cache_ttl_seconds < 1:
+            raise ValueError(
+                f"home.cache_ttl_seconds must be >= 1 (got {self.cache_ttl_seconds})"
+            )
+        if self.chip_min < 1 or self.chip_max < 1:
+            raise ValueError(
+                "home.chip_min / chip_max must be >= 1 "
+                f"(got chip_min={self.chip_min}, chip_max={self.chip_max})"
+            )
+        if self.chip_min > self.chip_max:
+            raise ValueError(
+                "home.chip_min must be <= chip_max "
+                f"(got chip_min={self.chip_min}, chip_max={self.chip_max})"
+            )
+        return self
+
+
+class UserIntentConfig(BaseModel):
+    """Write gates for the "what you wanted" recall list (ADR-110).
+
+    The agent-signal gate (a turn actually surfaced places) is the primary
+    filter applied at the call site; these are the cheap heuristic backstop.
+    `min_words` rejects terse turns, `stoplist` drops pure confirmations /
+    ordinals / pronoun replies, and `dedup_window_seconds` suppresses a new
+    intent that duplicates the user's most recent one within the window.
+    """
+
+    min_words: int = 3
+    stoplist: list[str] = []
+    dedup_window_seconds: int = 600
+
+    @model_validator(mode="after")
+    def _bounds(self) -> "UserIntentConfig":
+        if self.min_words < 1:
+            raise ValueError(
+                f"user_intents.min_words must be >= 1 (got {self.min_words})"
+            )
+        if self.dedup_window_seconds < 0:
+            raise ValueError(
+                "user_intents.dedup_window_seconds must be >= 0 "
+                f"(got {self.dedup_window_seconds})"
+            )
+        return self
+
+
 class ProviderEndpointConfig(BaseModel):
     """Non-secret provider config (base URL, etc.). API keys live in EnvConfig."""
 
@@ -402,21 +483,6 @@ class AppProvidersConfig(BaseModel):
     )
 
 
-class PlacesConfig(BaseModel):
-    """PlacesService cache TTL and per-request fetch cap (ADR-054, feature 019).
-
-    - cache_ttl_days: single lifetime for both the Tier 2 geo cache and the
-      Tier 3 enrichment cache. Both set_batch methods in PlacesCache use
-      `cache_ttl_days * 86400` seconds. Default 30 days.
-    - max_enrichment_batch: per-request cap on external provider fetches
-      in PlacesService.enrich_batch(geo_only=False). Counts unique provider_id,
-      not input positions.
-    """
-
-    cache_ttl_days: int = 30
-    max_enrichment_batch: int = 10
-
-
 class PromptConfig(BaseModel):
     """A loaded prompt template (ADR-059).
 
@@ -430,22 +496,128 @@ class PromptConfig(BaseModel):
 
 
 class ToolTimeoutsConfig(BaseModel):
-    """Per-tool asyncio.wait_for budgets in seconds (feature 027 M2, M9).
+    """Per-tool asyncio.wait_for budgets in seconds.
 
-    Consumed by the agent tool wrappers (M5) and the timeout guard (M9).
-    Not read in this feature — presence + type is the only requirement.
+    Consumed by the timeout guard in `core/agent/tools/_with_timeout.py`.
+    One field per live tool — extended as new consult-family tools land.
     """
 
-    recall: int = 5
-    consult: int = 10
-    save: int = 60  # accommodates Apify-backed Google Maps list scrapes
+    find_saved: int = 8
+    suggest_places: int = 18
+    discover_places: int = 8
 
     @model_validator(mode="after")
     def _positive_integers(self) -> "ToolTimeoutsConfig":
-        if self.recall < 1 or self.consult < 1 or self.save < 1:
+        if self.find_saved < 1 or self.suggest_places < 1 or self.discover_places < 1:
             raise ValueError(
                 "agent.tool_timeouts_seconds fields must be >= 1 "
-                f"(got recall={self.recall}, consult={self.consult}, save={self.save})"
+                f"(got find_saved={self.find_saved}, "
+                f"suggest_places={self.suggest_places}, "
+                f"discover_places={self.discover_places})"
+            )
+        return self
+
+
+class FindSavedConfig(BaseModel):
+    """Per-tool knobs for `find_saved`.
+
+    `default_limit` is what the tool uses when the agent omits the LLM
+    `limit` arg. `max_limit` caps any agent-supplied value so the LLM
+    cannot ask for an unbounded result set.
+    """
+
+    default_limit: int = 10
+    max_limit: int = 25
+
+    @model_validator(mode="after")
+    def _positive_integers(self) -> "FindSavedConfig":
+        if self.default_limit < 1 or self.max_limit < 1:
+            raise ValueError(
+                "agent.find_saved.default_limit / max_limit must be >= 1 "
+                f"(got default_limit={self.default_limit}, "
+                f"max_limit={self.max_limit})"
+            )
+        if self.default_limit > self.max_limit:
+            raise ValueError(
+                "agent.find_saved.default_limit must be <= max_limit "
+                f"(got default_limit={self.default_limit}, "
+                f"max_limit={self.max_limit})"
+            )
+        return self
+
+
+class SuggestPlacesConfig(BaseModel):
+    """Per-tool knobs for `suggest_places`.
+
+    `default_limit` / `max_limit` mirror `FindSavedConfig` — agent-facing
+    caps on returned candidates. `name_count` is how many candidate names
+    the namer LLM is asked to produce per call — kept higher than the
+    typical limit so the provider-validation + constraint-filter steps
+    have headroom to drop misses. `provider_concurrency` bounds the
+    fan-out into `PlacesSearchService.find()` so a noisy namer can't
+    overwhelm Google's quota.
+    """
+
+    default_limit: int = 5
+    max_limit: int = 15
+    name_count: int = 8
+    provider_concurrency: int = 5
+
+    @model_validator(mode="after")
+    def _positive_integers(self) -> "SuggestPlacesConfig":
+        if (
+            self.default_limit < 1
+            or self.max_limit < 1
+            or self.name_count < 1
+            or self.provider_concurrency < 1
+        ):
+            raise ValueError(
+                "agent.suggest_places fields must be >= 1 "
+                f"(got default_limit={self.default_limit}, "
+                f"max_limit={self.max_limit}, name_count={self.name_count}, "
+                f"provider_concurrency={self.provider_concurrency})"
+            )
+        if self.default_limit > self.max_limit:
+            raise ValueError(
+                "agent.suggest_places.default_limit must be <= max_limit "
+                f"(got default_limit={self.default_limit}, "
+                f"max_limit={self.max_limit})"
+            )
+        if self.name_count < self.default_limit:
+            raise ValueError(
+                "agent.suggest_places.name_count must be >= default_limit "
+                "(namer must produce enough candidates to survive provider "
+                "misses and constraint filtering) "
+                f"(got name_count={self.name_count}, "
+                f"default_limit={self.default_limit})"
+            )
+        return self
+
+
+class DiscoverPlacesConfig(BaseModel):
+    """Per-tool knobs for `discover_places`.
+
+    `default_limit` / `max_limit` mirror the other consult-family tools.
+    No `name_count` / `provider_concurrency` — the tool issues exactly
+    one `PlacesSearchService.find()` call (no fan-out, no namer).
+    """
+
+    default_limit: int = 10
+    max_limit: int = 25
+
+    @model_validator(mode="after")
+    def _positive_integers(self) -> "DiscoverPlacesConfig":
+        if self.default_limit < 1 or self.max_limit < 1:
+            raise ValueError(
+                "agent.discover_places.default_limit / max_limit must be >= 1 "
+                f"(got default_limit={self.default_limit}, "
+                f"max_limit={self.max_limit})"
+            )
+        if self.default_limit > self.max_limit:
+            raise ValueError(
+                "agent.discover_places.default_limit must be <= max_limit "
+                f"(got default_limit={self.default_limit}, "
+                f"max_limit={self.max_limit})"
             )
         return self
 
@@ -453,21 +625,25 @@ class ToolTimeoutsConfig(BaseModel):
 class AgentConfig(BaseModel):
     """Typed configuration for the agent path (feature 027 M2, ADR-062).
 
-    `max_steps` and `max_errors` bound the graph's should_continue loop (M3 reads these).
-    `checkpointer_ttl_seconds` is reserved for a future cleanup job
-    (Postgres has no native TTL).
+    `max_steps` and `max_errors` bound the graph's should_continue loop
+    (M3 reads these). `checkpointer_ttl_seconds` is reserved for a future
+    cleanup job (Postgres has no native TTL).
     `prompt_caching_enabled` wraps the system message in an Anthropic
     `cache_control: ephemeral` block (ADR-067). Disable for non-Anthropic orchestrators.
     """
 
     max_steps: int = 10
     max_errors: int = 3
+    max_tool_calls: int = 5
     max_history_messages: int = 40
     tool_result_window: int = 2
     state_message_cap: int = 200
     state_message_floor: int = 150
     checkpointer_ttl_seconds: int = 86400
     tool_timeouts_seconds: ToolTimeoutsConfig = ToolTimeoutsConfig()
+    find_saved: FindSavedConfig = FindSavedConfig()
+    suggest_places: SuggestPlacesConfig = SuggestPlacesConfig()
+    discover_places: DiscoverPlacesConfig = DiscoverPlacesConfig()
     prompt_caching_enabled: bool = True
 
     @model_validator(mode="after")
@@ -475,20 +651,28 @@ class AgentConfig(BaseModel):
         if (
             self.max_steps < 1
             or self.max_errors < 1
+            or self.max_tool_calls < 1
             or self.max_history_messages < 1
             or self.checkpointer_ttl_seconds < 1
         ):
             raise ValueError(
-                "agent.max_steps / max_errors / max_history_messages / "
-                "checkpointer_ttl_seconds must be >= 1 "
+                "agent.max_steps / max_errors / max_tool_calls / "
+                "max_history_messages / checkpointer_ttl_seconds must be >= 1 "
                 f"(got max_steps={self.max_steps}, max_errors={self.max_errors}, "
+                f"max_tool_calls={self.max_tool_calls}, "
                 f"max_history_messages={self.max_history_messages}, "
                 f"checkpointer_ttl_seconds={self.checkpointer_ttl_seconds})"
             )
+        if self.max_tool_calls > self.max_steps:
+            raise ValueError(
+                "agent.max_tool_calls must be <= max_steps "
+                "(the LLM-round ceiling must accommodate the tool budget) "
+                f"(got max_tool_calls={self.max_tool_calls}, "
+                f"max_steps={self.max_steps})"
+            )
         if self.tool_result_window < 0:
             raise ValueError(
-                "agent.tool_result_window must be >= 0 "
-                f"(got {self.tool_result_window})"
+                f"agent.tool_result_window must be >= 0 (got {self.tool_result_window})"
             )
         if self.state_message_floor < 1 or self.state_message_cap < 1:
             raise ValueError(
@@ -512,6 +696,129 @@ class AgentConfig(BaseModel):
         return self
 
 
+class MovementRadiusTiers(BaseModel):
+    """Base search radius in metres per scope tier, before mode/reach scaling."""
+
+    walkable: float = 1000.0
+    neighborhood: float = 2500.0
+    city: float = 7000.0
+    metro: float = 45000.0
+
+
+class MovementFallback(BaseModel):
+    """Neutral mobility capability applied when a `/v1/chat` request omits
+    `movement_profile` (ADR-085 / ADR-086).
+
+    Deliberately conservative: walking is listed first so the system's
+    deterministic mode pick — `available_modes[0]` when the resolver leaves
+    `effective_mode` empty — is walking rather than something that silently
+    widens every search radius. The resolver may still pick transit per turn
+    based on the working location and the message.
+    """
+
+    reach: Reach = "normal"
+    available_modes: list[MovementMode] = ["walking", "transit"]
+
+
+class MovementConfig(BaseModel):
+    """Movement / search-scope configuration (ADR-084).
+
+    `radius_tiers` × `mode_multiplier` produce the per-turn search radius;
+    `reach` shifts the tier first — see `core/agent/location.resolve_radius`.
+    """
+
+    radius_tiers: MovementRadiusTiers = MovementRadiusTiers()
+    mode_multiplier: dict[str, float] = {
+        "walking": 1.0,
+        "cycling": 1.5,
+        "transit": 2.0,
+        "rideshare": 2.2,
+        "motorbike": 2.4,
+        "driving": 2.6,
+    }
+    # Location-density scaling (ADR-084): "near me" reaches further in a
+    # sparse area than a dense one. The class is read from the geocoder's
+    # place type — never a static table.
+    density_factor: dict[str, float] = {
+        "dense": 0.7,
+        "medium": 1.0,
+        "sparse": 1.6,
+    }
+    fallback: MovementFallback = MovementFallback()
+
+
+class VoyagePricing(BaseModel):
+    """Per-1M-token rate for Voyage embeddings (not in Langfuse catalog)."""
+
+    input_per_1m: float
+
+    def cost_for(self, total_tokens: int) -> float:
+        return self.input_per_1m * (total_tokens / 1_000_000)
+
+
+class WhisperPricing(BaseModel):
+    """Per-second audio rate for Groq Whisper (not in Langfuse catalog)."""
+
+    per_audio_second: float
+
+    def cost_for(self, duration_seconds: float) -> float:
+        return self.per_audio_second * duration_seconds
+
+
+class GooglePlacesPricing(BaseModel):
+    """Per-call USD by endpoint path. SKU tier inferred from field mask;
+    today every path is Enterprise (the production `_FIELD_MASK` includes
+    Enterprise-tier fields). If we ever drop atmosphere fields back to
+    Essentials, swap the numbers — the helper signature stays the same.
+    """
+
+    per_endpoint: dict[str, float]
+
+    def cost_for(self, endpoint: str) -> float:
+        return self.per_endpoint.get(endpoint, 0.0)
+
+
+class ApifyActorPricing(BaseModel):
+    """Per-result rate for one Apify actor. Multiplied by the
+    `x-apify-pagination-total` header at the call site — no follow-up
+    HTTP request to the run object.
+    """
+
+    per_result: float
+
+
+class ApifyPricing(BaseModel):
+    google_maps_list: ApifyActorPricing
+    instagram_post: ApifyActorPricing
+
+    def cost_for(self, actor_key: str, item_count: int) -> float:
+        actor: ApifyActorPricing | None = getattr(self, actor_key, None)
+        if actor is None:
+            return 0.0
+        return actor.per_result * item_count
+
+
+class ExternalProviderPricing(BaseModel):
+    google_places: GooglePlacesPricing
+    apify: ApifyPricing
+
+
+class PricingConfig(BaseModel):
+    """Provider rates for cost attribution in Langfuse traces.
+
+    LLM completions and embeddings priced by Langfuse's catalog are
+    listed under `llm` for human reconciliation only — code never reads
+    those values. The fields that ARE read by code: `embeddings`,
+    `transcription`, and `external`.
+    """
+
+    currency: str = "USD"
+    llm: dict[str, dict[str, float]] = {}
+    embeddings: dict[str, VoyagePricing] = {}
+    transcription: dict[str, WhisperPricing] = {}
+    external: ExternalProviderPricing
+
+
 class AppConfig(BaseModel):
     app: AppMeta
     models: dict[str, LLMRoleConfig]
@@ -520,12 +827,13 @@ class AppConfig(BaseModel):
     external_services: ExternalServicesConfig = ExternalServicesConfig()
     embeddings: EmbeddingsConfig = EmbeddingsConfig()
     system_prompts: SystemPromptsConfig = SystemPromptsConfig()
-    consult: ConsultConfig = ConsultConfig()
-    recall: RecallConfig = RecallConfig()
     taste_model: TasteModelConfig = TasteModelConfig()
     memory: MemoryConfig = MemoryConfig()
-    places: PlacesConfig = PlacesConfig()
+    home: HomeConfig = HomeConfig()
+    user_intents: UserIntentConfig = UserIntentConfig()
     agent: AgentConfig = AgentConfig()
+    movement: MovementConfig = MovementConfig()
+    pricing: PricingConfig
     prompts: dict[str, PromptConfig] = {}
 
     @model_validator(mode="before")
@@ -546,7 +854,37 @@ class AppConfig(BaseModel):
 # Per-prompt required template-slot registry (feature 027 FR-018a).
 # Eager validation at _load_prompts() ensures any missing slot aborts boot.
 _REQUIRED_PROMPT_SLOTS: dict[str, list[str]] = {
-    "agent": ["{taste_profile_summary}", "{memory_summary}"],
+    "agent": [
+        "{location_context}",
+        "{movement_context}",
+        "{taste_profile_summary}",
+        "{memory_summary}",
+    ],
+    "location_resolver": [
+        "{current_message}",
+        "{conversation_history}",
+        "{user_actual_location}",
+        "{previous_working_location}",
+        "{distance_from_previous}",
+        "{mobility_profile}",
+    ],
+    "candidate_namer": [
+        "{intent}",
+        "{location_block}",
+        "{mobility_block}",
+        "{categories_block}",
+        "{hard_constraints_block}",
+        "{taste_block}",
+        "{count}",
+    ],
+    "home_suggester": [
+        "{taste_block}",
+        "{location_block}",
+        "{time_block}",
+        "{weather_block}",
+        "{chip_min}",
+        "{chip_max}",
+    ],
 }
 
 
@@ -642,6 +980,33 @@ class EnvConfig(BaseSettings):
     LANGFUSE_HOST: str | None = None
     AGENT_ENABLED: bool = True
     AGENT_MODEL: str | None = None  # ADR-068: orchestrator option key override
+    # Gateway service-to-service auth. The NestJS gateway holds the same
+    # secret and forwards it on every call as X-Gateway-Token alongside
+    # X-Gateway-User-Id (the verified Clerk subject). kebi never sees
+    # Clerk tokens directly; it trusts the gateway iff the shared secret
+    # validates. Required at startup — startup fails closed if unset.
+    GATEWAY_SHARED_SECRET: str | None = None
+    # "production" disables /docs, /redoc, /openapi.json and enables
+    # strict CORS. Any other value (default "development") leaves docs
+    # exposed and CORS permissive for local tooling.
+    ENVIRONMENT: str = "development"
+    # Comma-separated list of allowed CORS origins for the protected
+    # router. Empty = no cross-origin requests permitted. Gateway calls
+    # are server-to-server and do not need CORS; this field is for
+    # browser-based dev tooling only.
+    CORS_ALLOW_ORIGINS: str = ""
+    # When true (default), redact user-content fields (message, intent,
+    # transcript, city) from Langfuse traces. Disable only in
+    # short-lived debug sessions on dev data — production traces must
+    # never carry PII.
+    LANGFUSE_SCRUB_INPUT: bool = True
+    # S3-compatible object storage (Railway / AWS S3 / R2 / MinIO). All
+    # unset = NullObjectStorage (no-op fallback for local dev).
+    BUCKET_ENDPOINT_URL: str | None = None
+    BUCKET_NAME: str | None = None
+    BUCKET_ACCESS_KEY_ID: str | None = None
+    BUCKET_SECRET_ACCESS_KEY: str | None = None
+    BUCKET_REGION: str = "auto"
 
 
 _env: EnvConfig | None = None

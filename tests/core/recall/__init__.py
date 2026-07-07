@@ -1,1 +1,0 @@
-"""Recall service tests."""

@@ -1,116 +1,196 @@
-"""Pydantic models for PlacesService (ADR-054, feature 019).
+"""Domain models for the places library.
 
-Single source of truth for the "place" shape that flows between every service
-in this repo. `PlaceObject` is the unified return type for all read and write
-operations; `PlaceCreate` is the write-side input. Cache-tier data lives in
-`GeoData` (Tier 2) and `PlaceEnrichment` (Tier 3).
-
-No other module constructs or parses the provider-namespaced `provider_id`
-string — that is exclusively `PlacesRepository._build_provider_id()` (construct)
-and `PlacesService._strip_namespace()` (parse).
+Three core classes:
+- PlaceCore: DB-side curated and locational data, shared across all users.
+- PlaceObject: extends PlaceCore with Google-derived live fields (cache-only).
+- UserPlace: per (user, place) pair.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
+from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from typing_extensions import TypedDict
 
-# ---------------------------------------------------------------------------
-# Enums
-# ---------------------------------------------------------------------------
-
-
-class PlaceType(str, Enum):
-    food_and_drink = "food_and_drink"
-    things_to_do = "things_to_do"
-    shopping = "shopping"
-    services = "services"
-    accommodation = "accommodation"
+from .tags import TagType, TagValue
 
 
 class PlaceSource(str, Enum):
     tiktok = "tiktok"
     instagram = "instagram"
     youtube = "youtube"
-    google_maps = "google_maps"
+    google_maps_list = "google_maps_list"
     manual = "manual"
+    kebi = "kebi"
 
 
-class PlaceProvider(str, Enum):
-    google = "google"
-    foursquare = "foursquare"
-    manual = "manual"
+class BusinessStatus(str, Enum):
+    """Operational state of a place. Mirrors Google's `businessStatus` —
+    OPERATIONAL / CLOSED_TEMPORARILY / CLOSED_PERMANENTLY — but in our
+    snake_case style so the rest of the code stays provider-agnostic.
+    """
+
+    operational = "operational"
+    closed_temporarily = "closed_temporarily"
+    closed_permanently = "closed_permanently"
 
 
-# ---------------------------------------------------------------------------
-# Subcategory vocabulary — validated at the Pydantic boundary, not the DB
-# ---------------------------------------------------------------------------
+class PlaceCategory(str, Enum):
+    # food & drink
+    restaurant = "restaurant"
+    cafe = "cafe"
+    bar = "bar"
+    pub = "pub"
+    bakery = "bakery"
+    dessert_shop = "dessert_shop"
+    ice_cream_shop = "ice_cream_shop"
+    street_food = "street_food"
+    food_court = "food_court"
+    food_market = "food_market"
+    brewery = "brewery"
+    winery = "winery"
+    distillery = "distillery"
+    tea_house = "tea_house"
+    juice_bar = "juice_bar"
+    # retail
+    grocery_store = "grocery_store"
+    supermarket = "supermarket"
+    convenience_store = "convenience_store"
+    shopping_mall = "shopping_mall"
+    boutique = "boutique"
+    bookstore = "bookstore"
+    specialty_shop = "specialty_shop"
+    farmers_market = "farmers_market"
+    flea_market = "flea_market"
+    night_market = "night_market"
+    pharmacy = "pharmacy"
+    electronics_store = "electronics_store"
+    # culture / sightseeing
+    museum = "museum"
+    art_gallery = "art_gallery"
+    historical_site = "historical_site"
+    monument = "monument"
+    temple = "temple"
+    church = "church"
+    mosque = "mosque"
+    shrine = "shrine"
+    landmark = "landmark"
+    viewpoint = "viewpoint"
+    # entertainment
+    theme_park = "theme_park"
+    amusement_park = "amusement_park"
+    zoo = "zoo"
+    aquarium = "aquarium"
+    botanical_garden = "botanical_garden"
+    cinema = "cinema"
+    theater = "theater"
+    concert_hall = "concert_hall"
+    live_music_venue = "live_music_venue"
+    nightclub = "nightclub"
+    comedy_club = "comedy_club"
+    karaoke = "karaoke"
+    arcade = "arcade"
+    bowling_alley = "bowling_alley"
+    billiards_hall = "billiards_hall"
+    # nature / outdoors
+    park = "park"
+    beach = "beach"
+    hiking_trail = "hiking_trail"
+    lake = "lake"
+    river = "river"
+    garden = "garden"
+    campground = "campground"
+    scenic_lookout = "scenic_lookout"
+    # fitness / wellness
+    gym = "gym"
+    fitness_studio = "fitness_studio"
+    yoga_studio = "yoga_studio"
+    pilates_studio = "pilates_studio"
+    spa = "spa"
+    massage = "massage"
+    hot_spring = "hot_spring"
+    bathhouse = "bathhouse"
+    salon = "salon"
+    barber = "barber"
+    # services / utilities
+    atm = "atm"
+    bank = "bank"
+    post_office = "post_office"
+    gas_station = "gas_station"
+    parking = "parking"
+    laundry = "laundry"
+    # accommodation
+    hotel = "hotel"
+    hostel = "hostel"
+    guesthouse = "guesthouse"
+    bed_and_breakfast = "bed_and_breakfast"
+    resort = "resort"
+    vacation_rental = "vacation_rental"
+    # transit
+    airport = "airport"
+    train_station = "train_station"
+    metro_station = "metro_station"
+    bus_terminal = "bus_terminal"
+    ferry_terminal = "ferry_terminal"
+    # sport / recreation
+    stadium = "stadium"
+    arena = "arena"
+    sports_club = "sports_club"
+    swimming_pool = "swimming_pool"
+    climbing_gym = "climbing_gym"
+    skate_park = "skate_park"
+    golf_course = "golf_course"
+    # work / study
+    coworking_space = "coworking_space"
+    library = "library"
+    study_cafe = "study_cafe"
 
-_SUBCATEGORIES: dict[PlaceType, frozenset[str]] = {
-    PlaceType.food_and_drink: frozenset(
-        {
-            "restaurant",
-            "fast_food",
-            "cafe",
-            "bar",
-            "bakery",
-            "food_truck",
-            "brewery",
-            "dessert_shop",
-            "market",
-        }
-    ),
-    PlaceType.things_to_do: frozenset(
-        {
-            "nature",
-            "cultural_site",
-            "museum",
-            "nightlife",
-            "experience",
-            "wellness",
-            "event_venue",
-        }
-    ),
-    PlaceType.shopping: frozenset(
-        {
-            "market",
-            "boutique",
-            "mall",
-            "bookstore",
-            "specialty_store",
-        }
-    ),
-    PlaceType.services: frozenset(
-        {
-            "coworking",
-            "laundry",
-            "pharmacy",
-            "atm",
-            "car_rental",
-            "barbershop",
-        }
-    ),
-    PlaceType.accommodation: frozenset(
-        {
-            "hotel",
-            "hostel",
-            "rental",
-            "unique_stay",
-        }
-    ),
-}
+
+# Practical "near me" errands — places you walk to, not destinations you
+# choose. A turn whose categories fall in this set is clamped to a walkable
+# search radius (see core/agent/tools/_scope.py) so "nearest ATM" doesn't
+# surface a prominent branch across town.
+UTILITY_CATEGORIES: frozenset[PlaceCategory] = frozenset(
+    {
+        PlaceCategory.atm,
+        PlaceCategory.bank,
+        PlaceCategory.post_office,
+        PlaceCategory.gas_station,
+        PlaceCategory.parking,
+        PlaceCategory.laundry,
+        PlaceCategory.pharmacy,
+        PlaceCategory.convenience_store,
+        PlaceCategory.supermarket,
+        PlaceCategory.grocery_store,
+    }
+)
 
 
-# ---------------------------------------------------------------------------
-# Structured attributes (stored as JSONB on places.attributes)
-# ---------------------------------------------------------------------------
+# weekday → list of "HH:MM-HH:MM" ranges, plus "timezone" key for IANA string.
+# total=True: the only constructor (_google_mapper._map_hours) always sets all
+# 7 day keys + timezone. Empty days are stored as []; closed-all-day as
+# ["00:00-00:00"]. Any future constructor must populate every key.
+class HoursDict(TypedDict):
+    sunday: list[str]
+    monday: list[str]
+    tuesday: list[str]
+    wednesday: list[str]
+    thursday: list[str]
+    friday: list[str]
+    saturday: list[str]
+    timezone: str  # IANA e.g. "Asia/Tokyo"
 
 
 class LocationContext(BaseModel):
+    """Location container used in PlaceQuery and optionally PlaceCore.attributes."""
+
+    lat: float | None = None
+    lng: float | None = None
+    address: str | None = None
+    radius_m: int | None = None
     neighborhood: str | None = None
     city: str | None = None
     country: str | None = None
@@ -118,208 +198,312 @@ class LocationContext(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-class PlaceAttributes(BaseModel):
-    cuisine: str | None = None
-    price_hint: str | None = None
-    ambiance: str | None = None
-    dietary: list[str] = Field(default_factory=list)
-    good_for: list[str] = Field(default_factory=list)
-    location_context: LocationContext | None = None
-    # Rich attributes — inferable from text + Google Places metadata.
-    # All optional; existing rows in the JSONB column fall back to defaults.
-    atmosphere: list[str] = Field(default_factory=list)
-    time_of_day: list[str] = Field(default_factory=list)
-    season: list[str] = Field(default_factory=list)
-    crowd: list[str] = Field(default_factory=list)
-    dress_code: str | None = None
-    noise_level: str | None = None
-    music: str | None = None
-    aesthetic: list[str] = Field(default_factory=list)
-    signature_items: list[str] = Field(default_factory=list)
-    known_for: list[str] = Field(default_factory=list)
-
-    model_config = ConfigDict(extra="forbid")
+class PlaceTag(BaseModel):
+    type: TagType | str  # TagType for known types; plain str for LLM custom types
+    value: TagValue  # known enum value (CuisineTag, FeatureTag, …) or free-text str
+    source: str  # "google" | "llm" | "manual" | "tiktok" | ...
 
 
-# ---------------------------------------------------------------------------
-# HoursDict (TypedDict — round-trips cleanly through JSON for Redis)
-# ---------------------------------------------------------------------------
+class PlaceNameAlias(BaseModel):
+    """Alternative name for a place contributed by a non-canonical source.
 
-
-class HoursDict(TypedDict, total=False):
-    sunday: str | None
-    monday: str | None
-    tuesday: str | None
-    wednesday: str | None
-    thursday: str | None
-    friday: str | None
-    saturday: str | None
-    timezone: str  # IANA e.g. "Asia/Tokyo" — required when any day key is present
-
-
-# ---------------------------------------------------------------------------
-# Cache-tier Pydantic models
-# ---------------------------------------------------------------------------
-
-
-class GeoData(BaseModel):
-    """Tier 2 — cached geo data keyed by `places:geo:{provider_id}`."""
-
-    lat: float
-    lng: float
-    address: str
-    cached_at: datetime
-
-    model_config = ConfigDict(extra="forbid")
-
-
-class PlaceEnrichment(BaseModel):
-    """Tier 3 — cached live details keyed by `places:enrichment:{provider_id}`."""
-
-    hours: HoursDict | None = None
-    rating: float | None = None
-    phone: str | None = None
-    photo_url: str | None = None
-    popularity: float | None = None
-    fetched_at: datetime
-
-    model_config = ConfigDict(extra="forbid")
-
-
-# ---------------------------------------------------------------------------
-# Unified return type — every read and write path yields this shape
-# ---------------------------------------------------------------------------
-
-
-class PlaceObject(BaseModel):
-    """The single shape for a "place" flowing through any service in this repo.
-
-    Tier 1 fields come from PostgreSQL and are always present on any non-None
-    return. Tier 2 and Tier 3 fields are populated only when enrich_batch runs
-    and writes them through; they are None otherwise.
+    The canonical place_name comes from the provider (e.g. Google). Aliases
+    track names from other writers (TikTok captions, user notes, LLM extracts)
+    for richer search and provenance. Deduped by `value` at merge time;
+    first writer of a given alias value wins.
     """
 
-    # Tier 1 — PostgreSQL, always present
-    place_id: str
+    value: str
+    source: str  # "tiktok" | "instagram" | "user" | "llm" | ...
+
+
+SortField = Literal["created_at", "refreshed_at", "place_name", "distance"]
+
+
+class PlaceCatalogFilters(BaseModel):
+    """Shared catalog-side predicate fields.
+
+    Both `PlaceQuery` (search query) and `HybridSearchFilters` (hybrid search
+    predicate) constrain candidates by category + tag identically:
+      - `categories`: OR across values (place matches if its category is in the list)
+      - `tags`: AND across values (all listed tag values must be present)
+    """
+
+    categories: list[PlaceCategory] | None = None  # OR across values
+    tags: list[str] | None = None  # tag values; all must be present (AND)
+
+
+class PlaceQuery(PlaceCatalogFilters):
+    """Structured search query. All fields optional, combined with AND.
+
+    DB filters:  ids, provider_ids, place_names, categories, tags,
+                 location, created_after/before, sort_*
+    Client hints: open_now (passed through to the search client)
+
+    `ids` / `provider_ids` are OR across values (exact match — known-identity
+    batch lookup, e.g. resolving saved places through the source-of-truth
+    service per ADR-070). `place_names` is OR across values (ILIKE any on DB);
+    it also drives client/Google text search.
+
+    `categories` / `tags` semantics inherited from `PlaceCatalogFilters`.
+    """
+
+    # DB filters — known-identity batch lookup (exact, OR across values)
+    ids: list[str] | None = None  # places.id exact match
+    provider_ids: list[str] | None = None  # namespaced provider_id exact match
+
+    place_names: list[str] | None = None  # ILIKE any (OR); also drives text search
+    location: LocationContext | None = None
+
+    # date range (DB)
+    created_after: datetime | None = None
+    created_before: datetime | None = None
+
+    # ordering — provider-agnostic; each backend maps it (DB sorts the
+    # column / earth_distance, the place provider maps it to its own rank
+    # preference). "distance" orders nearest-first and requires location
+    # coords (see _validate_geo_location); sort_desc is ignored for it.
+    sort_by: SortField | None = None
+    sort_desc: bool = True
+
+    # client hints (ignored for DB queries)
+    open_now: bool | None = None  # only return currently open places
+
+    @model_validator(mode="after")
+    def _validate_geo_location(self) -> PlaceQuery:
+        loc = self.location
+        if self.sort_by == "distance" and (
+            loc is None or loc.lat is None or loc.lng is None
+        ):
+            raise ValueError(
+                "sort_by='distance' requires location.lat and location.lng "
+                "(a named-area location has no anchor to measure from)"
+            )
+        if loc is None:
+            return self
+        if (loc.lat is not None or loc.lng is not None) and loc.radius_m is None:
+            raise ValueError(
+                "location.radius_m is required when lat or lng is provided"
+            )
+        return self
+
+
+class PlaceCore(BaseModel):
+    """Canonical place data. DB-side. Same for all users.
+
+    Curated fields are mergeable on upsert. Locational fields are refreshable
+    after a 30-day TTL wipe (Google ToS compliance).
+    """
+
+    # identity
+    id: str | None = None
+    # namespaced: "<provider>:<id>", e.g. "google:ChIJ..."
+    provider_id: str | None = None
+
+    @field_validator("provider_id")
+    @classmethod
+    def _validate_provider_id(cls, v: str | None) -> str | None:
+        if v is not None and ":" not in v:
+            raise ValueError(
+                f"provider_id must be namespaced (e.g. 'google:ChIJ...'), got: {v!r}"
+            )
+        return v
+
+    # core (mergeable)
     place_name: str
-    place_type: PlaceType
-    subcategory: str | None = None
-    tags: list[str] = Field(default_factory=list)
-    attributes: PlaceAttributes = Field(default_factory=PlaceAttributes)
-    source_url: str | None = None
-    source: PlaceSource | None = None
-    provider_id: str | None = None  # namespaced; built only by PlacesRepository
-    created_at: datetime | None = None  # from ORM; None for freshly-built objects
+    place_name_aliases: list[PlaceNameAlias] = Field(default_factory=list)
+    categories: list[PlaceCategory] = Field(default_factory=list)
+    tags: list[PlaceTag] = Field(default_factory=list)
 
-    # Tier 2 — Redis geo cache
-    lat: float | None = None
-    lng: float | None = None
-    address: str | None = None
-    geo_fresh: bool = False
+    # location (Google-derived; wiped by nightly cron after 30 days per ToS)
+    location: LocationContext | None = None
 
-    # Tier 3 — Redis enrichment cache
-    hours: HoursDict | None = None
+    # timestamps
+    created_at: datetime | None = None
+    refreshed_at: datetime | None = None
+
+
+class PlaceObject(PlaceCore):
+    """Full place: PlaceCore + Google-derived live fields. Cache-only for live half.
+
+    cached_at is set when this object was written to cache (always populated for
+    objects that came from Google). It is None for objects reconstructed from DB
+    cores that have no cache entry yet.
+    """
+
     rating: float | None = None
+    hours: HoursDict | None = None
     phone: str | None = None
-    photo_url: str | None = None
-    popularity: float | None = None
-    enriched: bool = False  # recall mode never sets this True
+    website: str | None = None
+    popularity: int | None = None
+    business_status: BusinessStatus | None = None
+    cached_at: datetime | None = None
+
+    def to_core(self) -> PlaceCore:
+        """Strip live fields to get the persistable PlaceCore."""
+        return PlaceCore.model_validate(
+            self.model_dump(include=set(PlaceCore.model_fields))
+        )
+
+
+class UserPlace(BaseModel):
+    """One row per (user, place). Holds everything the user owns about this place."""
+
+    user_place_id: str
+    user_id: str
+    place_id: str  # FK to PlaceCore.id
+
+    approved: bool = True
+    visited: bool = False
+    liked: bool | None = None
+
+    note: str | None = None
+
+    source: PlaceSource
+    # Opaque pointer to the place's origin. URL for
+    # tiktok/instagram/youtube/google_maps_list; None for manual/kebi.
+    source_ref: str | None = None
+    # The name this place was shown as in the source post (e.g. a TikTok
+    # card label "Mirror Temple"), when it differs from the canonical
+    # provider name. Lets the product show the user the name they know
+    # it by. None when the source used the canonical name. Set once at
+    # save; never rewritten on re-save (mirrors source/source_ref).
+    source_label: str | None = None
+
+    saved_at: datetime
+    visited_at: datetime | None = None
+
+    @model_validator(mode="after")
+    def _validate_source(self) -> UserPlace:
+        if self.source in (PlaceSource.manual, PlaceSource.kebi):
+            if self.source_ref is not None:
+                raise ValueError(
+                    f"source_ref must be None when source is {self.source.value}"
+                )
+        else:
+            if self.source_ref is None:
+                raise ValueError(
+                    f"source_ref is required when source is {self.source.value}"
+                )
+        return self
+
+
+class UserPlaceStatusUpdate(BaseModel):
+    """A partial update to a user's saved-place state.
+
+    Carries only the fields a caller wants to change: an explicitly-set field
+    is written (including to `null` — clearing a note or returning `liked` to
+    neutral), an *unset* field is left untouched. The set/unset distinction is
+    `model_fields_set`, so callers must build this with the provided fields
+    only (e.g. `model_dump(exclude_unset=True)` from the request body) rather
+    than relying on `None` to mean "skip".
+    """
 
     model_config = ConfigDict(extra="forbid")
 
-    def copy_with(
-        self,
-        *,
-        geo_fresh: bool = True,
-        enriched: bool = True,
-    ) -> PlaceObject:
-        """Return a copy, stripping tiers whose flag is False.
-
-        `geo_fresh=False` clears Tier 2 (lat, lng, address) and sets geo_fresh=False.
-        `enriched=False` clears Tier 3 (hours, rating, phone, photo_url, popularity)
-        and sets enriched=False. Defaults preserve both tiers (identity copy).
-        """
-        updates: dict[str, object] = {}
-        if not geo_fresh:
-            updates.update(
-                {"lat": None, "lng": None, "address": None, "geo_fresh": False}
-            )
-        if not enriched:
-            updates.update(
-                {
-                    "hours": None,
-                    "rating": None,
-                    "phone": None,
-                    "photo_url": None,
-                    "popularity": None,
-                    "enriched": False,
-                }
-            )
-        return self.model_copy(update=updates)
+    visited: bool | None = None
+    liked: bool | None = None
+    approved: bool | None = None
+    note: str | None = None
 
 
-# ---------------------------------------------------------------------------
-# Write-side input
-# ---------------------------------------------------------------------------
+class LibrarySort(str, Enum):
+    """Order for the library browse — the screen's recent ↔ A–Z toggle.
+
+    `recent`: newest-saved first (`saved_at` desc), the default.
+    `name`: alphabetical by place name, case-insensitive (`lower(place_name)`
+    asc). Each maps to a distinct keyset anchor (see `LibraryCursor`), so a
+    cursor minted under one sort cannot be replayed under the other.
+    """
+
+    recent = "recent"
+    name = "name"
 
 
-class PlaceCreate(BaseModel):
-    user_id: str = Field(min_length=1)
-    place_name: str = Field(min_length=1)
-    place_type: PlaceType
-    subcategory: str | None = None
-    tags: list[str] = Field(default_factory=list)
-    attributes: PlaceAttributes = Field(default_factory=PlaceAttributes)
-    source_url: str | None = None
-    source: PlaceSource | None = None
-    external_id: str | None = None  # raw provider ID, no namespace prefix
-    provider: PlaceProvider | None = None
+class SavedPlaceView(BaseModel):
+    """List view combining a UserPlace with its underlying place data.
+
+    Carries `PlaceCore` (DB-side, persistable) — no live Google fields.
+    The saved-places list does not need rating/hours/etc., and skipping the
+    cache overlay keeps this read cheap.
+    """
+
+    place: PlaceCore
+    user_data: UserPlace
+
+
+class SavedPlaceFilters(PlaceCatalogFilters):
+    """Predicate over a user's saved places ⋈ the place catalog.
+
+    All fields optional, combined with AND. Shared by every read that
+    filters the `places ⋈ user_places` join — hybrid search (which fuses
+    ranks within this constrained pool) and the library browse endpoint.
+
+    Filters split across two tables:
+      - place catalog (places): categories, tags, location, geo
+      - user_places:  source, visited, liked, approved, saved_at range
+
+    `categories` / `tags` inherited from `PlaceCatalogFilters`.
+    """
+
+    # ---- place catalog filters --------------------------------------
+    city: str | None = None  # ILIKE
+    neighborhood: str | None = None  # ILIKE
+    country: str | None = None  # exact
+
+    lat: float | None = None
+    lng: float | None = None
+    radius_m: int | None = None  # required if lat/lng set
+
+    # ---- user_places filters (tri-state booleans: omit for "any") ---
+    source: PlaceSource | None = None  # exact: where the save came from
+    visited: bool | None = None
+    liked: bool | None = None  # NULL liked rows pass when None
+    approved: bool | None = None
+
+    saved_after: datetime | None = None
+    saved_before: datetime | None = None
 
     model_config = ConfigDict(extra="forbid")
 
     @model_validator(mode="after")
-    def _validate(self) -> PlaceCreate:
-        # Exactly zero or both of external_id and provider must be present.
-        if (self.external_id is None) != (self.provider is None):
-            raise ValueError(
-                "PlaceCreate: external_id and provider must be both set or both None "
-                f"(got external_id={self.external_id!r}, provider={self.provider!r})"
-            )
-
-        # subcategory must belong to the vocabulary for its place_type.
-        if self.subcategory is not None:
-            allowed = _SUBCATEGORIES.get(self.place_type, frozenset())
-            if self.subcategory not in allowed:
-                raise ValueError(
-                    f"PlaceCreate: subcategory {self.subcategory!r} is not valid for "
-                    f"place_type {self.place_type.value!r}; allowed={sorted(allowed)}"
-                )
-
+    def _validate_geo(self) -> SavedPlaceFilters:
+        has_lat = self.lat is not None
+        has_lng = self.lng is not None
+        if has_lat != has_lng:
+            raise ValueError("lat and lng must both be set or both be None")
+        if (has_lat or has_lng) and self.radius_m is None:
+            raise ValueError("radius_m is required when lat/lng is provided")
         return self
 
 
-# ---------------------------------------------------------------------------
-# Duplicate detection error
-# ---------------------------------------------------------------------------
+class HybridSearchFilters(SavedPlaceFilters):
+    """Filters applied identically to both legs of hybrid search.
 
-
-@dataclass(frozen=True, slots=True)
-class DuplicateProviderId:
-    """One conflict carried by DuplicatePlaceError."""
-
-    provider_id: str  # the namespaced string, e.g. "google:ChIJN1t_..."
-    existing_place_id: str  # the internal place_id of the row that already exists
-
-
-class DuplicatePlaceError(Exception):
-    """Raised by PlacesRepository.create / create_batch on provider_id collision.
-
-    `.conflicts` contains one entry per colliding provider_id. For create(),
-    always exactly one. For create_batch(), one or more — in the order they
-    appeared in the input batch.
+    The same filter set is joined into both the vector and FTS CTEs so
+    RRF fuses ranks computed within the same constrained candidate pool.
+    Inherits the full predicate from `SavedPlaceFilters` — no extra fields.
     """
 
-    def __init__(self, conflicts: list[DuplicateProviderId]) -> None:
-        self.conflicts = conflicts
-        provider_ids = ", ".join(c.provider_id for c in conflicts)
-        super().__init__(f"Duplicate provider_id(s): {provider_ids}")
+
+class HybridSearchHit(BaseModel):
+    """One result from hybrid search.
+
+    Carries both the canonical place and the user's relationship to it
+    so downstream consumers (LLM, API, evals) get everything in one
+    round trip — the repo already JOINs user_places when scoped to a
+    user, so emitting the user_data costs nothing extra.
+
+    `user_data` is None when the search ran in unscoped mode (no
+    `user_id` passed) — i.e., a global place catalog search not tied
+    to any user's saves.
+
+    `vector_rank` / `text_rank` are 1-indexed ranks within each leg's
+    candidate pool, or None if this place didn't show up in that leg.
+    """
+
+    place: PlaceCore
+    user_data: UserPlace | None = None
+    rrf_score: float
+    vector_rank: int | None
+    text_rank: int | None

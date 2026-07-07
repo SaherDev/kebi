@@ -13,7 +13,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Callable
 from enum import Enum
+from typing import TYPE_CHECKING
 
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from sqlalchemy import delete
@@ -22,11 +24,13 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from kebi.core.taste.debounce import RegenDebouncer
 from kebi.db.models import (
     Interaction,
-    Place,
-    Recommendation,
     TasteModel,
+    UserIntent,
     UserMemory,
 )
+
+if TYPE_CHECKING:
+    from kebi.core.places import UserPlacesRepo
 
 logger = logging.getLogger(__name__)
 
@@ -43,20 +47,27 @@ class DataScope(str, Enum):
     """
 
     all = "all"
-    # LangGraph checkpoint thread + any in-flight taste-regen task.
-    # Useful for resetting an agent that learned a bad pattern (e.g.
-    # "this URL always times out") without wiping the user's saves.
-    # User-facing label: "Clear chat history".
+    # LangGraph checkpoint thread + any in-flight taste-regen task + the
+    # "what you wanted" recall list (user_intents), which is surfaced
+    # conversation history (ADR-110). Useful for resetting an agent that
+    # learned a bad pattern (e.g. "this URL always times out") without
+    # wiping the user's saves. User-facing label: "Clear chat history".
     chat_history = "chat_history"
 
 
 class UserDataDeletionService:
     """Erases every trace of a user's AI-owned data.
 
-    Hits five tables in one transaction (embeddings cascade automatically
-    from places via FK ON DELETE CASCADE — see db/models.py:96), then the
+    Hits five user-scoped tables in one transaction (interactions,
+    user_memories, taste_model, user_intents, user_places), then the
     LangGraph checkpoint thread (separate connection pool), then any
     in-flight taste-regen task in the in-memory debouncer.
+
+    The shared `places` catalog (and its embeddings) is deliberately NOT
+    touched: those rows are cross-user place identities, not this user's
+    data. Only the per-user `user_places` link rows — which carry the
+    user's saves plus the source URLs they personally submitted — are
+    user-owned and get wiped here.
 
     Does NOT delete the user account — NestJS owns user lifecycle. The
     product repo's account-delete flow calls this service to wipe the
@@ -68,10 +79,12 @@ class UserDataDeletionService:
         session_factory: async_sessionmaker[AsyncSession],
         checkpointer: AsyncPostgresSaver | None,
         regen_debouncer: RegenDebouncer,
+        user_places_repo_factory: Callable[[AsyncSession], UserPlacesRepo],
     ) -> None:
         self._session_factory = session_factory
         self._checkpointer = checkpointer
         self._regen_debouncer = regen_debouncer
+        self._user_places_repo_factory = user_places_repo_factory
 
     async def delete_user_data(
         self,
@@ -84,8 +97,9 @@ class UserDataDeletionService:
         - `None` or `{DataScope.all}` → wipe everything (SQL tables +
           checkpoint thread + debouncer). Default — preserves the
           original "delete my account" behavior NestJS depends on.
-        - `{DataScope.chat_history}` → only the LangGraph checkpoint
-          thread + any pending taste-regen task. SQL tables untouched.
+        - `{DataScope.chat_history}` → the LangGraph checkpoint thread +
+          any pending taste-regen task + the recall list (user_intents).
+          The other SQL tables (saves, memories, taste model) are untouched.
         - A set containing `DataScope.all` collapses to "wipe everything"
           regardless of the other scopes (a no-op union).
         """
@@ -101,16 +115,26 @@ class UserDataDeletionService:
                     delete(Interaction).where(Interaction.user_id == user_id)
                 )
                 await session.execute(
-                    delete(Recommendation).where(Recommendation.user_id == user_id)
-                )
-                await session.execute(
                     delete(UserMemory).where(UserMemory.user_id == user_id)
                 )
                 await session.execute(
                     delete(TasteModel).where(TasteModel.user_id == user_id)
                 )
                 await session.execute(
-                    delete(Place).where(Place.user_id == user_id)
+                    delete(UserIntent).where(UserIntent.user_id == user_id)
+                )
+                await self._user_places_repo_factory(session).delete_by_user(
+                    user_id
+                )
+        elif DataScope.chat_history in active:
+            # The recall list is surfaced conversation history (ADR-110), so
+            # "clear chat history" must erase it too — not only a full wipe.
+            async with (
+                self._session_factory() as session,
+                session.begin(),
+            ):
+                await session.execute(
+                    delete(UserIntent).where(UserIntent.user_id == user_id)
                 )
 
         if wipe_all or DataScope.chat_history in active:

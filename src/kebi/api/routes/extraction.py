@@ -1,57 +1,62 @@
 """Extraction routes.
 
-`POST /v1/extract` — direct extraction endpoint that bypasses the agent
-(ADR-052 routes everything through `/v1/chat`; this is a debug/internal
-hook for testing the pipeline in isolation, with the full Evidence
-trail surfaced on every result item).
+`POST /v1/extract` — canonical product-facing extraction endpoint
+(ADR-073). The product repo calls this directly to save a place. The
+agent (`/v1/chat`) is conversation-only and does not write to
+`user_places`.
 
-`GET /v1/extraction/{request_id}` — poll Redis status for a background
-extraction by request_id.
+Note: no `from __future__ import annotations` here — slowapi's
+`@limiter.limit` + FastAPI's per-body type-adapter rebuild fails to
+resolve forward refs through the wrapper.
 """
 
-from __future__ import annotations
+from fastapi import APIRouter, Body, Depends, Request
 
-from fastapi import APIRouter, Depends, HTTPException
-
-from kebi.api.deps import get_extraction_service, get_status_repo
+from kebi.api.deps import (
+    GatewayIdentity,
+    get_extraction_service,
+    require_gateway_identity,
+)
+from kebi.api.rate_limit import limiter
 from kebi.api.schemas.extract_place import (
     ExtractPlaceRequest,
     ExtractPlaceResponse,
 )
 from kebi.core.extraction.service import ExtractionService
-from kebi.core.extraction.status_repository import ExtractionStatusRepository
 
 router = APIRouter()
 
 
 @router.post("/extract", status_code=200)
+@limiter.limit("10/minute")
 async def extract_place(
-    body: ExtractPlaceRequest,
+    request: Request,
+    body: ExtractPlaceRequest = Body(...),  # noqa: B008
+    identity: GatewayIdentity = Depends(require_gateway_identity),  # noqa: B008
     service: ExtractionService = Depends(get_extraction_service),  # noqa: B008
 ) -> ExtractPlaceResponse:
-    """Run the extraction pipeline directly, bypassing the agent.
+    """Run the extraction pipeline and save the place(s) — canonical
+    product-facing entry point (ADR-073).
 
-    Useful for debugging the cascade in isolation — the response carries
-    the full per-candidate `evidence` trail so callers can see exactly
-    which producers contributed and which media (caption / transcript /
-    frame / image / …) the extraction came from.
+    Synchronous: blocks until the pipeline completes. Latency profile —
+    text inputs land in milliseconds; URL inputs that hit yt-dlp /
+    Whisper / vision can take 30–60 seconds. Per ADR-071, every picker
+    candidate is persisted to `user_places` with `approved=False`; the
+    user curates after the fact. Per ADR-093, the per-candidate
+    evidence audit trail writes to an object-storage ledger and is no
+    longer returned in the response.
 
-    Production traffic still goes through `POST /v1/chat`; this route
-    is for iteration on the extraction layer itself.
+    `user_id` is resolved from the verified gateway identity — not a
+    body field — so a caller cannot link a place to someone else's
+    account.
+
+    The caller's plan-tier `save_limit` (forwarded by the gateway) is
+    enforced before the pipeline runs: a user with a full library gets a
+    terminal `status="failed"`, `failure_reason="save_limit_reached"`
+    response and spends no extraction quota.
     """
-    return await service.run(raw_input=body.raw_input, user_id=body.user_id)
-
-
-@router.get("/extraction/{request_id}", status_code=200)
-async def get_extraction_status(
-    request_id: str,
-    status_repo: ExtractionStatusRepository = Depends(get_status_repo),  # noqa: B008
-) -> ExtractPlaceResponse:
-    """Return the result of a background extraction keyed by request_id.
-
-    Returns 404 if the key is not in Redis yet (still running or expired).
-    """
-    payload = await status_repo.read(request_id)
-    if payload is None:
-        raise HTTPException(status_code=404, detail="Extraction result not found")
-    return ExtractPlaceResponse(**payload)
+    return await service.run(
+        raw_input=body.raw_input,
+        user_id=identity.user_id,
+        save_limit=identity.save_limit,
+    )

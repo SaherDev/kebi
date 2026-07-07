@@ -3,6 +3,7 @@
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 
 from kebi.core.extraction.enrichers.tiktok_photo import (
@@ -25,7 +26,9 @@ def _mock_proc(data: dict) -> MagicMock:  # type: ignore[type-arg]
 
 @pytest.fixture
 def enricher() -> TikTokPhotoEnricher:
-    return TikTokPhotoEnricher()
+    # http is injected but unused — these tests mock the yt-dlp subprocess
+    # path and never reach the carousel-fetch httpx call site.
+    return TikTokPhotoEnricher(http=AsyncMock(spec=httpx.AsyncClient))
 
 
 class TestTikTokPhotoEnricher:
@@ -59,7 +62,11 @@ class TestTikTokPhotoEnricher:
             "entries": [
                 {
                     "thumbnails": [
-                        {"url": "https://cdn.tiktok.com/sm1.jpg", "width": 320, "height": 320},
+                        {
+                            "url": "https://cdn.tiktok.com/sm1.jpg",
+                            "width": 320,
+                            "height": 320,
+                        },
                         {
                             "url": "https://cdn.tiktok.com/lg1.jpg",
                             "width": 1080,
@@ -101,9 +108,7 @@ class TestTikTokPhotoEnricher:
         assert ctx.is_photo_post is False
         assert ctx.image_urls == []
 
-    async def test_caps_image_urls_at_ten(
-        self, enricher: TikTokPhotoEnricher
-    ) -> None:
+    async def test_caps_image_urls_at_ten(self, enricher: TikTokPhotoEnricher) -> None:
         ctx = ExtractionContext(url="https://tiktok.com/v/long", user_id="u1")
         data = {
             "_type": "playlist",

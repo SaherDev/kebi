@@ -9,13 +9,13 @@ from unittest.mock import AsyncMock, MagicMock
 
 from sqlalchemy.sql import Delete
 
+from kebi.core.places import UserPlacesRepo
 from kebi.core.taste.debounce import RegenDebouncer
 from kebi.core.user.service import DataScope, UserDataDeletionService
 from kebi.db.models import (
     Interaction,
-    Place,
-    Recommendation,
     TasteModel,
+    UserIntent,
     UserMemory,
 )
 
@@ -41,17 +41,22 @@ def _build_session_factory_mock() -> tuple[MagicMock, AsyncMock]:
     return factory, session
 
 
-def _delete_targets(session: AsyncMock) -> list[type]:
-    """Extract the model class targeted by each session.execute(delete(...))."""
-    targets: list[type] = []
+def _delete_targets(session: AsyncMock) -> list[str]:
+    """Extract the table name targeted by each session.execute(delete(...)).
+
+    Uses `stmt.table.name` so it works uniformly for ORM-model deletes
+    (interactions/user_memories/taste_model) and the Core-Table delete
+    the UserPlacesRepo emits for user_places.
+    """
+    targets: list[str] = []
     for call in session.execute.await_args_list:
         stmt = call.args[0]
         assert isinstance(stmt, Delete), f"expected DELETE, got {type(stmt)}"
-        targets.append(stmt.entity_description["entity"])
+        targets.append(stmt.table.name)
     return targets
 
 
-async def test_sweep_deletes_all_five_user_scoped_tables() -> None:
+async def test_sweep_deletes_all_user_scoped_tables() -> None:
     factory, session = _build_session_factory_mock()
     checkpointer = AsyncMock()
     debouncer = RegenDebouncer()
@@ -60,16 +65,17 @@ async def test_sweep_deletes_all_five_user_scoped_tables() -> None:
         session_factory=factory,
         checkpointer=checkpointer,
         regen_debouncer=debouncer,
+        user_places_repo_factory=UserPlacesRepo,
     )
 
     await service.delete_user_data("user_abc")
 
     assert _delete_targets(session) == [
-        Interaction,
-        Recommendation,
-        UserMemory,
-        TasteModel,
-        Place,
+        Interaction.__tablename__,
+        UserMemory.__tablename__,
+        TasteModel.__tablename__,
+        UserIntent.__tablename__,
+        "user_places",
     ]
 
 
@@ -80,6 +86,7 @@ async def test_sweep_runs_inside_transaction() -> None:
         session_factory=factory,
         checkpointer=AsyncMock(),
         regen_debouncer=RegenDebouncer(),
+        user_places_repo_factory=UserPlacesRepo,
     )
 
     await service.delete_user_data("user_abc")
@@ -98,6 +105,7 @@ async def test_checkpointer_adelete_thread_called_with_user_id() -> None:
         session_factory=factory,
         checkpointer=checkpointer,
         regen_debouncer=RegenDebouncer(),
+        user_places_repo_factory=UserPlacesRepo,
     )
 
     await service.delete_user_data("user_abc")
@@ -114,6 +122,7 @@ async def test_checkpointer_none_logs_warning_and_continues() -> None:
         session_factory=factory,
         checkpointer=None,
         regen_debouncer=debouncer,
+        user_places_repo_factory=UserPlacesRepo,
     )
 
     await service.delete_user_data("user_abc")
@@ -138,6 +147,7 @@ async def test_debouncer_pending_task_cancelled() -> None:
         session_factory=factory,
         checkpointer=AsyncMock(),
         regen_debouncer=debouncer,
+        user_places_repo_factory=UserPlacesRepo,
     )
 
     await service.delete_user_data("user_abc")
@@ -160,6 +170,7 @@ async def test_debouncer_cancel_no_pending_task_is_noop() -> None:
         session_factory=factory,
         checkpointer=AsyncMock(),
         regen_debouncer=debouncer,
+        user_places_repo_factory=UserPlacesRepo,
     )
 
     await service.delete_user_data("user_abc")  # must not raise
@@ -176,6 +187,7 @@ async def test_idempotent_double_delete() -> None:
         session_factory=factory,
         checkpointer=checkpointer,
         regen_debouncer=RegenDebouncer(),
+        user_places_repo_factory=UserPlacesRepo,
     )
 
     await service.delete_user_data("user_abc")
@@ -196,6 +208,7 @@ async def test_sql_error_bubbles_up_for_central_handler() -> None:
         session_factory=factory,
         checkpointer=AsyncMock(),
         regen_debouncer=RegenDebouncer(),
+        user_places_repo_factory=UserPlacesRepo,
     )
 
     raised = False
@@ -226,6 +239,7 @@ async def test_adelete_thread_transient_failure_recovers_within_retry_budget(
         session_factory=factory,
         checkpointer=checkpointer,
         regen_debouncer=RegenDebouncer(),
+        user_places_repo_factory=UserPlacesRepo,
     )
 
     await service.delete_user_data("user_abc")
@@ -247,6 +261,7 @@ async def test_adelete_thread_exhausted_retries_raises(monkeypatch: object) -> N
         session_factory=factory,
         checkpointer=checkpointer,
         regen_debouncer=RegenDebouncer(),
+        user_places_repo_factory=UserPlacesRepo,
     )
 
     raised = False
@@ -264,9 +279,10 @@ async def test_adelete_thread_exhausted_retries_raises(monkeypatch: object) -> N
 # ---------------------------------------------------------------------------
 
 
-async def test_chat_history_scope_skips_sql_deletes() -> None:
-    """`scopes={chat_history}` must NOT touch the SQL tables — only the
-    LangGraph checkpoint thread + debouncer cancellation should fire."""
+async def test_chat_history_scope_deletes_only_user_intents() -> None:
+    """`scopes={chat_history}` clears the recall list (user_intents) — it is
+    surfaced conversation history (ADR-110) — plus the checkpoint thread +
+    debouncer, but leaves the other SQL tables (saves, memories, taste) alone."""
     factory, session = _build_session_factory_mock()
     checkpointer = AsyncMock()
     debouncer = RegenDebouncer()
@@ -275,18 +291,56 @@ async def test_chat_history_scope_skips_sql_deletes() -> None:
         session_factory=factory,
         checkpointer=checkpointer,
         regen_debouncer=debouncer,
+        user_places_repo_factory=UserPlacesRepo,
     )
 
-    await service.delete_user_data(
-        "user_abc", scopes={DataScope.chat_history}
-    )
+    await service.delete_user_data("user_abc", scopes={DataScope.chat_history})
 
-    # Session factory was never asked for a session.
-    factory.assert_not_called()
-    session.execute.assert_not_called()
+    # Exactly one SQL delete, targeting user_intents — nothing else.
+    assert _delete_targets(session) == [UserIntent.__tablename__]
 
     # Checkpoint thread + debouncer still cleared.
     checkpointer.adelete_thread.assert_awaited_once_with("user_abc")
+
+
+async def test_user_places_deleted_in_same_transaction_under_full_sweep() -> None:
+    """The full sweep must call UserPlacesRepo.delete_by_user with the
+    user_id, using the SAME session that ran the three ORM deletes (one
+    atomic transaction — no orphaned saves if a later step fails)."""
+    factory, session = _build_session_factory_mock()
+    repo = AsyncMock()
+    repo.delete_by_user = AsyncMock(return_value=2)
+    repo_factory = MagicMock(return_value=repo)
+
+    service = UserDataDeletionService(
+        session_factory=factory,
+        checkpointer=AsyncMock(),
+        regen_debouncer=RegenDebouncer(),
+        user_places_repo_factory=repo_factory,
+    )
+
+    await service.delete_user_data("user_abc")
+
+    repo_factory.assert_called_once_with(session)
+    repo.delete_by_user.assert_awaited_once_with("user_abc")
+
+
+async def test_chat_history_scope_does_not_touch_user_places() -> None:
+    """`scopes={chat_history}` must not construct the UserPlacesRepo or
+    issue a user_places delete — saves stay intact."""
+    factory, _ = _build_session_factory_mock()
+    repo_factory = MagicMock()
+
+    service = UserDataDeletionService(
+        session_factory=factory,
+        checkpointer=AsyncMock(),
+        regen_debouncer=RegenDebouncer(),
+        user_places_repo_factory=repo_factory,
+    )
+
+    await service.delete_user_data("user_abc", scopes={DataScope.chat_history})
+
+    repo_factory.assert_not_called()
 
 
 async def test_all_scope_explicit_is_same_as_no_scope() -> None:
@@ -296,16 +350,17 @@ async def test_all_scope_explicit_is_same_as_no_scope() -> None:
         session_factory=factory,
         checkpointer=AsyncMock(),
         regen_debouncer=RegenDebouncer(),
+        user_places_repo_factory=UserPlacesRepo,
     )
 
     await service.delete_user_data("user_abc", scopes={DataScope.all})
 
     assert _delete_targets(session) == [
-        Interaction,
-        Recommendation,
-        UserMemory,
-        TasteModel,
-        Place,
+        Interaction.__tablename__,
+        UserMemory.__tablename__,
+        TasteModel.__tablename__,
+        UserIntent.__tablename__,
+        "user_places",
     ]
 
 
@@ -316,6 +371,7 @@ async def test_scope_set_with_all_collapses_to_all() -> None:
         session_factory=factory,
         checkpointer=AsyncMock(),
         regen_debouncer=RegenDebouncer(),
+        user_places_repo_factory=UserPlacesRepo,
     )
 
     await service.delete_user_data(

@@ -5,11 +5,10 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from kebi.core.events.events import (
-    ChipConfirmed,
-    OnboardingSignal,
     PlaceSaved,
     RecommendationAccepted,
     RecommendationRejected,
+    RecommendationSaved,
     TurnCompleted,
 )
 from kebi.core.events.handlers import EventHandlers
@@ -30,6 +29,7 @@ class TestOnTasteSignal:
         return EventHandlers(
             taste_service=mock_taste_service,
             memory_service=MagicMock(),
+            intent_service=MagicMock(record_intent=AsyncMock()),
             tracer=MagicMock(
                 generation=MagicMock(return_value=MagicMock()),
                 capture_message=MagicMock(),
@@ -40,52 +40,49 @@ class TestOnTasteSignal:
     async def test_place_saved_calls_handle_signal_per_place(
         self, handlers: EventHandlers, mock_taste_service: MagicMock
     ) -> None:
-        event = PlaceSaved(user_id="u1", place_ids=["p1", "p2"], place_metadata={})
+        event = PlaceSaved(user_id="u1", place_core_ids=["p1", "p2"], place_metadata={})
         await handlers.on_taste_signal(event)
         assert mock_taste_service.handle_signal.await_count == 2
         calls = mock_taste_service.handle_signal.call_args_list
         assert calls[0].kwargs["signal_type"] == InteractionType.SAVE
-        assert calls[0].kwargs["place_id"] == "p1"
-        assert calls[1].kwargs["place_id"] == "p2"
+        assert calls[0].kwargs["place_core_id"] == "p1"
+        assert calls[1].kwargs["place_core_id"] == "p2"
 
     async def test_recommendation_accepted(
         self, handlers: EventHandlers, mock_taste_service: MagicMock
     ) -> None:
         event = RecommendationAccepted(
-            user_id="u1", recommendation_id="r1", place_id="p1"
+            user_id="u1", recommendation_id="r1", place_core_id="p1"
         )
         await handlers.on_taste_signal(event)
         mock_taste_service.handle_signal.assert_awaited_once_with(
-            user_id="u1", signal_type=InteractionType.ACCEPTED, place_id="p1"
+            user_id="u1", signal_type=InteractionType.ACCEPTED, place_core_id="p1"
         )
 
     async def test_recommendation_rejected(
         self, handlers: EventHandlers, mock_taste_service: MagicMock
     ) -> None:
         event = RecommendationRejected(
-            user_id="u1", recommendation_id="r1", place_id="p1"
+            user_id="u1", recommendation_id="r1", place_core_id="p1"
         )
         await handlers.on_taste_signal(event)
         mock_taste_service.handle_signal.assert_awaited_once_with(
-            user_id="u1", signal_type=InteractionType.REJECTED, place_id="p1"
-        )
-
-    async def test_onboarding_confirmed(
-        self, handlers: EventHandlers, mock_taste_service: MagicMock
-    ) -> None:
-        event = OnboardingSignal(user_id="u1", place_id="p1", confirmed=True)
-        await handlers.on_taste_signal(event)
-        mock_taste_service.handle_signal.assert_awaited_once_with(
-            user_id="u1", signal_type=InteractionType.ONBOARDING_CONFIRM, place_id="p1"
+            user_id="u1", signal_type=InteractionType.REJECTED, place_core_id="p1"
         )
 
-    async def test_onboarding_dismissed(
+    async def test_recommendation_saved_maps_to_dedicated_type(
         self, handlers: EventHandlers, mock_taste_service: MagicMock
     ) -> None:
-        event = OnboardingSignal(user_id="u1", place_id="p1", confirmed=False)
+        """Saving a recommendation is its own stronger signal — it maps to
+        SAVED_RECOMMENDATION, not the plain SAVE bucket."""
+        event = RecommendationSaved(
+            user_id="u1", recommendation_id="r1", place_core_id="p1"
+        )
         await handlers.on_taste_signal(event)
         mock_taste_service.handle_signal.assert_awaited_once_with(
-            user_id="u1", signal_type=InteractionType.ONBOARDING_DISMISS, place_id="p1"
+            user_id="u1",
+            signal_type=InteractionType.SAVED_RECOMMENDATION,
+            place_core_id="p1",
         )
 
     async def test_exception_does_not_raise(
@@ -93,13 +90,14 @@ class TestOnTasteSignal:
     ) -> None:
         mock_taste_service.handle_signal = AsyncMock(side_effect=RuntimeError("boom"))
         event = RecommendationAccepted(
-            user_id="u1", recommendation_id="r1", place_id="p1"
+            user_id="u1", recommendation_id="r1", place_core_id="p1"
         )
         await handlers.on_taste_signal(event)  # should not raise
 
 
 class TestOnTurnCompleted:
-    """Tests for EventHandlers.on_turn_completed() — thin delegation layer."""
+    """Tests for EventHandlers.on_turn_completed() — runs memory extraction
+    and intent recording, each independently guarded (ADR-110)."""
 
     @pytest.fixture
     def mock_taste_service(self) -> MagicMock:
@@ -112,12 +110,22 @@ class TestOnTurnCompleted:
         return svc
 
     @pytest.fixture
+    def mock_intent_service(self) -> MagicMock:
+        svc = MagicMock()
+        svc.record_intent = AsyncMock()
+        return svc
+
+    @pytest.fixture
     def handlers(
-        self, mock_taste_service: MagicMock, mock_memory_service: MagicMock
+        self,
+        mock_taste_service: MagicMock,
+        mock_memory_service: MagicMock,
+        mock_intent_service: MagicMock,
     ) -> EventHandlers:
         return EventHandlers(
             taste_service=mock_taste_service,
             memory_service=mock_memory_service,
+            intent_service=mock_intent_service,
             tracer=MagicMock(
                 generation=MagicMock(return_value=MagicMock()),
                 capture_message=MagicMock(),
@@ -125,69 +133,62 @@ class TestOnTurnCompleted:
             ),
         )
 
-    async def test_delegates_to_service(
-        self, handlers: EventHandlers, mock_memory_service: MagicMock
+    async def test_runs_both_memory_and_intent(
+        self,
+        handlers: EventHandlers,
+        mock_memory_service: MagicMock,
+        mock_intent_service: MagicMock,
     ) -> None:
-        event = TurnCompleted(user_id="user-1", user_message="I'm vegan")
+        event = TurnCompleted(
+            user_id="user-1", user_message="ramen, no line", surfaced_places=True
+        )
         await handlers.on_turn_completed(event)
         mock_memory_service.extract_and_save_facts.assert_awaited_once_with(
             user_id="user-1",
-            user_message="I'm vegan",
+            user_message="ramen, no line",
+        )
+        mock_intent_service.record_intent.assert_awaited_once_with(
+            "user-1", "ramen, no line", surfaced=True
         )
 
-    async def test_swallows_service_exceptions(
-        self, handlers: EventHandlers, mock_memory_service: MagicMock
+    async def test_passes_surfaced_flag_through(
+        self, handlers: EventHandlers, mock_intent_service: MagicMock
     ) -> None:
-        """Per ADR-043, handler failures must never propagate."""
+        event = TurnCompleted(
+            user_id="user-1", user_message="hi", surfaced_places=False
+        )
+        await handlers.on_turn_completed(event)
+        mock_intent_service.record_intent.assert_awaited_once_with(
+            "user-1", "hi", surfaced=False
+        )
+
+    async def test_intent_failure_does_not_block_memory(
+        self,
+        handlers: EventHandlers,
+        mock_memory_service: MagicMock,
+        mock_intent_service: MagicMock,
+    ) -> None:
+        """The two side-effects are isolated — intent failing still runs memory."""
+        mock_intent_service.record_intent = AsyncMock(
+            side_effect=RuntimeError("db down")
+        )
+        event = TurnCompleted(
+            user_id="user-1", user_message="anything here", surfaced_places=True
+        )
+        await handlers.on_turn_completed(event)  # must not raise
+        mock_memory_service.extract_and_save_facts.assert_awaited_once()
+
+    async def test_memory_failure_does_not_block_intent(
+        self,
+        handlers: EventHandlers,
+        mock_memory_service: MagicMock,
+        mock_intent_service: MagicMock,
+    ) -> None:
         mock_memory_service.extract_and_save_facts = AsyncMock(
             side_effect=RuntimeError("redis down")
         )
-        event = TurnCompleted(user_id="user-1", user_message="anything")
+        event = TurnCompleted(
+            user_id="user-1", user_message="anything here", surfaced_places=True
+        )
         await handlers.on_turn_completed(event)  # must not raise
-
-
-class TestOnChipConfirmed:
-    """Tests for the chip_confirmed handler (feature 023)."""
-
-    @pytest.fixture
-    def mock_taste_service(self) -> MagicMock:
-        svc = MagicMock()
-        svc.run_regen_now = AsyncMock()
-        svc.handle_signal = AsyncMock()
-        return svc
-
-    @pytest.fixture
-    def handlers(self, mock_taste_service: MagicMock) -> EventHandlers:
-        return EventHandlers(
-            taste_service=mock_taste_service,
-            memory_service=MagicMock(),
-            tracer=MagicMock(
-                generation=MagicMock(return_value=MagicMock()),
-                capture_message=MagicMock(),
-                flush=MagicMock(),
-            ),
-        )
-
-    async def test_invokes_run_regen_now_once(
-        self, handlers: EventHandlers, mock_taste_service: MagicMock
-    ) -> None:
-        event = ChipConfirmed(user_id="user-1")
-        await handlers.on_chip_confirmed(event)
-        mock_taste_service.run_regen_now.assert_awaited_once_with("user-1")
-
-    async def test_ignores_non_chip_confirmed_events(
-        self, handlers: EventHandlers, mock_taste_service: MagicMock
-    ) -> None:
-        event = TurnCompleted(user_id="user-1", user_message="hi")
-        await handlers.on_chip_confirmed(event)
-        mock_taste_service.run_regen_now.assert_not_awaited()
-
-    async def test_catches_exceptions(
-        self, handlers: EventHandlers, mock_taste_service: MagicMock
-    ) -> None:
-        mock_taste_service.run_regen_now = AsyncMock(
-            side_effect=RuntimeError("LLM blew up")
-        )
-        event = ChipConfirmed(user_id="user-1")
-        # Must not raise — ADR-043 requires background handlers to swallow.
-        await handlers.on_chip_confirmed(event)
+        mock_intent_service.record_intent.assert_awaited_once()

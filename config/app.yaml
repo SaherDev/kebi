@@ -44,7 +44,7 @@ models:
   # extraction pipeline.
   extractor:
     provider: openai
-    model: gpt-4o-mini
+    model: gpt-4o
     max_tokens: 512
     temperature: 0
   # Offline swap: set provider: ollama, model: gemma4:e2b (requires: ollama serve)
@@ -56,15 +56,29 @@ models:
     model: voyage-4-lite
     dimensions: 1024
 
-  # LangGraph agent brain — drives the recall/consult/save tool loop behind
+  # LangGraph agent brain — drives the recall/consult tool loop behind
   # POST /v1/chat and /v1/chat/stream (ADR-062/065). Higher temperature for
   # conversational variety.
   #
   # Runtime selection (ADR-068): set AGENT_MODEL=<option-key> in the env to
   # pick a non-default option. Unset / unknown values fall back to `default`.
   # Boot fails if `default` does not name one of the option keys below.
+  #
+  # Default is Haiku 4.5 (ADR-100, supersedes ADR-067's Sonnet choice): the
+  # orchestrator is ~69% of consult cost, and Haiku 4.5 is ~3x cheaper per
+  # token while staying in the function-calling-leading Claude family — so
+  # prompt caching below still applies. Set AGENT_MODEL=claude-sonnet to A/B
+  # back to Sonnet without a deploy.
+  #
+  # `advanced` (optional) names the option the top plan tier gets — the
+  # `advanced_models_enabled` entitlement makes `get_agent_graph` select
+  # logical role `orchestrator_advanced`, which boot resolution emits from
+  # this same option list (no duplicate model block). Sonnet, not Opus: a
+  # real quality lift over the Haiku base while staying cost-bounded
+  # against the tier's unlimited consults — retune by repointing `advanced`.
   orchestrator:
-    default: claude-sonnet
+    default: claude-haiku
+    advanced: claude-sonnet
     claude-sonnet:
       provider: anthropic
       model: claude-sonnet-4-6
@@ -98,11 +112,50 @@ models:
     max_tokens: 256
     temperature: 0
 
+  # Resolves the working location at the start of every agent turn that
+  # passes the location gate (core/agent/graph.py resolve_location node).
+  # Classification-like structured output — keep it cheap and
+  # deterministic, but the prompt has nuanced rules (future tense,
+  # lowercase place names, GPS-vs-explicit-name precedence) that the
+  # mini-tier OpenAI model was missing on real traffic, so we run this
+  # on Claude Haiku 4.5 instead.
+  location_resolver:
+    provider: anthropic
+    model: claude-haiku-4-5-20251001
+    max_tokens: 512
+    temperature: 0
+
+  # Proposes well-known place names that fit the user's intent, scoped to
+  # the turn's working location and movement capabilities. Output feeds
+  # the `suggest_places` agent tool, which then validates each candidate
+  # against the place provider. Cheap structured-output role — model
+  # knowledge of local landmarks matters more than reasoning depth.
+  candidate_namer:
+    provider: openai
+    model: gpt-4o-mini
+    max_tokens: 700
+    temperature: 0.3
+
+  # Generates the home screen's context-aware greeting + suggestion chips
+  # from the user's taste signal and the client-supplied local context
+  # (location, local time, optional weather). Output feeds GET /v1/home and
+  # is Redis-cached per coarse context bucket (ADR-111). Higher temperature
+  # for greeting variety; cheap structured-output role.
+  home_suggester:
+    provider: openai
+    model: gpt-4o-mini
+    max_tokens: 300
+    temperature: 0.8
+
 # ---------------------------------------------------------------------------
 # Extraction pipeline — confidence weights and decision thresholds
 # ADR-018, ADR-034: confidence scoring and two-phase confirmation
 # ---------------------------------------------------------------------------
 extraction:
+  # ADR-074: TTL for the URL-keyed result cache. 30 days — long
+  # enough to capture viral spread of a shared post; short enough
+  # that edited or deleted content washes out within a month.
+  result_cache_ttl_seconds: 2592000  # 30 * 24 * 60 * 60
   confidence_weights:
     base_scores:
       CAPTION: 0.70
@@ -151,18 +204,25 @@ extraction:
       list: 0.95
     corroboration_bonus: 0.10
     max_score: 0.97
-    # ADR-057: two-band save gate.
-    #   confidence < save_threshold    → not written, surfaces as "failed".
-    #   save_threshold ≤ c < confident → written with status "needs_review".
-    #   confidence ≥ confident_threshold → written silently as "saved".
-    save_threshold: 0.30
+    # Confidence is no longer a write gate (ADR-071 — every picker
+    # output is saved). `confident_threshold` now gates only the
+    # ADR-081 shared-alias contribution: a source label enters the
+    # global place_name_aliases only when the pick is at/above it.
     confident_threshold: 0.70
   circuit_breaker_threshold: 3
   circuit_breaker_cooldown: 900
   vision:
-    max_frames: 5
-    scene_threshold: 0.3
-    timeout_seconds: 10
+    # Listicle posts ("10 must-visit places") show one numbered card per
+    # place; 14 covers a 10-item list plus intro/outro/duplicate scene
+    # cuts. Dedup + the classifier discard near-duplicate frames.
+    max_frames: 14
+    # 0.2 (was 0.3): listicle cards cut between visually similar shots
+    # (aerial temple → aerial temple); 0.3 missed most transitions and
+    # sampled only ~5 of 10 cards.
+    scene_threshold: 0.2
+    # 25 (was 10): budget covers download + ffmpeg decode + one vision
+    # call over up to `max_frames` images. Deep level runs async.
+    timeout_seconds: 25
   whisper:
     timeout_seconds: 8
     audio_format: opus
@@ -203,30 +263,6 @@ external_services:
     timeout_seconds: 3.0
 
 # ---------------------------------------------------------------------------
-# Recall service configuration — Hybrid search with RRF
-# ADR-045: Reciprocal Rank Fusion of pgvector + FTS
-# ---------------------------------------------------------------------------
-recall:
-  max_results: 10
-  rrf_k: 60
-  candidate_multiplier: 2
-  min_rrf_score: 0.01
-  max_cosine_distance: 0.65
-
-# ---------------------------------------------------------------------------
-# Consult service configuration — Phase 3: 6-step pipeline
-# ADR-049: PlacesClient moved to core/places
-# ---------------------------------------------------------------------------
-consult:
-  max_alternatives: 2
-  placeholder_photo_url: "https://placehold.co/800x450.webp"
-  response_timeout_seconds: 10
-  default_radius_m: 1500
-  nearby_radius_m: 500
-  named_location_radius_m: 10000
-  walking_radius_m: 1000
-
-# ---------------------------------------------------------------------------
 # Embeddings configuration
 # ADR-040: Voyage 4-lite chosen for 9.25% better retrieval quality
 # ---------------------------------------------------------------------------
@@ -246,6 +282,15 @@ embeddings:
     - neighborhood
     - city
     - country
+  # Voyage rate-limit circuit breaker (providers/embeddings.VoyageEmbedder).
+  # The Voyage SDK's internal tenacity retry chain costs ~15s per call
+  # on rate-limit. `hard_timeout_seconds` aborts individual calls before
+  # the retry loop exhausts; `rate_limit_cooldown_seconds` skips
+  # subsequent calls entirely while the breaker is tripped. Saves are
+  # non-fatal on embedding failure (places persist; embeddings refill
+  # on a later save or backfill).
+  hard_timeout_seconds: 3.0
+  rate_limit_cooldown_seconds: 60.0
 
 # ---------------------------------------------------------------------------
 # Prompt Templates (ADR-059)
@@ -256,23 +301,33 @@ embeddings:
 prompts:
   taste_regen: taste_regen.txt
   agent: agent.txt
+  place_resolver: place_resolver.txt
+  place_classifier: place_classifier.txt
+  location_resolver: location_resolver.txt
+  candidate_namer: candidate_namer.txt
+  home_suggester: home_suggester.txt
 
 # ---------------------------------------------------------------------------
 # Agent Configuration (feature 027 M2, ADR-062)
 # enabled is controlled by AGENT_ENABLED env var (EnvConfig), default true.
-# max_steps / max_errors bound the graph's should_continue loop (M3).
-# tool_timeouts_seconds consumed by tool wrappers (M5) and timeout guard (M9).
+# max_steps / max_errors bound the graph's should_continue loop.
 # checkpointer_ttl_seconds reserved for a future cleanup job (Postgres has
 # no native TTL; periodic cleanup is deferred).
 # ---------------------------------------------------------------------------
 agent:
   max_steps: 10
   max_errors: 3
+  # Per-turn ceiling on tool invocations. Must be <= max_steps. When hit,
+  # the graph routes to fallback_node with a "give me more detail" message
+  # rather than letting the agent keep firing tools speculatively.
+  max_tool_calls: 5
   max_history_messages: 40
-  # Older ToolMessage payloads (recall/consult/save JSON, ~2-5KB each) get
-  # replaced by a one-line breadcrumb on the way to the LLM. The most recent
-  # `tool_result_window` payloads stay full. State is untouched — this only
-  # rewrites the per-call conversation list. 0 disables compaction.
+  # Older ToolMessage payloads (~2-5KB each) get replaced by a one-line
+  # breadcrumb on the way to the LLM. The most recent `tool_result_window`
+  # payloads stay full. State is untouched — this only rewrites the per-call
+  # conversation list. 0 disables compaction. (Also relevant: tool results
+  # are stripped from state entirely at the finalize node before checkpoint,
+  # so this compaction only matters for in-turn rebuild from history.)
   tool_result_window: 2
   # Cap unbounded growth of state["messages"] in long-lived threads. When the
   # list exceeds `state_message_cap`, the reducer trims it down toward
@@ -284,20 +339,85 @@ agent:
   state_message_cap: 200
   state_message_floor: 150
   checkpointer_ttl_seconds: 86400
-  prompt_caching_enabled: false  # ADR-067: Anthropic-only (ephemeral cache_control). Re-enable when orchestrator returns to Anthropic.
+  # ADR-067/100: Anthropic ephemeral cache_control on the orchestrator system
+  # message. Enabled now the default orchestrator is Anthropic Haiku 4.5 — the
+  # two same-turn Sonnet/Haiku calls (tool-decision + synthesis) render an
+  # identical system prompt, so the second call reads the cache instead of
+  # re-billing the full input. Haiku's min cacheable prompt (2048 tokens) is
+  # well under the ~9k-token system prompt. Set false for non-Anthropic
+  # orchestrators (AGENT_MODEL=gpt-4o-mini), which auto-cache server-side.
+  prompt_caching_enabled: true
+  # Per-tool asyncio budgets. One key per live tool.
   tool_timeouts_seconds:
-    recall: 5
-    consult: 10
-    # Save handles three flavors of input with very different latency:
-    # text-only / TikTok / IG (~3-5s), YouTube videos with deep enrichment
-    # (~15-20s), and Google Maps shared lists where Apify takes ~14s
-    # alone before NER and validation. 60s gives the slowest happy-path
-    # (~30s today) ~2x headroom.
-    save: 60
+    find_saved: 8
+    # suggest_places fans out: 1 namer LLM call + up to `name_count` parallel
+    # provider lookups (bounded by a semaphore inside the tool). The budget
+    # covers both phases — pad over find_saved's pure-DB timeout.
+    suggest_places: 18
+    # discover_places makes exactly one PlacesSearchService.find() call (DB
+    # first, then Google fallback when empty). Same pure-DB / single-provider
+    # budget as find_saved.
+    discover_places: 8
+  # find_saved-specific knobs. `default_limit` is what the tool uses when
+  # the agent omits the `limit` arg. `max_limit` caps any agent-supplied
+  # value so the LLM cannot ask for an unbounded result set.
+  find_saved:
+    default_limit: 10
+    max_limit: 25
+  # suggest_places — knobs for the candidate-naming + provider-validation
+  # flow. `default_limit` / `max_limit` cap what the agent can ask back
+  # (same role as in `find_saved`). `name_count` is how many candidate
+  # names the namer LLM is asked to produce — kept higher than the typical
+  # limit so the provider-validation and constraint-filter steps have
+  # headroom to drop misses without going empty. `provider_concurrency`
+  # bounds the per-tool fan-out into PlacesSearchService.find().
+  suggest_places:
+    default_limit: 5
+    max_limit: 15
+    name_count: 8
+    provider_concurrency: 5
+  # discover_places — provider-driven nearby search (no LLM, no saved-collection
+  # lookup). Wider defaults than suggest_places since results come straight from
+  # the provider's ranked list, not a small LLM-named shortlist.
+  discover_places:
+    default_limit: 10
+    max_limit: 25
+
+# ---------------------------------------------------------------------------
+# Movement / search-scope (ADR-084)
+# Every agent turn resolves an effective movement mode + scope tier into a
+# concrete search radius: radius = radius_tiers[shift(tier, reach)] ×
+# mode_multiplier[mode] × density_factor[density]. reach shifts the tier ±1
+# (compact -1, far +1); density comes from the geocoder's place type so
+# "near me" scales with how dense the area is.
+# `fallback` is the neutral mobility capability used when a /v1/chat
+# request omits movement_profile (ADR-086) — walking listed first so the
+# deterministic fallback mode is walking (most conservative radius).
+# ---------------------------------------------------------------------------
+movement:
+  radius_tiers:        # base metres per scope tier, before mode/reach scaling
+    walkable: 1000
+    neighborhood: 2500
+    city: 7000
+    metro: 45000
+  mode_multiplier:     # per-mode scale applied to the tier base
+    walking: 1.0
+    cycling: 1.5
+    transit: 2.0
+    rideshare: 2.2
+    motorbike: 2.4
+    driving: 2.6
+  density_factor:      # location-density scale (from the geocoder place type)
+    dense: 0.7
+    medium: 1.0
+    sparse: 1.6
+  fallback:            # used when the request carries no movement_profile
+    reach: normal
+    available_modes: [walking, transit]
 
 # ---------------------------------------------------------------------------
 # Taste Model Configuration
-# Signal-counts aggregation + LLM-generated taste_profile_summary + chips
+# Signal-counts aggregation + LLM-generated taste_profile_summary
 # ADR-058: RankingService deleted, agent-driven ranking deferred
 # ---------------------------------------------------------------------------
 taste_model:
@@ -305,15 +425,20 @@ taste_model:
   regen:
     min_signals: 3
     early_signal_threshold: 10
-  chip_threshold: 2
-  chip_max_count: 8
-  chip_selection_stages:
-    round_1: 5
-    round_2: 20
-    round_3: 50
-  warming_blend:
-    discovered: 0.8
-    saved: 0.2
+  # Evidence weight per signal in taste aggregation (the conviction ladder).
+  # A passive link-share `save` trains nothing on its own; a saved
+  # recommendation carries a base weight; the Library pills `visited`/`liked`
+  # add graduated bonuses on top, and `liked_negative` weights a disliked place
+  # into the rejected branch. Ladder: visited+liked >> liked > saved_rec >
+  # accepted. `approved` is a curation gate (not a weight).
+  signal_weights:
+    save: 0
+    accepted: 1
+    saved_recommendation: 2
+    visited: 2
+    liked: 3
+    liked_negative: 3
+    rejected: 1
 
 # ---------------------------------------------------------------------------
 # User Memory Configuration
@@ -334,18 +459,111 @@ memory:
     buffer_ttl_seconds: 604800
 
 # ---------------------------------------------------------------------------
-# PlacesService Configuration (ADR-054, feature 019)
-# Single TTL for both the geo cache (Tier 2) and the enrichment cache
-# (Tier 3), plus the per-request cap on external provider fetches in
-# enrich_batch(geo_only=False).
+# Home screen — greeting + suggestion chips (ADR-111)
+# Generated by the home_suggester role and Redis-cached per coarse context
+# bucket. TTL is bounded so a greeting refreshes within the hour; the
+# daypart segment of the cache key prevents a "good morning" leaking into
+# the evening regardless of TTL.
 # ---------------------------------------------------------------------------
-places:
-  cache_ttl_days: 30
-  # Per-consult fetch cap. Raised from 10 to 20 after the initial cap hit
-  # on real Bangkok queries (1 saved + 19 discovered). Combined with the
-  # saved-pid priority in `_fetch_and_split_misses`, saved places are
-  # guaranteed to be fetched and discovered places get the remaining
-  # budget up to this cap. Each fetch is a single Places API (New) Pro-
-  # tier call, cached for `cache_ttl_days`, so the amortized cost is
-  # dominated by the first consult for each place_id.
-  max_enrichment_batch: 20
+home:
+  cache_ttl_seconds: 3600
+  # Number of suggestion chips the LLM is asked for. The generation schema
+  # enforces these bounds; the fallback emits exactly chip_min generic chips.
+  chip_min: 3
+  chip_max: 4
+
+# ---------------------------------------------------------------------------
+# User intents — the "what you wanted" recall list (ADR-110)
+# Intent-bearing chat turns are persisted from the turn-completed event.
+# The agent-signal gate (a turn actually surfaced places) is the primary
+# filter; these knobs are the cheap belt-and-suspenders heuristic.
+# ---------------------------------------------------------------------------
+user_intents:
+  # A turn's message must have at least this many words to be recalled —
+  # filters terse confirmations the agent-signal gate might let through.
+  min_words: 3
+  # Pure confirmations / ordinals / pronoun-only replies never recalled,
+  # even if they surfaced places (e.g. "yes" to a "want me to widen?" prompt).
+  stoplist:
+    - "yes"
+    - "no"
+    - "ok"
+    - "okay"
+    - "yeah"
+    - "yep"
+    - "nope"
+    - "sure"
+    - "the first one"
+    - "the second one"
+    - "the third one"
+    - "that one"
+    - "this one"
+    - "first"
+    - "second"
+    - "third"
+  # Skip a new intent when it duplicates the user's most recent one within
+  # this window — avoids clutter from rapid re-asks of the same thing.
+  dedup_window_seconds: 600
+
+# ---------------------------------------------------------------------------
+# Pricing Configuration (ADR-092)
+# Reconcile monthly against invoices per docs/runbooks/cost-reconciliation.md.
+# Each provider carries its own `verified_on` date so reconciliation can
+# update one section without re-touching the others. Source-driven cost:
+# token-priced LLMs (gpt-4o, gpt-4o-mini, sonnet-4-6) are priced by Langfuse's
+# catalog from model + token count — `llm:` entries are documentation /
+# reconciliation only and code does NOT read them. `embeddings:`,
+# `transcription:`, and `external:` are read at the call site.
+# ---------------------------------------------------------------------------
+pricing:
+  currency: USD
+  llm:
+    # OpenAI — verified 2026-05-24 — source: pricepertoken.com (live aggregator)
+    gpt_4o:
+      input_per_1m: 2.50
+      cached_input_per_1m: 1.25
+      output_per_1m: 10.00
+    gpt_4o_mini:
+      input_per_1m: 0.15
+      cached_input_per_1m: 0.075
+      output_per_1m: 0.60
+    # Anthropic — verified 2026-05-24 — source: platform.claude.com/docs/en/about-claude/pricing
+    sonnet_4_6:
+      input_per_1m: 3.00
+      cache_read_per_1m: 0.30
+      cache_write_5m_per_1m: 3.75
+      cache_write_1h_per_1m: 6.00
+      output_per_1m: 15.00
+    # Anthropic Haiku 4.5 — used by location_resolver and as orchestrator alternative.
+    haiku_4_5:
+      input_per_1m: 1.00
+      cache_read_per_1m: 0.10
+      cache_write_5m_per_1m: 1.25
+      cache_write_1h_per_1m: 2.00
+      output_per_1m: 5.00
+  embeddings:
+    # Voyage — verified 2026-05-24 — source: docs.voyageai.com/docs/pricing
+    voyage_4_lite:
+      input_per_1m: 0.02
+  transcription:
+    # Groq — verified 2026-05-24 — source: groq.com/pricing
+    # $0.04/hour audio (10s minimum per request). Per-second = 0.04 / 3600.
+    whisper_large_v3_turbo:
+      per_audio_second: 0.00001111
+  external:
+    google_places:
+      # Google Places (New) — verified 2026-05-24 — source: developers.google.com/maps/billing-and-pricing/pricing
+      # Enterprise tier — _FIELD_MASK in google_client.py pulls rating,
+      # regularOpeningHours, priceLevel, websiteUri, and atmosphere
+      # fields. All Enterprise per Google's data-fields page.
+      per_endpoint:
+        ":searchText": 0.035       # $35 / 1k
+        ":searchNearby": 0.035     # $35 / 1k (Enterprise; no Essentials tier)
+        "/{place_id}": 0.020       # $20 / 1k  — Place Details Enterprise
+    apify:
+      # Apify — verified 2026-05-24 — sources: actor pages on apify.com
+      # Per-result × x-apify-pagination-total header — no follow-up call.
+      google_maps_list:
+        per_result: 0.013          # parseforge/google-maps-shared-list-scraper: $13/1k (paid plan)
+      instagram_post:
+        per_result: 0.0027         # apify/instagram-post-scraper: $2.70/1k (Free tier)
