@@ -233,3 +233,39 @@ async def test_subcategory_null_string_normalized_to_none() -> None:
     )
     out = await picker.pick(_ctx(), search_set)
     assert out[0].subcategory is None
+
+
+@pytest.mark.asyncio
+async def test_icon_threads_through_to_validated_candidate() -> None:
+    attributed = _attributed(provider_id="google:joe")
+    picker = _picker_with_response(
+        _PickerResponse(
+            picks=[
+                _PickedPlace(
+                    provider_id="google:joe",
+                    icon="🍕",
+                    evidence_fields=[EvidenceField.CAPTION],
+                )
+            ]
+        )
+    )
+    out = await picker.pick(_ctx(caption="pizza"), {"google:joe": attributed})
+    assert out[0].icon == "🍕"
+
+
+@pytest.mark.asyncio
+async def test_junk_icon_normalized_to_none() -> None:
+    attributed = _attributed(provider_id="google:joe")
+    picker = _picker_with_response(
+        _PickerResponse(
+            picks=[
+                _PickedPlace(
+                    provider_id="google:joe",
+                    icon="pizza place",
+                    evidence_fields=[EvidenceField.CAPTION],
+                )
+            ]
+        )
+    )
+    out = await picker.pick(_ctx(caption="pizza"), {"google:joe": attributed})
+    assert out[0].icon is None

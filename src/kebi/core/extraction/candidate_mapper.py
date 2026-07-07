@@ -135,6 +135,7 @@ def candidate_to_core(
         place_name_aliases=aliases or [],
         categories=c.categories,
         tags=c.tags,
+        icon=c.icon,
         location=c.location,
     )
 
@@ -237,6 +238,7 @@ def reconcile_picks(
                 # uncategorised. Both are already strict PlaceCategory values.
                 categories=pick.categories or place.categories,
                 tags=pick.tags,
+                icon=pick.icon,
                 confidence=confidence,
                 evidence=evidence,
                 subcategory=pick.subcategory,

@@ -712,3 +712,97 @@ async def test_tool_degrades_on_namer_exception() -> None:
     assert cmd.update["error_count"] == 1
     assert cmd.update["tool_calls_used"] == 1
     assert cmd.update["reasoning_steps"][-1].step == "suggest_places.failure"
+
+
+# ---------------------------------------------------------------------------
+# ADR-117: namer icon rides the validation query; warm rows stamped for display
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_namer_icon_rides_query_as_icon_hint() -> None:
+    namer = _make_namer(
+        [CandidateName(name="Dubai Fountain", reason="the show", icon="⛲")]
+    )
+    factory, search = _make_search_factory(
+        by_name={"Dubai Fountain": [_place("Dubai Fountain", place_id="p1")]}
+    )
+
+    await _run_suggest_places(
+        namer=namer,
+        places_search_factory=factory,
+        state=_state(working_location=_bangkok_working()),
+        tool_call_id="tc-1",
+        query="fountain show",
+        categories=None,
+        tags=None,
+        neighborhood_override=None,
+        city_override=None,
+        country_override=None,
+        limit=5,
+        name_count=8,
+        concurrency=5,
+    )
+
+    query = search.find.await_args_list[0].args[0]
+    assert query.icon_hint == "⛲"
+
+
+@pytest.mark.asyncio
+async def test_warm_row_without_icon_stamped_for_display_only() -> None:
+    # The hit already exists in the catalog with icon=None (warm path —
+    # icon_hint never fires). The response candidate still shows the
+    # namer's pick; no write happens through the tool.
+    namer = _make_namer(
+        [CandidateName(name="Gaa", reason="tasting menu", icon="🌿")]
+    )
+    factory, _search = _make_search_factory(
+        by_name={"Gaa": [_place("Gaa", place_id="p1")]}
+    )
+
+    cmd = await _run_suggest_places(
+        namer=namer,
+        places_search_factory=factory,
+        state=_state(working_location=_bangkok_working()),
+        tool_call_id="tc-1",
+        query="dinner",
+        categories=None,
+        tags=None,
+        neighborhood_override=None,
+        city_override=None,
+        country_override=None,
+        limit=5,
+        name_count=8,
+        concurrency=5,
+    )
+
+    payload = ConsultResult.model_validate_json(cmd.update["messages"][0].content)
+    assert payload.candidates[0].place.icon == "🌿"
+
+
+@pytest.mark.asyncio
+async def test_stored_icon_wins_over_namer_icon() -> None:
+    namer = _make_namer(
+        [CandidateName(name="Gaa", reason="tasting menu", icon="🌿")]
+    )
+    stored = _place("Gaa", place_id="p1").model_copy(update={"icon": "🍽️"})
+    factory, _search = _make_search_factory(by_name={"Gaa": [stored]})
+
+    cmd = await _run_suggest_places(
+        namer=namer,
+        places_search_factory=factory,
+        state=_state(working_location=_bangkok_working()),
+        tool_call_id="tc-1",
+        query="dinner",
+        categories=None,
+        tags=None,
+        neighborhood_override=None,
+        city_override=None,
+        country_override=None,
+        limit=5,
+        name_count=8,
+        concurrency=5,
+    )
+
+    payload = ConsultResult.model_validate_json(cmd.update["messages"][0].content)
+    assert payload.candidates[0].place.icon == "🍽️"

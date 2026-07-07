@@ -102,8 +102,20 @@ class PlacesSearchService:
     async def _external_fallback(
         self, query: PlaceQuery, limit: int
     ) -> list[PlaceObject]:
-        """Cold path: client.search → upsert (via service) → cache → return."""
+        """Cold path: client.search → upsert (via service) → cache → return.
+
+        `query.icon_hint` is stamped onto provider-fresh results here —
+        before `_persist_external` — so a caller-known icon rides the one
+        normal upsert instead of needing a second write later. Provider
+        results never carry an icon of their own today; the guard keeps
+        a future provider-sourced icon authoritative anyway.
+        """
         results = await self._client.search(query, limit)
+        if query.icon_hint:
+            results = [
+                r if r.icon else r.model_copy(update={"icon": query.icon_hint})
+                for r in results
+            ]
         return await self._persist_external(results)
 
     async def _persist_external(self, places: list[PlaceObject]) -> list[PlaceObject]:

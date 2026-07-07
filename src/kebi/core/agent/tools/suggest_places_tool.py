@@ -84,6 +84,7 @@ from kebi.core.places.models import (
     PlaceCore,
     PlaceObject,
     PlaceQuery,
+    normalize_icon,
 )
 
 logger = logging.getLogger(__name__)
@@ -520,6 +521,10 @@ async def _validate_candidates(
                         # order nearest-first so limit=1 returns the closest
                         # branch, not the most prominent/flagship one.
                         sort_by="distance",
+                        # The namer's icon rides the query so the cold-path
+                        # write-through persists it with the row's one
+                        # normal upsert (ADR-117).
+                        icon_hint=candidate.icon,
                     ),
                     limit=1,
                 )
@@ -544,5 +549,11 @@ async def _validate_candidates(
         if dedup_key in seen_ids:
             continue
         seen_ids.add(dedup_key)
+        icon = normalize_icon(candidate.icon)
+        if core.icon is None and icon is not None:
+            # Warm-path row (pre-dated this turn) — the icon_hint only
+            # persists on the cold-path write-through, so stamp the
+            # response copy for display; the DB row keeps NULL.
+            core = core.model_copy(update={"icon": icon})
         results.append((core, candidate.reason))
     return results

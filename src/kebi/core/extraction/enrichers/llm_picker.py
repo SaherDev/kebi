@@ -40,7 +40,7 @@ from kebi.core.extraction.types import (
     Producer,
     ValidatedCandidate,
 )
-from kebi.core.places import PlaceCategory, PlaceTag
+from kebi.core.places import PlaceCategory, PlaceTag, normalize_icon
 from kebi.providers.llm import InstructorClient
 
 logger = logging.getLogger(__name__)
@@ -105,6 +105,15 @@ class _PickedPlace(BaseModel):
         ),
     )
     tags: list[_LLMTag] = Field(default_factory=list)
+    icon: str | None = Field(
+        default=None,
+        description=(
+            "One emoji capturing THIS venue's identity (🗼 iconic tower, "
+            "⛲ fountain, 🌴 palm-defined place). Prefer specific over "
+            "generic; omit (null) when nothing beats the generic category "
+            "default — never emit 📍 or 📸."
+        ),
+    )
     subcategory: str | None = None
     evidence_fields: list[EvidenceField] = Field(default_factory=list)
     rejected: bool = False
@@ -260,6 +269,7 @@ class LLMPlacePicker:
             provider_id=pick.provider_id,
             categories=list(pick.categories),
             tags=tags,
+            icon=normalize_icon(pick.icon),
             confidence=0.0,  # overridden in reconcile
             evidence=evidence,
             subcategory=subcategory,

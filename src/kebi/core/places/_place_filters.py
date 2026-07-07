@@ -197,6 +197,7 @@ def row_to_place_core(row: RowMapping) -> PlaceCore:
         place_name_aliases=aliases,
         categories=[PlaceCategory(c) for c in (row.get("categories") or [])],
         tags=tags,
+        icon=row.get("icon"),
         location=location,
         created_at=row.get("created_at"),
         refreshed_at=row.get("refreshed_at"),

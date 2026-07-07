@@ -56,6 +56,17 @@ well. Override or refine ONLY when the venue's identity makes the
 fit obvious. Empty `categories` on the candidate means Google
 couldn't classify — fill 1–3 values yourself.
 
+## `icon` — one emoji for the venue's identity (optional)
+
+Pick the single emoji that captures what makes THIS venue itself —
+its identity, not its category bucket. A famous tower → 🗼, a fountain
+→ ⛲, a palm-defined waterfront → 🌴, a cat cafe → 🐱, an aquarium
+→ 🐠, a ramen shop → 🍜. Prefer the most specific emoji that exists.
+
+Omit the field (null) when you can't beat the obvious category default
+— a generic restaurant is fine without one. NEVER emit filler icons:
+no 📍, no 📸.
+
 ## `tags` — typed, source-tracked attributes
 
 Each tag has a `type` (one of: cuisine, dietary, feature, atmosphere,
@@ -125,6 +136,7 @@ Expected output:
     {
       "provider_id": "google:ChIJabc123",
       "categories": ["restaurant"],
+      "icon": "🏮",
       "tags": [
         {"type": "cuisine",    "value": "Thai"},
         {"type": "atmosphere", "value": "upscale"},
@@ -157,6 +169,7 @@ Expected output:
     {
       "provider_id": "google:ChIJxyz789",
       "categories": ["convenience_store"],
+      "icon": null,
       "tags": [
         {"type": "time", "value": "all_day"}
       ],

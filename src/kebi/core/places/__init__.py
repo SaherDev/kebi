@@ -28,6 +28,7 @@ from .models import (
     SavedPlaceView,
     UserPlace,
     UserPlaceStatusUpdate,
+    normalize_icon,
 )
 from .nominatim_geocoding_client import (
     GeocodeResult,
@@ -105,6 +106,7 @@ __all__ = [
     "SavedPlaceView",
     "UserPlace",
     "UserPlaceStatusUpdate",
+    "normalize_icon",
     # protocols
     "EmbedderProtocol",
     "EmbeddingsRepoProtocol",
