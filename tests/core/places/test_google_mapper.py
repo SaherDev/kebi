@@ -99,3 +99,143 @@ class TestRequireName:
         del raw["id"]
         assert map_place(raw, _NOW) is None
         assert map_place(raw, _NOW, require_name=False) is None
+
+
+class TestAddressComponentFallback:
+    """Ranked fallback (ADR-119): municipality-style cities and district
+    neighborhoods populate even without a `locality` component."""
+
+    @staticmethod
+    def _raw_with_components(components: list[dict[str, object]]) -> dict[str, object]:
+        return {
+            "id": "ChIJaddr",
+            "displayName": {"text": "Addr Test"},
+            "location": {"latitude": 1.0, "longitude": 2.0},
+            "types": [],
+            "addressComponents": components,
+        }
+
+    def test_da_nang_shape_admin_levels_fall_back(self) -> None:
+        """Real shape from google:ChIJ2y5L4dQNQjER... (The Marble Mountains)."""
+        raw = self._raw_with_components(
+            [
+                {"longText": "81", "types": ["street_number"]},
+                {"longText": "Huyền Trân Công Chúa", "types": ["route"]},
+                {
+                    "longText": "Ngũ Hành Sơn",
+                    "types": ["administrative_area_level_2", "political"],
+                },
+                {
+                    "longText": "Đà Nẵng",
+                    "types": ["administrative_area_level_1", "political"],
+                },
+                {"longText": "Vietnam", "types": ["country", "political"]},
+                {"longText": "550000", "types": ["postal_code"]},
+            ]
+        )
+        obj = map_place(raw, _NOW)
+
+        assert obj is not None and obj.location is not None
+        assert obj.location.city == "Đà Nẵng"
+        assert obj.location.neighborhood == "Ngũ Hành Sơn"
+        assert obj.location.country == "Vietnam"
+
+    def test_locality_beats_admin_level_1_regardless_of_order(self) -> None:
+        """US shape: the state appears FIRST in the array but locality wins —
+        rank beats response order."""
+        raw = self._raw_with_components(
+            [
+                {
+                    "longText": "California",
+                    "types": ["administrative_area_level_1", "political"],
+                },
+                {"longText": "San Francisco", "types": ["locality", "political"]},
+                {"longText": "United States", "types": ["country", "political"]},
+            ]
+        )
+        obj = map_place(raw, _NOW)
+
+        assert obj is not None and obj.location is not None
+        assert obj.location.city == "San Francisco"
+
+    def test_uk_postal_town_falls_back(self) -> None:
+        raw = self._raw_with_components(
+            [
+                {"longText": "London", "types": ["postal_town"]},
+                {
+                    "longText": "Greater London",
+                    "types": ["administrative_area_level_2", "political"],
+                },
+                {"longText": "United Kingdom", "types": ["country", "political"]},
+            ]
+        )
+        obj = map_place(raw, _NOW)
+
+        assert obj is not None and obj.location is not None
+        assert obj.location.city == "London"
+        assert obj.location.neighborhood == "Greater London"
+
+    def test_sublocality_beats_admin_level_2(self) -> None:
+        raw = self._raw_with_components(
+            [
+                {
+                    "longText": "Khet Watthana",
+                    "types": ["administrative_area_level_2", "political"],
+                },
+                {
+                    "longText": "Khlong Toei Nuea",
+                    "types": ["sublocality_level_1", "political"],
+                },
+            ]
+        )
+        obj = map_place(raw, _NOW)
+
+        assert obj is not None and obj.location is not None
+        assert obj.location.neighborhood == "Khlong Toei Nuea"
+
+    def test_no_city_like_component_stays_none(self) -> None:
+        raw = self._raw_with_components(
+            [{"longText": "42", "types": ["street_number"]}]
+        )
+        obj = map_place(raw, _NOW)
+
+        assert obj is not None and obj.location is not None
+        assert obj.location.city is None
+        assert obj.location.neighborhood is None
+
+    def test_empty_long_text_is_skipped(self) -> None:
+        raw = self._raw_with_components([{"longText": "", "types": ["locality"]}])
+        obj = map_place(raw, _NOW)
+
+        assert obj is not None and obj.location is not None
+        assert obj.location.city is None
+
+    def test_japan_shape_sublocality_level_2_is_neighborhood(self) -> None:
+        """Real shape from google:ChIJ8T1GpMGOGGAR... (Sensō-ji): the district
+        (Asakusa) is sublocality_level_2; chōme/block levels stay unmapped."""
+        raw = self._raw_with_components(
+            [
+                {"longText": "1", "types": ["premise"]},
+                {"longText": "3", "types": ["sublocality_level_4", "sublocality"]},
+                {
+                    "longText": "2-chōme",
+                    "types": ["sublocality_level_3", "sublocality"],
+                },
+                {
+                    "longText": "Asakusa",
+                    "types": ["sublocality_level_2", "sublocality"],
+                },
+                {"longText": "Taito City", "types": ["locality", "political"]},
+                {
+                    "longText": "Tokyo",
+                    "types": ["administrative_area_level_1", "political"],
+                },
+                {"longText": "Japan", "types": ["country", "political"]},
+            ]
+        )
+        obj = map_place(raw, _NOW)
+
+        assert obj is not None and obj.location is not None
+        assert obj.location.city == "Taito City"
+        assert obj.location.neighborhood == "Asakusa"
+        assert obj.location.country == "Japan"
