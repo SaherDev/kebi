@@ -70,9 +70,17 @@ no 📍, no 📸.
 ## `tags` — typed, source-tracked attributes
 
 Each tag has a `type` (one of: cuisine, dietary, feature, atmosphere,
-service, price, accessibility, time, season) and a `value` (use
-canonical lowercase enum values like `Thai`, `upscale`, `dinner`,
-`outdoor_seating`, `moderate`).
+service, price, time, season) and a `value` (use canonical lowercase
+enum values like `Thai`, `upscale`, `dinner`, `outdoor_seating`,
+`moderate`).
+
+Your tags are the product's ONLY source of experiential data — the
+place validator supplies identity and location, nothing else. Tag
+generously but truthfully, from two evidence sources: (1) what the post
+shows or says, and (2) your world knowledge of the identified venue —
+the candidate is already validated with its canonical name + location,
+so if you confidently recognize THIS specific venue, tag it from
+knowledge even when the post never says it.
 
 **MINIMUM OUTPUT BAR** — for any venue you recognize from its name +
 categories, you MUST emit at least:
@@ -105,15 +113,22 @@ it; leave off for generic / unknown venues:
   ("Pho" in Paris → cuisine=Vietnamese, not French).
 - price — emit when the venue's identity makes price tier obvious
   (a Michelin-starred restaurant is `very_expensive`; a hawker stall
-  is `budget`).
+  is `budget`) OR when the post's content signals it ("so cheap!",
+  "worth the splurge", visible menu prices, tasting-menu framing).
+- feature — emit when the post shows or says it (rooftop shots →
+  `rooftop`, terrace visible → `outdoor_seating`, band playing →
+  `live_music`) OR when you confidently know this specific venue has
+  it. Skip for venues you don't specifically recognize.
 
 CLAIM-LIKE — fill ONLY when the POST explicitly states or strongly
 implies them:
 - dietary — only if the post mentions vegetarian / vegan / halal /
   gluten-free options.
-- feature — physical attributes only if the post explicitly mentions
-  them (outdoor seating, rooftop, dog-friendly, etc.).
-- accessibility — only if explicitly mentioned in the post.
+
+FORBIDDEN — NEVER emit accessibility tags (`wheelchair_*`), not from
+the post and not from world knowledge. Unverified accessibility claims
+cause real-world harm to people who rely on them; they are dropped in
+code regardless of what you emit.
 
 # Examples
 
