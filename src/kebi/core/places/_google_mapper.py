@@ -235,12 +235,25 @@ _GOOGLE_TYPE_TO_DIETARY: dict[str, list[DietaryTag]] = {
     "halal_restaurant": [DietaryTag.halal],
 }
 
-# addressComponents type → LocationContext field name
-_ADDR_COMPONENT_TO_FIELD: dict[str, str] = {
-    "locality": "city",
-    "sublocality_level_1": "neighborhood",
-    "neighborhood": "neighborhood",
-    "country": "country",
+# addressComponents type → (LocationContext field, priority). Lower priority
+# wins; component order in Google's response never matters. The fallback
+# ranks exist because municipality-style cities (Đà Nẵng, Bangkok) arrive as
+# administrative_area_level_1 with the district as level_2 and NO locality —
+# without the fallback their city/neighborhood drop on the floor (ADR-119).
+# postal_town covers UK addresses. Accepted edge: where level_1 is a
+# state/province (US, AU) it becomes city only when Google supplies no
+# locality/postal_town at all — rare for venues, and better than null.
+_ADDR_COMPONENT_TO_FIELD: dict[str, tuple[str, int]] = {
+    "locality": ("city", 0),
+    "postal_town": ("city", 1),
+    "administrative_area_level_1": ("city", 2),
+    "sublocality_level_1": ("neighborhood", 0),
+    "neighborhood": ("neighborhood", 1),
+    # Japanese district names (Asakusa, Toyosu) arrive as level_2; the
+    # levels below that are chōme/block numbers and stay unmapped.
+    "sublocality_level_2": ("neighborhood", 2),
+    "administrative_area_level_2": ("neighborhood", 3),
+    "country": ("country", 0),
 }
 
 # ---------------------------------------------------------------------------
@@ -339,11 +352,17 @@ def _map_categories(types: list[str]) -> list[str]:
 def _map_address_components(
     components: list[dict[str, Any]],
 ) -> dict[str, str]:
-    result: dict[str, str] = {}
+    """Best-ranked component per field (see _ADDR_COMPONENT_TO_FIELD)."""
+    best: dict[str, tuple[int, str]] = {}
     for component in components:
         long_text = component.get("longText") or ""
+        if not long_text:
+            continue
         for comp_type in component.get("types") or []:
-            field = _ADDR_COMPONENT_TO_FIELD.get(comp_type)
-            if field and field not in result and long_text:
-                result[field] = long_text
-    return result
+            mapped = _ADDR_COMPONENT_TO_FIELD.get(comp_type)
+            if mapped is None:
+                continue
+            field, rank = mapped
+            if field not in best or rank < best[field][0]:
+                best[field] = (rank, long_text)
+    return {field: text for field, (_, text) in best.items()}

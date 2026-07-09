@@ -17,6 +17,16 @@ Format:
 
 ---
 
+## ADR-119: Address parsing gains a ranked fallback for municipality-style cities
+
+**Date:** 2026-07-09\
+**Status:** accepted\
+**Context:** A place's city and neighborhood come from the provider's address components, but the parser recognized only the `locality`-family component types. Cities that are administratively province-level municipalities — Đà Nẵng, Bangkok, and similar — arrive classified as administrative areas with the district one level below, so their places persisted with an empty city and neighborhood. That silently exempted them from named-area filtering, thinned the taste model's location signal, and dropped the city term from search text. The data was always present in the responses already paid for; only the parsing discarded it.\
+**Decision:** City and neighborhood are each resolved through a ranked fallback across the provider's component types (locality-style first, then postal town, then the administrative levels), where rank — not response order — decides. Nothing changes in what is requested from the provider or what it bills. Accepted edge: in countries where the top administrative level is a state or province, that name becomes the city only when no better component exists at all — rare for venues, and more useful than the previous null.\
+**Consequences:** Places in municipality-style cities become reachable by named-area filters and contribute their city to taste and search. Existing rows with an empty city self-heal within the provider-compliance TTL cycle, since the location blob is periodically wiped and re-fetched through the fixed parser. No cost or contract change.
+
+---
+
 ## ADR-118: Google is a minimal location validator; the knowledge layer owns experiential place data
 
 **Date:** 2026-07-09\
