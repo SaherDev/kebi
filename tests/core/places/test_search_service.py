@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-from typing import cast
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
 from kebi.core.places.models import (
-    HoursDict,
     LocationContext,
     PlaceCategory,
     PlaceCore,
@@ -16,6 +15,10 @@ from kebi.core.places.models import (
 )
 from kebi.core.places.search_service import PlacesSearchService
 from kebi.core.places.tags import CuisineTag
+
+# Marker for "this object came through the cache/provider path" — the
+# observable trace the overlay leaves now that the live half is gone.
+_CACHED_AT = datetime(2026, 1, 1, tzinfo=UTC)
 
 
 def _make_service(
@@ -64,7 +67,7 @@ def _object(pid: str) -> PlaceObject:
         provider_id=f"google:{pid}",
         place_name=f"Place {pid}",
         location=LocationContext(lat=1.0, address="Test St"),
-        rating=4.5,
+        cached_at=_CACHED_AT,
     )
 
 
@@ -77,7 +80,20 @@ def _idless_object(pid: str) -> PlaceObject:
         provider_id=f"google:{pid}",
         place_name=f"Place {pid}",
         location=LocationContext(lat=1.0, address="Test St"),
-        rating=4.5,
+        cached_at=_CACHED_AT,
+    )
+
+
+def _nameless_object(pid: str) -> PlaceObject:
+    """A Place Details fetch as the client returns it post-ADR-118: the
+    details mask omits displayName, so place_name arrives empty and the
+    search service must backfill it from the catalog row."""
+    return PlaceObject(
+        id=None,
+        provider_id=f"google:{pid}",
+        place_name="",
+        location=LocationContext(lat=1.0, address="Test St"),
+        cached_at=_CACHED_AT,
     )
 
 
@@ -105,7 +121,7 @@ class TestWarmPath:
 
         assert len(results) == 3
         b_result = next(r for r in results if r.provider_id == "google:b")
-        assert b_result.rating == 4.5
+        assert b_result.cached_at == _CACHED_AT
         # warm path — no Google call
         client.search.assert_not_awaited()
 
@@ -384,7 +400,7 @@ class TestFindEnrichment:
         passed = client.get_by_ids.call_args.args[0]
         assert set(passed) == {"google:b", "google:c"}
         assert len(results) == 3
-        assert all(r.rating == 4.5 for r in results)
+        assert all(r.cached_at == _CACHED_AT for r in results)
 
     async def test_overlay_takes_location_from_cache(self) -> None:
         """Cache location overrides DB location even when DB has lat/lng."""
@@ -409,30 +425,10 @@ class TestFindEnrichment:
         assert results[0].location.address == "Cache Ave"
         assert results[0].location.city == "Boston"
 
-    async def test_overlay_propagates_all_live_fields(self) -> None:
-        """Cache rating/hours/phone/website/popularity flow into result."""
-        hours = cast(
-            HoursDict,
-            {
-                "timezone": "Asia/Bangkok",
-                "monday": ["09:00-22:00"],
-                "tuesday": [],
-                "wednesday": [],
-                "thursday": [],
-                "friday": [],
-                "saturday": [],
-                "sunday": [],
-            },
-        )
-        cached = _object("a").model_copy(
-            update={
-                "rating": 4.9,
-                "hours": hours,
-                "phone": "+66-2-555-0000",
-                "website": "https://example.test",
-                "popularity": 1234,
-            }
-        )
+    async def test_overlay_propagates_cached_at(self) -> None:
+        """The cache entry's cached_at flows into the result."""
+        stamp = datetime(2026, 3, 15, tzinfo=UTC)
+        cached = _object("a").model_copy(update={"cached_at": stamp})
         repo = MagicMock(find=AsyncMock(return_value=[_core("a")]))
         cache = MagicMock(
             mget=AsyncMock(return_value={"google:a": cached}),
@@ -441,11 +437,7 @@ class TestFindEnrichment:
         svc = _make_service(repo=repo, cache=cache)
         result = (await svc.find(PlaceQuery(), limit=5))[0]
 
-        assert result.rating == 4.9
-        assert result.hours == hours
-        assert result.phone == "+66-2-555-0000"
-        assert result.website == "https://example.test"
-        assert result.popularity == 1234
+        assert result.cached_at == stamp
 
     async def test_db_authoritative_for_curated_fields(self) -> None:
         """DB place_name wins over a cache copy with a different (stale) name."""
@@ -477,7 +469,7 @@ class TestFindEnrichment:
         client.get_by_ids.assert_not_awaited()
         assert len(results) == 1
         assert results[0].provider_id is None
-        assert results[0].rating is None
+        assert results[0].cached_at is None
 
     async def test_stale_row_unresolvable_by_provider(self) -> None:
         """Stale row + cache miss + provider returns nothing → bare core out."""
@@ -499,7 +491,7 @@ class TestFindEnrichment:
         cache.mset.assert_not_awaited()
         assert len(results) == 1
         assert results[0].location is None
-        assert results[0].rating is None
+        assert results[0].cached_at is None
 
 
 # ---------------------------------------------------------------------------
@@ -510,14 +502,13 @@ class TestFindEnrichment:
 class TestPostTTLRecovery:
     async def test_full_recovery_db_wiped_cache_empty(self) -> None:
         """Post-30-day-cron: DB lat=None, cache empty. Provider repopulates both
-        and the result has fresh location + live fields."""
+        and the result carries the fresh location."""
         wiped = _core("p1", lat=None)
         fresh = _object("p1").model_copy(
             update={
                 "location": LocationContext(
                     lat=13.7, lng=100.5, address="Sukhumvit Soi 11"
                 ),
-                "rating": 4.7,
             }
         )
         repo = MagicMock(find=AsyncMock(return_value=[wiped]))
@@ -538,7 +529,7 @@ class TestPostTTLRecovery:
         assert results[0].location is not None
         assert results[0].location.lat == 13.7
         assert results[0].location.address == "Sukhumvit Soi 11"
-        assert results[0].rating == 4.7
+        assert results[0].cached_at == _CACHED_AT
 
     async def test_db_fully_null_location_treated_stale(self) -> None:
         """LocationContext entirely None → counted as stale → provider call."""
@@ -675,31 +666,31 @@ class TestFieldOwnership:
         assert result.categories == [PlaceCategory.cafe]
         assert [t.value for t in result.tags] == ["thai"]
 
-    async def test_cache_wins_for_live_fields(self) -> None:
-        """rating/hours/phone/website/popularity all come from cache."""
-        repo = MagicMock(find=AsyncMock(return_value=[_core("y")]))
-        live = _object("y").model_copy(
-            update={
-                "rating": 3.0,
-                "phone": "+1-555",
-                "website": "https://y",
-                "popularity": 50,
-            }
-        )
-        cache = MagicMock(
-            mget=AsyncMock(return_value={"google:y": live}),
-            mset=AsyncMock(),
-        )
-        svc = _make_service(repo=repo, cache=cache)
-        result = (await svc.find(PlaceQuery(), limit=5))[0]
+    def test_legacy_cache_payload_with_live_fields_still_parses(self) -> None:
+        """Cache entries written before ADR-118 carry the dropped live fields
+        (rating, hours, phone, ...). They must still deserialize — Pydantic
+        ignores unknown keys — so no cache flush is needed on deploy."""
+        legacy_payload = {
+            "id": "a",
+            "provider_id": "google:a",
+            "place_name": "Place a",
+            "location": {"lat": 1.0, "address": "Test St"},
+            "cached_at": "2026-01-01T00:00:00+00:00",
+            "rating": 4.5,
+            "hours": {"timezone": "Asia/Bangkok", "monday": ["09:00-22:00"]},
+            "phone": "+66-2-555-0000",
+            "website": "https://example.test",
+            "popularity": 1234,
+            "business_status": "operational",
+        }
+        obj = PlaceObject.model_validate(legacy_payload)
 
-        assert result.rating == 3.0
-        assert result.phone == "+1-555"
-        assert result.website == "https://y"
-        assert result.popularity == 50
+        assert obj.provider_id == "google:a"
+        assert obj.cached_at == _CACHED_AT
+        assert not hasattr(obj, "rating")
 
     async def test_no_cache_entry_yields_bare_object(self) -> None:
-        """No cache entry → live fields all None, core fields preserved."""
+        """No cache entry → cached_at None, core fields preserved."""
         repo = MagicMock(find=AsyncMock(return_value=[_core("z")]))
         cache = MagicMock(mget=AsyncMock(return_value={}), mset=AsyncMock())
         client = MagicMock(
@@ -710,11 +701,6 @@ class TestFieldOwnership:
         result = (await svc.find(PlaceQuery(), limit=5))[0]
 
         assert result.place_name == "Place z"
-        assert result.rating is None
-        assert result.hours is None
-        assert result.phone is None
-        assert result.website is None
-        assert result.popularity is None
         assert result.cached_at is None
 
 
@@ -961,12 +947,10 @@ class TestGetByIds:
         assert len(upsert_arg) == 3
         cache.mset.assert_awaited_once_with(fetched)
 
-    async def test_cache_hit_with_none_values_still_treated_as_hit(self) -> None:
-        """Cache returning a PlaceObject with rating=None is still a hit;
+    async def test_cache_hit_with_sparse_object_still_treated_as_hit(self) -> None:
+        """Cache returning a PlaceObject with location=None is still a hit;
         we don't second-guess the cache by re-fetching."""
-        partial = _object("a").model_copy(
-            update={"rating": None, "hours": None, "phone": None}
-        )
+        partial = _object("a").model_copy(update={"location": None})
         cache = MagicMock(
             mget=AsyncMock(return_value={"google:a": partial}),
             mset=AsyncMock(),
@@ -977,7 +961,69 @@ class TestGetByIds:
         result = await svc.get_by_ids(["google:a"])
 
         client.get_by_ids.assert_not_awaited()
-        assert result["google:a"].rating is None
+        assert result["google:a"].location is None
+
+
+class TestDetailsNameBackfill:
+    """ADR-118: details fetches arrive nameless; the DB row is the name
+    authority. Nameless objects with no catalog row must never be
+    persisted or cached."""
+
+    async def test_nameless_fetch_backfills_db_name(self) -> None:
+        repo = MagicMock(
+            find=AsyncMock(return_value=[]),
+            get_by_provider_ids=AsyncMock(return_value={"google:b": _core("b")}),
+        )
+        cache = MagicMock(mget=AsyncMock(return_value={}), mset=AsyncMock())
+        client = MagicMock(get_by_ids=AsyncMock(return_value=[_nameless_object("b")]))
+        upsert = MagicMock(upsert_and_embed=AsyncMock(return_value=[_core("b")]))
+        svc = _make_service(
+            repo=repo, cache=cache, client=client, upsert_service=upsert
+        )
+
+        result = await svc.get_by_ids(["google:b"])
+
+        assert result["google:b"].place_name == "Place b"
+        # Persisted and cached with the backfilled name, not the empty one.
+        persisted = upsert.upsert_and_embed.call_args.args[0]
+        assert persisted[0].place_name == "Place b"
+        cached_objs = cache.mset.call_args.args[0]
+        assert cached_objs[0].place_name == "Place b"
+
+    async def test_nameless_fetch_without_db_row_is_dropped(self) -> None:
+        repo = MagicMock(
+            find=AsyncMock(return_value=[]),
+            get_by_provider_ids=AsyncMock(return_value={}),
+        )
+        cache = MagicMock(mget=AsyncMock(return_value={}), mset=AsyncMock())
+        client = MagicMock(get_by_ids=AsyncMock(return_value=[_nameless_object("x")]))
+        upsert = MagicMock(upsert_and_embed=AsyncMock(return_value=[]))
+        svc = _make_service(
+            repo=repo, cache=cache, client=client, upsert_service=upsert
+        )
+
+        result = await svc.get_by_ids(["google:x"])
+
+        assert result == {}
+        upsert.upsert_and_embed.assert_not_awaited()
+        cache.mset.assert_not_awaited()
+
+    async def test_named_fetch_skips_repo_lookup(self) -> None:
+        repo = MagicMock(
+            find=AsyncMock(return_value=[]),
+            get_by_provider_ids=AsyncMock(return_value={}),
+        )
+        cache = MagicMock(mget=AsyncMock(return_value={}), mset=AsyncMock())
+        client = MagicMock(get_by_ids=AsyncMock(return_value=[_object("a")]))
+        upsert = MagicMock(upsert_and_embed=AsyncMock(return_value=[]))
+        svc = _make_service(
+            repo=repo, cache=cache, client=client, upsert_service=upsert
+        )
+
+        result = await svc.get_by_ids(["google:a"])
+
+        repo.get_by_provider_ids.assert_not_awaited()
+        assert result["google:a"].place_name == "Place a"
 
 
 # ---------------------------------------------------------------------------
@@ -1080,9 +1126,7 @@ class TestIconHintStamping:
         upsert = MagicMock(upsert_and_embed=AsyncMock(return_value=[_core("g1")]))
         svc = _make_service(repo=repo, client=client, upsert_service=upsert)
 
-        await svc.find(
-            PlaceQuery(place_names=["Ramen Bar"], icon_hint="⛲"), limit=1
-        )
+        await svc.find(PlaceQuery(place_names=["Ramen Bar"], icon_hint="⛲"), limit=1)
 
         persisted_cores = upsert.upsert_and_embed.call_args.args[0]
         assert persisted_cores[0].icon == "🍜"

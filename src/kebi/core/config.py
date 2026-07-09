@@ -282,19 +282,7 @@ class ExternalServiceConfig(BaseModel):
     timeout_seconds: float
 
 
-class GooglePlacesConfig(ExternalServiceConfig):
-    nearbysearch_url: str = (
-        "https://maps.googleapis.com/maps/api/place/nearbysearch/json"
-    )
-    request_fields: list[str] = ["name", "formatted_address", "place_id", "geometry"]
-    default_region: str = "th"
-
-
 class ExternalServicesConfig(BaseModel):
-    google_places: GooglePlacesConfig = GooglePlacesConfig(
-        base_url="https://maps.googleapis.com/maps/api/place/findplacefromtext/json",
-        timeout_seconds=5.0,
-    )
     tiktok_oembed: ExternalServiceConfig = ExternalServiceConfig(
         base_url="https://www.tiktok.com/oembed", timeout_seconds=3.0
     )

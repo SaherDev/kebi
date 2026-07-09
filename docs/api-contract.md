@@ -105,13 +105,20 @@ text leaving the server.
 ### `PlaceCore`
 
 The canonical place shape (ADR-070, ADR-077; the catalog table is
-`places` since ADR-079). Identity + static catalog fields only.
-Extraction returns `PlaceCore` — it does **not** populate live fields
-(rating, hours, popularity, business_status); those are filled in later
-by the catalog read/enrichment path that backs the agent's consult-family
-tools (ADR-089, ADR-090, ADR-091). There is no standalone product-facing
-endpoint for catalog reads today — saved/discovered/suggested places are
-returned inside chat responses as `tool_results`.
+`places` since ADR-079). This is the **complete** place shape the
+service returns, everywhere a place appears. Live provider fields
+(rating, opening hours, phone, website, popularity, business status)
+are **not part of the contract and are not coming later** — the service
+stopped requesting them from Google entirely (ADR-118); clients should
+not reserve UI for them. Tags carry provenance (`source`:
+`"google" | "llm" | ...`): categories and cuisine/dietary tags are
+provider-attested, experiential tags (service, feature, price,
+atmosphere) come from kebi's knowledge layer and **accumulate over
+time** — a freshly discovered place may initially carry only
+categories + cuisine tags and densify as content flows through
+extraction. There is no standalone product-facing endpoint for catalog
+reads today — saved/discovered/suggested places are returned inside
+chat responses as `tool_results`.
 
 ```json
 {
@@ -526,7 +533,7 @@ the first page (drop the `cursor`). Keep `sort` fixed across a paging run.
 
 | Field         | Type               | Notes                                                                                                                                                                               |
 | ------------- | ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `places`      | `SavedPlaceView[]` | `{ place: PlaceCore, user_data: UserPlace }`. `place` carries catalog fields only — no live rating/hours (same as extraction). `user_data` is this user's relationship to the place |
+| `places`      | `SavedPlaceView[]` | `{ place: PlaceCore, user_data: UserPlace }`. `place` is the complete place shape — live rating/hours don't exist anywhere in the contract (ADR-118). `user_data` is this user's relationship to the place |
 | `next_cursor` | `string \| null`   | Opaque keyset cursor. Pass it back as `?cursor=` for the next page. **`null` on the last page**                                                                                     |
 | `total`       | `integer`          | The caller's **grand total** of saved places — the whole stash, **independent of the request's filters and pagination** (drives the screen's hero count). Same on every page        |
 

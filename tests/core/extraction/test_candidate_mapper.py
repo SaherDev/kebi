@@ -50,6 +50,45 @@ def test_llm_tags_to_place_tags_maps_known_and_unknown_types() -> None:
     ]
 
 
+def test_llm_tags_drops_accessibility_by_type() -> None:
+    """ADR-118: inferred accessibility is forbidden — dropped in code."""
+    out = llm_tags_to_place_tags(
+        [
+            _Tag(type="accessibility", value="wheelchair_entrance"),
+            _Tag(type="accessibility", value="step_free"),
+            _Tag(type="feature", value="rooftop"),
+        ]
+    )
+    assert [(t.type, t.value) for t in out] == [(TagType.feature, "rooftop")]
+
+
+def test_llm_tags_drops_wheelchair_values_under_wrong_type() -> None:
+    """Mislabeling defense: a wheelchair value under any type label is dropped."""
+    out = llm_tags_to_place_tags(
+        [
+            _Tag(type="feature", value="wheelchair_entrance"),
+            _Tag(type="service", value=" Wheelchair_Restroom "),
+        ]
+    )
+    assert out == []
+
+
+def test_llm_tags_pass_price_service_feature() -> None:
+    """Knowledge-layer tags (ADR-118) flow through with source=llm."""
+    out = llm_tags_to_place_tags(
+        [
+            _Tag(type="price", value="budget"),
+            _Tag(type="service", value="serves_dinner"),
+            _Tag(type="feature", value="outdoor_seating"),
+        ]
+    )
+    assert [(t.type, t.value, t.source) for t in out] == [
+        (TagType.price, "budget", "llm"),
+        (TagType.service, "serves_dinner", "llm"),
+        (TagType.feature, "outdoor_seating", "llm"),
+    ]
+
+
 def test_merge_tags_dedupes_exact_pair_keeping_per_place() -> None:
     per_place = [
         PlaceTag(type=TagType.price, value="moderate", source="google"),

@@ -244,20 +244,9 @@ extraction:
     - source
 
 # ---------------------------------------------------------------------------
-# External services — URLs, timeouts, and request fields
+# External services — URLs and timeouts
 # ---------------------------------------------------------------------------
 external_services:
-  google_places:
-    base_url: https://maps.googleapis.com/maps/api/place/findplacefromtext/json
-    nearbysearch_url: https://maps.googleapis.com/maps/api/place/nearbysearch/json
-    timeout_seconds: 5.0
-    default_region: "th"
-    request_fields:
-      - name
-      - formatted_address
-      - place_id
-      - geometry
-      - types
   tiktok_oembed:
     base_url: https://www.tiktok.com/oembed
     timeout_seconds: 3.0
@@ -552,14 +541,15 @@ pricing:
       per_audio_second: 0.00001111
   external:
     google_places:
-      # Google Places (New) — verified 2026-05-24 — source: developers.google.com/maps/billing-and-pricing/pricing
-      # Enterprise tier — _FIELD_MASK in google_client.py pulls rating,
-      # regularOpeningHours, priceLevel, websiteUri, and atmosphere
-      # fields. All Enterprise per Google's data-fields page.
+      # Google Places (New) — verified 2026-07-09 — source: developers.google.com/maps/billing-and-pricing/pricing
+      # Google is a minimal location validator (ADR-118). Search masks pull
+      # only id/displayName/address/location/types → Text Search Pro.
+      # Place Details omits displayName (catalog name is authoritative)
+      # → Place Details Essentials.
       per_endpoint:
-        ":searchText": 0.035       # $35 / 1k
-        ":searchNearby": 0.035     # $35 / 1k (Enterprise; no Essentials tier)
-        "/{place_id}": 0.020       # $20 / 1k  — Place Details Enterprise
+        ":searchText": 0.032       # $32 / 1k — Text Search Pro
+        ":searchNearby": 0.032     # $32 / 1k — Nearby Search Pro
+        "/{place_id}": 0.005       # $5 / 1k  — Place Details Essentials
     apify:
       # Apify — verified 2026-05-24 — sources: actor pages on apify.com
       # Per-result × x-apify-pagination-total header — no follow-up call.

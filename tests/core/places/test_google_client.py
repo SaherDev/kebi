@@ -13,6 +13,8 @@ from kebi.core.places._google_query_builder import (
 )
 from kebi.core.places.google_client import (
     _DETAILS_CONCURRENCY,
+    _DETAILS_FIELD_MASK,
+    _FIELD_MASK,
     GooglePlacesClient,
 )
 from kebi.core.places.models import (
@@ -34,9 +36,7 @@ from kebi.core.places.tags import (
 
 
 def _make_client() -> GooglePlacesClient:
-    client = GooglePlacesClient(
-        api_key="test", http=MagicMock(spec=httpx.AsyncClient)
-    )
+    client = GooglePlacesClient(api_key="test", http=MagicMock(spec=httpx.AsyncClient))
     client._text_search = AsyncMock(return_value=[])
     client._nearby_search = AsyncMock(return_value=[])
     return client
@@ -52,6 +52,7 @@ def _client_with_request(**mock_kw: object) -> GooglePlacesClient:
 # ---------------------------------------------------------------------------
 # search() routing
 # ---------------------------------------------------------------------------
+
 
 class TestSearchRouting:
     async def test_category_routes_to_text_search(self) -> None:
@@ -124,6 +125,7 @@ class TestSearchRouting:
 # distance ordering → rankPreference on the request body
 # ---------------------------------------------------------------------------
 
+
 class TestRankPreference:
     _LOC = LocationContext(lat=13.7, lng=100.5, radius_m=500)
 
@@ -191,6 +193,7 @@ class TestTextSearchHardBound:
 # ---------------------------------------------------------------------------
 # build_text_search_params — text/type dedup
 # ---------------------------------------------------------------------------
+
 
 class TestBuildTextSearchParams:
     def test_strips_type_mapped_tag_from_text_when_other_text_remains(self) -> None:
@@ -280,6 +283,7 @@ class TestBuildTextSearchParams:
 # build_text_search_param_sets — OR-across-names fan-out
 # ---------------------------------------------------------------------------
 
+
 class TestBuildTextSearchParamSets:
     def test_single_name_is_one_set_matching_single_builder(self) -> None:
         q = PlaceQuery(place_names=["Blue Bottle"], tags=[CuisineTag.thai])
@@ -308,6 +312,7 @@ class TestBuildTextSearchParamSets:
 # ---------------------------------------------------------------------------
 # _text_search() — per-name fan-out, merge + dedup
 # ---------------------------------------------------------------------------
+
 
 def _place(provider_id: str, name: str) -> PlaceObject:
     return PlaceObject(provider_id=provider_id, place_name=name)
@@ -349,6 +354,7 @@ class TestTextSearchFanOut:
 # ---------------------------------------------------------------------------
 # get_by_ids() — Place Details fan-out
 # ---------------------------------------------------------------------------
+
 
 def _stub_place(provider_id: str) -> PlaceObject:
     return PlaceObject(
@@ -406,3 +412,43 @@ class TestGetByIds:
         result = await c._get_details("foursquare:abc")
         assert result is None
         c._request.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# Field-mask contracts (ADR-118)
+# ---------------------------------------------------------------------------
+
+
+class TestFieldMaskContracts:
+    """Pin the exact masks — any widening re-prices every Google call."""
+
+    def test_search_mask_is_exactly_pro_tier(self) -> None:
+        assert _FIELD_MASK.split(",") == [
+            "places.id",
+            "places.displayName",
+            "places.formattedAddress",
+            "places.addressComponents",
+            "places.location",
+            "places.types",
+        ]
+
+    def test_details_mask_is_exactly_essentials_tier(self) -> None:
+        """No displayName (the Pro tier-setter) and no `places.` prefix."""
+        assert _DETAILS_FIELD_MASK.split(",") == [
+            "id",
+            "formattedAddress",
+            "addressComponents",
+            "location",
+            "types",
+        ]
+
+    async def test_get_details_requests_without_name_requirement(self) -> None:
+        """The details path passes require_name=False so the nameless
+        Essentials response still maps (name backfilled downstream)."""
+        c = _make_client()
+        c._request = AsyncMock(return_value=[])
+        await c._get_details("google:ChIJx")
+
+        c._request.assert_awaited_once()
+        assert c._request.call_args.kwargs["require_name"] is False
+        assert c._request.call_args.args[2] == _DETAILS_FIELD_MASK

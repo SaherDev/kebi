@@ -160,3 +160,22 @@ class TestAgentPromptSlotValidation:
                 _load_prompts({"agent": "missing.txt"})
         finally:
             config_module.find_project_root = original  # type: ignore[assignment]
+
+
+class TestGooglePlacesPricing:
+    """Pin the recorded per-endpoint rates to the ADR-118 field masks:
+    search = Text Search Pro, details = Place Details Essentials."""
+
+    def test_search_endpoints_priced_at_pro(self) -> None:
+        pricing = get_config().pricing.external.google_places
+        assert pricing.cost_for(":searchText") == 0.032
+        assert pricing.cost_for(":searchNearby") == 0.032
+
+    def test_details_priced_at_essentials(self) -> None:
+        pricing = get_config().pricing.external.google_places
+        assert pricing.cost_for("/{place_id}") == 0.005
+
+    def test_legacy_external_services_block_removed(self) -> None:
+        from kebi.core.config import ExternalServicesConfig
+
+        assert "google_places" not in ExternalServicesConfig.model_fields
