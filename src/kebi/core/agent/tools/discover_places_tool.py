@@ -33,9 +33,10 @@ Mechanics:
   runtime — same rule `suggest_places` follows. Location shifts (the
   "in Shinjuku while in Bangkok" case) belong to the resolver, not to
   individual tools.
-- Memory hard constraints flow in via the `tags` arg (agent extracts
-  them from `{memory_summary}`) and are enforced with the shared
-  `hard_constraints_satisfied` filter after the provider returns.
+- Memory constraints flow in via the `tags` arg (agent extracts
+  them from `{memory_summary}`). Safety values (dietary/accessibility)
+  are enforced post-fetch via the shared `hard_constraints_satisfied`
+  filter; all other tag values only bias retrieval (ADR-118).
 
 Location anchoring is a hard precondition: with no working_location
 lat/lng + positive `search_radius_m` the tool returns immediately with
@@ -58,7 +59,10 @@ from kebi.core.agent.location import WorkingLocation
 from kebi.core.agent.reasoning import ReasoningStep
 from kebi.core.agent.state import AgentState
 from kebi.core.agent.stream_emit import emit_step_active, emit_step_done
-from kebi.core.agent.tools._hard_constraints import hard_constraints_satisfied
+from kebi.core.agent.tools._hard_constraints import (
+    hard_constraints_satisfied,
+    split_constraints,
+)
 from kebi.core.agent.tools._scope import clamp_to_walkable_for_utility
 from kebi.core.agent.tools._search_args import (
     CATEGORIES_DESC,
@@ -369,8 +373,12 @@ async def _run_discover_places_impl(
             steps=steps,
         )
 
-    required = tags or []
-    filtered = [p for p in venues if hard_constraints_satisfied(p, required)]
+    # Safety values (dietary/accessibility) exclude; everything else is a
+    # preference signal that already biased retrieval via PlaceQuery.tags
+    # (DB predicate + provider keyword text) — a fresh place with no
+    # experiential tags yet must not be zeroed out (ADR-118).
+    hard, _soft = split_constraints(tags or [])
+    filtered = [p for p in venues if hard_constraints_satisfied(p, hard)]
     dropped = len(venues) - len(filtered)
 
     if not filtered:
@@ -384,7 +392,7 @@ async def _run_discover_places_impl(
 
     final_objs = filtered[:limit]
     final_names = [p.place_name for p in final_objs]
-    _finish(found_summary(final_names, dropped=dropped if required else 0))
+    _finish(found_summary(final_names, dropped=dropped if hard else 0))
 
     candidates = [
         ConsultCandidate(

@@ -52,7 +52,10 @@ from kebi.core.agent.location import WorkingLocation
 from kebi.core.agent.reasoning import ReasoningStep
 from kebi.core.agent.state import AgentState
 from kebi.core.agent.stream_emit import emit_step_active, emit_step_done
-from kebi.core.agent.tools._hard_constraints import hard_constraints_satisfied
+from kebi.core.agent.tools._hard_constraints import (
+    hard_constraints_satisfied,
+    split_constraints,
+)
 from kebi.core.agent.tools._scope import clamp_to_walkable_for_utility
 from kebi.core.agent.tools._search_args import (
     CATEGORIES_DESC,
@@ -416,9 +419,15 @@ async def _run_suggest_places_impl(
             steps=steps,
         )
 
+    # Safety values (dietary/accessibility) exclude; other tag values are
+    # preference signals — the FULL tag list already steered the namer's
+    # name proposals and the validation query, so its work is done. A
+    # fresh place with no experiential tags yet must not be zeroed out
+    # (ADR-118).
+    hard, _soft = split_constraints(tags or [])
     filtered: list[tuple[PlaceCore, str]] = []
     for place, reason in validated:
-        if hard_constraints_satisfied(place, tags or []):
+        if hard_constraints_satisfied(place, hard):
             filtered.append((place, reason))
     dropped = len(validated) - len(filtered)
 
@@ -433,7 +442,7 @@ async def _run_suggest_places_impl(
 
     final = filtered[:limit]
     final_names = [place.place_name for place, _ in final]
-    _finish(found_summary(final_names, dropped=dropped if tags else 0))
+    _finish(found_summary(final_names, dropped=dropped if hard else 0))
 
     candidates = [
         ConsultCandidate(

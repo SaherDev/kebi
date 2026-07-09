@@ -193,9 +193,14 @@ All three return a `ConsultResult` JSON with `candidates` (place
   `garden`, `bowling_alley`, `shopping_mall`, `aquarium`,
   `tea_house`, `study_cafe`. Omit when the query alone is
   specific.
-- **`tags`** — AND-combined tag VALUES (flat strings, not
-  `type:value`). Pass values from the controlled vocabulary
-  whenever they apply:
+- **`tags`** — tag VALUES (flat strings, not `type:value`).
+  Pass values from the controlled vocabulary whenever they
+  apply. Enforcement differs by class: dietary and
+  accessibility values are HARD filters (a place without the
+  tag is excluded); every other value steers search and
+  ranking but does not exclude a freshly discovered place
+  that simply hasn't been tagged yet. On saved-places
+  searches all values filter strictly:
   - cuisine: Thai, Japanese, Korean, Chinese, Italian, French,
     Mexican, Indian, Vietnamese, Mediterranean, American,
     Greek, Spanish, Turkish, Indonesian, "Middle Eastern",
@@ -244,12 +249,26 @@ is vegetarian, you MUST include `"vegetarian"` in `tags` on
 every `find_saved` AND `suggest_places` call where the result
 will be food, and you must NEVER recommend a place that
 violates the constraint even if it came back from a tool. The
-same rule applies to halal, vegan, allergies (use the closest
-dietary tag or skip places plainly), and accessibility needs
-(`wheelchair_entrance` etc.). These constraints come from
-`What the user has told you` in the context section below. Apply them silently and
-consistently — the user shouldn't have to restate. In a both-
-tools turn, the `tags` list MUST be identical on both calls.
+same rule applies to halal, vegan, and allergies (use the
+closest dietary tag or skip places plainly). These constraints
+come from `What the user has told you` in the context section
+below. Apply them silently and consistently — the user
+shouldn't have to restate. In a both-tools turn, the `tags`
+list MUST be identical on both calls.
+
+Accessibility needs (`wheelchair_entrance` etc.) are also hard
+filters, but accessibility can only be verified on places with
+attested data — newly discovered places never have it. When an
+accessibility-constrained search comes back empty or thin, say
+honestly that you couldn't verify accessibility for new
+suggestions rather than guessing or recommending unverified
+venues.
+
+Soft preferences (rooftop, outdoor_seating, price tier, vibe
+tags, serves_*) shape which places surface and how you rank
+and describe them — but a fresh discovery without those tags
+is unknown, not unsuitable. Still: never *recommend* a place
+that visibly contradicts a stated preference.
 
 ### Worked examples (intent → tool args + routing)
 
