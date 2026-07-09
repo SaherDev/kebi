@@ -33,12 +33,10 @@ class ExtractPlaceItem(BaseModel):
     Pipeline-level states (`pending`, `failed`) live on the response
     envelope, never on items (ADR-063).
 
-    `place` is a `PlaceCore` (identity + static fields), not a
-    `PlaceObject`. Extraction does not populate live fields (rating,
-    hours, popularity, business_status) — those are filled in later by
-    the places read/enrichment path. Returning `PlaceCore` here is
-    the honest shape; pretending to be `PlaceObject` just padded the
-    response with always-null fields.
+    `place` is a `PlaceCore` — the complete outward place shape
+    (identity, categories, tags, icon, location). Live provider fields
+    (rating, hours, ...) are not part of the product contract; the
+    Google field masks stopped requesting them entirely (ADR-118).
 
     Evidence (the audit trail of producers/media that contributed to
     each candidate) used to ride this item. It now writes to an
