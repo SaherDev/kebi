@@ -23,7 +23,7 @@ def _provider_object(pid: str, id_: str | None = None) -> PlaceObject:
         provider_id=f"google:{pid}",
         place_name=f"Place {pid}",
         location=LocationContext(lat=1.0, lng=2.0, address="Provider St"),
-        rating=4.5,
+        cached_at=datetime(2026, 2, 1, tzinfo=UTC),
     )
 
 
@@ -49,8 +49,8 @@ def test_stamps_id_onto_idless_object() -> None:
     assert result[0].refreshed_at == datetime(2026, 6, 1, tzinfo=UTC)
 
 
-def test_never_touches_curated_or_live_fields() -> None:
-    """Only catalog identity is stamped; name/location/rating are the
+def test_never_touches_curated_fields() -> None:
+    """Only catalog identity is stamped; name/location/cached_at are the
     provider's to own."""
     obj = _provider_object("a")
     # The persisted core deliberately carries a divergent name to prove it
@@ -62,7 +62,7 @@ def test_never_touches_curated_or_live_fields() -> None:
     assert result[0].place_name == "Place a"
     assert result[0].location is not None
     assert result[0].location.lat == 1.0
-    assert result[0].rating == 4.5
+    assert result[0].cached_at == datetime(2026, 2, 1, tzinfo=UTC)
 
 
 def test_leaves_object_with_existing_id_untouched() -> None:

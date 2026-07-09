@@ -1,27 +1,26 @@
-"""Google Places API v1 → PlaceObject field mapping."""
+"""Google Places API v1 → PlaceObject field mapping.
+
+Maps only the minimal validator fields (ADR-118): identity, location,
+address, and `types`-derived categories + cuisine/dietary tags. Experiential
+tags (service, feature, price, atmosphere, accessibility) are owned by the
+LLM knowledge layer, not Google.
+"""
 
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, cast
+from typing import Any
 
 from .models import (
-    BusinessStatus,
-    HoursDict,
     LocationContext,
     PlaceCategory,
     PlaceObject,
     PlaceTag,
 )
 from .tags import (
-    AccessibilityTag,
     CuisineTag,
     DietaryTag,
-    FeatureTag,
-    PriceTag,
-    ServiceTag,
     TagType,
-    TagValue,
 )
 
 # Namespace tag on every Google-sourced provider_id (e.g. "google:ChIJ...").
@@ -202,20 +201,6 @@ _GOOGLE_TYPE_TO_CATEGORY: dict[str, str] = {
     "library": "library",
 }
 
-_GOOGLE_BUSINESS_STATUS: dict[str, BusinessStatus] = {
-    "OPERATIONAL": BusinessStatus.operational,
-    "CLOSED_TEMPORARILY": BusinessStatus.closed_temporarily,
-    "CLOSED_PERMANENTLY": BusinessStatus.closed_permanently,
-}
-
-_PRICE_LEVEL_MAP: dict[str, PriceTag] = {
-    "PRICE_LEVEL_FREE": PriceTag.free,
-    "PRICE_LEVEL_INEXPENSIVE": PriceTag.budget,
-    "PRICE_LEVEL_MODERATE": PriceTag.moderate,
-    "PRICE_LEVEL_EXPENSIVE": PriceTag.expensive,
-    "PRICE_LEVEL_VERY_EXPENSIVE": PriceTag.very_expensive,
-}
-
 # Restaurant-specific Google types → cuisine tag
 _GOOGLE_TYPE_TO_CUISINE: dict[str, CuisineTag] = {
     "thai_restaurant": CuisineTag.thai,
@@ -250,38 +235,6 @@ _GOOGLE_TYPE_TO_DIETARY: dict[str, list[DietaryTag]] = {
     "halal_restaurant": [DietaryTag.halal],
 }
 
-# Google boolean Place fields → (TagType, TagValue)
-_GOOGLE_BOOL_TO_TAG: dict[str, tuple[TagType, TagValue]] = {
-    "dineIn": (TagType.service, ServiceTag.dine_in),
-    "takeout": (TagType.service, ServiceTag.takeout),
-    "delivery": (TagType.service, ServiceTag.delivery),
-    "reservable": (TagType.service, ServiceTag.reservable),
-    "servesBreakfast": (TagType.service, ServiceTag.serves_breakfast),
-    "servesBrunch": (TagType.service, ServiceTag.serves_brunch),
-    "servesLunch": (TagType.service, ServiceTag.serves_lunch),
-    "servesDinner": (TagType.service, ServiceTag.serves_dinner),
-    "servesBeer": (TagType.service, ServiceTag.serves_beer),
-    "servesWine": (TagType.service, ServiceTag.serves_wine),
-    "servesCocktails": (TagType.service, ServiceTag.serves_cocktails),
-    "servesVegetarianFood": (TagType.dietary, DietaryTag.vegetarian_options),
-    "outdoorSeating": (TagType.feature, FeatureTag.outdoor_seating),
-    "liveMusic": (TagType.feature, FeatureTag.live_music),
-    "menuForChildren": (TagType.feature, FeatureTag.kids_menu),
-    "allowsDogs": (TagType.feature, FeatureTag.dog_friendly),
-    "goodForChildren": (TagType.feature, FeatureTag.family_friendly),
-    "goodForGroups": (TagType.feature, FeatureTag.group_friendly),
-    "goodForWatchingSports": (TagType.feature, FeatureTag.sports_viewing),
-}
-
-# accessibilityOptions sub-object fields → (TagType, TagValue)
-_acc = TagType.accessibility
-_GOOGLE_ACCESSIBILITY_TO_TAG: dict[str, tuple[TagType, TagValue]] = {
-    "wheelchairAccessibleParking": (_acc, AccessibilityTag.wheelchair_parking),
-    "wheelchairAccessibleEntrance": (_acc, AccessibilityTag.wheelchair_entrance),
-    "wheelchairAccessibleRestroom": (_acc, AccessibilityTag.wheelchair_restroom),
-    "wheelchairAccessibleSeating": (_acc, AccessibilityTag.wheelchair_seating),
-}
-
 # addressComponents type → LocationContext field name
 _ADDR_COMPONENT_TO_FIELD: dict[str, str] = {
     "locality": "city",
@@ -290,29 +243,32 @@ _ADDR_COMPONENT_TO_FIELD: dict[str, str] = {
     "country": "country",
 }
 
-_DAY_INT_TO_NAME: dict[int, str] = {
-    0: "sunday",
-    1: "monday",
-    2: "tuesday",
-    3: "wednesday",
-    4: "thursday",
-    5: "friday",
-    6: "saturday",
-}
-
-
 # ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
 
-def map_place(raw: dict[str, Any], now: datetime) -> PlaceObject | None:
+
+def map_place(
+    raw: dict[str, Any],
+    now: datetime,
+    *,
+    require_name: bool = True,
+) -> PlaceObject | None:
+    """Map a raw Google Place dict to a PlaceObject.
+
+    ``require_name=False`` is the Place Details mode: the details field mask
+    deliberately omits ``displayName`` (Essentials tier — the DB name is
+    sticky-authoritative), so a nameless response maps to ``place_name=""``
+    and the caller backfills the name from the catalog row. Search responses
+    always require a name — a nameless search result is unusable.
+    """
     raw_id = raw.get("id")
     if not raw_id:
         return None
 
     display_name = raw.get("displayName") or {}
     place_name = display_name.get("text") or ""
-    if not place_name:
+    if not place_name and require_name:
         return None
 
     types: list[str] = raw.get("types") or []
@@ -337,22 +293,6 @@ def map_place(raw: dict[str, Any], now: datetime) -> PlaceObject | None:
         for item in _GOOGLE_TYPE_TO_DIETARY.get(t, []):
             _add_tag(TagType.dietary, item)
 
-    # feature/service tags from top-level boolean fields
-    for field, (tag_type, tag_value) in _GOOGLE_BOOL_TO_TAG.items():
-        if raw.get(field) is True:
-            _add_tag(tag_type, tag_value)
-
-    # accessibility tags from nested accessibilityOptions object
-    accessibility = raw.get("accessibilityOptions") or {}
-    for field, (tag_type, tag_value) in _GOOGLE_ACCESSIBILITY_TO_TAG.items():
-        if accessibility.get(field) is True:
-            _add_tag(tag_type, tag_value)
-
-    # price tag
-    price_str = _PRICE_LEVEL_MAP.get(raw.get("priceLevel") or "")
-    if price_str:
-        _add_tag(TagType.price, price_str)
-
     raw_loc = raw.get("location") or {}
     addr = _map_address_components(raw.get("addressComponents") or [])
 
@@ -369,12 +309,6 @@ def map_place(raw: dict[str, Any], now: datetime) -> PlaceObject | None:
             neighborhood=addr.get("neighborhood"),
             country=addr.get("country"),
         ),
-        rating=raw.get("rating"),
-        hours=_map_hours(raw),
-        phone=raw.get("nationalPhoneNumber"),
-        website=raw.get("websiteUri"),
-        popularity=raw.get("userRatingCount"),
-        business_status=_GOOGLE_BUSINESS_STATUS.get(raw.get("businessStatus") or ""),
         cached_at=now,
     )
 
@@ -382,6 +316,7 @@ def map_place(raw: dict[str, Any], now: datetime) -> PlaceObject | None:
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
 
 def _map_categories(types: list[str]) -> list[str]:
     """Walk Google's types[] and return every recognized category, in order, deduped.
@@ -412,41 +347,3 @@ def _map_address_components(
             if field and field not in result and long_text:
                 result[field] = long_text
     return result
-
-
-def _map_hours(raw: dict[str, Any]) -> HoursDict | None:
-    opening_hours = raw.get("regularOpeningHours") or {}
-    time_zone = raw.get("timeZone") or {}
-    timezone_id = time_zone.get("id") if isinstance(time_zone, dict) else None
-    periods = opening_hours.get("periods") or []
-    if not periods or not timezone_id:
-        return None
-
-    hours: dict[str, Any] = {}
-    for period in periods:
-        open_obj = period.get("open") or {}
-        close_obj = period.get("close")
-        day_int = open_obj.get("day")
-        if day_int is None or day_int not in _DAY_INT_TO_NAME:
-            continue
-        day_name = _DAY_INT_TO_NAME[day_int]
-        if close_obj is None:
-            hours[day_name] = ["00:00-00:00"]
-        else:
-            slot = f"{_fmt_clock(open_obj)}-{_fmt_clock(close_obj)}"
-            hours.setdefault(day_name, []).append(slot)
-
-    for day_name in _DAY_INT_TO_NAME.values():
-        if day_name not in hours:
-            hours[day_name] = []
-
-    hours["timezone"] = timezone_id
-    return cast(HoursDict, hours)
-
-
-def _fmt_clock(clock: dict[str, Any]) -> str:
-    hour = clock.get("hour")
-    minute = clock.get("minute")
-    h = hour if isinstance(hour, int) and 0 <= hour <= 23 else 0
-    m = minute if isinstance(minute, int) and 0 <= minute <= 59 else 0
-    return f"{h:02d}:{m:02d}"
