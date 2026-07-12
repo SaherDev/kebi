@@ -115,8 +115,7 @@ class SQLAlchemyUserIntentRepository:
         has_more = len(rows) > limit
         page = rows[:limit]
         records = [
-            IntentRecord(id=r.id, text=r.text, created_at=r.created_at)
-            for r in page
+            IntentRecord(id=r.id, text=r.text, created_at=r.created_at) for r in page
         ]
         next_cursor = (
             IntentCursor(page[-1].created_at, page[-1].id).encode()

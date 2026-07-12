@@ -38,10 +38,8 @@ class ExtractPlaceItem(BaseModel):
     (rating, hours, ...) are not part of the product contract; the
     Google field masks stopped requesting them entirely (ADR-118).
 
-    Evidence (the audit trail of producers/media that contributed to
-    each candidate) used to ride this item. It now writes to an
-    object-storage ledger so the product repo never sees it — see
-    `core/extraction/evidence_bucket.py`.
+    The per-candidate producer/medium audit trail is not part of this
+    contract and never ships to the product repo.
     """
 
     place: PlaceCore

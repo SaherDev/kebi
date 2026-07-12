@@ -7,8 +7,10 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from kebi.api.schemas.extract_place import ExtractPlaceItem
-from kebi.core.extraction.evidence_bucket import EvidenceBucketWriter
-from kebi.core.extraction.extraction_pipeline import TooManyCandidatesError
+from kebi.core.extraction.extraction_pipeline import (
+    PipelineResult,
+    TooManyCandidatesError,
+)
 from kebi.core.extraction.service import ExtractionService
 from kebi.core.extraction.types import (
     Evidence,
@@ -16,6 +18,8 @@ from kebi.core.extraction.types import (
     Producer,
     ValidatedCandidate,
 )
+from kebi.core.knowledge.harvest_bucket import HarvestBucketWriter
+from kebi.core.knowledge.schemas import HarvestContent
 from kebi.core.places import (
     DuplicateUserPlaceError,
     PlaceCategory,
@@ -64,6 +68,7 @@ def _build_service(
     duplicate_place_ids: list[str] | None = None,
     cache_hit_items: list[ExtractPlaceItem] | None = None,
     save_places_first_call_exc: Exception | None = None,
+    content: HarvestContent | None = None,
 ) -> tuple[ExtractionService, MagicMock]:
     """Build ExtractionService with mocked collaborators.
 
@@ -83,7 +88,10 @@ def _build_service(
     pipeline = MagicMock()
     pipeline.run = AsyncMock(
         side_effect=pipeline_exc if pipeline_exc else None,
-        return_value=pipeline_result if pipeline_result is not None else [],
+        return_value=PipelineResult(
+            candidates=pipeline_result if pipeline_result is not None else [],
+            content=content if content is not None else HarvestContent(),
+        ),
     )
     if pipeline_exc:
         pipeline.run.side_effect = pipeline_exc
@@ -121,7 +129,7 @@ def _build_service(
 
     object_storage = MagicMock()
     object_storage.put_json = AsyncMock()
-    evidence_writer = EvidenceBucketWriter(storage=object_storage)
+    harvest_writer = HarvestBucketWriter(storage=object_storage)
 
     service = ExtractionService(
         pipeline=pipeline,
@@ -129,7 +137,7 @@ def _build_service(
         user_places_service=user_places_service,
         event_dispatcher=event_dispatcher,
         result_cache=result_cache,
-        evidence_writer=evidence_writer,
+        harvest_writer=harvest_writer,
     )
 
     container = MagicMock()
@@ -139,7 +147,7 @@ def _build_service(
     container.event_dispatcher = event_dispatcher
     container.result_cache = result_cache
     container.object_storage = object_storage
-    container.evidence_writer = evidence_writer
+    container.harvest_writer = harvest_writer
     return service, container
 
 
@@ -234,6 +242,48 @@ async def test_successful_save_emits_completed_envelope() -> None:
     event = c.event_dispatcher.dispatch.await_args.args[0]
     assert event.place_core_ids == ["place-uuid-1"]
     assert event.user_id == "u1"
+
+
+@pytest.mark.asyncio
+async def test_harvest_snapshot_written_and_event_dispatched() -> None:
+    """ADR-121: when a pipeline-run save carries content, the snapshot is
+    written to the bucket and a ContentHarvestRequested fires alongside
+    PlaceSaved."""
+    from kebi.core.events.events import ContentHarvestRequested, PlaceSaved
+
+    service, c = _build_service(
+        pipeline_result=[_candidate()],
+        upsert_result=[_persisted_core()],
+        content=HarvestContent(caption="late-night ramen in Shibuya", source_ref="u"),
+    )
+    resp = await service.run(raw_input="Fuji Ramen", user_id="u1")
+    assert resp.status == "completed"
+
+    # Snapshot persisted to the bucket under the harvest/ prefix.
+    c.object_storage.put_json.assert_awaited_once()
+    key = c.object_storage.put_json.await_args.args[0]
+    assert key.startswith("harvest/")
+
+    events = [call.args[0] for call in c.event_dispatcher.dispatch.await_args_list]
+    assert any(isinstance(e, PlaceSaved) for e in events)
+    harvest = next(e for e in events if isinstance(e, ContentHarvestRequested))
+    assert harvest.harvest_key == key
+    assert harvest.source_ref == "u"
+
+
+@pytest.mark.asyncio
+async def test_empty_content_skips_harvest() -> None:
+    """No content → no snapshot write, no harvest event (only PlaceSaved)."""
+    from kebi.core.events.events import ContentHarvestRequested
+
+    service, c = _build_service(
+        pipeline_result=[_candidate()],
+        upsert_result=[_persisted_core()],
+    )
+    await service.run(raw_input="Fuji Ramen", user_id="u1")
+    c.object_storage.put_json.assert_not_awaited()
+    events = [call.args[0] for call in c.event_dispatcher.dispatch.await_args_list]
+    assert not any(isinstance(e, ContentHarvestRequested) for e in events)
 
 
 @pytest.mark.asyncio
@@ -604,8 +654,5 @@ async def test_cache_hit_emits_extraction_cache_hit_marker(
     assert args[0] == "extraction_cache_hit"
     assert kwargs["user_id"] == "u-second"
     assert kwargs["session_id"] == "u-second"
-    assert (
-        kwargs["metadata"]["source_ref"]
-        == "https://www.tiktok.com/@x/video/1"
-    )
+    assert kwargs["metadata"]["source_ref"] == "https://www.tiktok.com/@x/video/1"
     assert kwargs["metadata"]["place_count"] == 1

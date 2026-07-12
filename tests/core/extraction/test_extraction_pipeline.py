@@ -186,7 +186,9 @@ async def test_level_picks_short_circuit_subsequent_levels() -> None:
         picker_returns=[candidate],
         search_results_by_query={"Chez Claude": [_place_object()]},
     )
-    out = await pipeline.run(url="https://x.com", user_id="u1", limit=_TEST_LIMIT)
+    out = (
+        await pipeline.run(url="https://x.com", user_id="u1", limit=_TEST_LIMIT)
+    ).candidates
     assert len(out) == 1
     # Picker called once (inline level), not twice — early exit on hit.
     assert picker.pick.await_count == 1
@@ -214,7 +216,9 @@ async def test_no_inline_picks_runs_deep_level() -> None:
             "B": [_place_object("google:b", "B")],
         },
     )
-    out = await pipeline.run(url="https://x.com", user_id="u1", limit=_TEST_LIMIT)
+    out = (
+        await pipeline.run(url="https://x.com", user_id="u1", limit=_TEST_LIMIT)
+    ).candidates
     assert out == []
     assert picker.pick.await_count == 2
 
@@ -401,7 +405,9 @@ async def test_dedup_collapses_same_provider_id() -> None:
         picker_returns=picks,
         search_results_by_query={"A": [_place_object("google:dup", "A")]},
     )
-    out = await pipeline.run(url="https://x.com", user_id="u1", limit=_TEST_LIMIT)
+    out = (
+        await pipeline.run(url="https://x.com", user_id="u1", limit=_TEST_LIMIT)
+    ).candidates
     assert len(out) == 1
 
 
@@ -450,7 +456,9 @@ async def test_caption_only_post_extracts_via_resolver_discovery() -> None:
         },
         resolver=_DiscoveringResolver(),
     )
-    out = await pipeline.run(url="https://x.com", user_id="u1", limit=_TEST_LIMIT)
+    out = (
+        await pipeline.run(url="https://x.com", user_id="u1", limit=_TEST_LIMIT)
+    ).candidates
 
     assert len(out) == 1
     assert out[0].place_name == "Thip Samai"

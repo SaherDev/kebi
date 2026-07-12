@@ -307,7 +307,8 @@ def map_place(
             _add_tag(TagType.dietary, item)
 
     raw_loc = raw.get("location") or {}
-    addr = _map_address_components(raw.get("addressComponents") or [])
+    components = raw.get("addressComponents") or []
+    addr = _map_address_components(components)
 
     return PlaceObject(
         provider_id=f"{GOOGLE_PROVIDER_PREFIX}{raw_id}",
@@ -321,9 +322,26 @@ def map_place(
             city=addr.get("city"),
             neighborhood=addr.get("neighborhood"),
             country=addr.get("country"),
+            country_code=_country_code(components),
         ),
         cached_at=now,
     )
+
+
+def _country_code(components: list[dict[str, Any]]) -> str | None:
+    """ISO-3166 alpha-2 from the country component's `shortText`.
+
+    The country component carries both `longText` ("United Arab Emirates",
+    which populates the display `country`) and `shortText` ("AE"). The code
+    is what canonical geo keys need, so it is captured separately here and
+    returned lowercased.
+    """
+    for component in components:
+        if "country" in (component.get("types") or []):
+            short = component.get("shortText")
+            if isinstance(short, str) and short:
+                return short.strip().lower()
+    return None
 
 
 # ---------------------------------------------------------------------------

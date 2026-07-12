@@ -167,6 +167,11 @@ class LocationContext(BaseModel):
     neighborhood: str | None = None
     city: str | None = None
     country: str | None = None
+    # ISO-3166 alpha-2 (e.g. "ae"), lowercased. Sourced from the provider's
+    # country component `shortText` — the code, not the display `country`.
+    # Enables code-keyed country filtering and canonical geo keys for the
+    # knowledge layer (ADR-120). Nullable: older rows self-heal on re-fetch.
+    country_code: str | None = None
 
     model_config = ConfigDict(extra="forbid")
 

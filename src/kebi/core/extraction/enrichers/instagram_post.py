@@ -163,9 +163,7 @@ class InstagramPostEnricher(SourceFilteredEnricher):
             )
             response.raise_for_status()
             data = response.json()
-            items: list[dict[str, Any]] = (
-                data if isinstance(data, list) else []
-            )
+            items: list[dict[str, Any]] = data if isinstance(data, list) else []
             item_count = int(
                 response.headers.get("x-apify-pagination-total", len(items))
             )

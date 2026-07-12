@@ -17,6 +17,7 @@ from pydantic import BaseModel, ConfigDict
 
 EntityType = Literal["country", "city", "neighborhood", "place"]
 SourceType = Literal["shared_content", "curated_expert", "kebi_message", "user_message"]
+ReviewStatus = Literal["pending", "approved", "rejected"]
 
 _COUNTRY_CODE_RE = re.compile(r"^[a-z]{2}$")
 
@@ -42,7 +43,103 @@ class KnowledgeClaim(BaseModel):
     source_ref: str | None = None
     confidence: float
     user_id: str | None = None
+    # Review gate (ADR-122). Defaults to approved (trust-everything today);
+    # reviewed_by/reviewed_at are set only once an AI or team member reviews.
+    review_status: ReviewStatus = "approved"
+    reviewed_by: str | None = None
+    reviewed_at: datetime | None = None
     created_at: datetime
+
+
+class ResolvedGeo(BaseModel):
+    """Geo an entity is anchored to, already resolved to canonical parts.
+
+    `country_code` is an ISO-3166 alpha-2 code (what `build_geo_key`
+    requires); `city`/`neighborhood` are display names the key builder
+    slugifies. Harvest fills this from a place's stored location; curation
+    fills it from a geocoder. A claim whose geo lacks the parts its scope
+    needs is dropped by the writer rather than mis-keyed.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    country_code: str | None = None
+    city: str | None = None
+    neighborhood: str | None = None
+
+
+class StructuredClaim(BaseModel):
+    """A claim resolved to the point where an entity_key can be built.
+
+    The shared hand-off both writers (harvest, curation) produce and the
+    `KnowledgeWriter` consumes. The producing LLM never emits this directly
+    with a key — its raw output is resolved (place index → catalog id, prose
+    → geo) into this shape first, so a model can never invent a key.
+    `confidence` is the model's own 0-1 estimate; the writer floors it by
+    source trust. `scope` reuses `EntityType`.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    scope: EntityType
+    entity_name: str
+    claim: str
+    tags: list[str] = []
+    confidence: float
+    place_ref: str | None = None
+    geo: ResolvedGeo | None = None
+
+
+class HarvestPlace(BaseModel):
+    """A place identified during extraction, with its resolved geo, that the
+    harvester reasons about. `place_id` is the catalog id used to key
+    place-scoped claims; `geo` anchors any geo-scoped claim about it."""
+
+    model_config = ConfigDict(frozen=True)
+
+    place_id: str
+    name: str
+    geo: ResolvedGeo
+
+
+class HarvestContent(BaseModel):
+    """The already-gathered content of one share, snapshotted for the
+    second pass. No raw media — only the derived text extraction already
+    produced (ADR: reuse content, no re-fetch)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    caption: str | None = None
+    transcript: str | None = None
+    hashtags: list[str] = []
+    title: str | None = None
+    platform: str | None = None
+    location_tag: str | None = None
+    source_ref: str | None = None
+
+    def is_empty(self) -> bool:
+        """True when there is nothing worth harvesting from."""
+        return not any(
+            (
+                self.caption,
+                self.transcript,
+                self.title,
+                self.location_tag,
+                self.hashtags,
+            )
+        )
+
+
+class HarvestSnapshot(BaseModel):
+    """The full bucket payload for one harvestable extraction event —
+    content plus the places it produced. Written to object storage under a
+    `harvest/{request_id}.json` key; the harvest event carries only the key,
+    and the handler reads this back."""
+
+    model_config = ConfigDict(frozen=True)
+
+    content: HarvestContent
+    places: list[HarvestPlace] = []
 
 
 def _slugify(part: str) -> str:

@@ -9,7 +9,7 @@ All other modules import from here. Nobody calls load_yaml_config() directly.
 
 import logging
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
 from pydantic import BaseModel, model_validator
@@ -426,6 +426,39 @@ class HomeConfig(BaseModel):
         return self
 
 
+class KnowledgeConfig(BaseModel):
+    """Knowledge-layer writer settings (ADR-120/121/122).
+
+    Confidence floors encode source trust: a harvested claim (one mention in
+    one share) floors low; a curated-expert claim floors high. The writer
+    takes `max(floor, model_estimate)`, capped at 1.0, so an obvious fact can
+    still score above its floor but a weak source can never masquerade as
+    strong.
+
+    The `*_review_status` fields are the review gate (ADR-122): the state a
+    fresh claim from each source lands in. Both default `approved` — the
+    product trusts every writer today. Turning on review (e.g. setting
+    `harvest_review_status: pending`) is this config change, not code.
+    """
+
+    harvest_confidence_floor: float = 0.35
+    curator_confidence_floor: float = 0.9
+    harvest_review_status: Literal["pending", "approved", "rejected"] = "approved"
+    curator_review_status: Literal["pending", "approved", "rejected"] = "approved"
+
+    @model_validator(mode="after")
+    def _bounds(self) -> "KnowledgeConfig":
+        for name, value in (
+            ("harvest_confidence_floor", self.harvest_confidence_floor),
+            ("curator_confidence_floor", self.curator_confidence_floor),
+        ):
+            if not (0.0 <= value <= 1.0):
+                raise ValueError(
+                    f"knowledge.{name} must be in [0.0, 1.0] (got {value})"
+                )
+        return self
+
+
 class UserIntentConfig(BaseModel):
     """Write gates for the "what you wanted" recall list (ADR-110).
 
@@ -819,6 +852,7 @@ class AppConfig(BaseModel):
     memory: MemoryConfig = MemoryConfig()
     home: HomeConfig = HomeConfig()
     user_intents: UserIntentConfig = UserIntentConfig()
+    knowledge: KnowledgeConfig = KnowledgeConfig()
     agent: AgentConfig = AgentConfig()
     movement: MovementConfig = MovementConfig()
     pricing: PricingConfig

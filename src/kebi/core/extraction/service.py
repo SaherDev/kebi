@@ -38,9 +38,8 @@ from kebi.api.schemas.extract_place import (
 from kebi.core.agent._trace_context import feature_trace
 from kebi.core.config import get_config
 from kebi.core.events.dispatcher import EventDispatcherProtocol
-from kebi.core.events.events import PlaceSaved
+from kebi.core.events.events import ContentHarvestRequested, PlaceSaved
 from kebi.core.extraction.candidate_mapper import candidate_to_core
-from kebi.core.extraction.evidence_bucket import EvidenceBucketWriter
 from kebi.core.extraction.extraction_pipeline import (
     ExtractionPipeline,
     TooManyCandidatesError,
@@ -49,6 +48,13 @@ from kebi.core.extraction.input_parser import ParsedInput, parse_input
 from kebi.core.extraction.result_cache import ExtractionResultCache
 from kebi.core.extraction.types import ValidatedCandidate
 from kebi.core.extraction.url_source import source_from_url
+from kebi.core.knowledge.harvest_bucket import HarvestBucketWriter
+from kebi.core.knowledge.schemas import (
+    HarvestContent,
+    HarvestPlace,
+    HarvestSnapshot,
+    ResolvedGeo,
+)
 from kebi.core.places import (
     DuplicateUserPlaceError,
     PlaceCore,
@@ -107,14 +113,27 @@ def _candidate_to_item_dict(
     static fields only, no live signals (rating/hours/popularity are
     enriched later by the places read path, not by extraction).
 
-    Evidence (the producer/medium audit trail) is intentionally absent:
-    it ships to the object-storage ledger out-of-band, not back to the
-    product repo. See `EvidenceBucketWriter`.
+    The per-candidate producer/medium audit trail is intentionally
+    absent from the response and is not persisted.
     """
     return {
         "place": place.model_dump(mode="json"),
         "confidence": candidate.confidence,
     }
+
+
+def _resolved_geo(place: PlaceCore) -> ResolvedGeo:
+    """The geo a place's harvested claims anchor to, from its stored
+    location. `country_code` (ISO alpha-2) is what canonical geo keys need;
+    a place lacking it yields only place-scoped claims downstream."""
+    loc = place.location
+    if loc is None:
+        return ResolvedGeo()
+    return ResolvedGeo(
+        country_code=loc.country_code,
+        city=loc.city,
+        neighborhood=loc.neighborhood,
+    )
 
 
 class ExtractionService:
@@ -134,14 +153,14 @@ class ExtractionService:
         user_places_service: UserPlacesServiceProtocol,
         event_dispatcher: EventDispatcherProtocol,
         result_cache: ExtractionResultCache,
-        evidence_writer: EvidenceBucketWriter,
+        harvest_writer: HarvestBucketWriter,
     ) -> None:
         self._pipeline = pipeline
         self._upsert = upsert_service
         self._user_places = user_places_service
         self._event_dispatcher = event_dispatcher
         self._result_cache = result_cache
-        self._evidence_writer = evidence_writer
+        self._harvest_writer = harvest_writer
 
     async def run(
         self,
@@ -308,12 +327,13 @@ class ExtractionService:
         """
         try:
             effective_limit = limit if limit is not None else DEFAULT_MAX_CANDIDATES
-            candidates = await self._pipeline.run(
+            pipeline_result = await self._pipeline.run(
                 url=parsed.url,
                 user_id=user_id,
                 supplementary_text=parsed.supplementary_text,
                 limit=effective_limit,
             )
+            candidates = pipeline_result.candidates
         except TooManyCandidatesError as exc:
             logger.info(
                 "Extraction request %s dropped: %d candidates exceeded limit of %d",
@@ -355,7 +375,7 @@ class ExtractionService:
             )
 
         items = await self._persist_and_build_items(
-            candidates, user_id, rid, source, parsed.url
+            candidates, user_id, rid, source, parsed.url, pipeline_result.content
         )
         if not items:
             return _failed_response(
@@ -446,6 +466,7 @@ class ExtractionService:
         request_id: str,
         source: PlaceSource | None,
         source_ref: str | None,
+        content: HarvestContent,
     ) -> list[ExtractPlaceItem]:
         """Inline v2 persistence flow (ADR-070, ADR-071).
 
@@ -511,15 +532,53 @@ class ExtractionService:
                     extra={"provider_id": c.provider_id},
                 )
                 continue
-            await self._evidence_writer.write(
-                place=persisted_core,
-                evidence=list(c.evidence),
-                user_id=user_id,
-                request_id=request_id,
-                source_ref=source_ref,
-            )
             items.append(ExtractPlaceItem(**_candidate_to_item_dict(c, persisted_core)))
+
+        # ADR-121: snapshot the content + identified places to the bucket and
+        # fire the background harvest. Only on this pipeline-run path (a
+        # cache hit re-derives nothing and was harvested at first extraction),
+        # and only when there is content worth mining and a place to anchor.
+        await self._maybe_harvest(request_id, user_id, content, eligible_cores)
         return items
+
+    async def _maybe_harvest(
+        self,
+        request_id: str,
+        user_id: str,
+        content: HarvestContent,
+        places: list[PlaceCore],
+    ) -> None:
+        """Persist a harvest snapshot and dispatch `ContentHarvestRequested`.
+
+        No-op when the content is empty or no place anchors it. The event
+        carries only the bucket key — the durable content lives in the
+        bucket, so the background handler reads it back off the critical
+        path (the snapshot write and dispatch already run after the HTTP
+        response via the event bus / non-fatal bucket write)."""
+        if content.is_empty() or not places:
+            return
+        harvest_places = [
+            HarvestPlace(
+                place_id=p.id,
+                name=p.place_name,
+                geo=_resolved_geo(p),
+            )
+            for p in places
+            if p.id
+        ]
+        if not harvest_places:
+            return
+        snapshot = HarvestSnapshot(content=content, places=harvest_places)
+        key = await self._harvest_writer.write(request_id=request_id, snapshot=snapshot)
+        if key is None:
+            return  # bucket write failed (already logged) — nothing to harvest
+        await self._event_dispatcher.dispatch(
+            ContentHarvestRequested(
+                user_id=user_id,
+                harvest_key=key,
+                source_ref=content.source_ref,
+            )
+        )
 
     async def _save_from_cache(
         self,
