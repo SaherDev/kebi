@@ -33,6 +33,7 @@ langgraph-checkpoint-postgres = "^3.0"
 psycopg = {extras = ["binary"], version = "^3.3.3"}
 aioboto3 = "^13.2"
 slowapi = "^0.1.9"
+anyascii = "^0.3.3"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.3"

@@ -17,6 +17,16 @@ Format:
 
 ---
 
+## ADR-125: Canonical entity keys transliterate names to ASCII before slugging
+
+**Date:** 2026-07-12\
+**Status:** accepted\
+**Context:** A knowledge claim's geo entity key (ADR-120/121) is a slug built from a place's city and neighborhood names, and ADR-121 accepted slugified names as a v1 limitation. But the slug was only a lowercase-and-hyphenate of the display name, so the same place keyed differently depending on how its name was written: "Hội An" and "Hoi An" produced different keys, as did "Đà Nẵng" and "Da Nang". Because a name arrives in its local diacritic form from one source and its ASCII spelling from another, one real city fragmented into several entity keys and its claims never merged — defeating the whole point of a canonical key. Non-Latin scripts were worse: a naive slug either kept raw characters (so a Thai or Japanese name never matched its romanised spelling) or dropped them entirely (collapsing every such name onto one empty key).\
+**Decision:** Names are transliterated to ASCII before the slug is formed, so a name's local-script form and its romanised spelling collapse to one stable key ("Hội An" and "Hoi An" both key as `hoi-an`; "東京" romanises deterministically). Transliteration uses a permissively licensed library rather than a hand-rolled Unicode fold, because correct slugification across scripts is a deep problem — combining marks that are vowels, letters that carry no decomposition — where a bespoke implementation quietly mangles the long tail. Only the display names feed the slug; the ISO country code and, for a venue, the catalog id remain the authoritative key parts they already were.\
+**Consequences:** One place now keys the same however its name is spelled or scripted, so claims about it accumulate on a single entity instead of scattering. A small transliteration dependency is added, chosen for a permissive licence to avoid the copyleft of the popular slug libraries. Existing rows carrying the old lowercase-only keys are orphaned rather than migrated; acceptable because the knowledge layer is new and thinly populated, and re-harvested content re-keys to the canonical form. Transliteration is lossy by nature (distinct names can romanise alike), an accepted trade for cross-spelling dedup at this scale; the country code in every geo key bounds collisions to within one country.
+
+---
+
 ## ADR-124: The turn resolves its location by default; administrative areas are never savable places
 
 **Date:** 2026-07-12\
