@@ -101,6 +101,64 @@ class TestRequireName:
         assert map_place(raw, _NOW, require_name=False) is None
 
 
+class TestAdministrativeAreaReject:
+    """ADR-082: a search matching an administrative area (a town, district,
+    road) is not a savable place and is dropped at validation."""
+
+    @staticmethod
+    def _raw(name: str, types: list[str]) -> dict[str, object]:
+        return {
+            "id": "ChIJarea",
+            "displayName": {"text": name},
+            "location": {"latitude": 16.05, "longitude": 108.2},
+            "types": types,
+        }
+
+    def test_locality_rejected_in_search_mode(self) -> None:
+        raw = self._raw("Hoi An", ["locality", "political"])
+        assert map_place(raw, _NOW) is None
+
+    def test_road_rejected_in_search_mode(self) -> None:
+        raw = self._raw("Sukhumvit Road", ["route"])
+        assert map_place(raw, _NOW) is None
+
+    def test_admin_area_rejected_in_search_mode(self) -> None:
+        raw = self._raw("Đà Nẵng", ["administrative_area_level_1", "political"])
+        assert map_place(raw, _NOW) is None
+
+    def test_details_mode_keeps_administrative_result(self) -> None:
+        """The by-id refresh maps its already-catalogued venue; it never
+        re-classifies, so the reject is search-only."""
+        raw = self._raw("Hoi An", ["locality", "political"])
+        obj = map_place(raw, _NOW, require_name=False)
+        assert obj is not None
+        assert obj.place_name == "Hoi An"
+
+    def test_real_venue_type_survives(self) -> None:
+        raw = self._raw("Nara Eatery", ["thai_restaurant", "restaurant", "food"])
+        obj = map_place(raw, _NOW)
+        assert obj is not None
+        assert PlaceCategory.restaurant in obj.categories
+
+    def test_district_as_attraction_survives(self) -> None:
+        """A place Google itself classifies as a venue keeps its category and
+        is NOT dropped, even alongside a `political` type (ADR-082 carve-out)."""
+        raw = self._raw(
+            "Zaanse Schans", ["tourist_attraction", "point_of_interest", "political"]
+        )
+        obj = map_place(raw, _NOW)
+        assert obj is not None
+        assert obj.categories  # mapped from tourist_attraction
+
+    def test_empty_types_not_rejected(self) -> None:
+        """A niche venue with no Google type (empty types) is kept — the reject
+        requires a positive administrative signal, not mere category-emptiness."""
+        raw = self._raw("Some Hidden Bar", [])
+        obj = map_place(raw, _NOW)
+        assert obj is not None
+        assert obj.categories == []
+
+
 class TestAddressComponentFallback:
     """Ranked fallback (ADR-119): municipality-style cities and district
     neighborhoods populate even without a `locality` component."""

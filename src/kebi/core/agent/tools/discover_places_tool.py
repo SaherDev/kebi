@@ -83,7 +83,6 @@ from kebi.core.agent.tools._with_timeout import tool_step_base_id, with_timeout
 from kebi.core.agent.tools.consult_models import ConsultCandidate, ConsultResult
 from kebi.core.config import get_config
 from kebi.core.extraction.extraction_pipeline import SearchServiceFactory
-from kebi.core.extraction.geo_filter import drop_geographic_features
 from kebi.core.places.models import (
     LocationContext,
     PlaceCategory,
@@ -362,7 +361,9 @@ async def _run_discover_places_impl(
             steps=steps,
         )
 
-    venues = drop_geographic_features(hits)
+    # Administrative areas (cities, districts, roads) are rejected upstream at
+    # validation (`_google_mapper`, ADR-082), so the provider never returns them.
+    venues = hits
 
     if not venues:
         _finish("nothing nearby matched that", kind="no_match")

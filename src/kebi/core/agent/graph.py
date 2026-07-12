@@ -734,6 +734,33 @@ _LOCATION_GATE_PHRASES = (
     "next week",
     "next month",
 )
+# Words that mark a turn as clearly location-free: greetings, acknowledgements,
+# a recall of saved history (the taste / library surface, not a place query), or
+# a meta / help question. None of these need a working location, so they skip the
+# resolver even though the gate otherwise resolves by default (see the gate
+# docstring — a lowercased place name like "da nang cafes" carries no keyword and
+# must NOT skip and answer for a stale carried city). Accepted edge: a genuine
+# place query that also contains a marker word ("save me a spot in da nang") skips.
+_LOCATION_FREE_MARKERS = frozenset(
+    {
+        "hi",
+        "hello",
+        "hey",
+        "yo",
+        "thanks",
+        "thank",
+        "thx",
+        "ty",
+        "cheers",
+        "save",
+        "saved",
+        "stash",
+        "library",
+        "bookmarked",
+        "history",
+        "help",
+    }
+)
 
 
 def _last_human_text(messages: list[Any]) -> str:
@@ -767,7 +794,15 @@ def _needs_location_resolution(state: AgentState) -> str:
         cleaned = token.strip(".,!?;:'\"()")
         if len(cleaned) > 1 and cleaned[0].isupper() and not cleaned.isupper():
             return "resolve"
-    return "skip"
+    # Resolve by default. A lowercased place name with no travel keyword
+    # ("da nang cafes", "what's good in da nang") reaches here, and skipping it
+    # would let a stale carried location answer for the wrong city. Only clearly
+    # location-free turns — greetings, acknowledgements, saved-history recall,
+    # meta / help questions — skip.
+    words = set(re.findall(r"[a-z']+", lowered))
+    if words & _LOCATION_FREE_MARKERS:
+        return "skip"
+    return "resolve"
 
 
 def _format_history_for_resolver(messages: list[BaseMessage]) -> str:

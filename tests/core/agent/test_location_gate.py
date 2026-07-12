@@ -45,6 +45,14 @@ def test_location_free_turns_skip(message: str) -> None:
         "i'll be visiting chiang rai next month",
         "going to hua hin for the weekend, any tips?",
         "on vacation in koh lipe, where should i eat?",
+        # Lowercased place name leading the message with no travel keyword —
+        # the proper-noun heuristic and keyword fallback both miss these, so
+        # the resolve-by-default tail must catch them (else a stale carried
+        # location answers for the wrong city).
+        "da nang food spots",
+        "what's good in da nang",
+        "show me da nang cafes",
+        "best restaurants da nang",
     ],
 )
 def test_location_relevant_turns_resolve(message: str) -> None:
