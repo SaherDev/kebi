@@ -27,6 +27,7 @@ def _whisper_cost_for(duration_seconds: float) -> float | None:
         return None
     return rate.cost_for(duration_seconds)
 
+
 _DEFAULT_WHISPER_CONFIG = ExtractionWhisperConfig()
 
 # Hard cap on audio payload size sent to Groq Whisper. Groq's own

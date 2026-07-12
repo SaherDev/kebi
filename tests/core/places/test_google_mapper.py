@@ -115,6 +115,32 @@ class TestAddressComponentFallback:
             "addressComponents": components,
         }
 
+    def test_country_code_from_short_text(self) -> None:
+        """The country component's shortText populates the ISO alpha-2
+        country_code (ADR-121), lowercased, alongside the display country."""
+        raw = self._raw_with_components(
+            [
+                {"longText": "Dubai", "types": ["locality"]},
+                {
+                    "longText": "United Arab Emirates",
+                    "shortText": "AE",
+                    "types": ["country", "political"],
+                },
+            ]
+        )
+        obj = map_place(raw, _NOW)
+        assert obj is not None and obj.location is not None
+        assert obj.location.country == "United Arab Emirates"
+        assert obj.location.country_code == "ae"
+
+    def test_country_code_none_without_short_text(self) -> None:
+        raw = self._raw_with_components(
+            [{"longText": "Thailand", "types": ["country"]}]
+        )
+        obj = map_place(raw, _NOW)
+        assert obj is not None and obj.location is not None
+        assert obj.location.country_code is None
+
     def test_da_nang_shape_admin_levels_fall_back(self) -> None:
         """Real shape from google:ChIJ2y5L4dQNQjER... (The Marble Mountains)."""
         raw = self._raw_with_components(

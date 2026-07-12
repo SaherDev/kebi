@@ -11,7 +11,11 @@ from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
-from kebi.db.models import KnowledgeEntityType, KnowledgeSourceType
+from kebi.db.models import (
+    KnowledgeEntityType,
+    KnowledgeReviewStatus,
+    KnowledgeSourceType,
+)
 from kebi.db.repositories.knowledge_claim_repository import (
     SQLAlchemyKnowledgeClaimRepository,
 )
@@ -47,6 +51,9 @@ def _row(
         source_ref=None,
         confidence=0.8,
         user_id=user_id,
+        review_status=KnowledgeReviewStatus.APPROVED,
+        reviewed_by=None,
+        reviewed_at=None,
         created_at=datetime(2026, 7, 11, tzinfo=UTC),
     )
 

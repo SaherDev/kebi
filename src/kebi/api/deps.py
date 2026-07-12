@@ -19,7 +19,6 @@ from kebi.core.config import AppConfig, ExtractionConfig, get_config, get_env
 from kebi.core.events.dispatcher import EventDispatcher
 from kebi.core.events.handlers import EventHandlers
 from kebi.core.extraction.enrichment_level import EnrichmentLevel
-from kebi.core.extraction.evidence_bucket import EvidenceBucketWriter
 from kebi.core.extraction.extraction_pipeline import (
     ExtractionPipeline,
     SearchServiceFactory,
@@ -29,6 +28,12 @@ from kebi.core.extraction.extraction_pipeline import (
 from kebi.core.extraction.result_cache import ExtractionResultCache
 from kebi.core.extraction.service import ExtractionService
 from kebi.core.home import HomeService
+from kebi.core.knowledge.curation_service import KnowledgeCurationService
+from kebi.core.knowledge.curator import KnowledgeCurator
+from kebi.core.knowledge.harvest_bucket import HarvestBucketReader, HarvestBucketWriter
+from kebi.core.knowledge.harvester import KnowledgeHarvester
+from kebi.core.knowledge.producer import KnowledgeIngestion
+from kebi.core.knowledge.writer import KnowledgeWriter
 from kebi.core.memory.buffer import MessageBuffer
 from kebi.core.memory.extractor import MemoryExtractor
 from kebi.core.memory.repository import SQLAlchemyUserMemoryRepository
@@ -53,6 +58,10 @@ from kebi.core.taste.debounce import regen_debouncer
 from kebi.core.taste.service import TasteModelService
 from kebi.core.user.intent_service import UserIntentService
 from kebi.core.user.service import UserDataDeletionService
+from kebi.db.repositories import (
+    KnowledgeClaimRepository,
+    SQLAlchemyKnowledgeClaimRepository,
+)
 from kebi.db.repositories.user_intent_repository import (
     SQLAlchemyUserIntentRepository,
 )
@@ -116,6 +125,9 @@ class GatewayIdentity:
     save_limit: int | None = None
     consults_per_day: int | None = None
     advanced_models_enabled: bool = False
+    # Whether this caller may push curated_expert knowledge (ADR-121). A
+    # global write, so it fails closed like the other boolean gates.
+    can_curate: bool = False
 
 
 def require_gateway_identity(
@@ -133,6 +145,7 @@ def require_gateway_identity(
     x_gateway_advanced_models_enabled: bool = Header(
         False, alias="X-Gateway-Advanced-Models-Enabled"
     ),
+    x_gateway_can_curate: bool = Header(False, alias="X-Gateway-Can-Curate"),
 ) -> GatewayIdentity:
     """Verify the gateway shared secret and return the forwarded identity.
 
@@ -155,6 +168,7 @@ def require_gateway_identity(
         save_limit=x_gateway_save_limit,
         consults_per_day=x_gateway_consults_per_day,
         advanced_models_enabled=x_gateway_advanced_models_enabled,
+        can_curate=x_gateway_can_curate,
     )
     # Stash on request.state so middleware (rate limiter, request-id
     # logger) can reach it without re-resolving the dep chain.
@@ -247,12 +261,19 @@ async def get_event_dispatcher(
     out the same instances the rest of the request graph already uses
     (ADR-019). All use session_factory internally — each repo method opens
     its own session, so background tasks don't depend on request session.
-    `BackgroundTasks` stays request-scoped (FastAPI requirement).
+    The harvest stack backing `content_harvest_requested` (ADR-121) needs no
+    request scope, so it is built from its process-wide providers here rather
+    than injected. `BackgroundTasks` stays request-scoped (FastAPI req).
     """
     handlers = EventHandlers(
         taste_service=taste_service,
         memory_service=memory_service,
         intent_service=intent_service,
+        harvest_reader=get_harvest_bucket_reader(get_object_storage()),
+        harvester=get_knowledge_harvester(),
+        ingestion=get_knowledge_ingestion(
+            get_knowledge_writer(get_knowledge_claim_repository())
+        ),
     )
 
     dispatcher = EventDispatcher(background_tasks=background_tasks)
@@ -270,6 +291,10 @@ async def get_event_dispatcher(
     dispatcher.register_handler(
         "turn_completed",
         handlers.on_turn_completed,  # type: ignore[arg-type]
+    )
+    dispatcher.register_handler(
+        "content_harvest_requested",
+        handlers.on_content_harvest_requested,  # type: ignore[arg-type]
     )
 
     return dispatcher
@@ -762,16 +787,96 @@ def get_object_storage() -> ObjectStorageProtocol:
     return _object_storage
 
 
-def get_evidence_bucket_writer(
+def get_harvest_bucket_writer(
     storage: ObjectStorageProtocol = Depends(get_object_storage),  # noqa: B008
-) -> EvidenceBucketWriter:
-    """FastAPI dependency providing the EvidenceBucketWriter.
+) -> HarvestBucketWriter:
+    """FastAPI dependency providing the HarvestBucketWriter (ADR-121).
 
-    Writes the per-extraction evidence audit trail to object storage
-    instead of stuffing it into the `/v1/extract` response. Storage is
-    pluggable via `ObjectStorageProtocol`.
+    Snapshots a share's already-gathered content to object storage so the
+    background harvest pass can mine it without re-fetching. Storage is
+    pluggable via `ObjectStorageProtocol`; the write is non-fatal.
     """
-    return EvidenceBucketWriter(storage=storage)
+    return HarvestBucketWriter(storage=storage)
+
+
+def get_harvest_bucket_reader(
+    storage: ObjectStorageProtocol = Depends(get_object_storage),  # noqa: B008
+) -> HarvestBucketReader:
+    """FastAPI dependency providing the HarvestBucketReader (ADR-121).
+
+    Reads a harvest snapshot back for the background handler.
+    """
+    return HarvestBucketReader(storage=storage)
+
+
+def get_knowledge_claim_repository() -> KnowledgeClaimRepository:
+    """FastAPI dependency providing the KnowledgeClaimRepository (ADR-120).
+
+    Uses session_factory — each method opens its own session, so it is safe
+    in both the request path (curator) and the background harvest handler.
+    """
+    return SQLAlchemyKnowledgeClaimRepository(_get_session_factory())
+
+
+def get_knowledge_writer(
+    repo: KnowledgeClaimRepository = Depends(  # noqa: B008
+        get_knowledge_claim_repository
+    ),
+) -> KnowledgeWriter:
+    """FastAPI dependency providing the shared KnowledgeWriter (ADR-121).
+
+    Mechanical write path; provenance is supplied by the producer via
+    `KnowledgeIngestion`.
+    """
+    return KnowledgeWriter(repo=repo)
+
+
+def get_knowledge_ingestion(
+    writer: KnowledgeWriter = Depends(get_knowledge_writer),  # noqa: B008
+) -> KnowledgeIngestion:
+    """FastAPI dependency providing the source-agnostic KnowledgeIngestion
+    (ADR-122): persists any ClaimProducer's claims under its own provenance."""
+    return KnowledgeIngestion(writer)
+
+
+def get_knowledge_harvester() -> KnowledgeHarvester:
+    """FastAPI dependency providing the KnowledgeHarvester (ADR-121/122).
+
+    A `shared_content` ClaimProducer; its trust floor and review status come
+    from config, so gating harvested claims later is a config change.
+    """
+    knowledge = get_config().knowledge
+    return KnowledgeHarvester(
+        get_instructor_client("knowledge_harvester"),
+        confidence_floor=knowledge.harvest_confidence_floor,
+        review_status=knowledge.harvest_review_status,
+    )
+
+
+def get_knowledge_curator() -> KnowledgeCurator:
+    """FastAPI dependency providing the KnowledgeCurator (ADR-121/122).
+
+    A `curated_expert` ClaimProducer; resolves each claim's area through the
+    shared free Nominatim geocoder so a curated claim keys identically to a
+    harvested one. Trust floor and review status come from config.
+    """
+    knowledge = get_config().knowledge
+    return KnowledgeCurator(
+        get_instructor_client("knowledge_curator"),
+        get_geocoding_client(),
+        confidence_floor=knowledge.curator_confidence_floor,
+        review_status=knowledge.curator_review_status,
+    )
+
+
+def get_knowledge_curation_service(
+    ingestion: KnowledgeIngestion = Depends(get_knowledge_ingestion),  # noqa: B008
+) -> KnowledgeCurationService:
+    """FastAPI dependency providing the KnowledgeCurationService (ADR-121)."""
+    return KnowledgeCurationService(
+        curator=get_knowledge_curator(),
+        ingestion=ingestion,
+    )
 
 
 def get_extraction_result_cache(
@@ -804,8 +909,8 @@ def get_extraction_service(
     result_cache: ExtractionResultCache = Depends(  # noqa: B008
         get_extraction_result_cache
     ),
-    evidence_writer: EvidenceBucketWriter = Depends(  # noqa: B008
-        get_evidence_bucket_writer
+    harvest_writer: HarvestBucketWriter = Depends(  # noqa: B008
+        get_harvest_bucket_writer
     ),
 ) -> ExtractionService:
     """FastAPI dependency providing ExtractionService (ADR-070, ADR-071, ADR-074).
@@ -817,8 +922,8 @@ def get_extraction_service(
     place. v2 services are the single seam — extraction never reaches
     the UserPlacesRepo directly. `result_cache` (ADR-074) lets the
     second-and-later users who share the same URL skip the pipeline.
-    `evidence_writer` ships the per-place audit trail to object storage
-    instead of returning it in the HTTP response.
+    `harvest_writer` snapshots the share's content to object storage and
+    the service dispatches a background harvest event (ADR-121).
     """
     return ExtractionService(
         pipeline=pipeline,
@@ -826,7 +931,7 @@ def get_extraction_service(
         user_places_service=user_places_service,
         event_dispatcher=event_dispatcher,
         result_cache=result_cache,
-        evidence_writer=evidence_writer,
+        harvest_writer=harvest_writer,
     )
 
 

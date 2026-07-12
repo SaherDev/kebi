@@ -12,12 +12,18 @@ from __future__ import annotations
 from typing import Protocol
 from uuid import uuid4
 
-from sqlalchemy import ColumnElement, and_, or_, select
+from sqlalchemy import ColumnElement, and_, or_, select, true
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from kebi.core.knowledge.schemas import EntityType, KnowledgeClaim, SourceType
+from kebi.core.knowledge.schemas import (
+    EntityType,
+    KnowledgeClaim,
+    ReviewStatus,
+    SourceType,
+)
 from kebi.db.models import KnowledgeClaim as KnowledgeClaimRow
+from kebi.db.models import KnowledgeReviewStatus
 
 
 def _to_record(row: KnowledgeClaimRow) -> KnowledgeClaim:
@@ -32,6 +38,9 @@ def _to_record(row: KnowledgeClaimRow) -> KnowledgeClaim:
         source_ref=row.source_ref,
         confidence=row.confidence,
         user_id=row.user_id,
+        review_status=row.review_status.value,
+        reviewed_by=row.reviewed_by,
+        reviewed_at=row.reviewed_at,
         created_at=row.created_at,
     )
 
@@ -46,6 +55,17 @@ def _scope_clause(user_id: str | None) -> ColumnElement[bool]:
     )
 
 
+def _approved_clause(approved_only: bool) -> ColumnElement[bool]:
+    """Restrict to live (approved) claims when the reader asks (ADR-122).
+
+    Off by default — no reader gates on review state yet; the future research
+    tool passes `approved_only=True` so pending/rejected claims never surface.
+    """
+    if not approved_only:
+        return true()
+    return KnowledgeClaimRow.review_status == KnowledgeReviewStatus.APPROVED
+
+
 class KnowledgeClaimRepository(Protocol):
     async def save(
         self,
@@ -58,14 +78,21 @@ class KnowledgeClaimRepository(Protocol):
         tags: list[str] | None = None,
         source_ref: str | None = None,
         user_id: str | None = None,
+        review_status: ReviewStatus = "approved",
     ) -> bool: ...
 
     async def list_for_entity(
-        self, entity_key: str, user_id: str | None = None
+        self,
+        entity_key: str,
+        user_id: str | None = None,
+        approved_only: bool = False,
     ) -> list[KnowledgeClaim]: ...
 
     async def list_under_prefix(
-        self, prefix: str, user_id: str | None = None
+        self,
+        prefix: str,
+        user_id: str | None = None,
+        approved_only: bool = False,
     ) -> list[KnowledgeClaim]: ...
 
 
@@ -84,11 +111,14 @@ class SQLAlchemyKnowledgeClaimRepository:
         tags: list[str] | None = None,
         source_ref: str | None = None,
         user_id: str | None = None,
+        review_status: ReviewStatus = "approved",
     ) -> bool:
         """Persist a claim via INSERT ON CONFLICT DO NOTHING.
 
         Returns True if a new row was written, False if the claim already
         existed under the dedup key (entity_key, claim, source_type, user_id).
+        `review_status` (ADR-122) is set at write; `reviewed_by`/`reviewed_at`
+        stay NULL until an actual review moves the claim.
         """
         async with self._session_factory() as session:
             stmt = (
@@ -104,6 +134,7 @@ class SQLAlchemyKnowledgeClaimRepository:
                     source_ref=source_ref,
                     confidence=confidence,
                     user_id=user_id,
+                    review_status=review_status,
                 )
                 .on_conflict_do_nothing(
                     index_elements=["entity_key", "claim", "source_type", "user_id"],
@@ -115,20 +146,27 @@ class SQLAlchemyKnowledgeClaimRepository:
             return result.first() is not None
 
     async def list_for_entity(
-        self, entity_key: str, user_id: str | None = None
+        self,
+        entity_key: str,
+        user_id: str | None = None,
+        approved_only: bool = False,
     ) -> list[KnowledgeClaim]:
         async with self._session_factory() as session:
             stmt = select(KnowledgeClaimRow).where(
                 and_(
                     KnowledgeClaimRow.entity_key == entity_key,
                     _scope_clause(user_id),
+                    _approved_clause(approved_only),
                 )
             )
             rows = (await session.execute(stmt)).scalars().all()
         return [_to_record(row) for row in rows]
 
     async def list_under_prefix(
-        self, prefix: str, user_id: str | None = None
+        self,
+        prefix: str,
+        user_id: str | None = None,
+        approved_only: bool = False,
     ) -> list[KnowledgeClaim]:
         """Geo prefix scan — e.g. prefix "ae/dubai" also matches "ae/dubai/jumeirah"."""
         async with self._session_factory() as session:
@@ -139,6 +177,7 @@ class SQLAlchemyKnowledgeClaimRepository:
                         KnowledgeClaimRow.entity_key.like(f"{prefix}/%"),
                     ),
                     _scope_clause(user_id),
+                    _approved_clause(approved_only),
                 )
             )
             rows = (await session.execute(stmt)).scalars().all()

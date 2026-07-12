@@ -47,6 +47,9 @@ class GeocodeResult(BaseModel):
     lat: float
     lng: float
     country: str | None = None
+    # ISO-3166 alpha-2 (lowercased) from the response's `address.country_code`
+    # — the code canonical geo keys need (ADR-121). Free in the same response.
+    country_code: str | None = None
     city: str | None = None
     neighborhood: str | None = None
     place_type: str | None = None
@@ -92,9 +95,19 @@ class NominatimGeocodingClient:
         except (KeyError, TypeError, ValueError):
             logger.warning("nominatim_search_unparseable", extra={"query": query})
             return None
+        addr = first.get("address") if isinstance(first.get("address"), dict) else {}
+        cc = addr.get("country_code")
         return GeocodeResult(
             lat=lat,
             lng=lng,
+            country=addr.get("country"),
+            country_code=cc.strip().lower() if isinstance(cc, str) and cc else None,
+            city=addr.get("city") or addr.get("town") or addr.get("village"),
+            neighborhood=(
+                addr.get("neighbourhood")
+                or addr.get("suburb")
+                or addr.get("city_district")
+            ),
             place_type=first.get("addresstype") or first.get("type"),
             bbox=_parse_bbox(first.get("boundingbox")),
         )

@@ -32,12 +32,17 @@ down_revision: str | Sequence[str] | None = "t8u9v0w1x2y3"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
+# create_type=False: the enums are created/dropped explicitly in
+# upgrade/downgrade below. Without this, `create_table` also emits a
+# `CREATE TYPE` for the same enum, which collides with the explicit create
+# and fails on a fresh DB with "type already exists".
 _ENTITY_TYPE = postgresql.ENUM(
     "country",
     "city",
     "neighborhood",
     "place",
     name="knowledge_entity_type",
+    create_type=False,
 )
 _SOURCE_TYPE = postgresql.ENUM(
     "shared_content",
@@ -45,6 +50,7 @@ _SOURCE_TYPE = postgresql.ENUM(
     "kebi_message",
     "user_message",
     name="knowledge_source_type",
+    create_type=False,
 )
 
 

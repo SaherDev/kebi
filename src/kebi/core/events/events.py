@@ -23,6 +23,23 @@ class PlaceSaved(DomainEvent):
     request_id: str = ""
 
 
+class ContentHarvestRequested(DomainEvent):
+    """Event: a saved share's content should be mined into knowledge claims.
+
+    Fired by ExtractionService after a pipeline-run save (not on the ADR-074
+    cache-hit path — that content was already harvested at first extraction).
+    Carries only a pointer: the durable `HarvestContent` + identified places
+    live in object storage under `harvest_key`, and the handler reads them
+    back to run the second pass off the critical path (ADR-121). `user_id`
+    is the sharer, for tracing only — harvested claims are global
+    (`user_id=NULL`), never scoped to the sharer.
+    """
+
+    event_type: str = "content_harvest_requested"
+    harvest_key: str
+    source_ref: str | None = None
+
+
 class RecommendationAccepted(DomainEvent):
     """Event: User accepted a recommendation"""
 
