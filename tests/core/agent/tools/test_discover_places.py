@@ -5,7 +5,6 @@ Exercises `_run_discover_places` directly with a stubbed
 
 - Location anchoring: no working_location → no provider call.
 - Empty provider response → no_match.
-- Geographic-feature drop strips administrative-only hits.
 - Post-fetch hard-constraint tag filter drops violating places.
 - Reasoning steps narrate every phase in plain language and in order.
 - Result envelope: `source="discovered"`, `user_data=None`, limit respected.
@@ -129,7 +128,8 @@ def _veg_tag() -> PlaceTag:
 
 
 def _make_search_factory(
-    *, hits: list[PlaceObject] | Exception,
+    *,
+    hits: list[PlaceObject] | Exception,
 ) -> tuple[
     Callable[[], AbstractAsyncContextManager[MagicMock]],
     MagicMock,
@@ -230,35 +230,6 @@ async def test_provider_empty_returns_no_match() -> None:
     step_ids = [s.step for s in cmd.update["reasoning_steps"]]
     assert step_ids == ["discover_places.start", "discover_places.no_match"]
     assert search.find.await_count == 1
-
-
-@pytest.mark.asyncio
-async def test_geo_filter_drops_administrative_only_hits() -> None:
-    """Hits with empty categories AND administrative names get dropped."""
-    admin_hit = PlaceObject(
-        id="p1",
-        provider_id="google:p1",
-        place_name="Sukhumvit Road",
-        categories=[],
-        tags=[],
-        cached_at=datetime.now(UTC),
-    )
-    factory, search = _make_search_factory(hits=[admin_hit])
-
-    cmd = await _run_discover_places(
-        places_search_factory=factory,
-        state=_state(working_location=_bangkok_working()),
-        tool_call_id="tc-1",
-        query="pharmacy",
-        categories=[PlaceCategory.pharmacy],
-        tags=None,
-        limit=10,
-    )
-
-    payload = ConsultResult.model_validate_json(cmd.update["messages"][0].content)
-    assert payload.empty_reason == "no_match"  # only admin hit was dropped
-    step_ids = [s.step for s in cmd.update["reasoning_steps"]]
-    assert step_ids[-1] == "discover_places.no_match"
 
 
 @pytest.mark.asyncio
@@ -368,9 +339,7 @@ async def test_limit_caps_returned_candidates() -> None:
 @pytest.mark.asyncio
 async def test_provider_call_carries_location_context() -> None:
     """The single find() call MUST be bound to the working location's circle."""
-    factory, search = _make_search_factory(
-        hits=[_place("Boots", place_id="p1")]
-    )
+    factory, search = _make_search_factory(hits=[_place("Boots", place_id="p1")])
 
     await _run_discover_places(
         places_search_factory=factory,
@@ -401,9 +370,7 @@ async def test_provider_call_carries_location_context() -> None:
 @pytest.mark.asyncio
 async def test_provider_call_omits_place_names_when_query_empty() -> None:
     """Empty query → no place_names entry; categories alone drive the search."""
-    factory, search = _make_search_factory(
-        hits=[_place("Boots", place_id="p1")]
-    )
+    factory, search = _make_search_factory(hits=[_place("Boots", place_id="p1")])
 
     await _run_discover_places(
         places_search_factory=factory,

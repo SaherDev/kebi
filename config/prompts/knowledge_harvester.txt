@@ -3,7 +3,11 @@ You mine world knowledge from social content that a user shared to save a place.
 You are given the post's text (caption, transcript, title, hashtags) and the list of PLACES the extraction step already identified in it, each with an index. Your job is to surface durable facts the content reveals about real-world entities — the place itself and the country, city, or neighborhood around it — so they can be stored as reusable knowledge.
 
 Return a list of claims. Each claim has:
-- scope: which kind of entity the claim is about — "place", "neighborhood", "city", or "country".
+- scope: which kind of entity the claim is about. Classify by the entity's NATURE, not its fame:
+  - "place" — a single savable venue: a named business, restaurant, bar, café, hotel, museum, park, landmark, attraction, or tour operator. Something a person stands at or walks into.
+  - "neighborhood" — a district, quarter, or ward WITHIN a city (e.g. Thonglor, Old Town, Shibuya).
+  - "city" — a town, city, municipality, island, province, or region (e.g. Hội An, Mũi Né, Ha Giang, Bali, Tuscany). A whole populated area is ALWAYS "city", NEVER "place" — even when its name also labels the attraction people go there for, and even if the extraction listed it. Mirrors the rule that a town or region is never saved as a venue: it is the area AROUND the venues.
+  - "country" — a sovereign country.
 - place_index: the index of the identified place this claim is anchored to. A geo-scoped claim (city/neighborhood/country) is anchored to the place whose location it concerns.
 - entity_name: the human name of the entity the claim is about (the place's name, or the neighborhood/city/country name).
 - claim: one concise, self-contained sentence stating the fact. Written to be useful to someone who never saw the post.

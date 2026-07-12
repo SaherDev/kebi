@@ -285,7 +285,20 @@ def map_place(
         return None
 
     types: list[str] = raw.get("types") or []
-    categories = [PlaceCategory(c) for c in _map_categories(types)]
+    mapped = _map_categories(types)
+    # ADR-082: a search matches an administrative area — a city, district,
+    # region, or road ("Da Nang", "Hoi An", "Sukhumvit Road") — when the query
+    # is itself a place name. Such a result carries an administrative Google
+    # type and maps to no venue category; it is not a savable place, so drop it
+    # here at validation before it can be persisted or handed to the picker
+    # (which would otherwise invent a `landmark` category for it). A place
+    # Google itself classifies as a venue keeps its category and survives,
+    # honoring the district-as-attraction carve-out. Only search results are
+    # filtered; the by-id details refresh (`require_name=False`) always maps its
+    # already-catalogued venue.
+    if require_name and not mapped and _is_administrative_type(types):
+        return None
+    categories = [PlaceCategory(c) for c in mapped]
 
     tags: list[PlaceTag] = []
     seen: set[tuple[str, str]] = set()
@@ -347,6 +360,48 @@ def _country_code(components: list[dict[str, Any]]) -> str | None:
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
+
+# Google place types that denote an administrative area (a city, district,
+# region, or road) rather than a savable venue. A text search matches one of
+# these when the query is itself a place name; the result must not become a
+# place (ADR-082). This is the reliable signal the v2 mapper previously
+# discarded when it abstracted Google types down to PlaceCategory.
+_ADMINISTRATIVE_TYPES = frozenset(
+    {
+        "locality",
+        "sublocality",
+        "sublocality_level_1",
+        "sublocality_level_2",
+        "sublocality_level_3",
+        "sublocality_level_4",
+        "sublocality_level_5",
+        "neighborhood",
+        "administrative_area_level_1",
+        "administrative_area_level_2",
+        "administrative_area_level_3",
+        "administrative_area_level_4",
+        "administrative_area_level_5",
+        "administrative_area_level_6",
+        "administrative_area_level_7",
+        "colloquial_area",
+        "political",
+        "country",
+        "archipelago",
+        "continent",
+        "postal_code",
+        "postal_code_prefix",
+        "postal_code_suffix",
+        "route",
+        "street_address",
+        "intersection",
+    }
+)
+
+
+def _is_administrative_type(types: list[str]) -> bool:
+    """True when any Google place type marks an administrative area."""
+    return any(t in _ADMINISTRATIVE_TYPES for t in types)
 
 
 def _map_categories(types: list[str]) -> list[str]:
