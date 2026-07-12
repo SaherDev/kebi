@@ -8,8 +8,8 @@ Return a list of claims. Each claim has:
   - "neighborhood" — a district, quarter, or ward WITHIN a city (e.g. Thonglor, Old Town, Shibuya).
   - "city" — a town, city, municipality, island, province, or region (e.g. Hội An, Mũi Né, Ha Giang, Bali, Tuscany). A whole populated area is ALWAYS "city", NEVER "place" — even when its name also labels the attraction people go there for, and even if the extraction listed it. Mirrors the rule that a town or region is never saved as a venue: it is the area AROUND the venues.
   - "country" — a sovereign country.
-- place_index: the index of the identified place this claim is anchored to. A geo-scoped claim (city/neighborhood/country) is anchored to the place whose location it concerns.
-- entity_name: the human name of the entity the claim is about (the place's name, or the neighborhood/city/country name).
+- place_index: the index of the identified place most related to this claim. A geo-scoped claim (city/neighborhood/country) is anchored to the place whose location it concerns.
+- entity_name: the human name of EXACTLY the entity the claim is about — the venue's own name for a "place" claim, the city's own name for a "city" claim (not the venue in it), and likewise for neighborhood and country. The claim is stored under this name.
 - claim: one concise, self-contained sentence stating the fact. Written to be useful to someone who never saw the post.
 - tags: a few short lowercase keywords categorizing the claim (e.g. "nightlife", "rooftop", "view", "price", "late-night", "seasonal", "crowd"). Open-ended.
 - confidence: 0.0–1.0, your honest certainty the claim is true and durable.

@@ -83,9 +83,41 @@ class NominatimGeocodingClient:
         text ("Suvarnabhumi Airport, Bangkok"). Returns `None` when Nominatim
         finds no match.
         """
+        return await self._search({"q": query})
+
+    async def search_structured(
+        self,
+        *,
+        city: str | None = None,
+        country: str | None = None,
+        countrycodes: str | None = None,
+    ) -> GeocodeResult | None:
+        """Resolve a place via Nominatim's structured query parameters.
+
+        Structured queries (`city=`, `country=`) match against the named
+        address component only, which makes bare names dramatically more
+        reliable than free-text `q=` — a bare "Hội An" free-texts to Đà Nẵng
+        but structured-matches Hoi An. `countrycodes` restricts results to a
+        comma-separated list of ISO-3166 alpha-2 codes. Returns `None` when
+        Nominatim finds no match.
+        """
+        params: dict[str, str] = {}
+        if city:
+            params["city"] = city
+        if country:
+            params["country"] = country
+        if countrycodes:
+            params["countrycodes"] = countrycodes
+        if not params:
+            return None
+        return await self._search(params)
+
+    async def _search(self, query_params: dict[str, str]) -> GeocodeResult | None:
+        """Run one `/search` call and parse the top hit — shared by the
+        free-text and structured entry points."""
         data = await self._request(
             "/search",
-            {"q": query, "format": "jsonv2", "limit": "1", "addressdetails": "1"},
+            {**query_params, "format": "jsonv2", "limit": "1", "addressdetails": "1"},
         )
         if not isinstance(data, list) or not data:
             return None
@@ -93,7 +125,9 @@ class NominatimGeocodingClient:
         try:
             lat, lng = float(first["lat"]), float(first["lon"])
         except (KeyError, TypeError, ValueError):
-            logger.warning("nominatim_search_unparseable", extra={"query": query})
+            logger.warning(
+                "nominatim_search_unparseable", extra={"query": query_params}
+            )
             return None
         addr = first.get("address") if isinstance(first.get("address"), dict) else {}
         cc = addr.get("country_code")
