@@ -13,6 +13,7 @@ import re
 from datetime import datetime
 from typing import Literal
 
+from anyascii import anyascii
 from pydantic import BaseModel, ConfigDict
 
 EntityType = Literal["country", "city", "neighborhood", "place"]
@@ -143,7 +144,25 @@ class HarvestSnapshot(BaseModel):
 
 
 def _slugify(part: str) -> str:
-    return part.strip().lower().replace(" ", "-")
+    """Diacritic- and script-insensitive slug so one place keys the same
+    regardless of how its name is written.
+
+    `anyascii` transliterates any script to ASCII first, so a name in its local
+    script and its romanised spelling collapse to one stable key: "Hội An" and
+    "Hoi An" → "hoi-an"; "Đà Nẵng" and "Da Nang" → "da-nang"; "東京" →
+    "dongjing"; "กรุงเทพ" → "krungethph". The ASCII result is lowercased and
+    every run of non-alphanumeric characters becomes a single hyphen.
+    """
+    out: list[str] = []
+    prev_hyphen = False
+    for ch in anyascii(part).lower():
+        if ch.isalnum():
+            out.append(ch)
+            prev_hyphen = False
+        elif not prev_hyphen:
+            out.append("-")
+            prev_hyphen = True
+    return "".join(out).strip("-")
 
 
 def build_place_key(place_id: str) -> str:
