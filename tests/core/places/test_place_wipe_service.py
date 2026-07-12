@@ -29,9 +29,7 @@ def _wiped_core(pid: str | None) -> PlaceCore:
     )
 
 
-def _svc(
-    *, wiped: list[PlaceCore]
-) -> tuple[PlaceWipeService, MagicMock, MagicMock]:
+def _svc(*, wiped: list[PlaceCore]) -> tuple[PlaceWipeService, MagicMock, MagicMock]:
     repo = MagicMock(wipe_stale_locations=AsyncMock(return_value=wiped))
     cache = MagicMock(delete_many=AsyncMock())
     return PlaceWipeService(repo=repo, cache=cache), repo, cache
@@ -77,9 +75,7 @@ class TestWipeStaleLocations:
             wiped=[_wiped_core("a"), _wiped_core("c"), _wiped_core("d")]
         )
         await svc.wipe_stale_locations()
-        cache.delete_many.assert_awaited_once_with(
-            ["google:a", "google:c", "google:d"]
-        )
+        cache.delete_many.assert_awaited_once_with(["google:a", "google:c", "google:d"])
 
     async def test_skips_cache_for_rows_without_provider_id(self) -> None:
         """A wiped row missing provider_id has no cache key — must be skipped."""
@@ -107,9 +103,7 @@ class _FakeRepo:
     def __init__(self, cores: list[PlaceCore]) -> None:
         self._by_id: dict[str, PlaceCore] = {c.id: c for c in cores if c.id}
 
-    async def find(
-        self, query: PlaceQuery, limit: int = 20
-    ) -> list[PlaceCore]:
+    async def find(self, query: PlaceQuery, limit: int = 20) -> list[PlaceCore]:
         return list(self._by_id.values())[:limit]
 
     async def get_by_ids(self, place_ids: list[str]) -> list[PlaceCore]:
@@ -128,11 +122,7 @@ class _FakeRepo:
         out: list[PlaceCore] = []
         for c in cores:
             existing = next(
-                (
-                    e
-                    for e in self._by_id.values()
-                    if e.provider_id == c.provider_id
-                ),
+                (e for e in self._by_id.values() if e.provider_id == c.provider_id),
                 None,
             )
             target_id = (existing.id if existing else None) or c.id or "?"
@@ -141,9 +131,7 @@ class _FakeRepo:
             out.append(stored)
         return out
 
-    async def wipe_stale_locations(
-        self, cutoff: datetime
-    ) -> list[PlaceCore]:
+    async def wipe_stale_locations(self, cutoff: datetime) -> list[PlaceCore]:
         wiped: list[PlaceCore] = []
         for cid, c in list(self._by_id.items()):
             if (
@@ -151,23 +139,17 @@ class _FakeRepo:
                 and c.refreshed_at is not None
                 and c.refreshed_at < cutoff
             ):
-                cleared = c.model_copy(
-                    update={"location": None, "refreshed_at": None}
-                )
+                cleared = c.model_copy(update={"location": None, "refreshed_at": None})
                 self._by_id[cid] = cleared
                 wiped.append(cleared)
         return wiped
 
 
 class _FakeCache:
-    def __init__(
-        self, initial: dict[str, PlaceObject] | None = None
-    ) -> None:
+    def __init__(self, initial: dict[str, PlaceObject] | None = None) -> None:
         self.store: dict[str, PlaceObject] = dict(initial or {})
 
-    async def mget(
-        self, provider_ids: list[str]
-    ) -> dict[str, PlaceObject]:
+    async def mget(self, provider_ids: list[str]) -> dict[str, PlaceObject]:
         return {p: self.store[p] for p in provider_ids if p in self.store}
 
     async def mset(
@@ -188,9 +170,7 @@ class _FakeUpsertService:
     def __init__(self, repo: _FakeRepo) -> None:
         self._repo = repo
 
-    async def upsert_and_embed(
-        self, candidates: list[PlaceCore]
-    ) -> list[PlaceCore]:
+    async def upsert_and_embed(self, candidates: list[PlaceCore]) -> list[PlaceCore]:
         return await self._repo.upsert_places(candidates)
 
 
@@ -209,14 +189,10 @@ class TestWipeThenSearchRecovery:
             id="p1",
             provider_id="google:p1",
             place_name="Place p1",
-            location=LocationContext(
-                lat=13.7, lng=100.5, address="Sukhumvit Soi 11"
-            ),
+            location=LocationContext(lat=13.7, lng=100.5, address="Sukhumvit Soi 11"),
             refreshed_at=sixty_days_ago,
         )
-        warm_obj = PlaceObject(
-            **warm_core.model_dump(), rating=4.7, popularity=1234
-        )
+        warm_obj = PlaceObject(**warm_core.model_dump(), cached_at=sixty_days_ago)
         repo = _FakeRepo([warm_core])
         cache = _FakeCache({"google:p1": warm_obj})
 
@@ -231,6 +207,7 @@ class TestWipeThenSearchRecovery:
         assert "google:p1" not in cache.store
 
         # ---- Step 2: SEARCH. Stale row + empty cache → provider refetch. ----
+        refetched_at = datetime.now(UTC)
         provider_fresh = PlaceObject(
             id="p1",
             provider_id="google:p1",
@@ -238,8 +215,7 @@ class TestWipeThenSearchRecovery:
             location=LocationContext(
                 lat=13.71, lng=100.51, address="Sukhumvit Soi 11 (refreshed)"
             ),
-            rating=4.8,
-            popularity=2000,
+            cached_at=refetched_at,
         )
         client = MagicMock(
             search=AsyncMock(return_value=[]),
@@ -257,14 +233,13 @@ class TestWipeThenSearchRecovery:
         # Provider was hit for exactly the wiped id.
         client.get_by_ids.assert_awaited_once_with(["google:p1"])
 
-        # The result reflects the refreshed location and live fields.
+        # The result reflects the refreshed location.
         assert len(results) == 1
         out = results[0]
         assert out.location is not None
         assert out.location.lat == 13.71
         assert out.location.address == "Sukhumvit Soi 11 (refreshed)"
-        assert out.rating == 4.8
-        assert out.popularity == 2000
+        assert out.cached_at == refetched_at
         # Curated DB field still wins (place_name).
         assert out.place_name == "Place p1"
 
@@ -272,7 +247,7 @@ class TestWipeThenSearchRecovery:
         assert repo._by_id["p1"].location is not None
         assert repo._by_id["p1"].location.lat == 13.71
         assert "google:p1" in cache.store
-        assert cache.store["google:p1"].rating == 4.8
+        assert cache.store["google:p1"].cached_at == refetched_at
 
     async def test_second_search_after_recovery_is_warm(self) -> None:
         """After the wipe-then-search cycle, a follow-up search must be
@@ -287,17 +262,18 @@ class TestWipeThenSearchRecovery:
         )
         repo = _FakeRepo([core])
         cache = _FakeCache(
-            {"google:p2": PlaceObject(**core.model_dump(), rating=3.0)}
+            {"google:p2": PlaceObject(**core.model_dump(), cached_at=sixty_days_ago)}
         )
 
         await PlaceWipeService(repo=repo, cache=cache).wipe_stale_locations()
 
+        refetched_at = datetime.now(UTC)
         fresh = PlaceObject(
             id="p2",
             provider_id="google:p2",
             place_name="Place p2",
             location=LocationContext(lat=2.0, lng=2.0),
-            rating=4.0,
+            cached_at=refetched_at,
         )
         client = MagicMock(
             search=AsyncMock(return_value=[]),
@@ -317,7 +293,7 @@ class TestWipeThenSearchRecovery:
         # Second search — fully warm now, provider NOT called again.
         results = await search_svc.find(PlaceQuery(), limit=10)
         assert client.get_by_ids.await_count == 1  # unchanged
-        assert results[0].rating == 4.0
+        assert results[0].cached_at == refetched_at
         assert results[0].location is not None
         assert results[0].location.lat == 2.0
 
@@ -334,12 +310,10 @@ class TestWipeThenSearchRecovery:
         )
         repo = _FakeRepo([core])
         cache = _FakeCache(
-            {"google:p3": PlaceObject(**core.model_dump(), rating=4.5)}
+            {"google:p3": PlaceObject(**core.model_dump(), cached_at=today)}
         )
 
-        wiped = await PlaceWipeService(
-            repo=repo, cache=cache
-        ).wipe_stale_locations()
+        wiped = await PlaceWipeService(repo=repo, cache=cache).wipe_stale_locations()
         assert wiped == 0
         assert "google:p3" in cache.store  # cache untouched
         assert repo._by_id["p3"].location is not None  # DB untouched
@@ -357,6 +331,6 @@ class TestWipeThenSearchRecovery:
         results = await search_svc.find(PlaceQuery(), limit=10)
 
         client.get_by_ids.assert_not_awaited()
-        assert results[0].rating == 4.5
+        assert results[0].cached_at == today
         assert results[0].location is not None
         assert results[0].location.lat == 5.0

@@ -9,6 +9,7 @@ from collections.abc import Awaitable
 from typing import TYPE_CHECKING
 
 from kebi.core.events.events import (
+    ContentHarvestRequested,
     DomainEvent,
     LibraryStateChanged,
     PlaceSaved,
@@ -21,6 +22,9 @@ from kebi.db.models import InteractionType
 from kebi.providers.tracing import TracingClient, get_tracing_client
 
 if TYPE_CHECKING:
+    from kebi.core.knowledge.harvest_bucket import HarvestBucketReader
+    from kebi.core.knowledge.harvester import KnowledgeHarvester
+    from kebi.core.knowledge.producer import KnowledgeIngestion
     from kebi.core.memory.service import UserMemoryService
     from kebi.core.taste.service import TasteModelService
     from kebi.core.user.intent_service import UserIntentService
@@ -44,11 +48,18 @@ class EventHandlers:
         memory_service: "UserMemoryService",
         intent_service: "UserIntentService",
         tracer: TracingClient | None = None,
+        *,
+        harvest_reader: "HarvestBucketReader | None" = None,
+        harvester: "KnowledgeHarvester | None" = None,
+        ingestion: "KnowledgeIngestion | None" = None,
     ) -> None:
         self.taste_service = taste_service
         self.memory_service = memory_service
         self.intent_service = intent_service
         self._tracer = tracer or get_tracing_client()
+        self._harvest_reader = harvest_reader
+        self._harvester = harvester
+        self._ingestion = ingestion
 
     async def on_taste_signal(self, event: DomainEvent) -> None:
         """Unified handler for all taste-related events.
@@ -92,6 +103,59 @@ class EventHandlers:
             )
             self._tracer.capture_message(
                 message=f"{event.event_type} handler error: {exc}",
+                level="error",
+                metadata={"event_id": event.event_id},
+                user_id=event.user_id,
+                session_id=event.user_id,
+            )
+            self._tracer.flush()
+
+    async def on_content_harvest_requested(
+        self, event: ContentHarvestRequested
+    ) -> None:
+        """Second pass over a saved share's content (ADR-121).
+
+        Reads the durable snapshot back from the bucket, mines it into
+        world-entity claims, and writes them global (`user_id=None`) as
+        `shared_content`. Best-effort: any failure is swallowed and traced
+        (ADR-043) — the place is already saved. No-op if the writer stack
+        wasn't wired (defensive) or the snapshot is gone.
+        """
+        try:
+            if (
+                self._harvest_reader is None
+                or self._harvester is None
+                or self._ingestion is None
+            ):
+                return
+            snapshot = await self._harvest_reader.get(event.harvest_key)
+            if snapshot is None:
+                return
+            claims = await self._harvester.harvest(
+                snapshot.content, snapshot.places, user_id=event.user_id
+            )
+            written = await self._ingestion.ingest(
+                self._harvester,
+                claims,
+                source_ref=event.source_ref,
+                user_id=None,
+            )
+            self._tracer.capture_message(
+                message=f"content_harvest wrote {len(written)} claim(s)",
+                level="info",
+                metadata={"event_id": event.event_id, "harvest_key": event.harvest_key},
+                user_id=event.user_id,
+                session_id=event.user_id,
+            )
+        except Exception as exc:
+            logger.error(
+                "Failed content harvest: %s",
+                exc,
+                exc_info=True,
+                extra={"user_id": event.user_id, "harvest_key": event.harvest_key},
+            )
+            self._tracer.capture_message(
+                message=f"content_harvest error: {exc}",
                 level="error",
                 metadata={"event_id": event.event_id},
                 user_id=event.user_id,

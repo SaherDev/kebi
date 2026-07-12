@@ -64,6 +64,12 @@ class PlacesSearchService:
         via ``client.get_by_ids`` (Place Details), then upserted to the DB and
         written to cache so subsequent calls stay warm. Ids the provider can't
         resolve are simply absent from the result dict.
+
+        Details responses intentionally carry no name (Essentials field mask,
+        ADR-118) — the catalog row is the name authority (the merge keeps it
+        sticky anyway), so nameless fetches are backfilled from the DB before
+        persist/cache. A nameless fetch with no catalog name is dropped:
+        a nameless place must never be persisted or cached.
         """
         if not provider_ids:
             return {}
@@ -74,7 +80,8 @@ class PlacesSearchService:
             return cached
 
         fetched = await self._client.get_by_ids(missing)
-        stamped = await self._persist_external(fetched)
+        named = await self._backfill_names(fetched)
+        stamped = await self._persist_external(named)
 
         fetched_map = {p.provider_id: p for p in stamped if p.provider_id}
         return {**cached, **fetched_map}
@@ -98,6 +105,34 @@ class PlacesSearchService:
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+
+    async def _backfill_names(self, fetched: list[PlaceObject]) -> list[PlaceObject]:
+        """Fill empty place_names from the catalog; drop unresolvable ones.
+
+        Only Place Details fetches arrive nameless (their mask omits
+        displayName — ADR-118), and details is a refresh path: every id it
+        is called with originated from a persisted row, so the catalog
+        lookup is expected to hit. Named objects pass through untouched
+        without a DB roundtrip.
+        """
+        nameless = [p for p in fetched if not p.place_name and p.provider_id]
+        if not nameless:
+            return fetched
+
+        rows = await self._repo.get_by_provider_ids(
+            [p.provider_id for p in nameless if p.provider_id]
+        )
+        result: list[PlaceObject] = []
+        for obj in fetched:
+            if obj.place_name:
+                result.append(obj)
+                continue
+            row = rows.get(obj.provider_id) if obj.provider_id else None
+            if row is None or not row.place_name:
+                logger.warning("details_name_backfill_missing_row %s", obj.provider_id)
+                continue
+            result.append(obj.model_copy(update={"place_name": row.place_name}))
+        return result
 
     async def _external_fallback(
         self, query: PlaceQuery, limit: int

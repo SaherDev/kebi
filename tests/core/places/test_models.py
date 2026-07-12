@@ -141,14 +141,10 @@ class TestPlaceObject:
         obj = PlaceObject(
             place_name="Test",
             provider_id="google:xyz",
-            rating=4.5,
-            popularity=1200,
         )
-        assert obj.rating == 4.5
         assert obj.place_name == "Test"
         assert obj.tags == []
-        assert obj.hours is None
-        assert obj.phone is None
+        assert obj.cached_at is None
 
 
 class TestPlaceQuery:

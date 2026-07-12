@@ -119,10 +119,16 @@ Emit `post_tags` that describe the WHOLE post, not any single venue —
 attributes that are clearly true of every place in the post. Examples:
 a "5 best fine-dining in Bangkok" roundup → `atmosphere=upscale`,
 `price=very_expensive`, `time=dinner`. A "cozy cafes" post →
-`atmosphere=cozy`, `time=morning`. Use canonical lowercase values.
+`atmosphere=cozy`, `time=morning`. A "cheap eats" post →
+`price=budget`. Use canonical lowercase values. These tags are the
+product's only source of experiential data, so emit them whenever the
+post's framing supports them — price included ("budget-friendly",
+"splurge-worthy" framing counts as evidence).
 Each tag has a `type` that MUST be exactly one of: cuisine, dietary,
-feature, atmosphere, service, price, accessibility, time, season — and
-a `value`. NEVER emit a location/region/city as a tag (location goes
+feature, atmosphere, service, price, time, season — and a `value`.
+NEVER emit accessibility tags (`wheelchair_*`) — unverified
+accessibility claims cause real-world harm and are dropped in code.
+NEVER emit a location/region/city as a tag (location goes
 in the `location` field, not `post_tags`). Only emit a shared tag when
 it plausibly applies to ALL candidates; leave `post_tags` empty when
 the post is a mixed bag. The later step adds per-venue tags and merges

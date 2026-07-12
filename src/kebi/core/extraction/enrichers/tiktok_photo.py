@@ -250,9 +250,7 @@ async def _fetch_tiktok_carousel_urls(client: httpx.AsyncClient, url: str) -> li
         )
         response.raise_for_status()
     except PermissionError as exc:
-        logger.warning(
-            "tiktok_carousel_refused", extra={"url": url, "error": str(exc)}
-        )
+        logger.warning("tiktok_carousel_refused", extra={"url": url, "error": str(exc)})
         return []
     except (httpx.HTTPError, httpx.TimeoutException) as exc:
         logger.warning(

@@ -49,6 +49,21 @@ models:
     temperature: 0
   # Offline swap: set provider: ollama, model: gemma4:e2b (requires: ollama serve)
 
+  # Knowledge-layer writers (ADR-120/121). Both mine world-entity facts from
+  # already-gathered text and emit structured claims; the harvester runs on the
+  # background second pass over a saved share, the curator structures an
+  # expert's prose. gpt-4o-mini — cheap, off the critical path.
+  knowledge_harvester:
+    provider: openai
+    model: gpt-4o-mini
+    max_tokens: 1024
+    temperature: 0
+  knowledge_curator:
+    provider: openai
+    model: gpt-4o-mini
+    max_tokens: 1024
+    temperature: 0
+
   # Embedding model for semantic search over saved places (pgvector) and for
   # the FTS+vector RRF recall pipeline. 1024-dim per ADR-040.
   embedder:
@@ -244,20 +259,9 @@ extraction:
     - source
 
 # ---------------------------------------------------------------------------
-# External services — URLs, timeouts, and request fields
+# External services — URLs and timeouts
 # ---------------------------------------------------------------------------
 external_services:
-  google_places:
-    base_url: https://maps.googleapis.com/maps/api/place/findplacefromtext/json
-    nearbysearch_url: https://maps.googleapis.com/maps/api/place/nearbysearch/json
-    timeout_seconds: 5.0
-    default_region: "th"
-    request_fields:
-      - name
-      - formatted_address
-      - place_id
-      - geometry
-      - types
   tiktok_oembed:
     base_url: https://www.tiktok.com/oembed
     timeout_seconds: 3.0
@@ -306,6 +310,24 @@ prompts:
   location_resolver: location_resolver.txt
   candidate_namer: candidate_namer.txt
   home_suggester: home_suggester.txt
+  knowledge_harvester: knowledge_harvester.txt
+  knowledge_curator: knowledge_curator.txt
+
+# ---------------------------------------------------------------------------
+# Knowledge layer (ADR-120/121) — provenance-weighted confidence floors.
+# A single harvested mention is weak evidence; curated expertise is strong.
+# The writer floors each claim's model-estimated confidence by source trust.
+# ---------------------------------------------------------------------------
+knowledge:
+  harvest_confidence_floor: 0.35
+  curator_confidence_floor: 0.9
+  # Review gate (ADR-122). The state a fresh claim from each source lands in.
+  # Both `approved` today — the product trusts every writer. When review turns
+  # on, set e.g. `harvest_review_status: pending` here (config, not code) and
+  # a reviewer (AI or team) moves harvested claims to approved before they
+  # surface. Allowed: pending | approved | rejected.
+  harvest_review_status: approved
+  curator_review_status: approved
 
 # ---------------------------------------------------------------------------
 # Agent Configuration (feature 027 M2, ADR-062)
@@ -552,14 +574,15 @@ pricing:
       per_audio_second: 0.00001111
   external:
     google_places:
-      # Google Places (New) — verified 2026-05-24 — source: developers.google.com/maps/billing-and-pricing/pricing
-      # Enterprise tier — _FIELD_MASK in google_client.py pulls rating,
-      # regularOpeningHours, priceLevel, websiteUri, and atmosphere
-      # fields. All Enterprise per Google's data-fields page.
+      # Google Places (New) — verified 2026-07-09 — source: developers.google.com/maps/billing-and-pricing/pricing
+      # Google is a minimal location validator (ADR-118). Search masks pull
+      # only id/displayName/address/location/types → Text Search Pro.
+      # Place Details omits displayName (catalog name is authoritative)
+      # → Place Details Essentials.
       per_endpoint:
-        ":searchText": 0.035       # $35 / 1k
-        ":searchNearby": 0.035     # $35 / 1k (Enterprise; no Essentials tier)
-        "/{place_id}": 0.020       # $20 / 1k  — Place Details Enterprise
+        ":searchText": 0.032       # $32 / 1k — Text Search Pro
+        ":searchNearby": 0.032     # $32 / 1k — Nearby Search Pro
+        "/{place_id}": 0.005       # $5 / 1k  — Place Details Essentials
     apify:
       # Apify — verified 2026-05-24 — sources: actor pages on apify.com
       # Per-result × x-apify-pagination-total header — no follow-up call.

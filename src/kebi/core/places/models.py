@@ -2,7 +2,7 @@
 
 Three core classes:
 - PlaceCore: DB-side curated and locational data, shared across all users.
-- PlaceObject: extends PlaceCore with Google-derived live fields (cache-only).
+- PlaceObject: PlaceCore as seen through the provider/cache path (+ cached_at).
 - UserPlace: per (user, place) pair.
 """
 
@@ -13,7 +13,6 @@ from enum import Enum
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
-from typing_extensions import TypedDict
 
 from .tags import TagType, TagValue
 
@@ -25,17 +24,6 @@ class PlaceSource(str, Enum):
     google_maps_list = "google_maps_list"
     manual = "manual"
     kebi = "kebi"
-
-
-class BusinessStatus(str, Enum):
-    """Operational state of a place. Mirrors Google's `businessStatus` —
-    OPERATIONAL / CLOSED_TEMPORARILY / CLOSED_PERMANENTLY — but in our
-    snake_case style so the rest of the code stays provider-agnostic.
-    """
-
-    operational = "operational"
-    closed_temporarily = "closed_temporarily"
-    closed_permanently = "closed_permanently"
 
 
 class PlaceCategory(str, Enum):
@@ -169,21 +157,6 @@ UTILITY_CATEGORIES: frozenset[PlaceCategory] = frozenset(
 )
 
 
-# weekday → list of "HH:MM-HH:MM" ranges, plus "timezone" key for IANA string.
-# total=True: the only constructor (_google_mapper._map_hours) always sets all
-# 7 day keys + timezone. Empty days are stored as []; closed-all-day as
-# ["00:00-00:00"]. Any future constructor must populate every key.
-class HoursDict(TypedDict):
-    sunday: list[str]
-    monday: list[str]
-    tuesday: list[str]
-    wednesday: list[str]
-    thursday: list[str]
-    friday: list[str]
-    saturday: list[str]
-    timezone: str  # IANA e.g. "Asia/Tokyo"
-
-
 class LocationContext(BaseModel):
     """Location container used in PlaceQuery and optionally PlaceCore.attributes."""
 
@@ -194,6 +167,11 @@ class LocationContext(BaseModel):
     neighborhood: str | None = None
     city: str | None = None
     country: str | None = None
+    # ISO-3166 alpha-2 (e.g. "ae"), lowercased. Sourced from the provider's
+    # country component `shortText` — the code, not the display `country`.
+    # Enables code-keyed country filtering and canonical geo keys for the
+    # knowledge layer (ADR-120). Nullable: older rows self-heal on re-fetch.
+    country_code: str | None = None
 
     model_config = ConfigDict(extra="forbid")
 
@@ -365,23 +343,20 @@ class PlaceCore(BaseModel):
 
 
 class PlaceObject(PlaceCore):
-    """Full place: PlaceCore + Google-derived live fields. Cache-only for live half.
+    """PlaceCore as seen through the provider/cache path.
 
     cached_at is set when this object was written to cache (always populated for
     objects that came from Google). It is None for objects reconstructed from DB
-    cores that have no cache entry yet.
+    cores that have no cache entry yet. The former Google "live half" (rating,
+    hours, phone, website, popularity, business_status) was dropped by ADR-118 —
+    the knowledge layer owns experiential data now; old cache entries still
+    carrying those keys deserialize fine (extra fields are ignored).
     """
 
-    rating: float | None = None
-    hours: HoursDict | None = None
-    phone: str | None = None
-    website: str | None = None
-    popularity: int | None = None
-    business_status: BusinessStatus | None = None
     cached_at: datetime | None = None
 
     def to_core(self) -> PlaceCore:
-        """Strip live fields to get the persistable PlaceCore."""
+        """Strip the cache stamp to get the persistable PlaceCore."""
         return PlaceCore.model_validate(
             self.model_dump(include=set(PlaceCore.model_fields))
         )

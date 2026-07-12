@@ -46,8 +46,6 @@ from kebi.providers.llm import InstructorClient
 logger = logging.getLogger(__name__)
 
 
-
-
 class _LLMTag(BaseModel):
     """Flat tag shape the LLM emits; converted to `PlaceTag` at the boundary.
 
@@ -59,7 +57,7 @@ class _LLMTag(BaseModel):
     type: str = Field(
         description=(
             "TagType axis. One of: cuisine, dietary, feature, atmosphere, "
-            "service, price, accessibility, time, season."
+            "service, price, time, season. Never accessibility."
         ),
     )
     value: str = Field(
@@ -67,6 +65,8 @@ class _LLMTag(BaseModel):
             "Tag value. Use canonical values where they exist "
             "(e.g. cuisine: Thai, Japanese, Italian; "
             "atmosphere: cozy, lively, romantic, scenic; "
+            "service: dine_in, reservable, serves_dinner, serves_cocktails; "
+            "feature: rooftop, outdoor_seating, live_music; "
             "price: budget, moderate, expensive, very_expensive)."
         ),
     )
@@ -192,9 +192,7 @@ class LLMPlacePicker:
                 )
             except Exception as exc:
                 t.fail(exc)
-                logger.warning(
-                    "LLMPlacePicker failed: %s", exc, exc_info=True
-                )
+                logger.warning("LLMPlacePicker failed: %s", exc, exc_info=True)
                 return []
 
             kept = [p for p in response.picks if not p.rejected]
@@ -409,8 +407,6 @@ TagType axes (use for `type` field on each tag):
                   serves_breakfast, serves_brunch, serves_lunch,
                   serves_dinner, serves_beer, serves_wine, serves_cocktails
   - price       — free, budget, moderate, expensive, very_expensive
-  - accessibility — wheelchair_parking, wheelchair_entrance,
-                    wheelchair_restroom, wheelchair_seating
   - time        — morning, brunch, lunch, afternoon, evening, night,
                   late_night, all_day
   - season      — summer, winter, rainy, spring, autumn, all_season
@@ -419,7 +415,19 @@ TagType axes (use for `type` field on each tag):
 this pick — pick from: caption, transcript, title, hashtag,
 location_tag, supplementary_text, known_places.
 
-REMEMBER: structural tags (atmosphere, service, time, season) fill
-confidently from the venue's identity. Claim-like tags (cuisine, dietary,
-price, feature, accessibility) require explicit post evidence.\
+REMEMBER: these tags are the product's only source of experiential data
+— tag generously but truthfully, from two evidence sources:
+  1. Post content — what the caption/transcript/title shows or says
+     (rooftop shots -> rooftop; "so cheap" -> budget; cocktail menus ->
+     serves_cocktails; dinner-service framing -> serves_dinner).
+  2. World knowledge of the identified venue — the candidate is already
+     validated with a canonical name + location; if you confidently know
+     THIS specific venue (a famous steakhouse -> steakhouse categories +
+     expensive + serves_dinner + reservable), tag from knowledge even
+     when the post never says it. Skip world-knowledge tags for venues
+     you don't specifically recognize.
+Price may be inferred from content signals or obvious venue identity.
+NEVER emit accessibility tags (wheelchair_*) — not from the post, not
+from world knowledge. Unverified accessibility claims cause real-world
+harm; they are dropped in code regardless.\
 """

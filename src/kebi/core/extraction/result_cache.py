@@ -6,15 +6,15 @@ share the same content-addressable reference skip the full pipeline
 (yt-dlp / Whisper / vision / NER / picker / Google) and just link the
 already-extracted PlaceCores to their own `user_places`.
 
-Key shape: `extract:v1:{source.value}:{sha256(source_ref)}`. The
+Key shape: `extract:v2:{source.value}:{sha256(source_ref)}`. The
 `source` segment namespaces by `PlaceSource` so cacheable refs from
 different platforms never share a slot — today that's TikTok /
 Instagram / YouTube / Google Maps lists keyed by canonical URL, but
 the same shape supports a future kebi-internal ref (e.g. a share
 token) whose `source_ref` isn't a URL at all. SHA-256 keeps key
-length bounded and avoids Redis key-character pitfalls. The `v1`
-prefix lets a future cache-shape change use `extract:v2:` without
-colliding.
+length bounded and avoids Redis key-character pitfalls. The version
+prefix isolates output-shape/content changes: `v1` → `v2` when
+ADR-118 strengthened tag emission (old v1 entries age out via TTL).
 
 Cacheability is a per-source decision the service makes before calling
 in: `manual` freetext isn't content-addressable and is never cached;
@@ -45,7 +45,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_KEY_PREFIX = "extract:v1:"
+_KEY_PREFIX = "extract:v2:"
 
 
 class ExtractionResultCache:

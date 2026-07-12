@@ -34,6 +34,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from contextlib import AbstractAsyncContextManager
+from dataclasses import dataclass
 from typing import Protocol
 
 from kebi.core.config import ExtractionConfig
@@ -52,6 +53,7 @@ from kebi.core.extraction.types import (
     Producer,
     ValidatedCandidate,
 )
+from kebi.core.knowledge.schemas import HarvestContent
 from kebi.core.places import (
     LocationContext,
     PlaceObject,
@@ -61,6 +63,32 @@ from kebi.core.places import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class PipelineResult:
+    """What one pipeline run yields: the picked candidates plus a snapshot
+    of the content they came from. The snapshot feeds the background harvest
+    pass (ADR-121) — it is built from the final context whether or not any
+    candidate survived, so an empty pick still carries its content."""
+
+    candidates: list[ValidatedCandidate]
+    content: HarvestContent
+
+
+def _build_harvest_content(
+    context: ExtractionContext, source_ref: str | None
+) -> HarvestContent:
+    """Snapshot the already-gathered content off the final context."""
+    return HarvestContent(
+        caption=context.caption,
+        transcript=context.transcript,
+        hashtags=list(context.hashtags),
+        title=context.title,
+        platform=context.platform,
+        location_tag=context.location_tag,
+        source_ref=source_ref,
+    )
 
 
 class PickerProtocol(Protocol):
@@ -229,12 +257,16 @@ class ExtractionPipeline:
         limit: int,
         supplementary_text: str = "",
         emit: EmitFn | None = None,
-    ) -> list[ValidatedCandidate]:
+    ) -> PipelineResult:
         """Run the search-first extraction cascade.
 
         `limit` is the per-request candidate cap (counted on names,
         not search results). The pipeline takes a concrete value;
         default-fallback logic lives in `ExtractionService.run`.
+
+        Returns a `PipelineResult` carrying the picks plus a content
+        snapshot (ADR-121) — the snapshot is built from the final
+        context so it is present on both the found and empty paths.
         """
         _emit: EmitFn = emit or (lambda step, summary, duration_ms=None: None)
 
@@ -287,10 +319,15 @@ class ExtractionPipeline:
                     "save.validate",
                     f"Confirmed {len(deduped)} place(s) via Places provider",
                 )
-                return deduped
+                return PipelineResult(
+                    candidates=deduped,
+                    content=_build_harvest_content(context, url),
+                )
 
         _emit("save.validate", "Could not confirm any places")
-        return []
+        return PipelineResult(
+            candidates=[], content=_build_harvest_content(context, url)
+        )
 
     async def _extend_search_set(
         self,

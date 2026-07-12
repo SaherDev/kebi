@@ -52,6 +52,7 @@ tier is a gateway-only change — kebi never sees it.
 | `X-Gateway-Save-Limit`              | integer        | absent = unlimited   | Max saved places (`/v1/extract`, `/v1/user/places`)|
 | `X-Gateway-Consults-Per-Day`        | integer        | absent = unlimited   | Daily consult quota on `/v1/chat`(+`/stream`)     |
 | `X-Gateway-Advanced-Models-Enabled` | `true`/`false` | `false` (fail closed)| Higher-quality orchestrator model on consults     |
+| `X-Gateway-Can-Curate`              | `true`/`false` | `false` (fail closed)| Push curated-expert knowledge (`POST /v1/knowledge/curate`) |
 
 Asymmetry by design (ADR-112): the boolean feature flags **fail closed** (a
 missing header denies the paid feature); the numeric limits **fail open** to
@@ -86,6 +87,7 @@ keyed by the verified `X-Gateway-User-Id`.
 | GET /v1/user/intents        | 60 / minute |
 | GET /v1/user/library        | 60 / minute |
 | POST /v1/user/places        | 60 / minute |
+| POST /v1/knowledge/curate   | 30 / minute |
 | PATCH /v1/user/places/{id}  | 60 / minute |
 | DELETE /v1/user/places/{id} | 60 / minute |
 | POST /v1/signal             | 60 / minute |
@@ -105,13 +107,20 @@ text leaving the server.
 ### `PlaceCore`
 
 The canonical place shape (ADR-070, ADR-077; the catalog table is
-`places` since ADR-079). Identity + static catalog fields only.
-Extraction returns `PlaceCore` — it does **not** populate live fields
-(rating, hours, popularity, business_status); those are filled in later
-by the catalog read/enrichment path that backs the agent's consult-family
-tools (ADR-089, ADR-090, ADR-091). There is no standalone product-facing
-endpoint for catalog reads today — saved/discovered/suggested places are
-returned inside chat responses as `tool_results`.
+`places` since ADR-079). This is the **complete** place shape the
+service returns, everywhere a place appears. Live provider fields
+(rating, opening hours, phone, website, popularity, business status)
+are **not part of the contract and are not coming later** — the service
+stopped requesting them from Google entirely (ADR-118); clients should
+not reserve UI for them. Tags carry provenance (`source`:
+`"google" | "llm" | ...`): categories and cuisine/dietary tags are
+provider-attested, experiential tags (service, feature, price,
+atmosphere) come from kebi's knowledge layer and **accumulate over
+time** — a freshly discovered place may initially carry only
+categories + cuisine tags and densify as content flows through
+extraction. There is no standalone product-facing endpoint for catalog
+reads today — saved/discovered/suggested places are returned inside
+chat responses as `tool_results`.
 
 ```json
 {
@@ -526,7 +535,7 @@ the first page (drop the `cursor`). Keep `sort` fixed across a paging run.
 
 | Field         | Type               | Notes                                                                                                                                                                               |
 | ------------- | ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `places`      | `SavedPlaceView[]` | `{ place: PlaceCore, user_data: UserPlace }`. `place` carries catalog fields only — no live rating/hours (same as extraction). `user_data` is this user's relationship to the place |
+| `places`      | `SavedPlaceView[]` | `{ place: PlaceCore, user_data: UserPlace }`. `place` is the complete place shape — live rating/hours don't exist anywhere in the contract (ADR-118). `user_data` is this user's relationship to the place |
 | `next_cursor` | `string \| null`   | Opaque keyset cursor. Pass it back as `?cursor=` for the next page. **`null` on the last page**                                                                                     |
 | `total`       | `integer`          | The caller's **grand total** of saved places — the whole stash, **independent of the request's filters and pagination** (drives the screen's hero count). Same on every page        |
 
@@ -832,6 +841,58 @@ Behavioral signal endpoint (ADR-060, narrowed by ADR-076 to recommendation accep
 > user's taste profile.
 
 **Responses:** `202 { "status": "accepted" }`; `422` on schema errors (including an unknown `signal_type`). **No `404`** — ADR-078 removed the recommendation existence check.
+
+---
+
+## POST /v1/knowledge/curate
+
+Push expert knowledge into the knowledge layer (ADR-121). The caller writes
+prose; kebi's LLM structures it into geo-scoped claims (country / city /
+neighborhood) and stores them as `curated_expert` — **global** knowledge, not
+scoped to the caller. v1 does not curate individual venues.
+
+**Gated:** requires the `X-Gateway-Can-Curate` capability header set to
+`true`. Missing/`false` → `403 { "detail": "curation_not_permitted" }` (fail
+closed, since these are global writes). `user_id` is taken only from
+`X-Gateway-User-Id` and recorded as provenance, never as a claim scope.
+
+(Plus `X-Gateway-Token` + `X-Gateway-User-Id` headers.)
+
+**Request:**
+
+```json
+{
+  "text": "Jumeirah's beach clubs are pricey but the sunset views are unreal. Dubai nightlife peaks after midnight.",
+  "location_hint": { "country_alpha2": "ae", "city": "Dubai" }
+}
+```
+
+| Field                        | Type     | Notes                                                                 |
+| ---------------------------- | -------- | --------------------------------------------------------------------- |
+| `text`                       | `string` | Required, non-empty. The expert's prose.                              |
+| `location_hint`              | `object` | Optional. Fallback geography when a claim's area can't be geocoded.   |
+| `location_hint.country_alpha2` | `string` | ISO-3166 alpha-2 (e.g. `"ae"`).                                     |
+| `location_hint.city`         | `string` | Optional.                                                             |
+| `location_hint.neighborhood` | `string` | Optional.                                                             |
+
+**Response (200):**
+
+```json
+{
+  "claims_written": 2,
+  "claims": [
+    { "scope": "neighborhood", "entity_name": "Jumeirah", "claim": "Beach clubs are pricey but the sunset views are exceptional.", "tags": ["nightlife", "price", "scenery"] },
+    { "scope": "city", "entity_name": "Dubai", "claim": "Nightlife peaks after midnight.", "tags": ["nightlife"] }
+  ]
+}
+```
+
+| Field            | Type       | Notes                                                                                     |
+| ---------------- | ---------- | ----------------------------------------------------------------------------------------- |
+| `claims_written` | `integer`  | Count of **new** rows stored. May be less than the prose implied — dedup collapses re-submissions, and unkeyable or accessibility claims are dropped. |
+| `claims`         | `object[]` | The stored claims: `{ scope, entity_name, claim, tags }`. Empty when nothing was stored.  |
+
+Accessibility claims are never stored (an unverified accessibility claim is real-world harm). Harvested (`shared_content`) and curated (`curated_expert`) claims about the same entity merge on the same key and are separable only by their source.
 
 ---
 

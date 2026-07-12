@@ -84,9 +84,7 @@ class TestRoundTrip:
         out = await cache.get(_SOURCE, "https://nothing.example.com/x")
         assert out is None
 
-    async def test_set_uses_namespaced_sha256_key(
-        self, redis_mock: AsyncMock
-    ) -> None:
+    async def test_set_uses_namespaced_sha256_key(self, redis_mock: AsyncMock) -> None:
         cache = ExtractionResultCache(redis_mock, ttl_seconds=_TEST_TTL_SECONDS)
         await cache.set(_SOURCE, _CANONICAL_URL, [_make_item()])
         assert _expected_key(_SOURCE, _CANONICAL_URL) in redis_mock._storage
@@ -186,3 +184,10 @@ class TestFailOpen:
         cache = ExtractionResultCache(redis_mock, ttl_seconds=_TEST_TTL_SECONDS)
         out = await cache.get(_SOURCE, _CANONICAL_URL)
         assert out is None
+
+
+class TestCacheVersion:
+    def test_prefix_pinned_to_v2(self) -> None:
+        """ADR-118 strengthened tag emission → outputs changed → v1 keys
+        must not be read. Bump this pin only with another output change."""
+        assert _KEY_PREFIX == "extract:v2:"

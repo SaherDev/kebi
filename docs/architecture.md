@@ -90,6 +90,15 @@ A per-turn tool-call budget caps how many tools the agent may invoke in a single
 
 The full reasoning behind the location / scope / tool-family design lives in ADR-083, ADR-084, ADR-086, ADR-088, ADR-089, ADR-090, ADR-091.
 
+## Two Layers the Agent Reads
+
+Every answer draws on two separate stores. Neither knows about the agent's mode; the agent is the only thing that reads both together.
+
+- **Knowledge layer** — what exists in the world: claims about countries, cities, neighborhoods, and places, held in the `knowledge_claims` table (ADR-120). One row per claim, entity-scoped via a canonical `entity_key` (`place:<places.id>` for places, a hierarchical geo slug like `ae/dubai/jumeirah` for country/city/neighborhood — no bare-name collisions). A `source_type` generalizes every origin behind the same shape: content harvested from shared posts, curated traveler expertise, and claims surfaced in conversation. Global claims (`shared_content`, `curated_expert`) are visible to everyone; conversation-origin claims (`kebi_message`, `user_message`) carry the speaker's `user_id` and are only ever read back for that same user. This sits alongside — not instead of — `places.tags` (ADR-118), which stays the fast, provenance-light vocabulary ranking already reads; `knowledge_claims` is the provenance-bearing substrate underneath it.
+- **Taste layer** — what *this user* cares about: the append-only `interactions` log is the source of truth, `taste_model` is its LLM-regenerated derived profile, and `user_memories` holds declarative personal facts stated in chat ("I'm vegetarian"). This layer is unchanged by ADR-120 — it is named here only as the counterpart the knowledge layer completes.
+
+Knowledge tells the agent what is true; taste tells it what is relevant to the person asking.
+
 ## Extraction — Saving a Place
 
 Extraction is a deterministic, level-driven pipeline. There is **no agent** in the save path; the product repo calls `POST /v1/extract` directly with a URL or place name.
@@ -136,6 +145,7 @@ One shared PostgreSQL instance on Railway. Ownership splits cleanly by domain.
 - `taste_model` — per-user taste profile (signal counts + LLM-regenerated summary)
 - `interactions` — append-only behavioral signal log
 - `user_memories` — personal facts extracted from chat messages
+- `knowledge_claims` — entity-scoped world-knowledge claims (ADR-120)
 
 **This repo does not write:** `users`, `user_settings` — those are NestJS / TypeORM.
 

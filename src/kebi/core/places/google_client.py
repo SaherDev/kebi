@@ -22,45 +22,29 @@ from .models import PlaceObject, PlaceQuery
 logger = logging.getLogger(__name__)
 
 _PLACES_API_BASE = "https://places.googleapis.com/v1/places"
+# Search mask — Google Places Pro tier by design (ADR-118). Google is a
+# minimal location validator: identity, name, address, location, and
+# `types` (which still yields categories + cuisine/dietary tags at no
+# extra tier cost). Experiential data (service/feature/price/atmosphere/
+# accessibility) is owned by the LLM knowledge layer, never requested
+# from Google. `displayName` is the Pro tier-setter; every other field
+# here is Essentials.
 _FIELD_MASK = (
     "places.id,"
     "places.displayName,"
     "places.formattedAddress,"
     "places.addressComponents,"
     "places.location,"
-    "places.rating,"
-    "places.regularOpeningHours,"
-    "places.nationalPhoneNumber,"
-    "places.websiteUri,"
-    "places.types,"
-    "places.businessStatus,"
-    "places.userRatingCount,"
-    "places.timeZone,"
-    "places.priceLevel,"
-    "places.dineIn,"
-    "places.takeout,"
-    "places.delivery,"
-    "places.reservable,"
-    "places.servesBreakfast,"
-    "places.servesBrunch,"
-    "places.servesLunch,"
-    "places.servesDinner,"
-    "places.servesBeer,"
-    "places.servesWine,"
-    "places.servesCocktails,"
-    "places.servesVegetarianFood,"
-    "places.outdoorSeating,"
-    "places.liveMusic,"
-    "places.menuForChildren,"
-    "places.allowsDogs,"
-    "places.goodForChildren,"
-    "places.goodForGroups,"
-    "places.goodForWatchingSports,"
-    "places.accessibilityOptions"
+    "places.types"
 )
-# Place Details endpoint returns a single Place; the field mask must omit
-# the `places.` prefix that the search endpoints require.
-_DETAILS_FIELD_MASK = _FIELD_MASK.replace("places.", "")
+# Place Details mask — Essentials tier (ADR-118), deliberately narrower
+# than the search mask: no `displayName`. Details only refreshes the
+# location of already-persisted rows, and the catalog name is
+# sticky-authoritative (the merge discards a provider name anyway), so
+# the search service backfills `place_name` from the DB row instead of
+# paying the Pro rate for a name we throw away. Single-Place endpoint,
+# so no `places.` prefix.
+_DETAILS_FIELD_MASK = "id,formattedAddress,addressComponents,location,types"
 # Cap on parallel Place Details GETs. Bounds provider QPS and cost when a
 # caller asks for many ids at once (e.g. post-TTL stale refresh).
 _DETAILS_CONCURRENCY = 5
@@ -122,7 +106,11 @@ class GooglePlacesClient:
             )
             return None
         google_id = provider_id[len(GOOGLE_PROVIDER_PREFIX) :]
-        results = await self._request("GET", f"/{google_id}", _DETAILS_FIELD_MASK)
+        # require_name=False: the details mask carries no displayName; the
+        # search service backfills the name from the catalog row.
+        results = await self._request(
+            "GET", f"/{google_id}", _DETAILS_FIELD_MASK, require_name=False
+        )
         return results[0] if results else None
 
     async def _text_search(
@@ -247,6 +235,7 @@ class GooglePlacesClient:
         path: str,
         field_mask: str,
         body: dict[str, Any] | None = None,
+        require_name: bool = True,
     ) -> list[PlaceObject]:
         """Shared HTTP path: auth, error handling, JSON decode, Place parsing.
 
@@ -257,10 +246,9 @@ class GooglePlacesClient:
         """
         # Per-call cost lookup. Place Details paths are dynamic ("/{id}");
         # normalize to "/{place_id}" so the config key is stable across
-        # every Place Details call. TODO: differentiate cost by field_mask
-        # SKU tier (Essentials / Pro / Enterprise) — today every path is
-        # Enterprise (rating, regularOpeningHours, priceLevel, atmosphere
-        # fields in _FIELD_MASK).
+        # every Place Details call. Endpoint key ↔ SKU tier is 1:1:
+        # search endpoints use _FIELD_MASK (Pro), Place Details uses
+        # _DETAILS_FIELD_MASK (Essentials) — ADR-118.
         from kebi.core.agent._trace_context import (  # noqa: PLC0415
             current_tool,
             traced_call,
@@ -307,16 +295,15 @@ class GooglePlacesClient:
                 t.output = {"status": exc.response.status_code, "places": 0}
                 return []
             except Exception as exc:
-                logger.exception(
-                    "google_places_request_error %s %s", method, path
-                )
+                logger.exception("google_places_request_error %s %s", method, path)
                 t.fail(exc)
                 return []
             raws = data.get("places") if "places" in data else [data]
             now = datetime.now(UTC)
             results = [
-                obj for raw in (raws or [])
-                if (obj := map_place(raw, now)) is not None
+                obj
+                for raw in (raws or [])
+                if (obj := map_place(raw, now, require_name=require_name)) is not None
             ]
             # Google bills per request regardless of result count, so cost
             # lands on the call even when results is [] (no-match still cost).

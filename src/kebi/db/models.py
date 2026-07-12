@@ -118,6 +118,122 @@ class UserIntent(Base):
     )
 
 
+class KnowledgeEntityType(PyEnum):
+    """Entity kinds a knowledge claim can be scoped to (ADR-120)."""
+
+    COUNTRY = "country"
+    CITY = "city"
+    NEIGHBORHOOD = "neighborhood"
+    PLACE = "place"
+
+
+class KnowledgeSourceType(PyEnum):
+    """Where a knowledge claim originated (ADR-120)."""
+
+    SHARED_CONTENT = "shared_content"
+    CURATED_EXPERT = "curated_expert"
+    KEBI_MESSAGE = "kebi_message"
+    USER_MESSAGE = "user_message"
+
+
+class KnowledgeReviewStatus(PyEnum):
+    """Approval state of a knowledge claim (ADR-122).
+
+    `approved` is the default — the product trusts every writer today. When
+    review turns on, a writer's default becomes config and a reviewer (AI or
+    team) moves claims between states; the future read path filters to
+    `approved`.
+    """
+
+    PENDING = "pending"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+
+
+class KnowledgeClaim(Base):
+    """One row per world-knowledge claim, entity-scoped (ADR-120).
+
+    `entity_key` is a canonical, collision-proof identifier: `place:<places.id>`
+    for places, a lowercased hierarchical geo slug (`ae`, `ae/dubai`,
+    `ae/dubai/jumeirah`) for country/city/neighborhood — see
+    `kebi.core.knowledge.schemas` for the builders. `user_id` is NULL for
+    global claims (shared_content, curated_expert) and set for
+    conversation-origin claims (kebi_message, user_message), which are only
+    ever read back for that same user. `confidence` is writer-set 0-1;
+    convention is curated_expert high, a single harvested mention lower.
+    """
+
+    __tablename__ = "knowledge_claims"
+    __table_args__ = (
+        UniqueConstraint(
+            "entity_key",
+            "claim",
+            "source_type",
+            "user_id",
+            name="uq_knowledge_claims_dedup",
+            postgresql_nulls_not_distinct=True,
+        ),
+        Index("ix_knowledge_claims_entity", "entity_type", "entity_key"),
+        Index(
+            "ix_knowledge_claims_user",
+            "user_id",
+            postgresql_where=text("user_id IS NOT NULL"),
+        ),
+        Index("ix_knowledge_claims_review_status", "review_status"),
+    )
+
+    id: Mapped[str] = mapped_column(
+        String, primary_key=True, default=lambda: str(uuid4())
+    )
+    entity_type: Mapped[KnowledgeEntityType] = mapped_column(
+        Enum(
+            KnowledgeEntityType,
+            name="knowledge_entity_type",
+            native_enum=True,
+            values_callable=lambda x: [e.value for e in x],
+        ),
+        nullable=False,
+    )
+    entity_key: Mapped[str] = mapped_column(String, nullable=False)
+    entity_name: Mapped[str] = mapped_column(String, nullable=False)
+    claim: Mapped[str] = mapped_column(Text, nullable=False)
+    tags: Mapped[list] = mapped_column(  # type: ignore[type-arg]
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
+    source_type: Mapped[KnowledgeSourceType] = mapped_column(
+        Enum(
+            KnowledgeSourceType,
+            name="knowledge_source_type",
+            native_enum=True,
+            values_callable=lambda x: [e.value for e in x],
+        ),
+        nullable=False,
+    )
+    source_ref: Mapped[str | None] = mapped_column(String, nullable=True)
+    confidence: Mapped[float] = mapped_column(Float, nullable=False)
+    user_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Review gate (ADR-122). Defaults to APPROVED — the product trusts every
+    # writer today; when review turns on the default becomes config. reviewed_*
+    # stay NULL until an actual review happens (auto-trusted != reviewed).
+    review_status: Mapped[KnowledgeReviewStatus] = mapped_column(
+        Enum(
+            KnowledgeReviewStatus,
+            name="knowledge_review_status",
+            native_enum=True,
+            values_callable=lambda x: [e.value for e in x],
+        ),
+        nullable=False,
+        server_default=KnowledgeReviewStatus.APPROVED.value,
+    )
+    reviewed_by: Mapped[str | None] = mapped_column(String, nullable=True)
+    reviewed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
 class UserMemory(Base):
     """Append-only store of personal facts extracted from user messages.
 

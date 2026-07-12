@@ -1,9 +1,10 @@
 """RedisPlacesCache — flat PlaceObject cache keyed by provider_id.
 
 Cache key: `place:{provider_id}`. TTL: 30 days (2_592_000 s) by default.
-Live fields only (rating, hours, phone, website, popularity, business_status,
-cached_at). The full PlaceObject is stored so overlays are a simple JSON
-parse + field copy.
+The full PlaceObject is stored so overlays are a simple JSON parse + field
+copy; the cache's job is location freshness for TTL-wiped rows (identity,
+location, cached_at). Entries written before ADR-118 may still carry dropped
+live-field keys (rating, hours, ...) — Pydantic ignores them on parse.
 """
 
 from __future__ import annotations

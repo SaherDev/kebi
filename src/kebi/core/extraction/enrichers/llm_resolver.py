@@ -153,7 +153,7 @@ class _ResolverTag(BaseModel):
     type: str = Field(
         description=(
             "TagType axis: cuisine, dietary, feature, atmosphere, service, "
-            "price, accessibility, time, season."
+            "price, time, season. Never accessibility."
         )
     )
     value: str = Field(description="Canonical lowercase tag value.")
@@ -249,9 +249,7 @@ class LLMResolver:
                 # Clean human label the user saw; fall back to the raw
                 # name if the model left it blank (never the search
                 # query — that may be the swapped-in real name).
-                display_labels[key] = (
-                    c.display_label.strip() or c.raw_name.strip()
-                )
+                display_labels[key] = c.display_label.strip() or c.raw_name.strip()
                 loc = self._area_location(c.area, shared_location)
                 if loc is not None:
                     query_locations[key] = loc
@@ -268,9 +266,7 @@ class LLMResolver:
             # per-tag filter; this is the deterministic backstop.
             # Location inference (section 2 of the prompt) still sees
             # every hashtag.
-            hashtags_too_noisy = (
-                len(context.hashtags) > _MAX_HASHTAGS_FOR_DISCOVERY
-            )
+            hashtags_too_noisy = len(context.hashtags) > _MAX_HASHTAGS_FOR_DISCOVERY
             discovered_count = 0
             for d in response.discovered:
                 if hashtags_too_noisy and d.found_in == EvidenceField.HASHTAG:
@@ -301,9 +297,7 @@ class LLMResolver:
 
             t.output = {
                 "resolved_count": len(queries),
-                "dropped_count": (
-                    len(names) - (len(queries) - discovered_count)
-                ),
+                "dropped_count": (len(names) - (len(queries) - discovered_count)),
                 "discovered_count": discovered_count,
                 "hashtag_discovery_gated": hashtags_too_noisy,
                 "per_candidate_area_count": len(query_locations),
