@@ -82,6 +82,56 @@ async def test_search_malformed_bbox_is_dropped() -> None:
     assert result.bbox is None
 
 
+async def test_search_structured_sends_component_params_not_freetext() -> None:
+    client, http = _client(
+        [
+            {
+                "lat": "15.88",
+                "lon": "108.33",
+                "addresstype": "city",
+                "address": {"city": "Hoi An", "country_code": "vn"},
+            }
+        ]
+    )
+    result = await client.search_structured(city="Hội An", countrycodes="vn")
+    assert result is not None
+    assert result.city == "Hoi An"
+    assert result.country_code == "vn"
+    _, kwargs = http.get.call_args
+    assert kwargs["params"]["city"] == "Hội An"
+    assert kwargs["params"]["countrycodes"] == "vn"
+    assert "q" not in kwargs["params"]
+
+
+async def test_search_structured_country_param() -> None:
+    client, http = _client(
+        [
+            {
+                "lat": "16.0",
+                "lon": "106.0",
+                "addresstype": "country",
+                "address": {"country": "Vietnam", "country_code": "vn"},
+            }
+        ]
+    )
+    result = await client.search_structured(country="Vietnam")
+    assert result is not None
+    assert result.place_type == "country"
+    _, kwargs = http.get.call_args
+    assert kwargs["params"]["country"] == "Vietnam"
+
+
+async def test_search_structured_no_params_returns_none_without_call() -> None:
+    client, http = _client([])
+    assert await client.search_structured() is None
+    http.get.assert_not_called()
+
+
+async def test_search_structured_empty_result_returns_none() -> None:
+    client, _ = _client([])
+    assert await client.search_structured(city="Muine", countrycodes="vn") is None
+
+
 async def test_reverse_extracts_components_with_fallbacks() -> None:
     client, _ = _client(
         {"address": {"country": "Thailand", "town": "Pattaya", "suburb": "Jomtien"}}

@@ -843,11 +843,14 @@ def get_knowledge_harvester() -> KnowledgeHarvester:
     """FastAPI dependency providing the KnowledgeHarvester (ADR-121/122).
 
     A `shared_content` ClaimProducer; its trust floor and review status come
-    from config, so gating harvested claims later is a config change.
+    from config, so gating harvested claims later is a config change. Claims
+    naming an entity other than their anchor place are re-keyed through the
+    shared free Nominatim geocoder, verified (ADR-126).
     """
     knowledge = get_config().knowledge
     return KnowledgeHarvester(
         get_instructor_client("knowledge_harvester"),
+        get_geocoding_client(),
         confidence_floor=knowledge.harvest_confidence_floor,
         review_status=knowledge.harvest_review_status,
     )
