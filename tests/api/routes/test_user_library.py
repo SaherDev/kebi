@@ -93,10 +93,13 @@ def test_insider_notes_surface_on_each_place(svc: AsyncMock) -> None:
             return_value={
                 "p1": [
                     PlaceNote(
+                        id="claim-1",
                         text="order the omakase",
                         tags=["food"],
                         source_type="shared_content",
                         from_shared=True,
+                        agree_count=3,
+                        disagree_count=1,
                     )
                 ]
             }
@@ -109,10 +112,13 @@ def test_insider_notes_surface_on_each_place(svc: AsyncMock) -> None:
     claims = body["places"][0]["claims"]
     assert len(claims) == 1
     assert claims[0] == {
+        "id": "claim-1",
         "text": "order the omakase",
         "tags": ["food"],
         "source": "community",
         "from_shared": True,
+        "agree_count": 3,
+        "disagree_count": 1,
     }
 
 

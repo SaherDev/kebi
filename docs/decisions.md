@@ -17,6 +17,16 @@ Format:
 
 ---
 
+## ADR-128: Insider notes carry a corroboration tally and a stable id, ahead of the vote that will move them
+
+**Date:** 2026-07-14\
+**Status:** accepted\
+**Context:** ADR-127 made a place's claims visible as insider notes, but a note stands or falls on a single writer's confidence — a provenance-based trust floor, not a signal of whether the people who read it actually agree. The product wants agreement to accumulate: the more readers who endorse a note, the more the system should trust and surface it. That is a per-reader vote, and building the vote write-path — where a vote lives, how a reader's own stance is read back, the endpoint that records it — is a larger piece deferred to its own decision. But a claim collapses duplicates on write (an identical fact re-said merges onto the one row), so the store has never counted corroboration; and the note the client renders exposes neither the claim's identity nor any tally, so shipping the counts later would be a second cross-repo contract change on the same surface.\
+**Decision:** A claim now carries an agree/disagree corroboration tally as first-class state, and the insider note exposes it alongside the claim's stable id — even though nothing writes the tally yet. Both counts start at zero and stay there until the vote write-path ships; the id is the claim's own identity, surfaced now as the note's stable list key and the target a future vote will address. The vote mechanism itself — the per-reader record, a reader's own stance, the write endpoint, and how the tally feeds ranking — is deliberately out of scope here and left to a later decision. What ships now is only the shape: the store can hold the tally, and the contract already names it, so the reader half is settled before the writer half exists.\
+**Consequences:** The Library note gains three fields — the claim id and the two counts — in one contract change instead of two, so when voting lands the client needs no further note-shape migration. The client can key its note list on a real id today rather than on note text, and can render a (currently zero) agree/disagree affordance without waiting. The cost is dormant state: two counters and an exposed id that carry no signal until the vote path is built, an accepted trade to avoid re-touching a cross-repo surface twice. Ranking still orders notes by writer confidence and recency (ADR-127); folding the tally into an effective score is part of the deferred vote decision, not this one. Voting on private conversation-origin claims (a user's own saved-recommendation reasons) is left for that decision too, since a personal note has no crowd to corroborate it.
+
+---
+
 ## ADR-127: The knowledge layer gets its first reader — a saved place shows its claims as insider notes, and the save reason becomes a claim
 
 **Date:** 2026-07-14\

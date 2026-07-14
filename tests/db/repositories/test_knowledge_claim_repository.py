@@ -54,6 +54,8 @@ def _row(
         review_status=KnowledgeReviewStatus.APPROVED,
         reviewed_by=None,
         reviewed_at=None,
+        agree_count=0,
+        disagree_count=0,
         created_at=datetime(2026, 7, 11, tzinfo=UTC),
     )
 

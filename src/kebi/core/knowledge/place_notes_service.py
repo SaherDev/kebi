@@ -59,6 +59,7 @@ class PlaceNotesService:
             ranked = self._rank(grouped.get(entity_key, []))
             result[place_id] = [
                 PlaceNote(
+                    id=claim.id,
                     text=claim.claim,
                     tags=claim.tags,
                     source_type=claim.source_type,
@@ -67,6 +68,8 @@ class PlaceNotesService:
                         and save_ref is not None
                         and claim.source_ref == save_ref
                     ),
+                    agree_count=claim.agree_count,
+                    disagree_count=claim.disagree_count,
                 )
                 for claim in ranked
             ]

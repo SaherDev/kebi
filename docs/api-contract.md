@@ -516,10 +516,13 @@ the first page (drop the `cursor`). Keep `sort` fixed across a paging run.
       },
       "claims": [
         {
+          "id": "c0ffee00-aaaa-bbbb-cccc-dddddddddddd",
           "text": "order the omakase — it's off-menu",
           "tags": ["food"],
           "source": "community",
-          "from_shared": true
+          "from_shared": true,
+          "agree_count": 0,
+          "disagree_count": 0
         }
       ]
     }
@@ -536,14 +539,18 @@ the first page (drop the `cursor`). Keep `sort` fixed across a paging run.
 | `total` | `integer` | The caller's **grand total** of saved places — the whole stash, **independent of the request's filters and pagination** (drives the screen's hero count). Same on every page |
 
 `claims` (`PlaceNote[]`, ADR-127) are the **insider notes** tied to the place
-from the knowledge layer — the payoff surface. Each: `text` (the note),
+from the knowledge layer — the payoff surface. Each: `id` (the claim's stable
+id — use as the list key and, later, the vote target), `text` (the note),
 `tags: string[]`, `source` (coarse origin label: `community` = harvested from
 shared content, `expert` = curated, `kebi` = the user's own saved-recommendation
-reason), and `from_shared: bool` — `true` when the note was mined from the very
-post the user shared for this save (badge it "from what you shared"). Approved
-claims only, strongest first, capped. A place with no claims returns `[]` — no
-empty section. v1 is place-scoped; city/neighborhood ambient notes are not yet
-included.
+reason), `from_shared: bool` — `true` when the note was mined from the very
+post the user shared for this save (badge it "from what you shared") — and
+`agree_count` / `disagree_count` (`integer`), the claim's corroboration tally.
+Both are `0` today and only move once the agree/disagree vote write-path ships;
+they are surfaced now so the client can render the counts without a later
+contract change. Approved claims only, strongest first, capped. A place with no
+claims returns `[]` — no empty section. v1 is place-scoped; city/neighborhood
+ambient notes are not yet included.
 
 `user_data` (`UserPlace`) fields: `user_place_id`, `place_id`, `approved`,
 `visited`, `liked` (tri-state, may be `null`), `note`, `source`,
