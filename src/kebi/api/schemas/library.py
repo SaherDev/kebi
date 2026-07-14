@@ -19,6 +19,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from kebi.core.knowledge.schemas import PlaceNote, SourceType
 from kebi.core.places import (
     LibrarySort,
     PlaceCategory,
@@ -29,6 +30,15 @@ from kebi.core.places import (
     UserPlace,
     UserPlaceStatusUpdate,
 )
+
+# Coarse, user-facing origin label for an insider note (ADR-127). The raw
+# `source_type` stays internal; the client styles by this stable label.
+_NOTE_SOURCE_LABELS: dict[SourceType, str] = {
+    "shared_content": "community",
+    "curated_expert": "expert",
+    "kebi_message": "kebi",
+    "user_message": "kebi",
+}
 
 
 class LibraryQuery(BaseModel):
@@ -104,13 +114,14 @@ class SaveUserPlaceRequest(BaseModel):
     exists in the catalog (it was just recommended), so the save just links it
     to the caller. `recommendation_id` is the id kebi minted on the consult
     result the place came from — it attributes the `saved_recommendation`
-    taste signal back to that recommendation. `note` is optional free text the
-    client stores on the save (e.g. the recommendation's reason it is showing,
-    or the user's own words) — the reason is not persisted server-side, so the
-    client is the only party that holds it at save time. `source` is not
-    accepted from the client — the route stamps `PlaceSource.kebi`. `user_id`
-    is intentionally absent (gateway identity, ADR-105). `extra="forbid"`
-    rejects unknown keys with a 422.
+    taste signal back to that recommendation. `reason` is the pick's rationale
+    the card is showing (the reason is not persisted server-side, so the client
+    supplies it); on create it is written to the knowledge layer as a
+    user-scoped `kebi_message` claim and surfaces in the Library's insider
+    notes (ADR-127) — it is **not** stored on the save as a note. `source` is
+    not accepted from the client — the route stamps `PlaceSource.kebi`.
+    `user_id` is intentionally absent (gateway identity, ADR-105).
+    `extra="forbid"` rejects unknown keys with a 422.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -121,12 +132,13 @@ class SaveUserPlaceRequest(BaseModel):
     recommendation_id: str = Field(
         ..., description="id of the recommendation the place was saved from"
     )
-    note: str | None = Field(
+    reason: str | None = Field(
         None,
         description=(
-            "Optional note to store on the save — e.g. the recommendation's "
-            "reason, or the user's own text. Applied only when the save is "
-            "created; a re-tap leaves an existing note untouched."
+            "The pick's rationale the card is showing. On create, stored as a "
+            "user-scoped kebi_message knowledge claim on the place (surfaces in "
+            "Library insider notes), not as a note on the save. A re-tap adds "
+            "nothing (claim-text dedup). Omit or null for no reason."
         ),
     )
 
@@ -198,17 +210,47 @@ class LibraryUserData(BaseModel):
         return cls.model_validate(up, from_attributes=True)
 
 
+class PlaceNoteView(BaseModel):
+    """One insider note on a saved place — the public projection of a knowledge
+    claim (ADR-127, ADR-105).
+
+    `source` is a coarse origin label (`community` / `expert` / `kebi`), not the
+    raw `source_type`. `from_shared` marks a note mined from the very post the
+    user shared for this save, so the client can badge it without any grouping.
+    Raw `source_ref`/`confidence`/ids are deliberately not exposed.
+    """
+
+    text: str
+    tags: list[str] = Field(default_factory=list)
+    source: str
+    from_shared: bool
+
+    @classmethod
+    def from_note(cls, note: PlaceNote) -> PlaceNoteView:
+        return cls(
+            text=note.text,
+            tags=list(note.tags),
+            source=_NOTE_SOURCE_LABELS.get(note.source_type, "community"),
+            from_shared=note.from_shared,
+        )
+
+
 class LibraryItem(BaseModel):
-    """One saved place on a Library page: the catalog place + the user's data."""
+    """One saved place on a Library page: the catalog place, the user's data,
+    and the insider notes tied to the place (ADR-127; empty when it has none)."""
 
     place: PlaceCore
     user_data: LibraryUserData
+    claims: list[PlaceNoteView] = Field(default_factory=list)
 
     @classmethod
-    def from_view(cls, view: SavedPlaceView) -> LibraryItem:
+    def from_view(
+        cls, view: SavedPlaceView, notes: list[PlaceNote] | None = None
+    ) -> LibraryItem:
         return cls(
             place=view.place,
             user_data=LibraryUserData.from_user_place(view.user_data),
+            claims=[PlaceNoteView.from_note(n) for n in (notes or [])],
         )
 
 
@@ -235,10 +277,18 @@ class LibraryResponse(BaseModel):
 
     @classmethod
     def from_page(
-        cls, views: list[SavedPlaceView], next_cursor: str | None, total: int
+        cls,
+        views: list[SavedPlaceView],
+        next_cursor: str | None,
+        total: int,
+        notes_by_place: dict[str, list[PlaceNote]] | None = None,
     ) -> LibraryResponse:
+        notes = notes_by_place or {}
         return cls(
-            places=[LibraryItem.from_view(v) for v in views],
+            places=[
+                LibraryItem.from_view(v, notes.get(v.place.id) if v.place.id else None)
+                for v in views
+            ],
             next_cursor=next_cursor,
             total=total,
         )

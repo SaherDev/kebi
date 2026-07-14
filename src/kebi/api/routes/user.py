@@ -7,6 +7,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from kebi.api.deps import (
     GatewayIdentity,
     get_event_dispatcher,
+    get_kebi_note_service,
+    get_place_notes_service,
+    get_places_repo,
     get_user_data_deletion_service,
     get_user_intent_service,
     get_user_places_service,
@@ -23,12 +26,15 @@ from kebi.api.schemas.library import (
 )
 from kebi.core.events.dispatcher import EventDispatcher
 from kebi.core.events.events import LibraryStateChanged, RecommendationSaved
+from kebi.core.knowledge.kebi_note_service import KebiNoteService
+from kebi.core.knowledge.place_notes_service import PlaceNotesService
 from kebi.core.places import (
     PlaceNotFoundError,
     PlaceSource,
     SaveLimitExceededError,
     UserPlacesService,
 )
+from kebi.core.places.protocols import PlacesRepoProtocol
 from kebi.core.user.intent_service import UserIntentService
 from kebi.core.user.service import DataScope, UserDataDeletionService
 
@@ -42,6 +48,7 @@ async def get_user_library(
     identity: Annotated[GatewayIdentity, Depends(require_gateway_identity)],
     params: Annotated[LibraryQuery, Query()],
     service: UserPlacesService = Depends(get_user_places_service),  # noqa: B008
+    notes_service: PlaceNotesService = Depends(get_place_notes_service),  # noqa: B008
 ) -> LibraryResponse:
     """Browse the caller's saved places (the Library screen).
 
@@ -62,6 +69,12 @@ async def get_user_library(
     By default every save is returned regardless of its `approved` flag;
     pass `approved=` to split curated vs. needs-review.
 
+    Each place also carries `claims` — the insider notes tied to it from the
+    knowledge layer (ADR-127): harvested from shared content or the user's own
+    saved-recommendation reasons, only approved claims, strongest first, with a
+    `from_shared` flag on notes mined from the very post the user shared. A
+    place with no claims returns an empty list.
+
     `user_id` comes only from the verified gateway identity — a caller can
     only ever read their own library. A malformed or sort-mismatched
     `cursor` surfaces as a 400 via the shared `ValueError` handler.
@@ -73,7 +86,8 @@ async def get_user_library(
         cursor=params.cursor,
         sort=params.sort,
     )
-    return LibraryResponse.from_page(places, next_cursor, total)
+    notes_by_place = await notes_service.notes_for_saves(places, identity.user_id)
+    return LibraryResponse.from_page(places, next_cursor, total, notes_by_place)
 
 
 @router.get("/user/intents", response_model=IntentsResponse)
@@ -116,6 +130,8 @@ async def save_user_place(
     identity: Annotated[GatewayIdentity, Depends(require_gateway_identity)],
     service: UserPlacesService = Depends(get_user_places_service),  # noqa: B008
     event_dispatcher: EventDispatcher = Depends(get_event_dispatcher),  # noqa: B008
+    note_service: KebiNoteService = Depends(get_kebi_note_service),  # noqa: B008
+    places_repo: PlacesRepoProtocol = Depends(get_places_repo),  # noqa: B008
 ) -> LibraryUserData:
     """Save a recommended place to the caller's library (the consult card's
     "save it" action).
@@ -125,6 +141,12 @@ async def save_user_place(
     taste signal half of "save it". This is a stronger signal than a passive
     link-share save (its own `saved_recommendation` interaction type, weighted
     heavier, and not counted toward the `source` distribution).
+
+    The pick's `reason` (client-supplied) is written to the knowledge layer as
+    a user-scoped `kebi_message` claim on the place (ADR-127), not stored on the
+    save as a note — it then surfaces in the Library's insider notes. It is
+    recorded only when the save is first created; the writer's claim-text dedup
+    means a re-tap adds nothing.
 
     Idempotent: a re-tap on an already-saved place returns the existing save
     and does **not** re-emit the signal, so saving twice never double-trains
@@ -146,7 +168,6 @@ async def save_user_place(
             identity.user_id,
             body.place_core_id,
             PlaceSource.kebi,
-            note=body.note,
             save_limit=identity.save_limit,
         )
     except PlaceNotFoundError as exc:
@@ -166,6 +187,16 @@ async def save_user_place(
                 place_core_id=body.place_core_id,
             )
         )
+        if body.reason:
+            cores = await places_repo.get_by_ids([body.place_core_id])
+            if cores:
+                await note_service.record(
+                    reason=body.reason,
+                    place_id=body.place_core_id,
+                    place_name=cores[0].place_name,
+                    user_id=identity.user_id,
+                    recommendation_id=body.recommendation_id,
+                )
     return LibraryUserData.from_user_place(user_place)
 
 

@@ -384,46 +384,19 @@ class TestSaveOne:
         repo.get_by_user_and_place.assert_awaited_once_with("u1", "p1")
         repo.save_user_places.assert_awaited_once()
 
-    async def test_persists_client_supplied_note_on_create(self) -> None:
+    async def test_save_one_never_stores_a_note(self) -> None:
+        """save_one carries no note — the pick's reason is written to the
+        knowledge layer by the route, not onto the save (ADR-127)."""
         repo = MagicMock(
             get_by_user_and_place=AsyncMock(return_value=None),
             save_user_places=AsyncMock(side_effect=lambda rows: rows),
         )
         svc = UserPlacesService(user_places_repo=repo)
 
-        row, created = await svc.save_one(
-            "u1", "p1", PlaceSource.kebi, note="great coffee for working"
-        )
+        row, created = await svc.save_one("u1", "p1", PlaceSource.kebi)
 
         assert created is True
-        assert row.note == "great coffee for working"
-
-    async def test_note_defaults_to_none(self) -> None:
-        repo = MagicMock(
-            get_by_user_and_place=AsyncMock(return_value=None),
-            save_user_places=AsyncMock(side_effect=lambda rows: rows),
-        )
-        svc = UserPlacesService(user_places_repo=repo)
-
-        row, _ = await svc.save_one("u1", "p1", PlaceSource.kebi)
-
         assert row.note is None
-
-    async def test_note_on_retap_does_not_overwrite_existing(self) -> None:
-        """A re-tap returns the existing row untouched — a note passed on the
-        re-save never clobbers a note the user may have hand-edited."""
-        existing = _user_place("u1", "p1")
-        repo = MagicMock(
-            get_by_user_and_place=AsyncMock(return_value=existing),
-            save_user_places=AsyncMock(),
-        )
-        svc = UserPlacesService(user_places_repo=repo)
-
-        row, created = await svc.save_one("u1", "p1", PlaceSource.kebi, note="new note")
-
-        assert created is False
-        assert row is existing
-        repo.save_user_places.assert_not_called()
 
     async def test_idempotent_returns_existing_without_writing(self) -> None:
         """A re-tap on an already-saved place returns the existing row and

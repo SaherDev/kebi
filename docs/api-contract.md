@@ -525,7 +525,15 @@ the first page (drop the `cursor`). Keep `sort` fixed across a paging run.
         "source_label": "Mirror Temple",
         "saved_at": "2026-05-01T08:00:00Z",
         "visited_at": null
-      }
+      },
+      "claims": [
+        {
+          "text": "order the omakase — it's off-menu",
+          "tags": ["food"],
+          "source": "community",
+          "from_shared": true
+        }
+      ]
     }
   ],
   "next_cursor": "eyJ0cyI6…",
@@ -535,7 +543,17 @@ the first page (drop the `cursor`). Keep `sort` fixed across a paging run.
 
 | Field         | Type               | Notes                                                                                                                                                                               |
 | ------------- | ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `places`      | `SavedPlaceView[]` | `{ place: PlaceCore, user_data: UserPlace }`. `place` is the complete place shape — live rating/hours don't exist anywhere in the contract (ADR-118). `user_data` is this user's relationship to the place |
+| `places`      | `SavedPlaceView[]` | `{ place: PlaceCore, user_data: UserPlace, claims: PlaceNote[] }`. `place` is the complete place shape — live rating/hours don't exist anywhere in the contract (ADR-118). `user_data` is this user's relationship to the place |
+
+`claims` (`PlaceNote[]`, ADR-127) are the **insider notes** tied to the place
+from the knowledge layer — the payoff surface. Each: `text` (the note),
+`tags: string[]`, `source` (coarse origin label: `community` = harvested from
+shared content, `expert` = curated, `kebi` = the user's own saved-recommendation
+reason), and `from_shared: bool` — `true` when the note was mined from the very
+post the user shared for this save (badge it "from what you shared"). Approved
+claims only, strongest first, capped. A place with no claims returns `[]` — no
+empty section. v1 is place-scoped; city/neighborhood ambient notes are not yet
+included.
 | `next_cursor` | `string \| null`   | Opaque keyset cursor. Pass it back as `?cursor=` for the next page. **`null` on the last page**                                                                                     |
 | `total`       | `integer`          | The caller's **grand total** of saved places — the whole stash, **independent of the request's filters and pagination** (drives the screen's hero count). Same on every page        |
 
@@ -589,7 +607,7 @@ POST /v1/user/places
 {
   "place_core_id": "c0ffee00-1111-2222-3333-444455556666",
   "recommendation_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
-  "note": "cozy spot to work, great coffee"
+  "reason": "great for a quiet date — the back room is candlelit"
 }
 ```
 
@@ -597,7 +615,12 @@ POST /v1/user/places
 | ------------------- | --------------- | -------- | -------------------------------------------------------------------------------------- |
 | `place_core_id`     | `string`        | Yes      | `places.id` of the candidate (consult `tool_results → payload.candidates[].place.id`)  |
 | `recommendation_id` | `string`        | Yes      | The id kebi minted on that consult result (`tool_results → payload.recommendation_id`) |
-| `note`              | `string`/`null` | No       | Free text stored on the save — e.g. the recommendation's reason the client is showing, or the user's own words. The reason is **not** persisted server-side, so the client supplies it here. Applied **only on create**; a re-tap leaves an existing note untouched (edit later via `PATCH`). Omit or `null` for no note |
+| `reason`            | `string`/`null` | No       | The pick's rationale the card is showing. The reason is **not** persisted server-side, so the client supplies it. On create it is written to the knowledge layer as a **user-scoped `kebi_message` claim** on the place (ADR-127) and surfaces in the Library's `claims` as a `kebi` note — it is **no longer stored on the save as a note** (this amends ADR-114). A re-tap adds nothing (claim-text dedup). Omit or `null` for no reason |
+
+> **ADR-127 note:** the save no longer echoes the reason back as `user_data.note`.
+> `user_data.note` is now set only by the user's own edit (`PATCH /v1/user/places/{id}`);
+> the reason appears instead in the place's Library `claims` (`source: "kebi"`).
+> Clients that sent `note` here must send `reason` and read it from `claims`.
 
 `source` is **not** a field — the server stamps `kebi`. Unknown fields → 422.
 
@@ -929,7 +952,7 @@ All protected calls additionally send the `X-Gateway-Token` + `X-Gateway-User-Id
 | GET /v1/user/intents        | "What you wanted" recall list              | — (optional `limit`/`cursor` query params)                  | IntentsResponse (`intents: { id, text, created_at }[]`, `next_cursor`)                   |
 | POST /v1/extract            | Canonical extraction (save a place)        | raw_input                                                    | ExtractPlaceResponse                                                                     |
 | GET /v1/user/library        | Browse the user's saved places (Library)   | — (optional filter + `sort` + `limit`/`cursor` query params) | LibraryResponse (`places: SavedPlaceView[]`, `next_cursor`, `total`)                     |
-| POST /v1/user/places        | Save a recommended place ("save it")       | place_core_id, recommendation_id, optional `note`            | LibraryUserData (created user-state, `201`; `404` if uncatalogued); emits taste signal  |
+| POST /v1/user/places        | Save a recommended place ("save it")       | place_core_id, recommendation_id, optional `reason`          | LibraryUserData (created user-state, `201`; `404` if uncatalogued); emits taste signal + writes `reason` as a `kebi_message` claim (ADR-127) |
 | PATCH /v1/user/places/{id}  | Update a save's user-state (pills/menu)    | partial body: `visited`/`liked`/`approved`/`note`            | LibraryUserData (updated user-state; `200`/`404`)                                        |
 | DELETE /v1/user/places/{id} | Remove one saved place from the library    | — (path param only)                                          | 204 No Content (`404` if absent/not owned)                                               |
 | DELETE /v1/user/data        | Account-deletion sweep of AI data          | — (optional `scope` query param)                             | 204 No Content                                                                           |
