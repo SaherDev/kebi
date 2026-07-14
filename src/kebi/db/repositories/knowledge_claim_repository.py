@@ -41,6 +41,8 @@ def _to_record(row: KnowledgeClaimRow) -> KnowledgeClaim:
         review_status=row.review_status.value,
         reviewed_by=row.reviewed_by,
         reviewed_at=row.reviewed_at,
+        agree_count=row.agree_count,
+        disagree_count=row.disagree_count,
         created_at=row.created_at,
     )
 

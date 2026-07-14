@@ -229,6 +229,15 @@ class KnowledgeClaim(Base):
     reviewed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # Corroboration tally: how many users agreed vs disagreed with this claim.
+    # Both start at 0 and only ever move once the (future) vote write-path
+    # ships; surfaced today so the Library note already carries the counts.
+    agree_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0")
+    )
+    disagree_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0")
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

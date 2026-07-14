@@ -214,24 +214,33 @@ class PlaceNoteView(BaseModel):
     """One insider note on a saved place — the public projection of a knowledge
     claim (ADR-127, ADR-105).
 
-    `source` is a coarse origin label (`community` / `expert` / `kebi`), not the
-    raw `source_type`. `from_shared` marks a note mined from the very post the
-    user shared for this save, so the client can badge it without any grouping.
-    Raw `source_ref`/`confidence`/ids are deliberately not exposed.
+    `id` is the underlying claim's id — a stable list key and the target a
+    future agree/disagree vote will address. `agree_count`/`disagree_count` are
+    its corroboration tally (both 0 until voting ships). `source` is a coarse
+    origin label (`community` / `expert` / `kebi`), not the raw `source_type`.
+    `from_shared` marks a note mined from the very post the user shared for this
+    save, so the client can badge it without any grouping. Raw
+    `source_ref`/`confidence` stay unexposed.
     """
 
+    id: str
     text: str
     tags: list[str] = Field(default_factory=list)
     source: str
     from_shared: bool
+    agree_count: int
+    disagree_count: int
 
     @classmethod
     def from_note(cls, note: PlaceNote) -> PlaceNoteView:
         return cls(
+            id=note.id,
             text=note.text,
             tags=list(note.tags),
             source=_NOTE_SOURCE_LABELS.get(note.source_type, "community"),
             from_shared=note.from_shared,
+            agree_count=note.agree_count,
+            disagree_count=note.disagree_count,
         )
 
 

@@ -49,6 +49,10 @@ class KnowledgeClaim(BaseModel):
     review_status: ReviewStatus = "approved"
     reviewed_by: str | None = None
     reviewed_at: datetime | None = None
+    # Corroboration tally (agree/disagree). Both 0 until the vote write-path
+    # ships; carried through so the Library note can show the counts today.
+    agree_count: int = 0
+    disagree_count: int = 0
     created_at: datetime
 
 
@@ -56,6 +60,9 @@ class PlaceNote(BaseModel):
     """One insider note surfaced on a place — a claim reduced to what the
     Library read exposes (ADR-127).
 
+    `id` is the underlying claim's id — a stable key for the client's list and
+    the target the (future) agree/disagree vote will address. `agree_count` /
+    `disagree_count` are its corroboration tally (0 until voting ships).
     `source_type` is kept internal so the API layer can map it to a coarse,
     user-facing label; it is not itself a wire field. `from_shared` is True
     when the underlying claim was harvested from the very post the user shared
@@ -65,10 +72,13 @@ class PlaceNote(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
+    id: str
     text: str
     tags: list[str] = []
     source_type: SourceType
     from_shared: bool = False
+    agree_count: int = 0
+    disagree_count: int = 0
 
 
 class ResolvedGeo(BaseModel):
