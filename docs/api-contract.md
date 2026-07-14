@@ -6,13 +6,6 @@ This document defines the HTTP contract between the product repo (services/api) 
 
 All requests come from NestJS after auth verification. kebi never receives requests directly from the frontend.
 
-> **ADR-079 coordination note.** The place catalog tables were renamed
-> `places_v2 → places` and `place_embeddings_v2 → place_embeddings`
-> (ADR-079, from `places_v2` introduced in ADR-070). The kebi schema +
-> code and any product-repo reference to these table names must ship in
-> **one coordinated deploy**. `place_core_id` on `POST /v1/signal` is
-> now documented as `places.id`.
-
 ## Connection
 
 - Base URL loaded from the `KEBI_BASE_URL` env var
@@ -119,9 +112,9 @@ provider-attested, experiential tags (service, feature, price,
 atmosphere) come from kebi's knowledge layer and **accumulate over
 time** — a freshly discovered place may initially carry only
 categories + cuisine tags and densify as content flows through
-extraction. There is no standalone product-facing endpoint for catalog
-reads today — saved/discovered/suggested places are returned inside
-chat responses as `tool_results`.
+extraction. Saved places are read via `GET /v1/user/library`;
+discovered and suggested places are returned inside chat responses as
+`tool_results`.
 
 ```json
 {
@@ -160,12 +153,6 @@ chat responses as `tool_results`.
 | `location`           | `LocationContext \| null`   | `{ lat, lng, address, neighborhood, city, country }` — any field may be `null`                                                                                                                                                                      |
 | `created_at`         | `ISO-8601 string \| null`   | Catalog row creation                                                                                                                                                                                                                                |
 | `refreshed_at`       | `ISO-8601 string \| null`   | Last provider refresh                                                                                                                                                                                                                               |
-
-> **Migration note (ADR-070/071):** the legacy v1 `PlaceObject` shape
-> (`place_type`, `subcategory`, `attributes{}`, Tier 2/3 enrichment
-> fields) is gone. `place_type` → `categories: string[]`; `attributes`
-> → `tags: [{type,value,source}]`. The v1 `places`/`embeddings` tables
-> were dropped in ADR-078.
 
 ---
 
@@ -460,7 +447,7 @@ ADR-112: if the caller's `X-Gateway-Save-Limit` is already met, extraction retur
 | Code  | When                                                                                     |
 | ----- | ---------------------------------------------------------------------------------------- |
 | `200` | Extraction completed or failed — inspect `status` / `failure_reason` in the response     |
-| `400` | Malformed request (missing `raw_input` / `user_id`, or `raw_input` exceeds the size cap) |
+| `400` | Malformed request (missing `raw_input`, or `raw_input` exceeds the size cap) |
 | `500` | Unhandled pipeline failure                                                               |
 
 ---
@@ -545,6 +532,8 @@ the first page (drop the `cursor`). Keep `sort` fixed across a paging run.
 | Field    | Type               | Notes                                                                                                                                                                                                                           |
 | -------- | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `places` | `SavedPlaceView[]` | `{ place: PlaceCore, user_data: UserPlace, claims: PlaceNote[] }`. `place` is the complete place shape — live rating/hours don't exist anywhere in the contract (ADR-118). `user_data` is this user's relationship to the place |
+| `next_cursor` | `string \| null` | Opaque keyset cursor. Pass it back as `?cursor=` for the next page. **`null` on the last page** |
+| `total` | `integer` | The caller's **grand total** of saved places — the whole stash, **independent of the request's filters and pagination** (drives the screen's hero count). Same on every page |
 
 `claims` (`PlaceNote[]`, ADR-127) are the **insider notes** tied to the place
 from the knowledge layer — the payoff surface. Each: `text` (the note),
@@ -555,8 +544,6 @@ post the user shared for this save (badge it "from what you shared"). Approved
 claims only, strongest first, capped. A place with no claims returns `[]` — no
 empty section. v1 is place-scoped; city/neighborhood ambient notes are not yet
 included.
-| `next_cursor` | `string \| null` | Opaque keyset cursor. Pass it back as `?cursor=` for the next page. **`null` on the last page** |
-| `total` | `integer` | The caller's **grand total** of saved places — the whole stash, **independent of the request's filters and pagination** (drives the screen's hero count). Same on every page |
 
 `user_data` (`UserPlace`) fields: `user_place_id`, `place_id`, `approved`,
 `visited`, `liked` (tri-state, may be `null`), `note`, `source`,
@@ -831,8 +818,10 @@ other SQL tables (saves, memories, taste model) are left untouched.
 > **not** in the sweep — those rows are cross-user place identities, not
 > this user's data. Only the per-user `user_places` link rows (the
 > user's saves plus the source URLs they personally submitted) are
-> user-owned and get wiped. The `recommendations` table and the v1
-> `places`/`embeddings` tables were dropped by ADR-078.
+> user-owned and get wiped. `knowledge_claims` are **not** swept —
+> neither global claims (cross-user world knowledge) nor the user's own
+> `kebi_message` reasons (ADR-127), which are deliberately retained as
+> place knowledge rather than erased.
 
 **Notes:** idempotent (absent user → still 204); synchronous (sub-second at portfolio volume); hard-delete only; no per-user Redis keys to clean; trusted-upstream auth.
 
@@ -992,15 +981,14 @@ All protected calls additionally send the `X-Gateway-Token` + `X-Gateway-User-Id
 
 **Database tables FastAPI owns (Alembic-managed; NestJS never writes them):**
 
-- `places` — shared place catalog (renamed from `places_v2`, ADR-079)
-- `place_embeddings` — place vectors (renamed from `place_embeddings_v2`, ADR-079)
+- `places` — shared place catalog
+- `place_embeddings` — place vectors
 - `user_places` — per-user saved-place links (`approved` curation flag)
 - `taste_model` — per-user taste profile
 - `interactions` — append-only behavioral signal log
 - `user_memories` — personal facts extracted from chat messages
 - `user_intents` — the home "what you wanted" recall list (ADR-110); intent-bearing chat turns
-
-> Dropped in ADR-078: v1 `places`/`embeddings` and `recommendations`.
+- `knowledge_claims` — entity-scoped world-knowledge claims (ADR-120)
 
 ---
 
@@ -1008,5 +996,4 @@ All protected calls additionally send the `X-Gateway-Token` + `X-Gateway-User-Id
 
 - All protected requests carry `X-Gateway-Token` (shared HMAC secret) and `X-Gateway-User-Id` (verified Clerk subject). kebi never sees Clerk tokens directly — it trusts the gateway iff the shared secret validates and the user_id matches the expected pattern.
 - FastAPI owns all AI-generated data in PostgreSQL; NestJS owns product data (users, settings). Neither writes the other's tables.
-- The `places` / `place_embeddings` table rename (ADR-079) is a coordinated cross-repo change — deploy kebi and the product repo together.
-- The gateway-auth contract is also a coordinated change — both repos must hold the same `GATEWAY_SHARED_SECRET` and ship together. Rotating the secret means setting the new value in both deploys.
+- The gateway-auth contract is a coordinated change — both repos must hold the same `GATEWAY_SHARED_SECRET` and ship together. Rotating the secret means setting the new value in both deploys.
