@@ -32,6 +32,9 @@ from kebi.core.knowledge.curation_service import KnowledgeCurationService
 from kebi.core.knowledge.curator import KnowledgeCurator
 from kebi.core.knowledge.harvest_bucket import HarvestBucketReader, HarvestBucketWriter
 from kebi.core.knowledge.harvester import KnowledgeHarvester
+from kebi.core.knowledge.kebi_note import KebiNoteProducer
+from kebi.core.knowledge.kebi_note_service import KebiNoteService
+from kebi.core.knowledge.place_notes_service import PlaceNotesService
 from kebi.core.knowledge.producer import KnowledgeIngestion
 from kebi.core.knowledge.writer import KnowledgeWriter
 from kebi.core.memory.buffer import MessageBuffer
@@ -880,6 +883,48 @@ def get_knowledge_curation_service(
         curator=get_knowledge_curator(),
         ingestion=ingestion,
     )
+
+
+def get_kebi_note_producer() -> KebiNoteProducer:
+    """FastAPI dependency providing the KebiNoteProducer (ADR-127).
+
+    A `kebi_message` ClaimProducer — turns a saved-recommendation reason into a
+    place-scoped claim. Trust floor and review status come from config, so
+    gating these notes later is a config change (no LLM, no geocoder).
+    """
+    knowledge = get_config().knowledge
+    return KebiNoteProducer(
+        confidence_floor=knowledge.kebi_message_confidence_floor,
+        review_status=knowledge.kebi_message_review_status,
+    )
+
+
+def get_kebi_note_service(
+    ingestion: KnowledgeIngestion = Depends(get_knowledge_ingestion),  # noqa: B008
+) -> KebiNoteService:
+    """FastAPI dependency providing the KebiNoteService (ADR-127).
+
+    Records a saved-recommendation reason as a user-scoped `kebi_message`
+    claim, through the same source-agnostic ingestion seam the curator uses.
+    """
+    return KebiNoteService(
+        producer=get_kebi_note_producer(),
+        ingestion=ingestion,
+    )
+
+
+def get_place_notes_service(
+    repo: KnowledgeClaimRepository = Depends(  # noqa: B008
+        get_knowledge_claim_repository
+    ),
+) -> PlaceNotesService:
+    """FastAPI dependency providing the PlaceNotesService (ADR-127).
+
+    The knowledge layer's first reader — surfaces the claims tied to a saved
+    place as insider notes on the Library. `place_notes_limit` (config) caps
+    how many notes surface on one place.
+    """
+    return PlaceNotesService(repo, limit=get_config().knowledge.place_notes_limit)
 
 
 def get_extraction_result_cache(

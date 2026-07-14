@@ -443,19 +443,32 @@ class KnowledgeConfig(BaseModel):
 
     harvest_confidence_floor: float = 0.35
     curator_confidence_floor: float = 0.9
+    # The saved-recommendation reason, written as a user-scoped `kebi_message`
+    # claim on save (ADR-127). Floored between harvested (weak) and curated
+    # (strong): it is the user's own rationale, trusted for them but not global
+    # expertise. `place_notes_limit` caps how many notes surface on one place.
+    kebi_message_confidence_floor: float = 0.8
     harvest_review_status: Literal["pending", "approved", "rejected"] = "approved"
     curator_review_status: Literal["pending", "approved", "rejected"] = "approved"
+    kebi_message_review_status: Literal["pending", "approved", "rejected"] = "approved"
+    place_notes_limit: int = 6
 
     @model_validator(mode="after")
     def _bounds(self) -> "KnowledgeConfig":
         for name, value in (
             ("harvest_confidence_floor", self.harvest_confidence_floor),
             ("curator_confidence_floor", self.curator_confidence_floor),
+            ("kebi_message_confidence_floor", self.kebi_message_confidence_floor),
         ):
             if not (0.0 <= value <= 1.0):
                 raise ValueError(
                     f"knowledge.{name} must be in [0.0, 1.0] (got {value})"
                 )
+        if self.place_notes_limit < 1:
+            raise ValueError(
+                "knowledge.place_notes_limit must be >= 1 "
+                f"(got {self.place_notes_limit})"
+            )
         return self
 
 

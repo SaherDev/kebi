@@ -88,6 +88,13 @@ class KnowledgeClaimRepository(Protocol):
         approved_only: bool = False,
     ) -> list[KnowledgeClaim]: ...
 
+    async def list_for_entities(
+        self,
+        entity_keys: list[str],
+        user_id: str | None = None,
+        approved_only: bool = False,
+    ) -> list[KnowledgeClaim]: ...
+
     async def list_under_prefix(
         self,
         prefix: str,
@@ -155,6 +162,29 @@ class SQLAlchemyKnowledgeClaimRepository:
             stmt = select(KnowledgeClaimRow).where(
                 and_(
                     KnowledgeClaimRow.entity_key == entity_key,
+                    _scope_clause(user_id),
+                    _approved_clause(approved_only),
+                )
+            )
+            rows = (await session.execute(stmt)).scalars().all()
+        return [_to_record(row) for row in rows]
+
+    async def list_for_entities(
+        self,
+        entity_keys: list[str],
+        user_id: str | None = None,
+        approved_only: bool = False,
+    ) -> list[KnowledgeClaim]:
+        """Batch of `list_for_entity` — every claim for any of `entity_keys`
+        in one `entity_key IN (...)` query, same scoping/approved rules. Lets a
+        page of places (each keyed `place:<id>`) resolve its notes in one round
+        trip instead of N. Returns `[]` for an empty key list."""
+        if not entity_keys:
+            return []
+        async with self._session_factory() as session:
+            stmt = select(KnowledgeClaimRow).where(
+                and_(
+                    KnowledgeClaimRow.entity_key.in_(entity_keys),
                     _scope_clause(user_id),
                     _approved_clause(approved_only),
                 )

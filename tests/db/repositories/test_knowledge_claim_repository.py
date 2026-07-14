@@ -203,6 +203,39 @@ async def test_list_for_entity_query_excludes_other_users() -> None:
     assert "knowledge_claims.user_id" in compiled
 
 
+# ---- list_for_entities: batched multi-key read (ADR-127) -------------------
+
+
+async def test_list_for_entities_batches_keys_and_returns_records() -> None:
+    factory, session = _mock_session_factory()
+    rows = [
+        _row("c1", "place:aaa", "omakase", KnowledgeSourceType.SHARED_CONTENT),
+        _row("c2", "place:bbb", "great for a date", KnowledgeSourceType.KEBI_MESSAGE),
+    ]
+    session.execute = AsyncMock(return_value=_scalars_result(rows))
+    repo = SQLAlchemyKnowledgeClaimRepository(factory)
+
+    claims = await repo.list_for_entities(
+        ["place:aaa", "place:bbb"], user_id="user_abc", approved_only=True
+    )
+
+    assert {c.id for c in claims} == {"c1", "c2"}
+    stmt = session.execute.await_args.args[0]
+    compiled = str(stmt.compile(compile_kwargs={"literal_binds": False}))
+    assert "knowledge_claims.entity_key IN" in compiled
+    assert "knowledge_claims.review_status" in compiled  # approved_only applied
+
+
+async def test_list_for_entities_short_circuits_on_empty_keys() -> None:
+    factory, session = _mock_session_factory()
+    repo = SQLAlchemyKnowledgeClaimRepository(factory)
+
+    claims = await repo.list_for_entities([])
+
+    assert claims == []
+    session.execute.assert_not_called()
+
+
 # ---- list_under_prefix: geo prefix scan ------------------------------------
 
 

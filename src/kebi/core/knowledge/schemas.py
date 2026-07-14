@@ -52,6 +52,25 @@ class KnowledgeClaim(BaseModel):
     created_at: datetime
 
 
+class PlaceNote(BaseModel):
+    """One insider note surfaced on a place — a claim reduced to what the
+    Library read exposes (ADR-127).
+
+    `source_type` is kept internal so the API layer can map it to a coarse,
+    user-facing label; it is not itself a wire field. `from_shared` is True
+    when the underlying claim was harvested from the very post the user shared
+    for this save (its `source_ref` equals the save's `source_ref`), so the
+    client can badge "from what you shared" without any grouping server-side.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    text: str
+    tags: list[str] = []
+    source_type: SourceType
+    from_shared: bool = False
+
+
 class ResolvedGeo(BaseModel):
     """Geo an entity is anchored to, already resolved to canonical parts.
 
