@@ -31,7 +31,7 @@ from kebi.core.agent._trace_context import feature_trace
 from kebi.core.agent.invocation import build_turn_payload
 from kebi.core.agent.messages import extract_text_content
 from kebi.core.chat.consult_quota import ConsultQuotaService
-from kebi.core.chat.service import ChatService
+from kebi.core.chat.service import ChatService, surfaced_place_results
 from kebi.core.config import get_env
 from kebi.core.events.events import TurnCompleted
 from kebi.providers.tracing import get_tracing_client
@@ -268,7 +268,7 @@ async def chat_stream(
                     TurnCompleted(
                         user_id=user_id,
                         user_message=body.message,
-                        surfaced_places=bool(tool_results),
+                        surfaced_places=surfaced_place_results(tool_results),
                     )
                 )
 

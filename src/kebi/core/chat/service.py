@@ -35,6 +35,17 @@ logger = logging.getLogger(__name__)
 # downstream can't pin the worker indefinitely.
 _CHAT_WALL_CLOCK_SECONDS = 90.0
 
+# Tools whose results are place candidates. Only these mark a turn as
+# "surfaced places" for the recall list (ADR-110): a `research` result is
+# insider notes, not places to go, so a research-only turn never enters
+# the home "what you wanted" list.
+_PLACE_TOOLS = frozenset({"find_saved", "suggest_places", "discover_places"})
+
+
+def surfaced_place_results(tool_results: list[dict[str, Any]]) -> bool:
+    """True when any captured tool result this turn came from a place tool."""
+    return any(tr.get("tool") in _PLACE_TOOLS for tr in tool_results)
+
 
 class ChatService:
     """Unified chat entry point — delegates all traffic to the agent pipeline."""
@@ -182,7 +193,7 @@ class ChatService:
                     TurnCompleted(
                         user_id=user_id,
                         user_message=request.message,
-                        surfaced_places=bool(tool_results),
+                        surfaced_places=surfaced_place_results(tool_results),
                     )
                 )
 
