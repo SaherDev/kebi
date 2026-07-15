@@ -83,9 +83,7 @@ def _clarify(
 class ResearchEntityResolver:
     """Resolve the asked-about area to a verified entity key, or refuse."""
 
-    def __init__(
-        self, geo: EntityGeoResolver, *, confidence_min: float = 0.5
-    ) -> None:
+    def __init__(self, geo: EntityGeoResolver, *, confidence_min: float = 0.5) -> None:
         self._geo = geo
         self._confidence_min = confidence_min
 
@@ -111,10 +109,7 @@ class ResearchEntityResolver:
             entity = await self._resolve_country_scope(country, working_location)
         else:
             entity = await self._resolve_here(working_location)
-        if (
-            not entity.needs_clarification
-            and entity.confidence < self._confidence_min
-        ):
+        if not entity.needs_clarification and entity.confidence < self._confidence_min:
             name = entity.entity_name or "that place"
             return _clarify(
                 f"could not pin down {name} confidently enough to answer about it",
@@ -124,13 +119,10 @@ class ResearchEntityResolver:
 
     # ---- scopes ----------------------------------------------------------
 
-    async def _resolve_here(
-        self, wl: WorkingLocation | None
-    ) -> ResolvedEntity:
+    async def _resolve_here(self, wl: WorkingLocation | None) -> ResolvedEntity:
         if wl is None:
             return _clarify(
-                "no place in play — need a city, country, or neighborhood "
-                "to research",
+                "no place in play — need a city, country, or neighborhood to research",
                 empty="ambiguous",
             )
         code = await self._working_country_code(wl)
@@ -139,9 +131,7 @@ class ResearchEntityResolver:
                 f"could not verify the current location ({wl.city})",
                 empty="unresolved",
             )
-        return self._geo_entity(
-            code, wl.city, None, confidence=_EXACT_CONFIDENCE
-        )
+        return self._geo_entity(code, wl.city, None, confidence=_EXACT_CONFIDENCE)
 
     async def _resolve_country_scope(
         self, country: str, wl: WorkingLocation | None

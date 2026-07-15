@@ -210,8 +210,7 @@ class ResearchService:
             )
         own_depth = key.count("/")
         return [
-            (claim, abs(claim.entity_key.count("/") - own_depth))
-            for claim in claims
+            (claim, abs(claim.entity_key.count("/") - own_depth)) for claim in claims
         ]
 
     # ---- Stage C ----------------------------------------------------------

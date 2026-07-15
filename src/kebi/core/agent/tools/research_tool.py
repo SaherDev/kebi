@@ -197,9 +197,7 @@ async def _run_research(
     if result.empty_reason in ("unresolved", "ambiguous"):
         _finish("couldn't pin down the place", kind=result.empty_reason)
     elif result.empty_reason == "no_claims":
-        _finish(
-            f"nothing on {result.entity_name} yet", kind=result.empty_reason
-        )
+        _finish(f"nothing on {result.entity_name} yet", kind=result.empty_reason)
     elif result.empty_reason == "no_topic_match":
         _finish(
             f"nothing on that angle for {result.entity_name} yet",

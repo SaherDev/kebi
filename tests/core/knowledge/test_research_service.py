@@ -200,9 +200,7 @@ async def test_tag_match_outranks_trust_alone() -> None:
 
 async def test_proximity_ranks_specific_over_ambient() -> None:
     own = _claim("vn/da-nang", "city fact", claim_id="own")
-    parent = _claim(
-        "vn", "country fact", entity_type="country", claim_id="parent"
-    )
+    parent = _claim("vn", "country fact", entity_type="country", claim_id="parent")
     repo = _repo(under_prefix=[own], for_entities=[parent])
     service = _service(repo, _resolver(_city_entity()))
 
@@ -213,9 +211,7 @@ async def test_proximity_ranks_specific_over_ambient() -> None:
 
 
 async def test_notes_capped_at_limit() -> None:
-    claims = [
-        _claim("vn/da-nang", f"fact {i}", claim_id=f"c{i}") for i in range(8)
-    ]
+    claims = [_claim("vn/da-nang", f"fact {i}", claim_id=f"c{i}") for i in range(8)]
     repo = _repo(under_prefix=[*claims])
     service = _service(repo, _resolver(_city_entity()), notes_limit=3)
 
