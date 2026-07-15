@@ -81,6 +81,75 @@ async def test_run_dispatches_turn_completed_on_success() -> None:
     assert event.user_message == "find ramen"
 
 
+async def test_place_tool_results_mark_turn_as_surfaced() -> None:
+    graph = AsyncMock()
+    graph.astream = _mock_astream(
+        [
+            {
+                "messages": [AIMessage(content="here you go")],
+                "reasoning_steps": [],
+                "tool_results": [
+                    {"tool": "find_saved", "tool_call_id": "tc-1", "payload": {}}
+                ],
+            }
+        ]
+    )
+    dispatcher = _make_dispatcher()
+    service = _make_service(agent_graph=graph, dispatcher=dispatcher)
+
+    await service.run(ChatRequest(message="find ramen"), user_id="u-1")
+
+    event = dispatcher.dispatch.await_args.args[0]
+    assert event.surfaced_places is True
+
+
+async def test_research_only_turn_not_marked_as_surfaced() -> None:
+    """A research turn returns insider notes, not places to go — it must
+    not enter the ADR-110 home recall list."""
+    graph = AsyncMock()
+    graph.astream = _mock_astream(
+        [
+            {
+                "messages": [AIMessage(content="locals use BIDV")],
+                "reasoning_steps": [],
+                "tool_results": [
+                    {"tool": "research", "tool_call_id": "tc-1", "payload": {}}
+                ],
+            }
+        ]
+    )
+    dispatcher = _make_dispatcher()
+    service = _make_service(agent_graph=graph, dispatcher=dispatcher)
+
+    await service.run(ChatRequest(message="atm fees in da nang?"), user_id="u-2")
+
+    event = dispatcher.dispatch.await_args.args[0]
+    assert event.surfaced_places is False
+
+
+async def test_mixed_research_and_place_turn_counts_as_surfaced() -> None:
+    graph = AsyncMock()
+    graph.astream = _mock_astream(
+        [
+            {
+                "messages": [AIMessage(content="here you go")],
+                "reasoning_steps": [],
+                "tool_results": [
+                    {"tool": "research", "tool_call_id": "tc-1", "payload": {}},
+                    {"tool": "suggest_places", "tool_call_id": "tc-2", "payload": {}},
+                ],
+            }
+        ]
+    )
+    dispatcher = _make_dispatcher()
+    service = _make_service(agent_graph=graph, dispatcher=dispatcher)
+
+    await service.run(ChatRequest(message="cash near me"), user_id="u-4")
+
+    event = dispatcher.dispatch.await_args.args[0]
+    assert event.surfaced_places is True
+
+
 async def test_run_dispatches_turn_completed_on_outer_error() -> None:
     graph = AsyncMock()
     graph.astream = _mock_astream(raises=RuntimeError("boom"))

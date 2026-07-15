@@ -30,12 +30,18 @@ from kebi.core.extraction.service import ExtractionService
 from kebi.core.home import HomeService
 from kebi.core.knowledge.curation_service import KnowledgeCurationService
 from kebi.core.knowledge.curator import KnowledgeCurator
+from kebi.core.knowledge.geo_resolve import EntityGeoResolver
 from kebi.core.knowledge.harvest_bucket import HarvestBucketReader, HarvestBucketWriter
 from kebi.core.knowledge.harvester import KnowledgeHarvester
 from kebi.core.knowledge.kebi_note import KebiNoteProducer
 from kebi.core.knowledge.kebi_note_service import KebiNoteService
 from kebi.core.knowledge.place_notes_service import PlaceNotesService
 from kebi.core.knowledge.producer import KnowledgeIngestion
+from kebi.core.knowledge.research_resolver import ResearchEntityResolver
+from kebi.core.knowledge.research_service import (
+    ResearchRankingWeights,
+    ResearchService,
+)
 from kebi.core.knowledge.writer import KnowledgeWriter
 from kebi.core.memory.buffer import MessageBuffer
 from kebi.core.memory.extractor import MemoryExtractor
@@ -927,6 +933,41 @@ def get_place_notes_service(
     return PlaceNotesService(repo, limit=get_config().knowledge.place_notes_limit)
 
 
+def get_research_service(
+    repo: KnowledgeClaimRepository = Depends(  # noqa: B008
+        get_knowledge_claim_repository
+    ),
+) -> ResearchService:
+    """FastAPI dependency providing the ResearchService.
+
+    The knowledge layer's agent-facing reader behind the `research` tool:
+    staged verified-or-refuse entity resolution over the free Nominatim
+    geocoder, then an entity-bounded, approved-only claims read ranked
+    in memory. Limits, weights, and thresholds come from config
+    (`agent.research`, `knowledge.research`).
+    """
+    cfg = get_config()
+    research_cfg = cfg.knowledge.research
+    resolver = ResearchEntityResolver(
+        EntityGeoResolver(get_geocoding_client()),
+        confidence_min=research_cfg.entity_confidence_min,
+    )
+    return ResearchService(
+        repo,
+        resolver,
+        default_limit=cfg.agent.research.default_limit,
+        max_limit=cfg.agent.research.max_limit,
+        notes_limit=cfg.agent.research.notes_limit,
+        weights=ResearchRankingWeights(
+            w_tag=research_cfg.w_tag,
+            w_text=research_cfg.w_text,
+            w_trust=research_cfg.w_trust,
+            w_prox=research_cfg.w_prox,
+        ),
+        topic_relevance_floor=research_cfg.topic_relevance_floor,
+    )
+
+
 def get_extraction_result_cache(
     config: AppConfig = Depends(get_config),  # noqa: B008
 ) -> ExtractionResultCache:
@@ -1032,6 +1073,7 @@ def get_agent_graph(
     candidate_namer: CandidateNamerService = Depends(  # noqa: B008
         get_candidate_namer_service
     ),
+    research_service: ResearchService = Depends(get_research_service),  # noqa: B008
 ) -> Any:
     """Build the agent StateGraph per-request.
 
@@ -1074,6 +1116,7 @@ def get_agent_graph(
             hybrid_search,
             candidate_namer,
             places_search_factory,
+            research_service,
             discovery_enabled=identity.discovery_enabled,
         ),
         checkpointer,

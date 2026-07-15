@@ -20,6 +20,21 @@ EntityType = Literal["country", "city", "neighborhood", "place"]
 SourceType = Literal["shared_content", "curated_expert", "kebi_message", "user_message"]
 ReviewStatus = Literal["pending", "approved", "rejected"]
 
+# Coarse, user-facing origin label for a surfaced claim (ADR-127). The raw
+# `source_type` never crosses the wire; every reader (Library notes, research
+# notes) maps through this one table so the labels can't diverge.
+NOTE_SOURCE_LABELS: dict[SourceType, str] = {
+    "shared_content": "community",
+    "curated_expert": "expert",
+    "kebi_message": "kebi",
+    "user_message": "kebi",
+}
+
+
+def note_source_label(source_type: SourceType) -> str:
+    """The coarse origin label for a claim's source_type."""
+    return NOTE_SOURCE_LABELS.get(source_type, "community")
+
 _COUNTRY_CODE_RE = re.compile(r"^[a-z]{2}$")
 
 

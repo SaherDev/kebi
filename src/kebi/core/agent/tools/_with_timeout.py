@@ -39,6 +39,12 @@ from kebi.core.agent.tools._summaries import TITLES
 
 logger = logging.getLogger(__name__)
 
+# Which list field a tool's degraded (timeout / crash) payload empties.
+# The consult place tools speak ConsultResult (`candidates`); `research`
+# speaks ResearchResult (`notes`). A degraded payload must match the
+# tool's own shape so clients and tests never see a foreign field.
+_DEGRADED_EMPTY_FIELD = {"research": "notes"}
+
 
 def tool_step_base_id(tool_name: str, state: AgentState) -> str:
     """Deterministic SSE-lifecycle id base for this tool call (ADR-102).
@@ -67,7 +73,7 @@ def _degraded_command(
     """
     payload = json.dumps(
         {
-            "candidates": [],
+            _DEGRADED_EMPTY_FIELD.get(tool_name, "candidates"): [],
             "empty_reason": "error",
             "error": detail,
         }

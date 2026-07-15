@@ -162,9 +162,11 @@ Unified conversational entry point (ADR-052, ADR-065). The agent is a
 LangGraph turn driven by the `orchestrator` LLM role with a small
 **consult-family** of internal tools — `find_saved` (the user's saved
 places), `suggest_places` (LLM-named candidates validated against the
-place provider), and `discover_places` (direct provider lookup for
-utility intents and as a fall-through) — see ADR-089, ADR-090, ADR-091.
-Each tool returns a structured `ConsultResult` that is surfaced to the
+place provider), `discover_places` (direct provider lookup for
+utility intents and as a fall-through) — see ADR-089, ADR-090, ADR-091 —
+and `research` (insider answers from the knowledge layer's claims
+store, ADR-129: what to order, local tricks, fees, safety, timing).
+Each tool returns a structured payload that is surfaced to the
 caller in `data.tool_results` so the product UI can render places
 without re-parsing the agent's prose. URL submissions are redirected
 to `POST /v1/extract` — the chat path never writes to `user_places`.
@@ -237,7 +239,11 @@ to `POST /v1/extract` — the chat path never writes to `user_places`.
 > The SSE step-lifecycle fields `id` and `status` (ADR-102) are **not** part of
 > this non-stream shape — they appear only on `/v1/chat/stream` frames (below).
 
-`ToolResult` shape: `{ tool: "find_saved" | "suggest_places" | "discover_places", tool_call_id: string, payload: ConsultResult }`. `ConsultResult` carries `candidates` (each with `place`, `source ∈ {saved, suggested, discovered}`, optional namer `reason`), an `empty_reason` literal when no candidates were produced (e.g. `no_location`, `no_match`), and a `recommendation_id` (a per-recommendation id minted by kebi). The client echoes `recommendation_id` back when the user accepts/rejects (`POST /v1/signal`) or saves (`POST /v1/user/places`) a candidate, so the signal attributes to that recommendation.
+`ToolResult` shape: `{ tool: "find_saved" | "suggest_places" | "discover_places" | "research", tool_call_id: string, payload: ConsultResult | ResearchResult }`. The `payload` is a union **discriminated by `tool`**: the three place tools carry a `ConsultResult`, `research` carries a `ResearchResult` (additive — a client that doesn't render research payloads still gets the agent's prose answer).
+
+`ConsultResult` carries `candidates` (each with `place`, `source ∈ {saved, suggested, discovered}`, optional namer `reason`), an `empty_reason` literal when no candidates were produced (e.g. `no_location`, `no_match`), and a `recommendation_id` (a per-recommendation id minted by kebi). The client echoes `recommendation_id` back when the user accepts/rejects (`POST /v1/signal`) or saves (`POST /v1/user/places`) a candidate, so the signal attributes to that recommendation.
+
+`ResearchResult` (ADR-129) carries `entity_name` + `entity_key` (the resolved area the notes are about), `notes` — each `{ id, text, tags, source, confidence, agree_count, disagree_count }`, where `id` is the underlying claim's stable id (ADR-128), `tags` are claim-vocabulary values, and `source` is the coarse origin label `community | expert | kebi` (raw provenance never crosses the wire) — plus, when empty, an `empty_reason ∈ { unresolved, ambiguous, no_claims, no_topic_match }` and a `clarification` string. Research results are knowledge, not place candidates: they carry no `recommendation_id` and nothing in them is save/signal-able. Note for the home surface: a turn whose only tool result is `research` does **not** count as a place-surfacing turn for the `GET /v1/user/intents` recall list (ADR-110 semantics preserved).
 
 ### `error`
 

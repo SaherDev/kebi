@@ -201,10 +201,12 @@ class NominatimGeocodingClient:
             place_type = "village"
         else:
             place_type = data.get("addresstype") or data.get("type")
+        cc = address.get("country_code")
         return GeocodeResult(
             lat=lat,
             lng=lng,
             country=country,
+            country_code=cc.strip().lower() if isinstance(cc, str) and cc else None,
             city=city,
             neighborhood=neighborhood,
             place_type=place_type,

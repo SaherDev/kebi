@@ -45,6 +45,7 @@ from kebi.core.agent.tools._search_args import (
 )
 from kebi.core.agent.tools._summaries import NEED_LOCATION, TITLES, found_summary
 from kebi.core.agent.tools._with_timeout import tool_step_base_id, with_timeout
+from kebi.core.agent.tools._working_location import maybe_working_location
 from kebi.core.agent.tools.consult_models import ConsultCandidate, ConsultResult
 from kebi.core.config import get_config
 from kebi.core.places.hybrid_search_service import HybridSearchService
@@ -54,18 +55,6 @@ logger = logging.getLogger(__name__)
 
 
 _TOOL_NAME = "find_saved"
-
-
-def _maybe_working_location(state: AgentState) -> WorkingLocation | None:
-    """Read the turn's working location off state, returning None on absence."""
-    wl_dict = state.get("working_location")
-    if not wl_dict:
-        return None
-    try:
-        return WorkingLocation.model_validate(wl_dict)
-    except Exception:
-        logger.warning("working_location on state failed validation; ignoring")
-        return None
 
 
 def _eq_ci(a: str | None, b: str | None) -> bool:
@@ -264,7 +253,7 @@ async def _run_find_saved_impl(
         base_id, _TOOL_NAME, title=TITLES[_TOOL_NAME], source="agent"
     )
 
-    working = _maybe_working_location(state)
+    working = maybe_working_location(state)
     has_named_area = bool(neighborhood or city or country)
 
     filters = _assemble_filters(
