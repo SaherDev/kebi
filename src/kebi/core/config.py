@@ -426,6 +426,50 @@ class HomeConfig(BaseModel):
         return self
 
 
+class KnowledgeResearchConfig(BaseModel):
+    """Research read-path knobs (the knowledge layer's agent-facing reader).
+
+    `entity_confidence_min` is the resolve-vs-clarify threshold: a resolved
+    entity below it clarifies instead of retrieving (staged resolver emits
+    1.0 for an exact working-location match, 0.8 for a verified geocode).
+    The `w_*` weights shape the in-memory Stage-C rank (tag match on the
+    controlled vocabulary, lexical text overlap, writer trust, proximity to
+    the asked scope). `topic_relevance_floor` is the `no_topic_match` cutoff
+    on the relevance component — applied only when the question carries
+    topic signal, so a broad "tell me about X" never trips it.
+    """
+
+    entity_confidence_min: float = 0.5
+    w_tag: float = 0.5
+    w_text: float = 0.3
+    w_trust: float = 0.2
+    w_prox: float = 0.1
+    topic_relevance_floor: float = 0.05
+
+    @model_validator(mode="after")
+    def _bounds(self) -> "KnowledgeResearchConfig":
+        for name, value in (
+            ("entity_confidence_min", self.entity_confidence_min),
+            ("topic_relevance_floor", self.topic_relevance_floor),
+        ):
+            if not (0.0 <= value <= 1.0):
+                raise ValueError(
+                    f"knowledge.research.{name} must be in [0.0, 1.0] "
+                    f"(got {value})"
+                )
+        for name, value in (
+            ("w_tag", self.w_tag),
+            ("w_text", self.w_text),
+            ("w_trust", self.w_trust),
+            ("w_prox", self.w_prox),
+        ):
+            if value < 0.0:
+                raise ValueError(
+                    f"knowledge.research.{name} must be >= 0 (got {value})"
+                )
+        return self
+
+
 class KnowledgeConfig(BaseModel):
     """Knowledge-layer writer settings (ADR-120/121/122).
 
@@ -452,6 +496,7 @@ class KnowledgeConfig(BaseModel):
     curator_review_status: Literal["pending", "approved", "rejected"] = "approved"
     kebi_message_review_status: Literal["pending", "approved", "rejected"] = "approved"
     place_notes_limit: int = 6
+    research: KnowledgeResearchConfig = KnowledgeResearchConfig()
 
     @model_validator(mode="after")
     def _bounds(self) -> "KnowledgeConfig":
@@ -539,15 +584,22 @@ class ToolTimeoutsConfig(BaseModel):
     find_saved: int = 8
     suggest_places: int = 18
     discover_places: int = 8
+    research: int = 8
 
     @model_validator(mode="after")
     def _positive_integers(self) -> "ToolTimeoutsConfig":
-        if self.find_saved < 1 or self.suggest_places < 1 or self.discover_places < 1:
+        if (
+            self.find_saved < 1
+            or self.suggest_places < 1
+            or self.discover_places < 1
+            or self.research < 1
+        ):
             raise ValueError(
                 "agent.tool_timeouts_seconds fields must be >= 1 "
                 f"(got find_saved={self.find_saved}, "
                 f"suggest_places={self.suggest_places}, "
-                f"discover_places={self.discover_places})"
+                f"discover_places={self.discover_places}, "
+                f"research={self.research})"
             )
         return self
 
@@ -656,6 +708,35 @@ class DiscoverPlacesConfig(BaseModel):
         return self
 
 
+class ResearchToolConfig(BaseModel):
+    """Per-tool knobs for `research`.
+
+    `default_limit` / `max_limit` mirror the other consult-family tools —
+    caps on the agent-supplied `limit` arg. `notes_limit` is the service's
+    own hard cap on notes returned per call, whatever the agent asked for.
+    """
+
+    default_limit: int = 6
+    max_limit: int = 10
+    notes_limit: int = 10
+
+    @model_validator(mode="after")
+    def _positive_integers(self) -> "ResearchToolConfig":
+        if self.default_limit < 1 or self.max_limit < 1 or self.notes_limit < 1:
+            raise ValueError(
+                "agent.research.default_limit / max_limit / notes_limit must "
+                f"be >= 1 (got default_limit={self.default_limit}, "
+                f"max_limit={self.max_limit}, notes_limit={self.notes_limit})"
+            )
+        if self.default_limit > self.max_limit:
+            raise ValueError(
+                "agent.research.default_limit must be <= max_limit "
+                f"(got default_limit={self.default_limit}, "
+                f"max_limit={self.max_limit})"
+            )
+        return self
+
+
 class AgentConfig(BaseModel):
     """Typed configuration for the agent path (feature 027 M2, ADR-062).
 
@@ -678,6 +759,7 @@ class AgentConfig(BaseModel):
     find_saved: FindSavedConfig = FindSavedConfig()
     suggest_places: SuggestPlacesConfig = SuggestPlacesConfig()
     discover_places: DiscoverPlacesConfig = DiscoverPlacesConfig()
+    research: ResearchToolConfig = ResearchToolConfig()
     prompt_caching_enabled: bool = True
 
     @model_validator(mode="after")

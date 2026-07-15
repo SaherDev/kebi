@@ -334,6 +334,21 @@ knowledge:
   kebi_message_review_status: approved
   # Max insider notes surfaced on one place in the Library read (ADR-127).
   place_notes_limit: 6
+  # Research read path — the knowledge layer's agent-facing reader.
+  # `entity_confidence_min` is the resolve-vs-clarify threshold (exact
+  # working-location match resolves at 1.0, verified geocode at 0.8; below
+  # the min the tool asks instead of retrieving). The `w_*` weights shape the
+  # in-memory relevance rank (controlled-vocabulary tag match, lexical text
+  # overlap, writer trust, proximity to the asked scope) and
+  # `topic_relevance_floor` is the `no_topic_match` cutoff on the relevance
+  # component — only applied when the question carries topic signal.
+  research:
+    entity_confidence_min: 0.5
+    w_tag: 0.5
+    w_text: 0.3
+    w_trust: 0.2
+    w_prox: 0.1
+    topic_relevance_floor: 0.05
 
 # ---------------------------------------------------------------------------
 # Agent Configuration (feature 027 M2, ADR-062)
@@ -386,6 +401,10 @@ agent:
     # first, then Google fallback when empty). Same pure-DB / single-provider
     # budget as find_saved.
     discover_places: 8
+    # research reads the claims store by indexed entity key (no LLM, no
+    # provider); at most one free Nominatim geocode when the asked-about
+    # area isn't the working location. Same budget as the pure-DB tools.
+    research: 8
   # find_saved-specific knobs. `default_limit` is what the tool uses when
   # the agent omits the `limit` arg. `max_limit` caps any agent-supplied
   # value so the LLM cannot ask for an unbounded result set.
@@ -410,6 +429,14 @@ agent:
   discover_places:
     default_limit: 10
     max_limit: 25
+  # research — insider notes from the knowledge layer. `default_limit` /
+  # `max_limit` cap the agent-supplied `limit`; `notes_limit` is the
+  # service's own hard cap per call. Kept tight: the notes feed one prose
+  # answer, not a list UI.
+  research:
+    default_limit: 6
+    max_limit: 10
+    notes_limit: 10
 
 # ---------------------------------------------------------------------------
 # Movement / search-scope (ADR-084)
