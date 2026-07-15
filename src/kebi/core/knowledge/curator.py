@@ -26,6 +26,7 @@ from kebi.core.knowledge.schemas import (
     SourceType,
     StructuredClaim,
 )
+from kebi.core.knowledge.tags import render_claim_tag_vocabulary
 
 if TYPE_CHECKING:
     from kebi.core.places.nominatim_geocoding_client import NominatimGeocodingClient
@@ -119,7 +120,14 @@ class KnowledgeCurator:
                 response = await self._client.extract(
                     response_model=_CuratorResponse,
                     messages=[
-                        {"role": "system", "content": get_prompt("knowledge_curator")},
+                        {
+                            "role": "system",
+                            # Same rendered vocabulary as the harvester —
+                            # one bounded tag list on every write path.
+                            "content": get_prompt("knowledge_curator")
+                            + "\n\n"
+                            + render_claim_tag_vocabulary(),
+                        },
                         {"role": "user", "content": text},
                     ],
                 )

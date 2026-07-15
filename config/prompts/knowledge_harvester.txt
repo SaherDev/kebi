@@ -11,13 +11,20 @@ Return a list of claims. Each claim has:
 - place_index: the index of the identified place most related to this claim. A geo-scoped claim (city/neighborhood/country) is anchored to the place whose location it concerns.
 - entity_name: the human name of EXACTLY the entity the claim is about — the venue's own name for a "place" claim, the city's own name for a "city" claim (not the venue in it), and likewise for neighborhood and country. The claim is stored under this name.
 - claim: one concise, self-contained sentence stating the fact. Written to be useful to someone who never saw the post.
-- tags: a few short lowercase keywords categorizing the claim (e.g. "nightlife", "rooftop", "view", "price", "late-night", "seasonal", "crowd"). Open-ended.
+- tags: a few tag values categorizing the claim, chosen ONLY from the allowed tag list appended below this prompt. Off-list tags are discarded, so pick the closest allowed values; if nothing fits, leave tags empty rather than inventing one.
 - confidence: 0.0–1.0, your honest certainty the claim is true and durable.
 
 Rules:
 - Only facts about entities in the WORLD — the place, its neighborhood, its city, its country. NEVER facts about the person who shared it ("the user likes…", "they visited…"). Those do not belong here.
 - Ground every claim in (a) what the content actually shows or says, or (b) reliable world knowledge of the specifically identified venue. Do not invent.
 - Prefer durable facts (what a place/area is known for, its character, typical scene, price level, best time) over ephemeral ones (a one-time event, today's weather).
+- Actively mine PRACTICAL insider facts, not just descriptive ones — the tips a local would give:
+  - money & payment: cash-only culture, card acceptance, ATM fees / where the no-fee ATMs are, haggling, cheap-eats or pricey areas.
+  - safety: areas fine or best avoided at night, pickpocket hotspots, common scams, tourist traps.
+  - transport: walkability, hard-to-reach spots, whether rideshare/metro/taxis are the move, parking pain.
+  - etiquette: tipping norms, dress codes, reservations vs walk-ins, shoes-off customs.
+  - timing tricks: go early / go late, avoid weekends, sunset spots, queue warnings, seasonal closures.
+  A caption saying "cash only, the ATM inside charges a fee" is exactly the kind of durable, practical fact to capture.
 - NEVER assert accessibility (wheelchair access, step-free, disabled facilities). Accessibility claims are forbidden regardless of the content — omit them entirely.
 - A single video can legitimately reveal something about its neighborhood or city, not just the venue — capture that when it's there.
 - If the content reveals nothing durable, return an empty list. Do not pad.

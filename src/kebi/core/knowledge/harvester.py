@@ -34,6 +34,7 @@ from kebi.core.knowledge.schemas import (
     StructuredClaim,
     _slugify,
 )
+from kebi.core.knowledge.tags import render_claim_tag_vocabulary
 
 if TYPE_CHECKING:
     from kebi.core.places.nominatim_geocoding_client import NominatimGeocodingClient
@@ -135,7 +136,11 @@ class KnowledgeHarvester:
                     messages=[
                         {
                             "role": "system",
-                            "content": get_prompt("knowledge_harvester"),
+                            # Vocabulary rendered from code so the prompt and
+                            # the writer's normalization can never drift.
+                            "content": get_prompt("knowledge_harvester")
+                            + "\n\n"
+                            + render_claim_tag_vocabulary(),
                         },
                         {"role": "user", "content": _render_content(content, places)},
                     ],

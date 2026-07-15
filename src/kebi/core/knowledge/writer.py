@@ -25,6 +25,7 @@ from kebi.core.knowledge.schemas import (
     build_geo_key,
     build_place_key,
 )
+from kebi.core.knowledge.tags import normalize_claim_tags
 from kebi.db.repositories.knowledge_claim_repository import KnowledgeClaimRepository
 
 logger = logging.getLogger(__name__)
@@ -86,6 +87,9 @@ class KnowledgeWriter:
                 logger.debug("knowledge_claim_dropped_accessibility")
                 continue
             confidence = min(1.0, max(confidence_floor, claim.confidence))
+            # Off-vocabulary tags are dropped, not stored: the tag index is
+            # only useful if reader and writer share one bounded vocabulary.
+            # (Accessibility was checked on the RAW tags above, on purpose.)
             created = await self._repo.save(
                 entity_type=claim.scope,
                 entity_key=key,
@@ -93,7 +97,7 @@ class KnowledgeWriter:
                 claim=claim.claim,
                 source_type=source_type,
                 confidence=confidence,
-                tags=claim.tags,
+                tags=normalize_claim_tags(claim.tags),
                 source_ref=source_ref,
                 user_id=user_id,
                 review_status=review_status,

@@ -19,7 +19,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from kebi.core.knowledge.schemas import PlaceNote, SourceType
+from kebi.core.knowledge.schemas import PlaceNote, note_source_label
 from kebi.core.places import (
     LibrarySort,
     PlaceCategory,
@@ -30,15 +30,6 @@ from kebi.core.places import (
     UserPlace,
     UserPlaceStatusUpdate,
 )
-
-# Coarse, user-facing origin label for an insider note (ADR-127). The raw
-# `source_type` stays internal; the client styles by this stable label.
-_NOTE_SOURCE_LABELS: dict[SourceType, str] = {
-    "shared_content": "community",
-    "curated_expert": "expert",
-    "kebi_message": "kebi",
-    "user_message": "kebi",
-}
 
 
 class LibraryQuery(BaseModel):
@@ -237,7 +228,7 @@ class PlaceNoteView(BaseModel):
             id=note.id,
             text=note.text,
             tags=list(note.tags),
-            source=_NOTE_SOURCE_LABELS.get(note.source_type, "community"),
+            source=note_source_label(note.source_type),
             from_shared=note.from_shared,
             agree_count=note.agree_count,
             disagree_count=note.disagree_count,
