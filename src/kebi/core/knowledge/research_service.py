@@ -48,12 +48,17 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _TOKEN_RE = re.compile(r"[a-z0-9]+")
-# Question scaffolding that carries no topic signal. Deliberately tiny —
-# a missed stopword only adds a harmless token.
+# Question scaffolding that carries no topic signal. Broad-question words
+# ("what should I know", "any tips", "general info") must not read as a
+# topic, or "tell me about X" phrasings would trip the no_topic_match
+# floor. Deliberately conservative beyond that — a missed stopword only
+# adds a harmless token.
 _STOPWORDS = frozenset(
     "the a an in at on of for to and or is are was it its this that "
     "what whats which how where when who tell me my you your about "
-    "there here near around good best any some with".split()
+    "there here near around good best any some with should would could "
+    "know things stuff anything something everything advice tips tip "
+    "info information worth like want need get".split()
 )
 
 
