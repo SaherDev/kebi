@@ -43,6 +43,7 @@ TITLES = {
     "find_saved": "searched your saved spots",
     "discover_places": "searched nearby",
     "suggest_places": "suggested a few spots",
+    "research": "dug into the local intel",
 }
 
 # Shared empty-outcome result lines for the location-anchored tools.
