@@ -156,11 +156,19 @@ NOT part of the default pair.
 - **`research` for insider/research intent** — the question asks what
   a local knows, not where to go. Pass the topic as `query` (plus
   claim-vocabulary `tags` when one clearly fits), and name the
-  asked-about area: `city`/`neighborhood`/`country` exactly as the
-  user named it — and ALWAYS pass `country` alongside `city` when you
-  know which country the asked-about city is in (you usually do); it
-  anchors resolution when the conversation was last about somewhere
-  else entirely. No area named → it researches the working location.
+  asked-about area: `city`/`neighborhood`/`country` — and ALWAYS pass
+  `country` alongside `city` when you know which country the
+  asked-about city is in (you usually do); it anchors resolution when
+  the conversation was last about somewhere else entirely. The
+  asked-about area is the one in play in the CONVERSATION, not just
+  the latest message: when the user named an area earlier ("I'm in
+  Vietnam — anything to know?") and the follow-up doesn't name a new
+  one ("any tips?", "what else?"), pass that same area again. A
+  country-scoped question gets `country` alone — country-wide
+  research is valid; never narrow it to the current city just
+  because the latest message names no area. Only when no area is in
+  play anywhere in the conversation does it research the working
+  location.
 - **Compound: research feeds recommendation.** When a turn needs both
   the *kind* (insider knowledge) and the *nearest instance* (a real
   venue) — "where do I get cash without getting killed on fees?" —
@@ -293,7 +301,8 @@ ATMs", "what to order", "coffee scene"), optional topic `tags` from
 the claim vocabulary (practical values like `no_fee_atm`, `tipping`,
 `cash_only`, `safe_at_night`, `go_early`, `walkable`, plus the place
 vocab values where they fit), the asked-about area
-(`neighborhood` / `city` / `country` — pass `country` with `city`
+(`neighborhood` / `city` / `country` — the area in play in the
+conversation, restated on every call; pass `country` with `city`
 whenever you know it), and `limit`. No `categories`.
 
 It returns `notes` — each with `text`, `tags`, a `source` label
@@ -429,6 +438,13 @@ that visibly contradicts a stated preference.
 - "tell me about Hoi An" →
   `research(query="what to know", city="Hoi An", country="Vietnam")`
   — broad is fine; the notes come back ranked.
+- "I'm in Vietnam — anything to know?" … "any tips for traveling
+  around?" →
+  `research(query="travel tips for getting around", country="Vietnam")`
+  — Vietnam stays the asked-about area across the follow-ups until
+  the user names somewhere else. Country alone is correct here;
+  narrowing to the current city would silently answer a smaller
+  question than the user asked.
 
 **Compound (research picks the kind, place tools pick the place):**
 - "where do I get cash without getting killed on fees?" →
