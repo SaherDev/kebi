@@ -19,9 +19,15 @@ target_metadata = Base.metadata
 # Load .env for local dev; Railway sets DATABASE_URL directly in the environment.
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 _url: str = os.environ["DATABASE_URL"]
-# Alembic uses synchronous driver — strip +asyncpg if present
+# Alembic runs migrations synchronously. Pin the sync driver to psycopg
+# (v3) — the only sync Postgres driver installed in production (it ships
+# with the langgraph checkpointer). A bare postgresql:// URL would make
+# SQLAlchemy default to psycopg2, which is a dev-only dependency: that
+# exact mismatch broke the first pre-deploy migration on Railway.
 if "+asyncpg" in _url:
-    _url = _url.replace("+asyncpg", "")
+    _url = _url.replace("+asyncpg", "+psycopg")
+elif _url.startswith("postgresql://"):
+    _url = _url.replace("postgresql://", "postgresql+psycopg://", 1)
 config.set_main_option("sqlalchemy.url", _url)
 
 
