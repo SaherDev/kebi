@@ -12,9 +12,9 @@ Search-first flow (one pass per `EnrichmentLevel`):
    re-checked after the resolver's free-text discovery.
 3. **Search** — for each unique `KnownPlace` name (plus `location_tag`
    when present), call `PlacesSearchService.find()` and collect the
-   results into a `search_set` keyed by `provider_id`. Geographic
-   features (administrative-only names like districts / roads) are
-   dropped via `drop_geographic_features`.
+   results into a `search_set` keyed by `provider_id`. Administrative
+   areas (cities, districts, roads) are rejected upstream at
+   validation (`_google_mapper`), so `find()` never returns them.
 4. **Pick** (`LLMPlacePicker`) lets the LLM choose which results the
    post actually references and infer the v2 vocabulary
    (`categories`, `tags`).
@@ -46,7 +46,6 @@ from kebi.core.extraction.candidate_mapper import (
 )
 from kebi.core.extraction.dedup import dedup_by_provider_id
 from kebi.core.extraction.enrichment_level import EnrichmentLevel
-from kebi.core.extraction.geo_filter import drop_geographic_features
 from kebi.core.extraction.types import (
     ExtractionContext,
     Medium,
@@ -433,7 +432,7 @@ class ExtractionPipeline:
         for (raw, search_query, producer, medium), results in zip(
             queries, batches, strict=True
         ):
-            for place in drop_geographic_features(results):
+            for place in results:
                 if not place.provider_id:
                     continue
                 if place.provider_id in search_set:

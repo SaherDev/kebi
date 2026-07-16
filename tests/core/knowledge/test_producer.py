@@ -19,7 +19,7 @@ _CLAIM = StructuredClaim(
 
 
 def test_harvester_and_curator_are_claim_producers() -> None:
-    harvester = KnowledgeHarvester(AsyncMock(), confidence_floor=0.35)
+    harvester = KnowledgeHarvester(AsyncMock(), AsyncMock(), confidence_floor=0.35)
     curator = KnowledgeCurator(AsyncMock(), AsyncMock(), confidence_floor=0.9)
     assert isinstance(harvester, ClaimProducer)
     assert isinstance(curator, ClaimProducer)

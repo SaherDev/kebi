@@ -508,31 +508,6 @@ async def test_resolver_discovery_re_enforces_candidate_cap() -> None:
 
 
 @pytest.mark.asyncio
-async def test_geo_features_filtered_from_search_results() -> None:
-    """Administrative-name results should be dropped before the picker."""
-    inline = _StubLevel(
-        name="inline",
-        seeds=[KnownPlace(name="A", producer=Producer.LLM_NER, medium=Medium.CAPTION)],
-    )
-    real_venue = _place_object("google:venue", "Joe Pizza")
-    admin_result = PlaceObject(
-        provider_id="google:road1",
-        place_name="Sukhumvit Road",
-        categories=[],
-    )
-    pipeline, picker, _ = _make_pipeline(
-        levels=[inline],
-        picker_returns=[],
-        search_results_by_query={"A": [real_venue, admin_result]},
-    )
-    await pipeline.run(url="https://x.com", user_id="u1", limit=_TEST_LIMIT)
-    pick_args = picker.pick.await_args
-    search_set = pick_args.args[1]
-    assert "google:venue" in search_set
-    assert "google:road1" not in search_set
-
-
-@pytest.mark.asyncio
 async def test_per_candidate_location_biases_each_search() -> None:
     """ADR-082: each search is biased by that candidate's own location
     when the resolver supplied one (multi-destination post), and by the

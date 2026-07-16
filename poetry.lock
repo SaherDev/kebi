@@ -326,6 +326,18 @@ mcp = ["mcp (>=1.0) ; python_version >= \"3.10\""]
 vertex = ["google-auth[requests] (>=2,<3)"]
 
 [[package]]
+name = "anyascii"
+version = "0.3.3"
+description = "Unicode to ASCII transliteration"
+optional = false
+python-versions = ">=3.3"
+groups = ["main"]
+files = [
+    {file = "anyascii-0.3.3-py3-none-any.whl", hash = "sha256:f5ab5e53c8781a36b5a40e1296a0eeda2f48c649ef10c3921c1381b1d00dee7a"},
+    {file = "anyascii-0.3.3.tar.gz", hash = "sha256:c94e9dd9d47b3d9494eca305fef9447d00b4bf1a32aff85aa746fa3ec7fb95c3"},
+]
+
+[[package]]
 name = "anyio"
 version = "4.12.1"
 description = "High-level concurrency and networking framework on top of asyncio or Trio"
@@ -5058,4 +5070,4 @@ cffi = ["cffi (>=1.17,<2.0) ; platform_python_implementation != \"PyPy\" and pyt
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.11,<3.14"
-content-hash = "af7b227b5ae348258d55a38740f60fe9491a3ff6d20b2f41563d6beef3200921"
+content-hash = "f3d508e7bd3ee3776b854e47339b658ac58279af2e29ae7396bd109a03582210"

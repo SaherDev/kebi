@@ -1,17 +1,10 @@
 # API Contract — product repo ↔ kebi
 
-Source of truth: the product repo's `docs/api-contract.md`. Copy to `kebi/docs/` after any changes.
+Source of truth: **this repo (kebi)** — `docs/api-contract.md`. kebi is the server that implements these endpoints and every contract change is driven by an ADR here (`docs/decisions.md`), so the canonical spec lives with the implementation. The product repo (`kebi-app`) keeps a pointer to this file; edit the contract here, then coordinate the client change in the product repo.
 
 This document defines the HTTP contract between the product repo (services/api) and the AI service (kebi). The product repo is the client. The AI repo is the server.
 
 All requests come from NestJS after auth verification. kebi never receives requests directly from the frontend.
-
-> **ADR-079 coordination note.** The place catalog tables were renamed
-> `places_v2 → places` and `place_embeddings_v2 → place_embeddings`
-> (ADR-079, from `places_v2` introduced in ADR-070). The kebi schema +
-> code and any product-repo reference to these table names must ship in
-> **one coordinated deploy**. `place_core_id` on `POST /v1/signal` is
-> now documented as `places.id`.
 
 ## Connection
 
@@ -45,14 +38,14 @@ the caller's **capabilities** (never the plan name) as headers on the same
 trusted channel as the identity. kebi enforces them. Repricing or renaming a
 tier is a gateway-only change — kebi never sees it.
 
-| Header                              | Value          | Missing →            | Gates                                              |
-| ----------------------------------- | -------------- | -------------------- | ------------------------------------------------- |
-| `X-Gateway-Taste-Enabled`           | `true`/`false` | `false` (fail closed)| Taste-model personalization on `/v1/chat`         |
-| `X-Gateway-Discovery-Enabled`       | `true`/`false` | `false` (fail closed)| `suggest_places` + `discover_places` agent tools  |
-| `X-Gateway-Save-Limit`              | integer        | absent = unlimited   | Max saved places (`/v1/extract`, `/v1/user/places`)|
-| `X-Gateway-Consults-Per-Day`        | integer        | absent = unlimited   | Daily consult quota on `/v1/chat`(+`/stream`)     |
-| `X-Gateway-Advanced-Models-Enabled` | `true`/`false` | `false` (fail closed)| Higher-quality orchestrator model on consults     |
-| `X-Gateway-Can-Curate`              | `true`/`false` | `false` (fail closed)| Push curated-expert knowledge (`POST /v1/knowledge/curate`) |
+| Header                              | Value          | Missing →             | Gates                                                       |
+| ----------------------------------- | -------------- | --------------------- | ----------------------------------------------------------- |
+| `X-Gateway-Taste-Enabled`           | `true`/`false` | `false` (fail closed) | Taste-model personalization on `/v1/chat`                   |
+| `X-Gateway-Discovery-Enabled`       | `true`/`false` | `false` (fail closed) | `suggest_places` + `discover_places` agent tools            |
+| `X-Gateway-Save-Limit`              | integer        | absent = unlimited    | Max saved places (`/v1/extract`, `/v1/user/places`)         |
+| `X-Gateway-Consults-Per-Day`        | integer        | absent = unlimited    | Daily consult quota on `/v1/chat`(+`/stream`)               |
+| `X-Gateway-Advanced-Models-Enabled` | `true`/`false` | `false` (fail closed) | Higher-quality orchestrator model on consults               |
+| `X-Gateway-Can-Curate`              | `true`/`false` | `false` (fail closed) | Push curated-expert knowledge (`POST /v1/knowledge/curate`) |
 
 Asymmetry by design (ADR-112): the boolean feature flags **fail closed** (a
 missing header denies the paid feature); the numeric limits **fail open** to
@@ -61,6 +54,7 @@ free-tier numbers. The gateway is expected to always send the limits for
 capped tiers.
 
 Enforcement outcomes the gateway should map to an upgrade prompt:
+
 - **Consult quota** — `POST /v1/chat` returns `200` with `type:"error"`,
   `data.reason:"daily_limit_reached"`. `POST /v1/chat/stream` emits an `error`
   frame `{ "detail": "daily_limit_reached" }` then `done`. (Checked at entry —
@@ -118,9 +112,9 @@ provider-attested, experiential tags (service, feature, price,
 atmosphere) come from kebi's knowledge layer and **accumulate over
 time** — a freshly discovered place may initially carry only
 categories + cuisine tags and densify as content flows through
-extraction. There is no standalone product-facing endpoint for catalog
-reads today — saved/discovered/suggested places are returned inside
-chat responses as `tool_results`.
+extraction. Saved places are read via `GET /v1/user/library`;
+discovered and suggested places are returned inside chat responses as
+`tool_results`.
 
 ```json
 {
@@ -147,24 +141,18 @@ chat responses as `tool_results`.
 }
 ```
 
-| Field                | Type                        | Notes                                                                                                                                                                                                                    |
-| -------------------- | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `id`                 | `string \| null`            | Catalog primary key (`places.id`). `null` only for freshly-built, unsaved objects                                                                                                                                        |
-| `provider_id`        | `string \| null`            | Namespaced external ID (e.g. `"google:ChIJ…"`)                                                                                                                                                                           |
-| `place_name`         | `string`                    | Canonical name (provider-sourced)                                                                                                                                                                                        |
-| `place_name_aliases` | `{ value, source }[]`       | Alternative names from non-canonical writers (TikTok caption, user note, LLM)                                                                                                                                            |
-| `categories`         | `string[]`                  | `PlaceCategory` enum values, e.g. `"restaurant"`, `"cafe"`, `"bar"`                                                                                                                                                      |
-| `tags`               | `{ type, value, source }[]` | `type` ∈ `cuisine \| dietary \| feature \| atmosphere \| service \| price \| accessibility \| time \| season` (or an LLM free-text type); `value` is an enum or free-text; `source` e.g. `"google" \| "llm" \| "tiktok"` |
+| Field                | Type                        | Notes                                                                                                                                                                                                                                               |
+| -------------------- | --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `id`                 | `string \| null`            | Catalog primary key (`places.id`). `null` only for freshly-built, unsaved objects                                                                                                                                                                   |
+| `provider_id`        | `string \| null`            | Namespaced external ID (e.g. `"google:ChIJ…"`)                                                                                                                                                                                                      |
+| `place_name`         | `string`                    | Canonical name (provider-sourced)                                                                                                                                                                                                                   |
+| `place_name_aliases` | `{ value, source }[]`       | Alternative names from non-canonical writers (TikTok caption, user note, LLM)                                                                                                                                                                       |
+| `categories`         | `string[]`                  | `PlaceCategory` enum values, e.g. `"restaurant"`, `"cafe"`, `"bar"`                                                                                                                                                                                 |
+| `tags`               | `{ type, value, source }[]` | `type` ∈ `cuisine \| dietary \| feature \| atmosphere \| service \| price \| accessibility \| time \| season` (or an LLM free-text type); `value` is an enum or free-text; `source` e.g. `"google" \| "llm" \| "tiktok"`                            |
 | `icon`               | `string \| null`            | Single emoji for the place's identity (🗼, ⛲, 🌴), LLM-picked where an LLM already sees the place (ADR-117). **Nullable by design** — LLM-less paths (provider discovery) leave it `null`; the client falls back to its own category→emoji mapping |
-| `location`           | `LocationContext \| null`   | `{ lat, lng, address, neighborhood, city, country }` — any field may be `null`                                                                                                                                           |
-| `created_at`         | `ISO-8601 string \| null`   | Catalog row creation                                                                                                                                                                                                     |
-| `refreshed_at`       | `ISO-8601 string \| null`   | Last provider refresh                                                                                                                                                                                                    |
-
-> **Migration note (ADR-070/071):** the legacy v1 `PlaceObject` shape
-> (`place_type`, `subcategory`, `attributes{}`, Tier 2/3 enrichment
-> fields) is gone. `place_type` → `categories: string[]`; `attributes`
-> → `tags: [{type,value,source}]`. The v1 `places`/`embeddings` tables
-> were dropped in ADR-078.
+| `location`           | `LocationContext \| null`   | `{ lat, lng, address, neighborhood, city, country }` — any field may be `null`                                                                                                                                                                      |
+| `created_at`         | `ISO-8601 string \| null`   | Catalog row creation                                                                                                                                                                                                                                |
+| `refreshed_at`       | `ISO-8601 string \| null`   | Last provider refresh                                                                                                                                                                                                                               |
 
 ---
 
@@ -174,9 +162,11 @@ Unified conversational entry point (ADR-052, ADR-065). The agent is a
 LangGraph turn driven by the `orchestrator` LLM role with a small
 **consult-family** of internal tools — `find_saved` (the user's saved
 places), `suggest_places` (LLM-named candidates validated against the
-place provider), and `discover_places` (direct provider lookup for
-utility intents and as a fall-through) — see ADR-089, ADR-090, ADR-091.
-Each tool returns a structured `ConsultResult` that is surfaced to the
+place provider), `discover_places` (direct provider lookup for
+utility intents and as a fall-through) — see ADR-089, ADR-090, ADR-091 —
+and `research` (insider answers from the knowledge layer's claims
+store, ADR-129: what to order, local tricks, fees, safety, timing).
+Each tool returns a structured payload that is surfaced to the
 caller in `data.tool_results` so the product UI can render places
 without re-parsing the agent's prose. URL submissions are redirected
 to `POST /v1/extract` — the chat path never writes to `user_places`.
@@ -249,7 +239,11 @@ to `POST /v1/extract` — the chat path never writes to `user_places`.
 > The SSE step-lifecycle fields `id` and `status` (ADR-102) are **not** part of
 > this non-stream shape — they appear only on `/v1/chat/stream` frames (below).
 
-`ToolResult` shape: `{ tool: "find_saved" | "suggest_places" | "discover_places", tool_call_id: string, payload: ConsultResult }`. `ConsultResult` carries `candidates` (each with `place`, `source ∈ {saved, suggested, discovered}`, optional namer `reason`), an `empty_reason` literal when no candidates were produced (e.g. `no_location`, `no_match`), and a `recommendation_id` (a per-recommendation id minted by kebi). The client echoes `recommendation_id` back when the user accepts/rejects (`POST /v1/signal`) or saves (`POST /v1/user/places`) a candidate, so the signal attributes to that recommendation.
+`ToolResult` shape: `{ tool: "find_saved" | "suggest_places" | "discover_places" | "research", tool_call_id: string, payload: ConsultResult | ResearchResult }`. The `payload` is a union **discriminated by `tool`**: the three place tools carry a `ConsultResult`, `research` carries a `ResearchResult` (additive — a client that doesn't render research payloads still gets the agent's prose answer).
+
+`ConsultResult` carries `candidates` (each with `place`, `source ∈ {saved, suggested, discovered}`, optional namer `reason`), an `empty_reason` literal when no candidates were produced (e.g. `no_location`, `no_match`), and a `recommendation_id` (a per-recommendation id minted by kebi). The client echoes `recommendation_id` back when the user accepts/rejects (`POST /v1/signal`) or saves (`POST /v1/user/places`) a candidate, so the signal attributes to that recommendation.
+
+`ResearchResult` (ADR-129) carries `entity_name` + `entity_key` (the resolved area the notes are about), `notes` — each `{ id, text, tags, source, confidence, agree_count, disagree_count }`, where `id` is the underlying claim's stable id (ADR-128), `tags` are claim-vocabulary values, and `source` is the coarse origin label `community | expert | kebi` (raw provenance never crosses the wire) — plus, when empty, an `empty_reason ∈ { unresolved, ambiguous, no_claims, no_topic_match }` and a `clarification` string. Research results are knowledge, not place candidates: they carry no `recommendation_id` and nothing in them is save/signal-able. Note for the home surface: a turn whose only tool result is `research` does **not** count as a place-surfacing turn for the `GET /v1/user/intents` recall list (ADR-110 semantics preserved).
 
 ### `error`
 
@@ -363,13 +357,13 @@ GET /v1/home?city=shimokitazawa&local_time=2026-06-28T21:41:00&weather=clear
 GET /v1/home?lat=35.6615&lng=139.6680&local_time=2026-06-28T21:41:00
 ```
 
-| Param        | Type             | Notes                                                                                                                       |
-| ------------ | ---------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| `lat`        | `float` (−90–90) | Device latitude. Used only to reverse-geocode a city name when `city` is absent — the server never originates location     |
-| `lng`        | `float` (−180–180)| Device longitude (paired with `lat`)                                                                                      |
-| `city`       | `string`         | Client-supplied city name; when present, skips reverse-geocoding                                                           |
-| `local_time` | ISO-8601         | Device local time. Drives the daypart (morning/afternoon/evening/late_night) — the client's timezone is canonical          |
-| `weather`    | `string`         | Coarse free-text hint (e.g. `clear`, `rain`); folded into a small band server-side. Omit when unknown                      |
+| Param        | Type               | Notes                                                                                                                  |
+| ------------ | ------------------ | ---------------------------------------------------------------------------------------------------------------------- |
+| `lat`        | `float` (−90–90)   | Device latitude. Used only to reverse-geocode a city name when `city` is absent — the server never originates location |
+| `lng`        | `float` (−180–180) | Device longitude (paired with `lat`)                                                                                   |
+| `city`       | `string`           | Client-supplied city name; when present, skips reverse-geocoding                                                       |
+| `local_time` | ISO-8601           | Device local time. Drives the daypart (morning/afternoon/evening/late_night) — the client's timezone is canonical      |
+| `weather`    | `string`           | Coarse free-text hint (e.g. `clear`, `rain`); folded into a small band server-side. Omit when unknown                  |
 
 **Response (200):** `HomeResponse`
 
@@ -385,18 +379,18 @@ GET /v1/home?lat=35.6615&lng=139.6680&local_time=2026-06-28T21:41:00
 }
 ```
 
-| Field      | Type              | Notes                                                                                              |
-| ---------- | ----------------- | ------------------------------------------------------------------------------------------------- |
-| `greeting` | `string`          | Short context-aware line                                                                           |
-| `chips`    | `{ text }[]`      | 3–4 suggestion chips. `text` is both the display label and the intent re-submitted to `POST /v1/chat` |
+| Field      | Type         | Notes                                                                                                 |
+| ---------- | ------------ | ----------------------------------------------------------------------------------------------------- |
+| `greeting` | `string`     | Short context-aware line                                                                              |
+| `chips`    | `{ text }[]` | 3–4 suggestion chips. `text` is both the display label and the intent re-submitted to `POST /v1/chat` |
 
 The chips emit **no** taste signal on their own — only an actual chat turn,
 save, or accept/reject trains taste. There is no chip-confirmation endpoint.
 
-| Code  | When                                                        |
-| ----- | ----------------------------------------------------------- |
-| `200` | Always on success — including the fail-open fallback        |
-| `422` | Unknown query param, or `lat`/`lng` out of range            |
+| Code  | When                                                 |
+| ----- | ---------------------------------------------------- |
+| `200` | Always on success — including the fail-open fallback |
+| `422` | Unknown query param, or `lat`/`lng` out of range     |
 
 ---
 
@@ -445,7 +439,7 @@ Canonical product-facing extraction endpoint (ADR-073). The product repo calls t
 | `results`         | `ExtractPlaceItem[]`                   | `{ place: PlaceCore, confidence: float (0–1) }`. **No per-item `status`** — ADR-071 saves every picker candidate with `approved=False`; the user curates later in the product UI. **No `evidence`** — ADR-093 moved the audit trail to an object-storage ledger so it no longer rides the response |
 | `raw_input`       | `string \| null`                       | The original user-supplied string, verbatim                                                                                                                                                                                                                                                        |
 | `request_id`      | `string \| null`                       | Correlation id                                                                                                                                                                                                                                                                                     |
-| `failure_reason`  | `string \| null`                       | Populated only when `status == "failed"`. One of `unsupported_url`, `empty_input`, `no_candidates`, `all_below_threshold`, `candidate_limit_exceeded`, `pipeline_error`, `save_limit_reached`                                                                                                        |
+| `failure_reason`  | `string \| null`                       | Populated only when `status == "failed"`. One of `unsupported_url`, `empty_input`, `no_candidates`, `all_below_threshold`, `candidate_limit_exceeded`, `pipeline_error`, `save_limit_reached`                                                                                                      |
 | `failure_message` | `string \| null`                       | Human-readable diagnostic, only when `status == "failed"`                                                                                                                                                                                                                                          |
 
 ADR-081: the extract response is unchanged. The name the place was shown as in the source post (e.g. a TikTok card title "Mirror Temple", resolver-cleaned of list numbering) is **not** returned here — it is persisted per save on `user_places.source_label` and surfaced when the user's saved places are read. Independently, a confidently-matched source label is added to the shared `place.place_name_aliases` (which feeds search); low-confidence labels stay per-user-only and never enter shared search.
@@ -459,7 +453,7 @@ ADR-112: if the caller's `X-Gateway-Save-Limit` is already met, extraction retur
 | Code  | When                                                                                     |
 | ----- | ---------------------------------------------------------------------------------------- |
 | `200` | Extraction completed or failed — inspect `status` / `failure_reason` in the response     |
-| `400` | Malformed request (missing `raw_input` / `user_id`, or `raw_input` exceeds the size cap) |
+| `400` | Malformed request (missing `raw_input`, or `raw_input` exceeds the size cap) |
 | `500` | Unhandled pipeline failure                                                               |
 
 ---
@@ -525,7 +519,18 @@ the first page (drop the `cursor`). Keep `sort` fixed across a paging run.
         "source_label": "Mirror Temple",
         "saved_at": "2026-05-01T08:00:00Z",
         "visited_at": null
-      }
+      },
+      "claims": [
+        {
+          "id": "c0ffee00-aaaa-bbbb-cccc-dddddddddddd",
+          "text": "order the omakase — it's off-menu",
+          "tags": ["food"],
+          "source": "community",
+          "from_shared": true,
+          "agree_count": 0,
+          "disagree_count": 0
+        }
+      ]
     }
   ],
   "next_cursor": "eyJ0cyI6…",
@@ -533,11 +538,25 @@ the first page (drop the `cursor`). Keep `sort` fixed across a paging run.
 }
 ```
 
-| Field         | Type               | Notes                                                                                                                                                                               |
-| ------------- | ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `places`      | `SavedPlaceView[]` | `{ place: PlaceCore, user_data: UserPlace }`. `place` is the complete place shape — live rating/hours don't exist anywhere in the contract (ADR-118). `user_data` is this user's relationship to the place |
-| `next_cursor` | `string \| null`   | Opaque keyset cursor. Pass it back as `?cursor=` for the next page. **`null` on the last page**                                                                                     |
-| `total`       | `integer`          | The caller's **grand total** of saved places — the whole stash, **independent of the request's filters and pagination** (drives the screen's hero count). Same on every page        |
+| Field    | Type               | Notes                                                                                                                                                                                                                           |
+| -------- | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `places` | `SavedPlaceView[]` | `{ place: PlaceCore, user_data: UserPlace, claims: PlaceNote[] }`. `place` is the complete place shape — live rating/hours don't exist anywhere in the contract (ADR-118). `user_data` is this user's relationship to the place |
+| `next_cursor` | `string \| null` | Opaque keyset cursor. Pass it back as `?cursor=` for the next page. **`null` on the last page** |
+| `total` | `integer` | The caller's **grand total** of saved places — the whole stash, **independent of the request's filters and pagination** (drives the screen's hero count). Same on every page |
+
+`claims` (`PlaceNote[]`, ADR-127) are the **insider notes** tied to the place
+from the knowledge layer — the payoff surface. Each: `id` (the claim's stable
+id — use as the list key and, later, the vote target), `text` (the note),
+`tags: string[]`, `source` (coarse origin label: `community` = harvested from
+shared content, `expert` = curated, `kebi` = the user's own saved-recommendation
+reason), `from_shared: bool` — `true` when the note was mined from the very
+post the user shared for this save (badge it "from what you shared") — and
+`agree_count` / `disagree_count` (`integer`), the claim's corroboration tally.
+Both are `0` today and only move once the agree/disagree vote write-path ships;
+they are surfaced now so the client can render the counts without a later
+contract change. Approved claims only, strongest first, capped. A place with no
+claims returns `[]` — no empty section. v1 is place-scoped; city/neighborhood
+ambient notes are not yet included.
 
 `user_data` (`UserPlace`) fields: `user_place_id`, `place_id`, `approved`,
 `visited`, `liked` (tri-state, may be `null`), `note`, `source`,
@@ -574,7 +593,7 @@ Save a place kebi recommended to the caller's library — the consult card's
 recommended), so this only links it to the caller. `user_id` is taken from
 `X-Gateway-User-Id`; a caller can only ever save into **their own** library.
 
-Saving also emits a **positive taste signal** — a *stronger* one than a
+Saving also emits a **positive taste signal** — a _stronger_ one than a
 link-share save: its own `saved_recommendation` interaction type, weighted
 heavier in the taste evidence and **not** counted toward the discovery-source
 distribution (kebi is not a channel the user discovers from).
@@ -589,15 +608,20 @@ POST /v1/user/places
 {
   "place_core_id": "c0ffee00-1111-2222-3333-444455556666",
   "recommendation_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
-  "note": "cozy spot to work, great coffee"
+  "reason": "great for a quiet date — the back room is candlelit"
 }
 ```
 
-| Field               | Type            | Required | Notes                                                                                  |
-| ------------------- | --------------- | -------- | -------------------------------------------------------------------------------------- |
-| `place_core_id`     | `string`        | Yes      | `places.id` of the candidate (consult `tool_results → payload.candidates[].place.id`)  |
-| `recommendation_id` | `string`        | Yes      | The id kebi minted on that consult result (`tool_results → payload.recommendation_id`) |
-| `note`              | `string`/`null` | No       | Free text stored on the save — e.g. the recommendation's reason the client is showing, or the user's own words. The reason is **not** persisted server-side, so the client supplies it here. Applied **only on create**; a re-tap leaves an existing note untouched (edit later via `PATCH`). Omit or `null` for no note |
+| Field               | Type            | Required | Notes                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| ------------------- | --------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `place_core_id`     | `string`        | Yes      | `places.id` of the candidate (consult `tool_results → payload.candidates[].place.id`)                                                                                                                                                                                                                                                                                                                                                      |
+| `recommendation_id` | `string`        | Yes      | The id kebi minted on that consult result (`tool_results → payload.recommendation_id`)                                                                                                                                                                                                                                                                                                                                                     |
+| `reason`            | `string`/`null` | No       | The pick's rationale the card is showing. The reason is **not** persisted server-side, so the client supplies it. On create it is written to the knowledge layer as a **user-scoped `kebi_message` claim** on the place (ADR-127) and surfaces in the Library's `claims` as a `kebi` note — it is **no longer stored on the save as a note** (this amends ADR-114). A re-tap adds nothing (claim-text dedup). Omit or `null` for no reason |
+
+> **ADR-127 note:** the save no longer echoes the reason back as `user_data.note`.
+> `user_data.note` is now set only by the user's own edit (`PATCH /v1/user/places/{id}`);
+> the reason appears instead in the place's Library `claims` (`source: "kebi"`).
+> Clients that sent `note` here must send `reason` and read it from `claims`.
 
 `source` is **not** a field — the server stamps `kebi`. Unknown fields → 422.
 
@@ -609,12 +633,12 @@ shape as `user_data` in the library response (every `UserPlace` field
 with the existing save and does **not** re-emit the taste signal — saving
 twice never double-trains taste.
 
-| Code  | When                                                                          |
-| ----- | ----------------------------------------------------------------------------- |
-| `201` | Saved (or already saved) — returns the user-state                             |
+| Code  | When                                                                                                                                                     |
+| ----- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `201` | Saved (or already saved) — returns the user-state                                                                                                        |
 | `403` | `X-Gateway-Save-Limit` already met (`detail: save_limit_reached`) — map to upgrade. A re-tap on an already-saved place is exempt and still returns `201` |
-| `404` | `place_core_id` is not in the catalog (`detail: place_not_found`)             |
-| `422` | Missing `place_core_id`/`recommendation_id`, or an unknown field              |
+| `404` | `place_core_id` is not in the catalog (`detail: place_not_found`)                                                                                        |
+| `422` | Missing `place_core_id`/`recommendation_id`, or an unknown field                                                                                         |
 
 ---
 
@@ -725,9 +749,9 @@ GET /v1/user/intents?limit=20
 GET /v1/user/intents?limit=20&cursor=<next_cursor-from-prior-response>
 ```
 
-| Param    | Type                      | Notes                                                                              |
-| -------- | ------------------------- | --------------------------------------------------------------------------------- |
-| `limit`  | `int` (1–100, default 20) | Max intents per page. Out-of-range → 422                                           |
+| Param    | Type                      | Notes                                                                                         |
+| -------- | ------------------------- | --------------------------------------------------------------------------------------------- |
+| `limit`  | `int` (1–100, default 20) | Max intents per page. Out-of-range → 422                                                      |
 | `cursor` | `string`                  | Opaque cursor from a prior response's `next_cursor`. Omit for the first page. Malformed → 400 |
 
 **Response (200):** `IntentsResponse`
@@ -745,10 +769,10 @@ GET /v1/user/intents?limit=20&cursor=<next_cursor-from-prior-response>
 }
 ```
 
-| Field         | Type             | Notes                                                                                                            |
-| ------------- | ---------------- | -------------------------------------------------------------------------------------------------------------- |
-| `intents`     | `IntentItem[]`   | `{ id, text, created_at }`. `text` is the verbatim message; re-submit it to `POST /v1/chat` on tap              |
-| `next_cursor` | `string \| null` | Opaque keyset cursor. Pass it back as `?cursor=` for the next page. **`null` on the last page**                 |
+| Field         | Type             | Notes                                                                                              |
+| ------------- | ---------------- | -------------------------------------------------------------------------------------------------- |
+| `intents`     | `IntentItem[]`   | `{ id, text, created_at }`. `text` is the verbatim message; re-submit it to `POST /v1/chat` on tap |
+| `next_cursor` | `string \| null` | Opaque keyset cursor. Pass it back as `?cursor=` for the next page. **`null` on the last page**    |
 
 `created_at` is a **raw ISO-8601 instant** — relative phrasing ("yesterday,
 8:42") is the client's to render, since only the client knows the user's
@@ -757,11 +781,11 @@ timezone. `user_id` is **not** echoed.
 **Empty state:** a user with no recalled intents returns
 `{ "intents": [], "next_cursor": null }` — the shape is guaranteed.
 
-| Code  | When                                                |
-| ----- | --------------------------------------------------- |
-| `200` | Success (including the empty history)               |
-| `400` | Malformed `cursor`                                  |
-| `422` | Unknown query param, or `limit` out of 1–100        |
+| Code  | When                                         |
+| ----- | -------------------------------------------- |
+| `200` | Success (including the empty history)        |
+| `400` | Malformed `cursor`                           |
+| `422` | Unknown query param, or `limit` out of 1–100 |
 
 ---
 
@@ -807,8 +831,10 @@ other SQL tables (saves, memories, taste model) are left untouched.
 > **not** in the sweep — those rows are cross-user place identities, not
 > this user's data. Only the per-user `user_places` link rows (the
 > user's saves plus the source URLs they personally submitted) are
-> user-owned and get wiped. The `recommendations` table and the v1
-> `places`/`embeddings` tables were dropped by ADR-078.
+> user-owned and get wiped. `knowledge_claims` are **not** swept —
+> neither global claims (cross-user world knowledge) nor the user's own
+> `kebi_message` reasons (ADR-127), which are deliberately retained as
+> place knowledge rather than erased.
 
 **Notes:** idempotent (absent user → still 204); synchronous (sub-second at portfolio volume); hard-delete only; no per-user Redis keys to clean; trusted-upstream auth.
 
@@ -867,13 +893,13 @@ closed, since these are global writes). `user_id` is taken only from
 }
 ```
 
-| Field                        | Type     | Notes                                                                 |
-| ---------------------------- | -------- | --------------------------------------------------------------------- |
-| `text`                       | `string` | Required, non-empty. The expert's prose.                              |
-| `location_hint`              | `object` | Optional. Fallback geography when a claim's area can't be geocoded.   |
+| Field                          | Type     | Notes                                                               |
+| ------------------------------ | -------- | ------------------------------------------------------------------- |
+| `text`                         | `string` | Required, non-empty. The expert's prose.                            |
+| `location_hint`                | `object` | Optional. Fallback geography when a claim's area can't be geocoded. |
 | `location_hint.country_alpha2` | `string` | ISO-3166 alpha-2 (e.g. `"ae"`).                                     |
-| `location_hint.city`         | `string` | Optional.                                                             |
-| `location_hint.neighborhood` | `string` | Optional.                                                             |
+| `location_hint.city`           | `string` | Optional.                                                           |
+| `location_hint.neighborhood`   | `string` | Optional.                                                           |
 
 **Response (200):**
 
@@ -881,16 +907,26 @@ closed, since these are global writes). `user_id` is taken only from
 {
   "claims_written": 2,
   "claims": [
-    { "scope": "neighborhood", "entity_name": "Jumeirah", "claim": "Beach clubs are pricey but the sunset views are exceptional.", "tags": ["nightlife", "price", "scenery"] },
-    { "scope": "city", "entity_name": "Dubai", "claim": "Nightlife peaks after midnight.", "tags": ["nightlife"] }
+    {
+      "scope": "neighborhood",
+      "entity_name": "Jumeirah",
+      "claim": "Beach clubs are pricey but the sunset views are exceptional.",
+      "tags": ["nightlife", "price", "scenery"]
+    },
+    {
+      "scope": "city",
+      "entity_name": "Dubai",
+      "claim": "Nightlife peaks after midnight.",
+      "tags": ["nightlife"]
+    }
   ]
 }
 ```
 
-| Field            | Type       | Notes                                                                                     |
-| ---------------- | ---------- | ----------------------------------------------------------------------------------------- |
+| Field            | Type       | Notes                                                                                                                                                 |
+| ---------------- | ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `claims_written` | `integer`  | Count of **new** rows stored. May be less than the prose implied — dedup collapses re-submissions, and unkeyable or accessibility claims are dropped. |
-| `claims`         | `object[]` | The stored claims: `{ scope, entity_name, claim, tags }`. Empty when nothing was stored.  |
+| `claims`         | `object[]` | The stored claims: `{ scope, entity_name, claim, tags }`. Empty when nothing was stored.                                                              |
 
 Accessibility claims are never stored (an unverified accessibility claim is real-world harm). Harvested (`shared_content`) and curated (`curated_expert`) claims about the same entity merge on the same key and are separable only by their source.
 
@@ -921,20 +957,20 @@ Always HTTP 200 — DB outages surface via `db: "disconnected"`.
 
 All protected calls additionally send the `X-Gateway-Token` + `X-Gateway-User-Id` headers (see "Service-to-service auth").
 
-| Endpoint                    | Purpose                                    | NestJS Sends (body)                                          | kebi Returns                                                                             |
-| --------------------------- | ------------------------------------------ | ------------------------------------------------------------ | ---------------------------------------------------------------------------------------- |
-| POST /v1/chat               | Conversational turn (consult-family agent) | message, optional location, movement_profile                 | type (`agent`\|`error`), message, data (reasoning_steps + tool_results), tool_calls_used |
-| POST /v1/chat/stream        | SSE streaming chat                         | Same as POST /v1/chat                                        | reasoning_step + tool_result + message + done frames                                     |
-| GET /v1/home                | Home greeting + suggestion chips           | — (optional `lat`/`lng`/`city`/`local_time`/`weather` query) | HomeResponse (`greeting`, `chips: { text }[]`); fail-open, always `200`                  |
-| GET /v1/user/intents        | "What you wanted" recall list              | — (optional `limit`/`cursor` query params)                  | IntentsResponse (`intents: { id, text, created_at }[]`, `next_cursor`)                   |
-| POST /v1/extract            | Canonical extraction (save a place)        | raw_input                                                    | ExtractPlaceResponse                                                                     |
-| GET /v1/user/library        | Browse the user's saved places (Library)   | — (optional filter + `sort` + `limit`/`cursor` query params) | LibraryResponse (`places: SavedPlaceView[]`, `next_cursor`, `total`)                     |
-| POST /v1/user/places        | Save a recommended place ("save it")       | place_core_id, recommendation_id, optional `note`            | LibraryUserData (created user-state, `201`; `404` if uncatalogued); emits taste signal  |
-| PATCH /v1/user/places/{id}  | Update a save's user-state (pills/menu)    | partial body: `visited`/`liked`/`approved`/`note`            | LibraryUserData (updated user-state; `200`/`404`)                                        |
-| DELETE /v1/user/places/{id} | Remove one saved place from the library    | — (path param only)                                          | 204 No Content (`404` if absent/not owned)                                               |
-| DELETE /v1/user/data        | Account-deletion sweep of AI data          | — (optional `scope` query param)                             | 204 No Content                                                                           |
-| POST /v1/signal             | Recommendation accept/reject               | signal_type, recommendation_id, place_core_id                | status (202)                                                                             |
-| GET /v1/health              | Service health check (unauthenticated)     | —                                                            | status, db connectivity                                                                  |
+| Endpoint                    | Purpose                                    | NestJS Sends (body)                                          | kebi Returns                                                                                                                                 |
+| --------------------------- | ------------------------------------------ | ------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| POST /v1/chat               | Conversational turn (consult-family agent) | message, optional location, movement_profile                 | type (`agent`\|`error`), message, data (reasoning_steps + tool_results), tool_calls_used                                                     |
+| POST /v1/chat/stream        | SSE streaming chat                         | Same as POST /v1/chat                                        | reasoning_step + tool_result + message + done frames                                                                                         |
+| GET /v1/home                | Home greeting + suggestion chips           | — (optional `lat`/`lng`/`city`/`local_time`/`weather` query) | HomeResponse (`greeting`, `chips: { text }[]`); fail-open, always `200`                                                                      |
+| GET /v1/user/intents        | "What you wanted" recall list              | — (optional `limit`/`cursor` query params)                   | IntentsResponse (`intents: { id, text, created_at }[]`, `next_cursor`)                                                                       |
+| POST /v1/extract            | Canonical extraction (save a place)        | raw_input                                                    | ExtractPlaceResponse                                                                                                                         |
+| GET /v1/user/library        | Browse the user's saved places (Library)   | — (optional filter + `sort` + `limit`/`cursor` query params) | LibraryResponse (`places: SavedPlaceView[]`, `next_cursor`, `total`)                                                                         |
+| POST /v1/user/places        | Save a recommended place ("save it")       | place_core_id, recommendation_id, optional `reason`          | LibraryUserData (created user-state, `201`; `404` if uncatalogued); emits taste signal + writes `reason` as a `kebi_message` claim (ADR-127) |
+| PATCH /v1/user/places/{id}  | Update a save's user-state (pills/menu)    | partial body: `visited`/`liked`/`approved`/`note`            | LibraryUserData (updated user-state; `200`/`404`)                                                                                            |
+| DELETE /v1/user/places/{id} | Remove one saved place from the library    | — (path param only)                                          | 204 No Content (`404` if absent/not owned)                                                                                                   |
+| DELETE /v1/user/data        | Account-deletion sweep of AI data          | — (optional `scope` query param)                             | 204 No Content                                                                                                                               |
+| POST /v1/signal             | Recommendation accept/reject               | signal_type, recommendation_id, place_core_id                | status (202)                                                                                                                                 |
+| GET /v1/health              | Service health check (unauthenticated)     | —                                                            | status, db connectivity                                                                                                                      |
 
 ---
 
@@ -958,15 +994,14 @@ All protected calls additionally send the `X-Gateway-Token` + `X-Gateway-User-Id
 
 **Database tables FastAPI owns (Alembic-managed; NestJS never writes them):**
 
-- `places` — shared place catalog (renamed from `places_v2`, ADR-079)
-- `place_embeddings` — place vectors (renamed from `place_embeddings_v2`, ADR-079)
+- `places` — shared place catalog
+- `place_embeddings` — place vectors
 - `user_places` — per-user saved-place links (`approved` curation flag)
 - `taste_model` — per-user taste profile
 - `interactions` — append-only behavioral signal log
 - `user_memories` — personal facts extracted from chat messages
 - `user_intents` — the home "what you wanted" recall list (ADR-110); intent-bearing chat turns
-
-> Dropped in ADR-078: v1 `places`/`embeddings` and `recommendations`.
+- `knowledge_claims` — entity-scoped world-knowledge claims (ADR-120)
 
 ---
 
@@ -974,5 +1009,4 @@ All protected calls additionally send the `X-Gateway-Token` + `X-Gateway-User-Id
 
 - All protected requests carry `X-Gateway-Token` (shared HMAC secret) and `X-Gateway-User-Id` (verified Clerk subject). kebi never sees Clerk tokens directly — it trusts the gateway iff the shared secret validates and the user_id matches the expected pattern.
 - FastAPI owns all AI-generated data in PostgreSQL; NestJS owns product data (users, settings). Neither writes the other's tables.
-- The `places` / `place_embeddings` table rename (ADR-079) is a coordinated cross-repo change — deploy kebi and the product repo together.
-- The gateway-auth contract is also a coordinated change — both repos must hold the same `GATEWAY_SHARED_SECRET` and ship together. Rotating the secret means setting the new value in both deploys.
+- The gateway-auth contract is a coordinated change — both repos must hold the same `GATEWAY_SHARED_SECRET` and ship together. Rotating the secret means setting the new value in both deploys.

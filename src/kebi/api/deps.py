@@ -30,9 +30,18 @@ from kebi.core.extraction.service import ExtractionService
 from kebi.core.home import HomeService
 from kebi.core.knowledge.curation_service import KnowledgeCurationService
 from kebi.core.knowledge.curator import KnowledgeCurator
+from kebi.core.knowledge.geo_resolve import EntityGeoResolver
 from kebi.core.knowledge.harvest_bucket import HarvestBucketReader, HarvestBucketWriter
 from kebi.core.knowledge.harvester import KnowledgeHarvester
+from kebi.core.knowledge.kebi_note import KebiNoteProducer
+from kebi.core.knowledge.kebi_note_service import KebiNoteService
+from kebi.core.knowledge.place_notes_service import PlaceNotesService
 from kebi.core.knowledge.producer import KnowledgeIngestion
+from kebi.core.knowledge.research_resolver import ResearchEntityResolver
+from kebi.core.knowledge.research_service import (
+    ResearchRankingWeights,
+    ResearchService,
+)
 from kebi.core.knowledge.writer import KnowledgeWriter
 from kebi.core.memory.buffer import MessageBuffer
 from kebi.core.memory.extractor import MemoryExtractor
@@ -843,11 +852,14 @@ def get_knowledge_harvester() -> KnowledgeHarvester:
     """FastAPI dependency providing the KnowledgeHarvester (ADR-121/122).
 
     A `shared_content` ClaimProducer; its trust floor and review status come
-    from config, so gating harvested claims later is a config change.
+    from config, so gating harvested claims later is a config change. Claims
+    naming an entity other than their anchor place are re-keyed through the
+    shared free Nominatim geocoder, verified (ADR-126).
     """
     knowledge = get_config().knowledge
     return KnowledgeHarvester(
         get_instructor_client("knowledge_harvester"),
+        get_geocoding_client(),
         confidence_floor=knowledge.harvest_confidence_floor,
         review_status=knowledge.harvest_review_status,
     )
@@ -876,6 +888,83 @@ def get_knowledge_curation_service(
     return KnowledgeCurationService(
         curator=get_knowledge_curator(),
         ingestion=ingestion,
+    )
+
+
+def get_kebi_note_producer() -> KebiNoteProducer:
+    """FastAPI dependency providing the KebiNoteProducer (ADR-127).
+
+    A `kebi_message` ClaimProducer — turns a saved-recommendation reason into a
+    place-scoped claim. Trust floor and review status come from config, so
+    gating these notes later is a config change (no LLM, no geocoder).
+    """
+    knowledge = get_config().knowledge
+    return KebiNoteProducer(
+        confidence_floor=knowledge.kebi_message_confidence_floor,
+        review_status=knowledge.kebi_message_review_status,
+    )
+
+
+def get_kebi_note_service(
+    ingestion: KnowledgeIngestion = Depends(get_knowledge_ingestion),  # noqa: B008
+) -> KebiNoteService:
+    """FastAPI dependency providing the KebiNoteService (ADR-127).
+
+    Records a saved-recommendation reason as a user-scoped `kebi_message`
+    claim, through the same source-agnostic ingestion seam the curator uses.
+    """
+    return KebiNoteService(
+        producer=get_kebi_note_producer(),
+        ingestion=ingestion,
+    )
+
+
+def get_place_notes_service(
+    repo: KnowledgeClaimRepository = Depends(  # noqa: B008
+        get_knowledge_claim_repository
+    ),
+) -> PlaceNotesService:
+    """FastAPI dependency providing the PlaceNotesService (ADR-127).
+
+    The knowledge layer's first reader — surfaces the claims tied to a saved
+    place as insider notes on the Library. `place_notes_limit` (config) caps
+    how many notes surface on one place.
+    """
+    return PlaceNotesService(repo, limit=get_config().knowledge.place_notes_limit)
+
+
+def get_research_service(
+    repo: KnowledgeClaimRepository = Depends(  # noqa: B008
+        get_knowledge_claim_repository
+    ),
+) -> ResearchService:
+    """FastAPI dependency providing the ResearchService.
+
+    The knowledge layer's agent-facing reader behind the `research` tool:
+    staged verified-or-refuse entity resolution over the free Nominatim
+    geocoder, then an entity-bounded, approved-only claims read ranked
+    in memory. Limits, weights, and thresholds come from config
+    (`agent.research`, `knowledge.research`).
+    """
+    cfg = get_config()
+    research_cfg = cfg.knowledge.research
+    resolver = ResearchEntityResolver(
+        EntityGeoResolver(get_geocoding_client()),
+        confidence_min=research_cfg.entity_confidence_min,
+    )
+    return ResearchService(
+        repo,
+        resolver,
+        default_limit=cfg.agent.research.default_limit,
+        max_limit=cfg.agent.research.max_limit,
+        notes_limit=cfg.agent.research.notes_limit,
+        weights=ResearchRankingWeights(
+            w_tag=research_cfg.w_tag,
+            w_text=research_cfg.w_text,
+            w_trust=research_cfg.w_trust,
+            w_prox=research_cfg.w_prox,
+        ),
+        topic_relevance_floor=research_cfg.topic_relevance_floor,
     )
 
 
@@ -984,6 +1073,7 @@ def get_agent_graph(
     candidate_namer: CandidateNamerService = Depends(  # noqa: B008
         get_candidate_namer_service
     ),
+    research_service: ResearchService = Depends(get_research_service),  # noqa: B008
 ) -> Any:
     """Build the agent StateGraph per-request.
 
@@ -1026,6 +1116,7 @@ def get_agent_graph(
             hybrid_search,
             candidate_namer,
             places_search_factory,
+            research_service,
             discovery_enabled=identity.discovery_enabled,
         ),
         checkpointer,

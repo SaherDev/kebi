@@ -118,6 +118,32 @@ async def test_drops_accessibility_claim() -> None:
     assert repo.saved == []
 
 
+async def test_tags_normalized_to_vocabulary_on_write() -> None:
+    """Known tags stored in canonical form; off-vocab hallucinations dropped."""
+    repo = _FakeRepo()
+    await _persist(
+        repo,
+        [
+            _claim(
+                "city",
+                tags=["thai", "banana-pancake-street", "cash only", "GO_EARLY"],
+            )
+        ],
+    )
+    assert repo.saved[0]["tags"] == ["Thai", "cash_only", "go_early"]
+
+
+async def test_accessibility_checked_on_raw_tags_before_normalization() -> None:
+    """An accessibility marker in a raw (even off-vocab) tag still drops the
+    whole claim — normalization must not launder it out first."""
+    repo = _FakeRepo()
+    written = await _persist(
+        repo, [_claim("city", tags=["step-free entrance", "cash_only"])]
+    )
+    assert written == []
+    assert repo.saved == []
+
+
 async def test_confidence_floored_by_source_trust() -> None:
     repo = _FakeRepo()
     await _persist(repo, [_claim("country", confidence=0.1)], floor=0.9)

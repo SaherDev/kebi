@@ -67,7 +67,9 @@ class UserDataDeletionService:
     touched: those rows are cross-user place identities, not this user's
     data. Only the per-user `user_places` link rows — which carry the
     user's saves plus the source URLs they personally submitted — are
-    user-owned and get wiped here.
+    user-owned and get wiped here. `knowledge_claims` are also left intact
+    (including the user's own `kebi_message` reasons) — a deliberate product
+    choice to retain place knowledge; see ADR-127.
 
     Does NOT delete the user account — NestJS owns user lifecycle. The
     product repo's account-delete flow calls this service to wipe the

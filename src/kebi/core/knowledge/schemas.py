@@ -13,11 +13,27 @@ import re
 from datetime import datetime
 from typing import Literal
 
+from anyascii import anyascii
 from pydantic import BaseModel, ConfigDict
 
 EntityType = Literal["country", "city", "neighborhood", "place"]
 SourceType = Literal["shared_content", "curated_expert", "kebi_message", "user_message"]
 ReviewStatus = Literal["pending", "approved", "rejected"]
+
+# Coarse, user-facing origin label for a surfaced claim (ADR-127). The raw
+# `source_type` never crosses the wire; every reader (Library notes, research
+# notes) maps through this one table so the labels can't diverge.
+NOTE_SOURCE_LABELS: dict[SourceType, str] = {
+    "shared_content": "community",
+    "curated_expert": "expert",
+    "kebi_message": "kebi",
+    "user_message": "kebi",
+}
+
+
+def note_source_label(source_type: SourceType) -> str:
+    """The coarse origin label for a claim's source_type."""
+    return NOTE_SOURCE_LABELS.get(source_type, "community")
 
 _COUNTRY_CODE_RE = re.compile(r"^[a-z]{2}$")
 
@@ -48,7 +64,36 @@ class KnowledgeClaim(BaseModel):
     review_status: ReviewStatus = "approved"
     reviewed_by: str | None = None
     reviewed_at: datetime | None = None
+    # Corroboration tally (agree/disagree). Both 0 until the vote write-path
+    # ships; carried through so the Library note can show the counts today.
+    agree_count: int = 0
+    disagree_count: int = 0
     created_at: datetime
+
+
+class PlaceNote(BaseModel):
+    """One insider note surfaced on a place — a claim reduced to what the
+    Library read exposes (ADR-127).
+
+    `id` is the underlying claim's id — a stable key for the client's list and
+    the target the (future) agree/disagree vote will address. `agree_count` /
+    `disagree_count` are its corroboration tally (0 until voting ships).
+    `source_type` is kept internal so the API layer can map it to a coarse,
+    user-facing label; it is not itself a wire field. `from_shared` is True
+    when the underlying claim was harvested from the very post the user shared
+    for this save (its `source_ref` equals the save's `source_ref`), so the
+    client can badge "from what you shared" without any grouping server-side.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    id: str
+    text: str
+    tags: list[str] = []
+    source_type: SourceType
+    from_shared: bool = False
+    agree_count: int = 0
+    disagree_count: int = 0
 
 
 class ResolvedGeo(BaseModel):
@@ -143,7 +188,25 @@ class HarvestSnapshot(BaseModel):
 
 
 def _slugify(part: str) -> str:
-    return part.strip().lower().replace(" ", "-")
+    """Diacritic- and script-insensitive slug so one place keys the same
+    regardless of how its name is written.
+
+    `anyascii` transliterates any script to ASCII first, so a name in its local
+    script and its romanised spelling collapse to one stable key: "Hội An" and
+    "Hoi An" → "hoi-an"; "Đà Nẵng" and "Da Nang" → "da-nang"; "東京" →
+    "dongjing"; "กรุงเทพ" → "krungethph". The ASCII result is lowercased and
+    every run of non-alphanumeric characters becomes a single hyphen.
+    """
+    out: list[str] = []
+    prev_hyphen = False
+    for ch in anyascii(part).lower():
+        if ch.isalnum():
+            out.append(ch)
+            prev_hyphen = False
+        elif not prev_hyphen:
+            out.append("-")
+            prev_hyphen = True
+    return "".join(out).strip("-")
 
 
 def build_place_key(place_id: str) -> str:

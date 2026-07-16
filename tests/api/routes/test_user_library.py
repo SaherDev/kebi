@@ -11,11 +11,13 @@ from fastapi.testclient import TestClient
 
 from kebi.api.deps import (
     GatewayIdentity,
+    get_place_notes_service,
     get_user_places_service,
     require_gateway_identity,
 )
 from kebi.api.errors import register_error_handlers
 from kebi.api.routes.user import router as user_router
+from kebi.core.knowledge.schemas import PlaceNote
 from kebi.core.places import (
     LocationContext,
     PlaceCategory,
@@ -29,11 +31,15 @@ from kebi.core.places import (
 _TEST_USER_ID = "user_test_dummy_123456789012345"
 
 
-def _make_app(service: AsyncMock) -> TestClient:
+def _make_app(service: AsyncMock, notes_service: AsyncMock | None = None) -> TestClient:
+    notes_service = notes_service or AsyncMock(
+        notes_for_saves=AsyncMock(return_value={})
+    )
     app = FastAPI()
     register_error_handlers(app)  # wires ValueError → 400 + X-Request-Id
     app.include_router(user_router, prefix="/v1")
     app.dependency_overrides[get_user_places_service] = lambda: service
+    app.dependency_overrides[get_place_notes_service] = lambda: notes_service
     app.dependency_overrides[require_gateway_identity] = lambda: GatewayIdentity(
         user_id=_TEST_USER_ID
     )
@@ -77,6 +83,51 @@ def test_returns_places_and_next_cursor(svc: AsyncMock) -> None:
     assert args[0] == _TEST_USER_ID
     assert args[2] == 50  # limit
     assert kwargs["cursor"] is None
+
+
+def test_insider_notes_surface_on_each_place(svc: AsyncMock) -> None:
+    """A place's claims appear as `claims` on its item, projected to the public
+    note shape (coarse source label + from_shared, no raw source_ref)."""
+    notes_service = AsyncMock(
+        notes_for_saves=AsyncMock(
+            return_value={
+                "p1": [
+                    PlaceNote(
+                        id="claim-1",
+                        text="order the omakase",
+                        tags=["food"],
+                        source_type="shared_content",
+                        from_shared=True,
+                        agree_count=3,
+                        disagree_count=1,
+                    )
+                ]
+            }
+        )
+    )
+    client = _make_app(svc, notes_service)
+
+    body = client.get("/v1/user/library").json()
+
+    claims = body["places"][0]["claims"]
+    assert len(claims) == 1
+    assert claims[0] == {
+        "id": "claim-1",
+        "text": "order the omakase",
+        "tags": ["food"],
+        "source": "community",
+        "from_shared": True,
+        "agree_count": 3,
+        "disagree_count": 1,
+    }
+
+
+def test_place_without_claims_has_empty_list(svc: AsyncMock) -> None:
+    client = _make_app(svc)  # default notes service returns {}
+
+    body = client.get("/v1/user/library").json()
+
+    assert body["places"][0]["claims"] == []
 
 
 def test_user_id_is_not_exposed_in_response(svc: AsyncMock) -> None:

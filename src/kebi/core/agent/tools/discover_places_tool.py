@@ -80,10 +80,13 @@ from kebi.core.agent.tools._summaries import (
     found_summary,
 )
 from kebi.core.agent.tools._with_timeout import tool_step_base_id, with_timeout
+from kebi.core.agent.tools._working_location import (
+    is_anchored,
+    maybe_working_location,
+)
 from kebi.core.agent.tools.consult_models import ConsultCandidate, ConsultResult
 from kebi.core.config import get_config
 from kebi.core.extraction.extraction_pipeline import SearchServiceFactory
-from kebi.core.extraction.geo_filter import drop_geographic_features
 from kebi.core.places.models import (
     LocationContext,
     PlaceCategory,
@@ -93,33 +96,6 @@ from kebi.core.places.models import (
 logger = logging.getLogger(__name__)
 
 _TOOL_NAME = "discover_places"
-
-
-def _maybe_working_location(state: AgentState) -> WorkingLocation | None:
-    """Read the turn's working location off state, returning None on absence."""
-    wl_dict = state.get("working_location")
-    if not wl_dict:
-        return None
-    try:
-        return WorkingLocation.model_validate(wl_dict)
-    except Exception:
-        logger.warning("working_location on state failed validation; ignoring")
-        return None
-
-
-def _is_anchored(working: WorkingLocation | None) -> bool:
-    """Strict location-anchoring gate for the provider phase.
-
-    Mirrors `suggest_places._is_anchored`. The provider's
-    locationBias.circle / locationRestriction.circle needs lat/lng +
-    radius_m — and `WorkingLocation.search_radius_m` defaults to 0.0
-    before the resolver has run, so a positive radius is the
-    "resolver has decided this turn" signal. A turn that lacks either
-    is a `no_location` outcome.
-    """
-    if working is None:
-        return False
-    return working.search_radius_m > 0
 
 
 def _build_location_context(working: WorkingLocation) -> LocationContext:
@@ -324,8 +300,8 @@ async def _run_discover_places_impl(
         emit_step_done(base_id, step, started=outcome_started)
         steps.append(step)
 
-    working = _maybe_working_location(state)
-    if not _is_anchored(working):
+    working = maybe_working_location(state)
+    if not is_anchored(working):
         _finish(NEED_LOCATION, kind="no_location")
         return _build_command(
             state=state,
@@ -362,7 +338,9 @@ async def _run_discover_places_impl(
             steps=steps,
         )
 
-    venues = drop_geographic_features(hits)
+    # Administrative areas (cities, districts, roads) are rejected upstream at
+    # validation (`_google_mapper`, ADR-082), so the provider never returns them.
+    venues = hits
 
     if not venues:
         _finish("nothing nearby matched that", kind="no_match")

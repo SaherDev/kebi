@@ -128,6 +128,12 @@ class WorkingLocation(BaseModel):
     lat: float
     lng: float
     neighborhood: str | None = None
+    # ISO-3166 alpha-2, lowercased, from the geocoder's address.country_code.
+    # `country` above is the display name ("Vietnam"); canonical entity keys
+    # (build_geo_key) need the code. Optional so states checkpointed before
+    # this field existed still validate; consumers fall back to resolving the
+    # display name.
+    country_code: str | None = None
 
     # Place density of this location, from the geocoder's place type — feeds
     # the radius so "near me" scales with how dense the area is (ADR-084).

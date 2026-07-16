@@ -73,6 +73,10 @@ from kebi.core.agent.tools._summaries import (
     found_summary,
 )
 from kebi.core.agent.tools._with_timeout import tool_step_base_id, with_timeout
+from kebi.core.agent.tools._working_location import (
+    is_anchored,
+    maybe_working_location,
+)
 from kebi.core.agent.tools.candidate_namer import (
     CandidateName,
     CandidateNamerService,
@@ -95,45 +99,12 @@ logger = logging.getLogger(__name__)
 _TOOL_NAME = "suggest_places"
 
 
-def _maybe_working_location(state: AgentState) -> WorkingLocation | None:
-    """Read the turn's working location off state, returning None on absence.
-
-    Mirrors the helper in `find_saved_tool.py`. Stays local rather than
-    shared because the two tools may diverge on what they accept as
-    "usable" working_location — `suggest_places` additionally requires
-    a non-zero search radius (see `_is_anchored`).
-    """
-    wl_dict = state.get("working_location")
-    if not wl_dict:
-        return None
-    try:
-        return WorkingLocation.model_validate(wl_dict)
-    except Exception:
-        logger.warning("working_location on state failed validation; ignoring")
-        return None
-
-
-def _is_anchored(working: WorkingLocation | None) -> bool:
-    """Strict location-anchoring gate for the namer + provider phases.
-
-    `suggest_places` does not call the namer LLM or the provider without
-    a real geographic anchor. The `find_saved` tool accepts named-area
-    overrides (city / country) as a substitute for lat/lng — but the
-    namer needs the radius + density to scope its suggestions, and the
-    provider's locationBias.circle needs lat/lng + radius_m. A turn
-    that lacks either is a `no_location` outcome.
-    """
-    if working is None:
-        return False
-    return working.search_radius_m > 0
-
-
 def _build_location_context(working: WorkingLocation) -> LocationContext:
     """Bound every provider call to the resolved working location.
 
     Carries lat/lng + radius_m (required by `PlaceQuery._validate_geo_location`)
     plus city/country/neighborhood so the provider's text-search reranker
-    has the named context too. `_is_anchored` has already gated this —
+    has the named context too. `is_anchored` has already gated this —
     radius_m is always positive here.
     """
     return LocationContext(
@@ -362,8 +333,8 @@ async def _run_suggest_places_impl(
         emit_step_done(base_id, step, started=outcome_started)
         steps.append(step)
 
-    working = _maybe_working_location(state)
-    if not _is_anchored(working):
+    working = maybe_working_location(state)
+    if not is_anchored(working):
         _finish(NEED_LOCATION, kind="no_location")
         return _build_command(
             state=state,
@@ -372,7 +343,7 @@ async def _run_suggest_places_impl(
             steps=steps,
         )
 
-    assert working is not None  # narrowed by _is_anchored
+    assert working is not None  # narrowed by is_anchored
     # Utility errands ("ATM near me") are walked to — clamp to a walkable
     # radius so the namer scope and provider locationBias stay tight and the
     # nearest branch wins, not a prominent one across town.
