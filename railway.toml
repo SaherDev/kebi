@@ -7,7 +7,13 @@ builder = "railpack"
 # only (0.0.0.0 → gateway ECONNREFUSED), while the deploy healthcheck probes
 # over IPv4 ("::" alone → replicas never become healthy; asyncio sets
 # IPV6_V6ONLY on the socket).
-startCommand = "PYTHONPATH=/app/src poetry run uvicorn kebi.api.main:app --host '' --port $PORT"
+#
+# Start via the app venv's own interpreter — NEVER `poetry run`. Railpack's
+# runtime image ships only the project venv (/app/.venv, copied at build);
+# Poetry's private interpreter is not runnable there (its stdlib isn't in
+# the image — crashes with libexpat/encodings errors on the mise-2026.7
+# runtime image). `poetry run` added nothing at runtime anyway.
+startCommand = "PYTHONPATH=/app/src /app/.venv/bin/python -m uvicorn kebi.api.main:app --host '' --port $PORT"
 healthcheckPath = "/v1/health"
 restartPolicyType = "on_failure"
 restartPolicyMaxRetries = 3
