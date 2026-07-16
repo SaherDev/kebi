@@ -17,6 +17,16 @@ Format:
 
 ---
 
+## ADR-131: Research's asked-about area is conversation-scoped, and country questions stay at country scope
+
+**Date:** 2026-07-16\
+**Status:** accepted\
+**Context:** The research tool answers about the area the orchestrator names, falling back to the turn's working location when none is passed. In practice that fallback fired on conversational follow-ups: a user who established the subject earlier ("I'm in Vietnam — anything to know?") and then asked a bare follow-up ("any tips?") got their question silently re-scoped to the working-location *city*, because the latest message named no area and the orchestrator applied "no area named" per-message. A city-scoped read only sees that city's claims plus its country-level ancestors — claims under sibling cities are deliberately out of reach — so a user with plenty of country-wide knowledge stored was told there was nothing yet. The reader already supports country scope end-to-end (a country read sweeps every claim beneath it, per ADR-124's city-heavy store); only the routing failed to ask at that scope.\
+**Decision:** The orchestrator treats the asked-about area as a property of the conversation, not of the latest message: an area the user put in play stays the research subject across follow-ups until they name a new one, and is restated on every research call. A country-scoped question is asked at country scope — country-wide research is a first-class shape, never narrowed to the current city just because the newest message names no area. The working-location fallback remains only for conversations where no area was ever in play. This is a routing-contract change expressed in the orchestrator's instructions; the resolver and reader are unchanged.\
+**Consequences:** Follow-up research questions inherit the subject the user actually established, so stored knowledge is found at the scope it was asked about — the common "tips for the country I'm traveling in" case now reads the whole country's claims instead of one city's. The trade is stickiness: a user who moves the conversation to a new area must name it once before follow-ups re-anchor, and a stale subject can persist if the model misjudges when the topic changed — bounded by the existing verified-or-refuse resolution, which still never answers about an unverifiable place.
+
+---
+
 ## ADR-130: Claim tags become a controlled vocabulary shared by writer and reader, and harvesting mines practical insider facts
 
 **Date:** 2026-07-15\
