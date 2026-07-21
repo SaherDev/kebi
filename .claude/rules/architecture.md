@@ -26,16 +26,15 @@
 
 - UI, frontend, auth, user management, CRUD operations
 - Product data writes — users, settings belong to NestJS
-- Database migrations for product tables — NestJS (TypeORM) in the product repo manages users and user_settings. Alembic in this repo owns places, embeddings, taste_model, recommendations, user_memories, interaction_log.
+- Database migrations for product tables — TypeORM in the product repo manages users and user_settings; Alembic here owns the AI tables (list under Database Access).
 - Payment, notifications, or any product feature logic
 
 ## Database Access
 
-- Write ownership split by domain: FastAPI writes AI data, NestJS writes product data
-- FastAPI writes: places, embeddings, taste_model, user_memories, interaction_log, user_intents
+- Shared PostgreSQL instance on Railway; write ownership split by domain — never cross it
+- FastAPI (this repo) writes the AI tables: places, place_embeddings, user_places, taste_model, interactions, user_memories, user_intents, knowledge_claims. Alembic here owns their migrations. The legacy recommendations table was dropped (ADR-078).
 - FastAPI reads: all tables as needed
-- NestJS writes: users, user_settings (product data, via TypeORM)
-- Migration ownership split by domain: Alembic in this repo owns places, embeddings, taste_model, recommendations, user_memories, interaction_log. TypeORM in the product repo manages users and user_settings. NestJS never touches AI tables.
+- NestJS (product repo) writes users and user_settings via TypeORM (`synchronize: true`). NestJS never touches AI tables.
 - Database client: SQLAlchemy async + asyncpg
 - Redis is owned exclusively by this repo. NestJS does not connect to Redis.
 
@@ -50,6 +49,9 @@ All LLM and embedding calls go through the provider abstraction layer.
 ## Coding Constraints
 
 - **Pydantic for all boundaries**: Function inputs/outputs that cross module boundaries use Pydantic models. No raw dicts.
+- **DI via `Depends()` only**: No constructing services/repos inside functions — everything injectable for tests.
+- **Repository pattern for all DB access**: Routes and services never issue queries directly.
+- **Abstract base class over provider conditionals**: A new provider is a new subclass, never an if/match branch.
 - **Responses are explicit DTOs (ADR-105)**: Every route returns a response model that names exactly the fields that leave the service — never a domain/persistence model serialized directly. A field is exposed only by being declared on the response model; never echo the caller's identity. Applies to all `/v1` endpoints.
 - **No hardcoded model names**: Always read from config.
 - **No `.env` files**: Secrets via environment variables. Non-secret config in `config/*.yaml`.

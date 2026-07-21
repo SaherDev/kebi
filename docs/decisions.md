@@ -17,6 +17,16 @@ Format:
 
 ---
 
+## ADR-132: CLAUDE.md carries only commands, non-obvious facts, and pointers
+
+**Date:** 2026-07-21\
+**Status:** accepted\
+**Context:** CLAUDE.md had drifted into a mix of real guidance, verbatim duplicates of the `@import`ed `.claude/rules/` files, generic conventions an agent follows anyway, and template residue (a nonexistent `app/utils/` path, hardcoded model names the repo's own rules forbid). Duplication also let the two copies diverge: the rules file's database table list had gone stale while CLAUDE.md's stayed current.\
+**Decision:** CLAUDE.md holds only what earns its lines — commands, non-obvious facts an agent would otherwise get wrong, and one-line pointers to the files that own the detail. Anything rule-shaped lives exactly once in `.claude/rules/` and is imported; linter-enforceable style lives in linter config; model names live in `config/app.yaml`. Section order is commands first, then stack, then conventions (structure rule updated to match).\
+**Consequences:** The memory file is ~40% shorter with no duplicated guidance left to drift, and the rules files are the single home for boundaries and constraints. Future additions must justify why a line belongs in CLAUDE.md rather than in a rules file, the linter config, or app config.
+
+---
+
 ## ADR-131: Research's asked-about area is conversation-scoped, and country questions stay at country scope
 
 **Date:** 2026-07-16\
