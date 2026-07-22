@@ -148,6 +148,16 @@ ephemeral area knowledge.
   name is never persisted as its own entity — it resolves to its verified
   containing area's extent plus experience-type tags (never silently
   dropped).
+- **Harvest from noted-interest-only shares** (gap exposed by Step 1,
+  2026-07-23): the knowledge harvest is anchored to persisted places
+  (ADR-121/126 — the anchor supplies the geo identity that constrains claim
+  resolution), so a share whose every place is a noted non-venue now
+  produces **no claims at all** — pre-Step-1 it harvested only because the
+  mislabeled venue wrongly anchored it. Verified live: the Vietnam
+  video (Ha Giang Loop / Hoi An / Mui Ne) yields three noted interests and
+  zero claims. Step 2's area entities become the missing anchor: a
+  noted-interest share resolves its areas through the entity store and
+  harvests against them.
 
 **Constraints:** knowledge layer stays the rich-data owner — the entity store
 holds identity + geometry only. Consult answers stay venue-only in this step.
