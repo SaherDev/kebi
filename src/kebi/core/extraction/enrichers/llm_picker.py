@@ -19,7 +19,7 @@ Emits places vocabulary (categories + typed tags) — ADR-070.
 from __future__ import annotations
 
 import logging
-from typing import cast
+from typing import Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -37,6 +37,7 @@ from kebi.core.extraction.types import (
     EvidenceField,
     ExtractionContext,
     Medium,
+    PickOutcome,
     Producer,
     ValidatedCandidate,
 )
@@ -118,6 +119,16 @@ class _PickedPlace(BaseModel):
     evidence_fields: list[EvidenceField] = Field(default_factory=list)
     rejected: bool = False
     rejection_reason: str | None = None
+    rejection_kind: Literal["non_venue", "other"] | None = Field(
+        default=None,
+        description=(
+            "Set only when rejected=true. 'non_venue' means the referenced "
+            "name is a route, road, pass, loop, trail, region, island, town, "
+            "neighborhood, or natural feature — not a visitable venue. "
+            "'other' (or null) for any other rejection (wrong place, "
+            "unrelated result)."
+        ),
+    )
 
     model_config = ConfigDict(extra="forbid")
 
@@ -150,15 +161,19 @@ class LLMPlacePicker:
         context: ExtractionContext,
         search_set: dict[str, AttributedSearchResult],
         shared_tags: list[PlaceTag] | None = None,
-    ) -> list[ValidatedCandidate]:
+    ) -> PickOutcome:
         """Classify search results into picks (ADR-080: post-search half).
 
         `shared_tags` are post-level attribute tags from the resolver,
         merged into every pick (per-place tags win on conflict). Default
         `None` preserves pre-ADR-080 behavior when no resolver is wired.
+
+        Besides the kept candidates, the outcome carries the display
+        labels of picks the LLM rejected as non-venue geography, so the
+        caller can narrate them as noted interests (never a silent drop).
         """
         if not search_set:
-            return []
+            return PickOutcome(candidates=[])
 
         user_content = self._build_prompt(context, search_set)
         # Phase 4.5 subtask 2: nests under the extraction_run trace.
@@ -193,7 +208,7 @@ class LLMPlacePicker:
             except Exception as exc:
                 t.fail(exc)
                 logger.warning("LLMPlacePicker failed: %s", exc, exc_info=True)
-                return []
+                return PickOutcome(candidates=[])
 
             kept = [p for p in response.picks if not p.rejected]
             rejected = [p for p in response.picks if p.rejected]
@@ -201,14 +216,26 @@ class LLMPlacePicker:
                 "picked_count": len(kept),
                 "rejected_count": len(rejected),
             }
+            non_venue_names: list[str] = []
             for r in rejected:
                 logger.info(
                     "place_picker_rejected",
                     extra={
                         "provider_id": r.provider_id,
                         "reason": r.rejection_reason,
+                        "kind": r.rejection_kind,
                     },
                 )
+                # A non-venue rejection is narrated, not just logged. The
+                # post's own label for the place (display_label, empty ⇒
+                # the raw query name) is what the user recognizes — not
+                # the surviving search candidate's name.
+                if r.rejection_kind == "non_venue":
+                    attributed = search_set.get(r.provider_id)
+                    if attributed is not None:
+                        non_venue_names.append(
+                            attributed.display_label or attributed.query
+                        )
 
             intermediate: list[ValidatedCandidate] = [
                 c
@@ -218,11 +245,14 @@ class LLMPlacePicker:
             if shared_tags:
                 for c in intermediate:
                     c.tags = merge_tags(c.tags, shared_tags)
-            return reconcile_picks(
-                picks=intermediate,
-                search_set=search_set,
-                confidence_config=self._confidence_config,
-                context=context,
+            return PickOutcome(
+                candidates=reconcile_picks(
+                    picks=intermediate,
+                    search_set=search_set,
+                    confidence_config=self._confidence_config,
+                    context=context,
+                ),
+                non_venue_names=non_venue_names,
             )
 
     @staticmethod

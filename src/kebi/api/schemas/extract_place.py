@@ -83,10 +83,28 @@ FailureReason = Literal[
 ]
 
 
+class NotedInterest(BaseModel):
+    """Acknowledgment for a detected non-venue (a route, region, town,
+    natural feature) the share referenced.
+
+    Explicit projection (ADR-105): `name` is the detected name as the
+    user knows it; `message` is a ready-to-render acknowledgment. Nothing
+    is persisted for a noted interest — this is how a rejected non-venue
+    stays visible instead of being silently dropped.
+    """
+
+    name: str
+    message: str
+
+
 class ExtractPlaceResponse(BaseModel):
     """Response body for extract-place endpoint (ADR-063).
 
-    Invariant: `results` is empty iff `status != "completed"`.
+    Invariant: `status == "completed"` requires at least one of `results`
+    / `noted_interests`; the non-completed statuses carry neither. A
+    completed response with empty `results` and non-empty
+    `noted_interests` is the "share contained only non-venue geography"
+    outcome — a success with nothing saved.
 
     `failure_reason` and `failure_message` are populated only when
     `status == "failed"` so callers can surface a meaningful diagnostic
@@ -99,15 +117,23 @@ class ExtractPlaceResponse(BaseModel):
     request_id: str | None = None
     failure_reason: FailureReason | None = None
     failure_message: str | None = None
+    noted_interests: list[NotedInterest] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _status_results_consistency(self) -> "ExtractPlaceResponse":
-        if self.status == "completed" and not self.results:
-            raise ValueError("status='completed' requires non-empty results")
+        if self.status == "completed" and not (self.results or self.noted_interests):
+            raise ValueError(
+                "status='completed' requires non-empty results or noted_interests"
+            )
         if self.status != "completed" and self.results:
             raise ValueError(
                 f"status={self.status!r} forbids non-empty results; "
                 f"pipeline-level states carry no items"
+            )
+        if self.status != "completed" and self.noted_interests:
+            raise ValueError(
+                f"status={self.status!r} forbids noted_interests; an "
+                f"acknowledgment is a completed outcome"
             )
         if self.status == "failed" and self.failure_reason is None:
             raise ValueError(

@@ -429,18 +429,29 @@ Canonical product-facing extraction endpoint (ADR-073). The product repo calls t
   "raw_input": "https://www.tiktok.com/@user/video/123",
   "request_id": "9f1c…",
   "failure_reason": null,
-  "failure_message": null
+  "failure_message": null,
+  "noted_interests": [
+    {
+      "name": "Ha Giang Loop",
+      "message": "'Ha Giang Loop' looks like a route or region rather than a single place — I've noted it as a travel interest instead of saving it."
+    }
+  ]
 }
 ```
 
 | Field             | Type                                   | Notes                                                                                                                                                                                                                                                                                              |
 | ----------------- | -------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `status`          | `"pending" \| "completed" \| "failed"` | Envelope-level only. `results` is non-empty **iff** `status == "completed"`                                                                                                                                                                                                                        |
+| `status`          | `"pending" \| "completed" \| "failed"` | Envelope-level only. `status == "completed"` requires at least one of `results` / `noted_interests`; the other statuses carry neither                                                                                                                                                              |
 | `results`         | `ExtractPlaceItem[]`                   | `{ place: PlaceCore, confidence: float (0–1) }`. **No per-item `status`** — ADR-071 saves every picker candidate with `approved=False`; the user curates later in the product UI. **No `evidence`** — ADR-093 moved the audit trail to an object-storage ledger so it no longer rides the response |
 | `raw_input`       | `string \| null`                       | The original user-supplied string, verbatim                                                                                                                                                                                                                                                        |
 | `request_id`      | `string \| null`                       | Correlation id                                                                                                                                                                                                                                                                                     |
 | `failure_reason`  | `string \| null`                       | Populated only when `status == "failed"`. One of `unsupported_url`, `empty_input`, `no_candidates`, `all_below_threshold`, `candidate_limit_exceeded`, `pipeline_error`, `save_limit_reached`                                                                                                      |
 | `failure_message` | `string \| null`                       | Human-readable diagnostic, only when `status == "failed"`                                                                                                                                                                                                                                          |
+| `noted_interests` | `NotedInterest[]`                      | `{ name: string, message: string }`. Non-venue geography the share referenced (a route, region, town, natural feature) — detected, acknowledged, **never saved**. Render `message` (or your own copy off `name`) so the user's action has a visible outcome. May accompany non-empty `results`     |
+
+**New legal outcome:** `status: "completed"` with empty `results` and non-empty `noted_interests` — the share contained only non-venue geography (e.g. a video about a motorbike loop). This is a success, not a failure; nothing was saved and the acknowledgment is the payload. Callers that previously treated `completed` as "results present" must handle this shape.
+
+Note: `noted_interests` does not ride the ADR-074 URL result cache — a repeat submission of an already-cached URL returns the cached `results` without the acknowledgments. Accepted limitation while noted interests are acknowledge-only.
 
 ADR-081: the extract response is unchanged. The name the place was shown as in the source post (e.g. a TikTok card title "Mirror Temple", resolver-cleaned of list numbering) is **not** returned here — it is persisted per save on `user_places.source_label` and surfaced when the user's saved places are read. Independently, a confidently-matched source label is added to the shared `place.place_name_aliases` (which feeds search); low-confidence labels stay per-user-only and never enter shared search.
 

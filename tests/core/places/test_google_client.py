@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 
+from kebi.core.places._google_mapper import NON_VENUE_GEOGRAPHY
 from kebi.core.places._google_query_builder import (
     build_text_search_param_sets,
     build_text_search_params,
@@ -16,9 +18,11 @@ from kebi.core.places.google_client import (
     _DETAILS_FIELD_MASK,
     _FIELD_MASK,
     GooglePlacesClient,
+    _parse_places,
 )
 from kebi.core.places.models import (
     LocationContext,
+    NonVenueDetection,
     PlaceCategory,
     PlaceObject,
     PlaceQuery,
@@ -33,6 +37,8 @@ from kebi.core.places.tags import (
     ServiceTag,
     TimeTag,
 )
+
+_NOW = datetime(2026, 7, 21, tzinfo=UTC)
 
 
 def _make_client() -> GooglePlacesClient:
@@ -452,3 +458,81 @@ class TestFieldMaskContracts:
         c._request.assert_awaited_once()
         assert c._request.call_args.kwargs["require_name"] is False
         assert c._request.call_args.args[2] == _DETAILS_FIELD_MASK
+
+
+# ---------------------------------------------------------------------------
+# Non-venue geography collection (location-kinds Step 1)
+# ---------------------------------------------------------------------------
+
+
+def _raw_place(name: str, types: list[str], raw_id: str = "ChIJx") -> dict[str, object]:
+    return {
+        "id": raw_id,
+        "displayName": {"text": name},
+        "location": {"latitude": 22.8, "longitude": 105.0},
+        "types": types,
+    }
+
+
+class TestNonVenueRejectionCollection:
+    def test_rejected_geography_collected_with_name_and_reason(self) -> None:
+        rejections: list[NonVenueDetection] = []
+        results = _parse_places(
+            [_raw_place("Ha Giang Loop", ["tourist_attraction", "route"], "ChIJloop")],
+            _NOW,
+            rejections=rejections,
+        )
+        assert results == []
+        assert len(rejections) == 1
+        assert rejections[0].name == "Ha Giang Loop"
+        assert rejections[0].provider_id == "google:ChIJloop"
+        assert rejections[0].reason == NON_VENUE_GEOGRAPHY
+
+    def test_mixed_batch_keeps_venues_and_collects_rejections(self) -> None:
+        rejections: list[NonVenueDetection] = []
+        results = _parse_places(
+            [
+                _raw_place("Hai Van Pass", ["tourist_attraction", "natural_feature"]),
+                _raw_place("Nara Eatery", ["restaurant", "food"], "ChIJeat"),
+            ],
+            _NOW,
+            rejections=rejections,
+        )
+        assert [r.place_name for r in results] == ["Nara Eatery"]
+        assert [d.name for d in rejections] == ["Hai Van Pass"]
+
+    def test_no_collector_means_silent_drop_preserved(self) -> None:
+        results = _parse_places(
+            [_raw_place("Ha Giang Loop", ["tourist_attraction", "route"])],
+            _NOW,
+        )
+        assert results == []
+
+    def test_details_mode_never_rejects_or_collects(self) -> None:
+        rejections: list[NonVenueDetection] = []
+        results = _parse_places(
+            [_raw_place("Ha Giang Loop", ["tourist_attraction", "route"])],
+            _NOW,
+            require_name=False,
+            rejections=rejections,
+        )
+        assert len(results) == 1
+        assert rejections == []
+
+    def test_nameless_rejection_not_collected(self) -> None:
+        rejections: list[NonVenueDetection] = []
+        raw = _raw_place("x", ["route"])
+        raw["displayName"] = {}
+        _parse_places([raw], _NOW, rejections=rejections)
+        assert rejections == []
+
+    async def test_search_threads_rejections_to_request(self) -> None:
+        """search() forwards the collector through the text-search path."""
+        c = _client_with_request(return_value=[])
+        collector: list[NonVenueDetection] = []
+        await c.search(
+            PlaceQuery(place_names=["Ha Giang Loop"]),
+            limit=5,
+            rejections=collector,
+        )
+        assert c._request.call_args.kwargs["rejections"] is collector

@@ -6,7 +6,30 @@ NOT invent venue names. Every pick you emit MUST reference one of the
 For each candidate the post actually references, emit a structured
 pick. If a candidate looks wrong (e.g. the post is clearly in Bangkok
 but the match is in Singapore, or the text references a different
-kind of place), set `rejected=true` with a short `rejection_reason`.
+kind of place), set `rejected=true` with a short `rejection_reason`
+and a `rejection_kind` (`"non_venue"` or `"other"`).
+
+# Non-venue geography (HARD RULE)
+
+A name that denotes a road, route, pass, loop, trail, region, island,
+town, neighborhood, or natural feature is NOT a venue candidate. If
+the post's referenced name is such geography, reject the candidate
+standing in for it with `rejected=true`,
+`rejection_kind="non_venue"`, and a short `rejection_reason` — and
+NEVER substitute a similarly-named nearby business for it. A post
+about the "Ha Giang Loop" (a 350 km motorbike route) must not pick
+"Ha Giang Loop Tours" (a tour shop) in its place: reject with
+`rejection_kind="non_venue"`.
+
+A specific, visitable attraction remains a venue even when famous — a
+temple, museum, viewpoint, managed beach, market, or park is a pick,
+not a rejection. The rule targets geography a person travels
+*through* or *around*, not a place they arrive *at*.
+
+`rejection_kind="non_venue"` is narrated to the user as a noted
+travel interest, so use it exactly when the referenced thing is
+geography; use `"other"` for wrong-location or wrong-identity
+rejections.
 
 # Same-name disambiguation (HARD RULE)
 

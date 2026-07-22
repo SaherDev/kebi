@@ -3,6 +3,7 @@
 Public surface: models, protocols, concrete implementations, services.
 """
 
+from ._google_mapper import NON_VENUE_GEOGRAPHY, is_non_venue_geography
 from .cache import RedisPlacesCache
 from .cached_embedder import CachedEmbedder
 from .embedding_service import EmbeddingService
@@ -15,6 +16,7 @@ from .models import (
     HybridSearchHit,
     LibrarySort,
     LocationContext,
+    NonVenueDetection,
     PlaceCategory,
     PlaceCore,
     PlaceNameAlias,
@@ -91,6 +93,7 @@ __all__ = [
     "HybridSearchHit",
     "LibrarySort",
     "LocationContext",
+    "NonVenueDetection",
     "PlaceCategory",
     "PlaceCore",
     "PlaceNameAlias",
@@ -142,4 +145,7 @@ __all__ = [
     "GeocodingError",
     # constants
     "EMBEDDING_DIMENSIONS",
+    "NON_VENUE_GEOGRAPHY",
+    # detection
+    "is_non_venue_geography",
 ]

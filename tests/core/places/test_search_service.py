@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 from kebi.core.places.models import (
     LocationContext,
+    NonVenueDetection,
     PlaceCategory,
     PlaceCore,
     PlaceObject,
@@ -1147,3 +1148,63 @@ class TestIconHintStamping:
 
         upsert.upsert_and_embed.assert_not_awaited()
         assert results[0].icon is None
+
+
+class TestFindWithRejections:
+    """Location-kinds Step 1: the cold path reports the non-venue geography
+    the provider search rejected; warm/DB paths report none."""
+
+    @staticmethod
+    def _detection() -> NonVenueDetection:
+        return NonVenueDetection(
+            name="Ha Giang Loop",
+            provider_id="google:ChIJloop",
+            reason="non_venue_geography",
+        )
+
+    async def test_cold_path_propagates_detections(self) -> None:
+        detection = self._detection()
+
+        async def _search(
+            query: PlaceQuery,
+            limit: int = 20,
+            *,
+            rejections: list[NonVenueDetection] | None = None,
+        ) -> list[PlaceObject]:
+            if rejections is not None:
+                rejections.append(detection)
+            return []
+
+        client = MagicMock(
+            search=AsyncMock(side_effect=_search),
+            get_by_ids=AsyncMock(return_value=[]),
+        )
+        service = _make_service(client=client)
+        places, rejections = await service.find_with_rejections(
+            PlaceQuery(place_names=["Ha Giang Loop"])
+        )
+        assert places == []
+        assert rejections == [detection]
+
+    async def test_db_hit_path_reports_no_detections(self) -> None:
+        repo = MagicMock(
+            find=AsyncMock(return_value=[_core("p1")]),
+            get_by_provider_ids=AsyncMock(return_value={}),
+        )
+        cache = MagicMock(
+            mget=AsyncMock(return_value={"google:p1": _object("p1")}),
+            mset=AsyncMock(),
+        )
+        service = _make_service(repo=repo, cache=cache)
+        places, rejections = await service.find_with_rejections(
+            PlaceQuery(place_names=["Place p1"])
+        )
+        assert [p.provider_id for p in places] == ["google:p1"]
+        assert rejections == []
+
+    async def test_find_keeps_list_shape(self) -> None:
+        """`find()` delegates but still returns a bare list for the
+        agent-tool callers that never see detections."""
+        service = _make_service()
+        result = await service.find(PlaceQuery(place_names=["x"]))
+        assert result == []

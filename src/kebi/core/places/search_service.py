@@ -19,7 +19,7 @@ from __future__ import annotations
 import logging
 
 from ._place_utils import overlay_with_cache, stamp_catalog_identity
-from .models import PlaceCore, PlaceObject, PlaceQuery
+from .models import NonVenueDetection, PlaceCore, PlaceObject, PlaceQuery
 from .protocols import (
     PlacesCacheProtocol,
     PlacesClientProtocol,
@@ -46,16 +46,33 @@ class PlacesSearchService:
     async def find(self, query: PlaceQuery, limit: int = 20) -> list[PlaceObject]:
         """DB → enrich (cache + provider fallback) → external query fallback
         if no DB hits."""
+        places, _ = await self.find_with_rejections(query, limit)
+        return places
+
+    async def find_with_rejections(
+        self, query: PlaceQuery, limit: int = 20
+    ) -> tuple[list[PlaceObject], list[NonVenueDetection]]:
+        """`find`, plus the non-venue geography the provider search rejected.
+
+        The detections let extraction narrate a rejected route/region as a
+        noted interest instead of silently returning a thinner list. Only
+        the cold provider path can produce detections — a DB hit is by
+        construction an already-validated venue. (A bad row persisted before
+        the validator tightened is the picker's job to reject until the
+        cleanup script removes it.)
+        """
         db_hits = await self._repo.find(query, limit)
         if not db_hits:
-            return await self._external_fallback(query, limit)
+            rejections: list[NonVenueDetection] = []
+            places = await self._external_fallback(query, limit, rejections=rejections)
+            return places, rejections
 
         # get_by_ids hits cache first; only misses (incl. TTL-wiped stale
         # rows) go to the provider, with upsert + mset on the way back.
         provider_ids = [c.provider_id for c in db_hits if c.provider_id]
         enriched = await self.get_by_ids(provider_ids)
 
-        return overlay_with_cache(db_hits, enriched)
+        return overlay_with_cache(db_hits, enriched), []
 
     async def get_by_ids(self, provider_ids: list[str]) -> dict[str, PlaceObject]:
         """Resolve places by provider_id with cache → external fallback.
@@ -135,7 +152,10 @@ class PlacesSearchService:
         return result
 
     async def _external_fallback(
-        self, query: PlaceQuery, limit: int
+        self,
+        query: PlaceQuery,
+        limit: int,
+        rejections: list[NonVenueDetection] | None = None,
     ) -> list[PlaceObject]:
         """Cold path: client.search → upsert (via service) → cache → return.
 
@@ -145,7 +165,7 @@ class PlacesSearchService:
         results never carry an icon of their own today; the guard keeps
         a future provider-sourced icon authoritative anyway.
         """
-        results = await self._client.search(query, limit)
+        results = await self._client.search(query, limit, rejections=rejections)
         if query.icon_hint:
             results = [
                 r if r.icon else r.model_copy(update={"icon": query.icon_hint})

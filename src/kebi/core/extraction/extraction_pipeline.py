@@ -34,7 +34,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from contextlib import AbstractAsyncContextManager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol
 
 from kebi.core.config import ExtractionConfig
@@ -49,12 +49,14 @@ from kebi.core.extraction.enrichment_level import EnrichmentLevel
 from kebi.core.extraction.types import (
     ExtractionContext,
     Medium,
+    PickOutcome,
     Producer,
     ValidatedCandidate,
 )
 from kebi.core.knowledge.schemas import HarvestContent
 from kebi.core.places import (
     LocationContext,
+    NonVenueDetection,
     PlaceObject,
     PlaceQuery,
     PlacesSearchServiceProtocol,
@@ -69,10 +71,16 @@ class PipelineResult:
     """What one pipeline run yields: the picked candidates plus a snapshot
     of the content they came from. The snapshot feeds the background harvest
     pass (ADR-121) — it is built from the final context whether or not any
-    candidate survived, so an empty pick still carries its content."""
+    candidate survived, so an empty pick still carries its content.
+
+    `noted_non_venues` carries the names the run detected as non-venue
+    geography (a route, region, town, natural feature) — from the search
+    validator and the picker alike — deduped, in first-seen order. The
+    service narrates them as noted interests (never a silent drop)."""
 
     candidates: list[ValidatedCandidate]
     content: HarvestContent
+    noted_non_venues: list[str] = field(default_factory=list)
 
 
 def _build_harvest_content(
@@ -91,8 +99,9 @@ def _build_harvest_content(
 
 
 class PickerProtocol(Protocol):
-    """Pick-step contract — LLM classifies the search_set, returns
-    `ValidatedCandidate`s. `shared_tags` are the resolver's post-level
+    """Pick-step contract — LLM classifies the search_set, returns a
+    `PickOutcome` (kept `ValidatedCandidate`s + names rejected as
+    non-venue geography). `shared_tags` are the resolver's post-level
     tags merged into every pick (ADR-080)."""
 
     async def pick(
@@ -100,7 +109,7 @@ class PickerProtocol(Protocol):
         context: ExtractionContext,
         search_set: dict[str, AttributedSearchResult],
         shared_tags: list[PlaceTag] | None = None,
-    ) -> list[ValidatedCandidate]: ...
+    ) -> PickOutcome: ...
 
 
 class ResolverProtocol(Protocol):
@@ -279,6 +288,9 @@ class ExtractionPipeline:
         # provider_id from a later level overwrites without re-querying).
         search_set: dict[str, AttributedSearchResult] = {}
         searched_queries: set[str] = set()
+        # Non-venue geography noted across levels: normalized name → the
+        # first display name seen. Ordered dict keeps first-seen order.
+        noted: dict[str, str] = {}
 
         for level in self._levels:
             executed, fired = await level.run(context)
@@ -299,13 +311,18 @@ class ExtractionPipeline:
             # push the request past the candidate ceiling.
             _enforce_candidate_limit(context, limit, _emit)
 
-            await self._extend_search_set(
+            detections = await self._extend_search_set(
                 context, search_set, searched_queries, resolver_output
             )
+            for d in detections:
+                noted.setdefault(normalize_query(d.name), d.name)
 
-            results = await self._picker.pick(
+            outcome = await self._picker.pick(
                 context, search_set, shared_tags=resolver_output.post_tags
             )
+            for name in outcome.non_venue_names:
+                noted.setdefault(normalize_query(name), name)
+            results = outcome.candidates
 
             level_summary = level.summary_fn(context, fired, len(results))
             _emit(f"save.{level.name}", level_summary)
@@ -321,11 +338,14 @@ class ExtractionPipeline:
                 return PipelineResult(
                     candidates=deduped,
                     content=_build_harvest_content(context, url),
+                    noted_non_venues=list(noted.values()),
                 )
 
         _emit("save.validate", "Could not confirm any places")
         return PipelineResult(
-            candidates=[], content=_build_harvest_content(context, url)
+            candidates=[],
+            content=_build_harvest_content(context, url),
+            noted_non_venues=list(noted.values()),
         )
 
     async def _extend_search_set(
@@ -334,11 +354,12 @@ class ExtractionPipeline:
         search_set: dict[str, AttributedSearchResult],
         searched_queries: set[str],
         resolver_output: ResolverOutput,
-    ) -> None:
-        """Fan out `PlacesSearchService.find()` over the resolver-cleaned
-        producer names (skip queries already issued on an earlier level).
-        Drop geographic-feature results and attribute each surviving
-        result to the `KnownPlace` whose name produced it.
+    ) -> list[NonVenueDetection]:
+        """Fan out `PlacesSearchService.find_with_rejections()` over the
+        resolver-cleaned producer names (skip queries already issued on an
+        earlier level). Attribute each surviving result to the `KnownPlace`
+        whose name produced it, and return the non-venue geography the
+        validator rejected so the run can narrate it as noted interests.
 
         ADR-080: the string sent to the provider is the resolver's
         cleaned query; the raw `KnownPlace` name stays the attribution
@@ -384,7 +405,7 @@ class ExtractionPipeline:
                 queries.append((tag, tag, Producer.VIDEO_METADATA, Medium.LOCATION_TAG))
 
         if not queries:
-            return
+            return []
 
         # Shared post location is the default; a candidate with its own
         # `area` (ADR-082 — multi-destination posts) is biased by that
@@ -401,7 +422,7 @@ class ExtractionPipeline:
 
         async def _find(
             search_query: str, location: LocationContext | None
-        ) -> list[PlaceObject]:
+        ) -> tuple[list[PlaceObject], list[NonVenueDetection]]:
             """Run one name's search; best-effort — errors degrade to [].
 
             Each task acquires its own `PlacesSearchService` bound to a
@@ -412,7 +433,7 @@ class ExtractionPipeline:
             """
             try:
                 async with sem, self._search_service_factory() as svc:
-                    return await svc.find(
+                    return await svc.find_with_rejections(
                         PlaceQuery(place_names=[search_query], location=location),
                         limit=_SEARCH_LIMIT_PER_QUERY,
                     )
@@ -421,7 +442,7 @@ class ExtractionPipeline:
                     "places_search_failed",
                     extra={"query": search_query, "error": str(exc)},
                 )
-                return []
+                return [], []
 
         batches = await asyncio.gather(
             *[_find(sq, _location_for(raw)) for raw, sq, _, _ in queries]
@@ -429,9 +450,11 @@ class ExtractionPipeline:
 
         # Merge in `queries` order (not completion order) so cross-name dedup
         # stays deterministic — first producer to claim a provider_id wins.
-        for (raw, search_query, producer, medium), results in zip(
+        detections: list[NonVenueDetection] = []
+        for (raw, search_query, producer, medium), (results, rejected) in zip(
             queries, batches, strict=True
         ):
+            detections.extend(rejected)
             for place in results:
                 if not place.provider_id:
                     continue
@@ -448,6 +471,7 @@ class ExtractionPipeline:
                     ),
                 )
             searched_queries.add(normalize_query(raw))
+        return detections
 
 
 __all__ = [
