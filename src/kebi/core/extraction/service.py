@@ -34,6 +34,7 @@ from kebi.api.schemas.extract_place import (
     ExtractPlaceItem,
     ExtractPlaceResponse,
     FailureReason,
+    NotedInterest,
 )
 from kebi.core.agent._trace_context import feature_trace
 from kebi.core.config import get_config
@@ -99,6 +100,25 @@ def _failed_response(
         failure_reason=reason,
         failure_message=message,
     )
+
+
+def _noted_interests(names: list[str]) -> list[NotedInterest]:
+    """Build the acknowledgment entries for detected non-venue geography.
+
+    Acknowledge-only: nothing is persisted for a noted interest — the
+    message keeps the user's action visible (never a silent drop) until
+    the area model gives these a real home."""
+    return [
+        NotedInterest(
+            name=name,
+            message=(
+                f"'{name}' looks like a route or region rather than a "
+                f"single place — I've noted it as a travel interest "
+                f"instead of saving it."
+            ),
+        )
+        for name in names
+    ]
 
 
 def _candidate_to_item_dict(
@@ -362,7 +382,20 @@ class ExtractionService:
                 message="Pipeline error — see server logs.",
             )
 
+        noted = _noted_interests(pipeline_result.noted_non_venues)
+
         if not candidates:
+            # A share that contained only non-venue geography (a route, a
+            # region) is a success with nothing saved — the acknowledgment
+            # IS the outcome, not a failure.
+            if noted:
+                return ExtractPlaceResponse(
+                    status="completed",
+                    results=[],
+                    raw_input=raw_input,
+                    request_id=rid,
+                    noted_interests=noted,
+                )
             return _failed_response(
                 raw_input,
                 rid,
@@ -378,6 +411,14 @@ class ExtractionService:
             candidates, user_id, rid, source, parsed.url, pipeline_result.content
         )
         if not items:
+            if noted:
+                return ExtractPlaceResponse(
+                    status="completed",
+                    results=[],
+                    raw_input=raw_input,
+                    request_id=rid,
+                    noted_interests=noted,
+                )
             return _failed_response(
                 raw_input,
                 rid,
@@ -393,6 +434,7 @@ class ExtractionService:
             results=items,
             raw_input=raw_input,
             request_id=rid,
+            noted_interests=noted,
         )
 
     async def _link_to_user(

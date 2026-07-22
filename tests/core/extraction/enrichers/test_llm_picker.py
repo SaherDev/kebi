@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -65,8 +66,8 @@ def _picker_with_response(response: _PickerResponse) -> LLMPlacePicker:
 @pytest.mark.asyncio
 async def test_empty_search_set_short_circuits() -> None:
     picker = _picker_with_response(_PickerResponse(picks=[]))
-    out = await picker.pick(_ctx(), {})
-    assert out == []
+    outcome = await picker.pick(_ctx(), {})
+    assert outcome.candidates == []
     picker._instructor_client.extract.assert_not_called()
 
 
@@ -86,12 +87,13 @@ async def test_pick_with_valid_provider_id_returns_candidate() -> None:
             ]
         )
     )
-    out = await picker.pick(_ctx(caption="pizza in Bangkok"), search_set)
-    assert len(out) == 1
-    assert out[0].provider_id == "google:joe"
-    assert out[0].place_name == "Joe's Pizza"  # echoed from search result
-    assert out[0].categories == [PlaceCategory.restaurant]
-    assert out[0].confidence > 0.0
+    outcome = await picker.pick(_ctx(caption="pizza in Bangkok"), search_set)
+    assert len(outcome.candidates) == 1
+    assert outcome.candidates[0].provider_id == "google:joe"
+    # place_name echoed from the search result
+    assert outcome.candidates[0].place_name == "Joe's Pizza"
+    assert outcome.candidates[0].categories == [PlaceCategory.restaurant]
+    assert outcome.candidates[0].confidence > 0.0
 
 
 @pytest.mark.asyncio
@@ -108,8 +110,8 @@ async def test_pick_missing_from_search_set_is_dropped() -> None:
             ]
         )
     )
-    out = await picker.pick(_ctx(), search_set)
-    assert out == []
+    outcome = await picker.pick(_ctx(), search_set)
+    assert outcome.candidates == []
 
 
 @pytest.mark.asyncio
@@ -126,8 +128,8 @@ async def test_rejected_pick_excluded() -> None:
             ]
         )
     )
-    out = await picker.pick(_ctx(), search_set)
-    assert out == []
+    outcome = await picker.pick(_ctx(), search_set)
+    assert outcome.candidates == []
 
 
 @pytest.mark.asyncio
@@ -147,13 +149,13 @@ async def test_tags_converted_to_place_tag_with_source_llm() -> None:
             ]
         )
     )
-    out = await picker.pick(_ctx(caption="pizza"), search_set)
-    assert len(out) == 1
-    tag_pairs = {(str(t.type), str(t.value)) for t in out[0].tags}
+    outcome = await picker.pick(_ctx(caption="pizza"), search_set)
+    assert len(outcome.candidates) == 1
+    tag_pairs = {(str(t.type), str(t.value)) for t in outcome.candidates[0].tags}
     # type may resolve to TagType enum or stay as str — both forms accepted.
     assert any(v == "Italian" for _, v in tag_pairs)
     assert any(v == "cozy" for _, v in tag_pairs)
-    assert all(t.source == "llm" for t in out[0].tags)
+    assert all(t.source == "llm" for t in outcome.candidates[0].tags)
 
 
 @pytest.mark.asyncio
@@ -174,9 +176,9 @@ async def test_shared_tags_merged_into_pick_per_place_wins() -> None:
         PlaceTag(type=TagType.price, value="moderate", source="llm"),  # exact dup
         PlaceTag(type=TagType.atmosphere, value="upscale", source="llm"),
     ]
-    out = await picker.pick(_ctx(caption="x"), search_set, shared_tags=shared)
-    assert len(out) == 1
-    tags = out[0].tags
+    outcome = await picker.pick(_ctx(caption="x"), search_set, shared_tags=shared)
+    assert len(outcome.candidates) == 1
+    tags = outcome.candidates[0].tags
     values = [t.value for t in tags]
     # exact (price, moderate) dup not duplicated; shared atmosphere added.
     assert values.count("moderate") == 1
@@ -198,9 +200,9 @@ async def test_shared_tags_none_preserves_behavior() -> None:
             ]
         )
     )
-    out = await picker.pick(_ctx(caption="x"), search_set)
-    assert len(out) == 1
-    assert {t.value for t in out[0].tags} == {"Italian"}
+    outcome = await picker.pick(_ctx(caption="x"), search_set)
+    assert len(outcome.candidates) == 1
+    assert {t.value for t in outcome.candidates[0].tags} == {"Italian"}
 
 
 @pytest.mark.asyncio
@@ -210,11 +212,11 @@ async def test_instructor_exception_returns_empty_list() -> None:
     picker = LLMPlacePicker(
         instructor_client=instructor, confidence_config=ConfidenceConfig()
     )
-    out = await picker.pick(
+    outcome = await picker.pick(
         _ctx(),
         {"google:joe": _attributed(provider_id="google:joe")},
     )
-    assert out == []
+    assert outcome.candidates == []
 
 
 @pytest.mark.asyncio
@@ -231,8 +233,8 @@ async def test_subcategory_null_string_normalized_to_none() -> None:
             ]
         )
     )
-    out = await picker.pick(_ctx(), search_set)
-    assert out[0].subcategory is None
+    outcome = await picker.pick(_ctx(), search_set)
+    assert outcome.candidates[0].subcategory is None
 
 
 @pytest.mark.asyncio
@@ -249,8 +251,8 @@ async def test_icon_threads_through_to_validated_candidate() -> None:
             ]
         )
     )
-    out = await picker.pick(_ctx(caption="pizza"), {"google:joe": attributed})
-    assert out[0].icon == "🍕"
+    outcome = await picker.pick(_ctx(caption="pizza"), {"google:joe": attributed})
+    assert outcome.candidates[0].icon == "🍕"
 
 
 @pytest.mark.asyncio
@@ -267,5 +269,87 @@ async def test_junk_icon_normalized_to_none() -> None:
             ]
         )
     )
-    out = await picker.pick(_ctx(caption="pizza"), {"google:joe": attributed})
-    assert out[0].icon is None
+    outcome = await picker.pick(_ctx(caption="pizza"), {"google:joe": attributed})
+    assert outcome.candidates[0].icon is None
+
+
+@pytest.mark.asyncio
+async def test_non_venue_rejection_surfaces_display_label() -> None:
+    attributed = dataclasses.replace(
+        _attributed(provider_id="google:loop-tours", place_name="Ha Giang Loop Tours"),
+        display_label="Ha Giang Loop",
+    )
+    picker = _picker_with_response(
+        _PickerResponse(
+            picks=[
+                _PickedPlace(
+                    provider_id="google:loop-tours",
+                    rejected=True,
+                    rejection_reason="route, not a venue",
+                    rejection_kind="non_venue",
+                )
+            ]
+        )
+    )
+    outcome = await picker.pick(_ctx(), {"google:loop-tours": attributed})
+    assert outcome.candidates == []
+    assert outcome.non_venue_names == ["Ha Giang Loop"]
+
+
+@pytest.mark.asyncio
+async def test_non_venue_rejection_falls_back_to_query_name() -> None:
+    attributed = dataclasses.replace(
+        _attributed(provider_id="google:x", place_name="Somewhere"),
+        query="Hai Van Pass",
+    )
+    picker = _picker_with_response(
+        _PickerResponse(
+            picks=[
+                _PickedPlace(
+                    provider_id="google:x",
+                    rejected=True,
+                    rejection_kind="non_venue",
+                )
+            ]
+        )
+    )
+    outcome = await picker.pick(_ctx(), {"google:x": attributed})
+    assert outcome.non_venue_names == ["Hai Van Pass"]
+
+
+@pytest.mark.asyncio
+async def test_other_rejection_kind_not_narrated() -> None:
+    search_set = {"google:joe": _attributed(provider_id="google:joe")}
+    picker = _picker_with_response(
+        _PickerResponse(
+            picks=[
+                _PickedPlace(
+                    provider_id="google:joe",
+                    rejected=True,
+                    rejection_reason="wrong city",
+                    rejection_kind="other",
+                )
+            ]
+        )
+    )
+    outcome = await picker.pick(_ctx(), search_set)
+    assert outcome.candidates == []
+    assert outcome.non_venue_names == []
+
+
+@pytest.mark.asyncio
+async def test_non_venue_rejection_with_unknown_provider_id_skipped() -> None:
+    search_set = {"google:joe": _attributed(provider_id="google:joe")}
+    picker = _picker_with_response(
+        _PickerResponse(
+            picks=[
+                _PickedPlace(
+                    provider_id="google:hallucinated",
+                    rejected=True,
+                    rejection_kind="non_venue",
+                )
+            ]
+        )
+    )
+    outcome = await picker.pick(_ctx(), search_set)
+    assert outcome.non_venue_names == []

@@ -11,6 +11,7 @@ from .models import (
     HybridSearchFilters,
     HybridSearchHit,
     LibrarySort,
+    NonVenueDetection,
     PlaceCore,
     PlaceObject,
     PlaceQuery,
@@ -89,13 +90,23 @@ class PlacesCacheProtocol(Protocol):
 
 
 class PlacesClientProtocol(Protocol):
-    async def search(self, query: PlaceQuery, limit: int = 20) -> list[PlaceObject]: ...
+    async def search(
+        self,
+        query: PlaceQuery,
+        limit: int = 20,
+        *,
+        rejections: list[NonVenueDetection] | None = None,
+    ) -> list[PlaceObject]: ...
 
     async def get_by_ids(self, provider_ids: list[str]) -> list[PlaceObject]: ...
 
 
 class PlacesSearchServiceProtocol(Protocol):
     async def find(self, query: PlaceQuery, limit: int = 20) -> list[PlaceObject]: ...
+
+    async def find_with_rejections(
+        self, query: PlaceQuery, limit: int = 20
+    ) -> tuple[list[PlaceObject], list[NonVenueDetection]]: ...
 
     async def get_by_ids(self, provider_ids: list[str]) -> dict[str, PlaceObject]: ...
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from kebi.core.places._google_mapper import map_place
+from kebi.core.places._google_mapper import is_non_venue_geography, map_place
 from kebi.core.places.models import PlaceCategory
 from kebi.core.places.tags import CuisineTag, TagType
 
@@ -157,6 +157,93 @@ class TestAdministrativeAreaReject:
         obj = map_place(raw, _NOW)
         assert obj is not None
         assert obj.categories == []
+
+
+class TestNonVenueGeographyReject:
+    """Location-kinds Step 1: linear/natural geography co-stamped
+    `tourist_attraction` no longer passes as a venue — the exact hole
+    that let "Ha Giang Loop" save as a landmark."""
+
+    @staticmethod
+    def _raw(name: str, types: list[str]) -> dict[str, object]:
+        return {
+            "id": "ChIJgeo",
+            "displayName": {"text": name},
+            "location": {"latitude": 22.8, "longitude": 105.0},
+            "types": types,
+        }
+
+    # -- the rule itself ------------------------------------------------
+
+    def test_route_with_tourist_attraction_is_non_venue(self) -> None:
+        """Incident 1: Ha Giang Loop."""
+        assert is_non_venue_geography(["tourist_attraction", "route"]) is True
+
+    def test_natural_feature_with_tourist_attraction_is_non_venue(self) -> None:
+        """Incident 2 shape: Hai Van Pass, and Mount Fuji / Ha Long Bay —
+        accepted Step 1 behavior; they become areas in Step 2."""
+        assert is_non_venue_geography(["tourist_attraction", "natural_feature"]) is True
+
+    def test_bare_natural_feature_is_non_venue(self) -> None:
+        """The roadmap's literal example: previously leaked with empty
+        categories because no administrative type matched."""
+        assert is_non_venue_geography(["natural_feature", "point_of_interest"]) is True
+
+    def test_tourist_attraction_alone_is_venue(self) -> None:
+        """Burj Khalifa: generic attraction with no geography marker."""
+        assert (
+            is_non_venue_geography(["tourist_attraction", "point_of_interest"]) is False
+        )
+
+    def test_specific_venue_type_wins_over_geography_marker(self) -> None:
+        """Bondi Beach (`beach`), Hoan Kiem Lake (`lake`): a specific venue
+        type keeps the place a venue even beside natural_feature."""
+        assert (
+            is_non_venue_geography(["beach", "natural_feature", "tourist_attraction"])
+            is False
+        )
+        assert is_non_venue_geography(["lake", "natural_feature"]) is False
+
+    def test_admin_type_without_attraction_is_non_venue(self) -> None:
+        assert is_non_venue_geography(["locality", "political"]) is True
+
+    def test_district_as_attraction_carve_out_holds(self) -> None:
+        """Zaanse Schans: political + tourist_attraction stays a venue
+        (ADR-124 carve-out)."""
+        assert (
+            is_non_venue_geography(
+                ["tourist_attraction", "point_of_interest", "political"]
+            )
+            is False
+        )
+
+    def test_empty_types_is_venue(self) -> None:
+        assert is_non_venue_geography([]) is False
+
+    # -- the gate in map_place ------------------------------------------
+
+    def test_route_attraction_rejected_in_search_mode(self) -> None:
+        raw = self._raw("Ha Giang Loop", ["tourist_attraction", "route"])
+        assert map_place(raw, _NOW) is None
+
+    def test_natural_feature_attraction_rejected_in_search_mode(self) -> None:
+        raw = self._raw("Hai Van Pass", ["tourist_attraction", "natural_feature"])
+        assert map_place(raw, _NOW) is None
+
+    def test_details_mode_never_gates(self) -> None:
+        """The by-id TTL refresh must keep mapping an already-catalogued
+        row even if its types would fail search validation."""
+        raw = self._raw("Ha Giang Loop", ["tourist_attraction", "route"])
+        obj = map_place(raw, _NOW, require_name=False)
+        assert obj is not None
+
+    def test_nature_venue_with_specific_type_survives_search(self) -> None:
+        raw = self._raw(
+            "Bondi Beach", ["beach", "natural_feature", "tourist_attraction"]
+        )
+        obj = map_place(raw, _NOW)
+        assert obj is not None
+        assert PlaceCategory.beach in obj.categories
 
 
 class TestAddressComponentFallback:

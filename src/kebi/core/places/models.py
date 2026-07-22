@@ -195,6 +195,23 @@ class PlaceNameAlias(BaseModel):
     source: str  # "tiktok" | "instagram" | "user" | "llm" | ...
 
 
+class NonVenueDetection(BaseModel):
+    """A search result rejected at validation as non-venue geography.
+
+    Carries the provider's display name so callers can narrate the
+    rejection ("noted as a travel interest") instead of dropping it
+    silently. `reason` is the machine-readable rejection constant
+    (`NON_VENUE_GEOGRAPHY` today); Step 2 of the location-kinds roadmap
+    turns it into a routing decision, so it is a string, not a bool.
+    """
+
+    name: str
+    provider_id: str | None = None
+    reason: str
+
+    model_config = ConfigDict(frozen=True)
+
+
 SortField = Literal["created_at", "refreshed_at", "place_name", "distance"]
 
 

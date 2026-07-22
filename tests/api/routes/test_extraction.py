@@ -95,3 +95,40 @@ class TestExtractRoute:
         body = resp.json()
         assert body["status"] == "failed"
         assert body["results"] == []
+
+    def test_post_extract_returns_noted_interests(self) -> None:
+        """A noted-only completed envelope (share contained only non-venue
+        geography) passes through the route intact."""
+        mock_service = AsyncMock(spec=ExtractionService)
+        mock_service.run.return_value = ExtractPlaceResponse(
+            status="completed",
+            results=[],
+            raw_input="https://tiktok.com/@x/video/456",
+            request_id="req_noted",
+            noted_interests=[
+                {
+                    "name": "Ha Giang Loop",
+                    "message": "'Ha Giang Loop' noted as a travel interest.",
+                }
+            ],
+        )
+        app.dependency_overrides[get_extraction_service] = lambda: mock_service
+        try:
+            client = TestClient(app)
+            resp = client.post(
+                "/v1/extract",
+                json={"raw_input": "https://tiktok.com/@x/video/456"},
+            )
+        finally:
+            app.dependency_overrides.pop(get_extraction_service, None)
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == "completed"
+        assert body["results"] == []
+        assert body["noted_interests"] == [
+            {
+                "name": "Ha Giang Loop",
+                "message": "'Ha Giang Loop' noted as a travel interest.",
+            }
+        ]

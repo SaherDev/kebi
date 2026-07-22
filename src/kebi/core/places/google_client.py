@@ -11,13 +11,18 @@ import httpx
 
 from kebi.core.utils.geo import bounding_box
 
-from ._google_mapper import GOOGLE_PROVIDER_PREFIX, map_place
+from ._google_mapper import (
+    GOOGLE_PROVIDER_PREFIX,
+    NON_VENUE_GEOGRAPHY,
+    is_non_venue_geography,
+    map_place,
+)
 from ._google_query_builder import (
     build_text_search_param_sets,
     build_text_search_params,
     query_to_google_types,
 )
-from .models import PlaceObject, PlaceQuery
+from .models import NonVenueDetection, PlaceObject, PlaceQuery
 
 logger = logging.getLogger(__name__)
 
@@ -59,12 +64,22 @@ class GooglePlacesClient:
         self._api_key = api_key
         self._http = http
 
-    async def search(self, query: PlaceQuery, limit: int = 20) -> list[PlaceObject]:
+    async def search(
+        self,
+        query: PlaceQuery,
+        limit: int = 20,
+        *,
+        rejections: list[NonVenueDetection] | None = None,
+    ) -> list[PlaceObject]:
         """Route to Google's :searchText or :searchNearby based on what the
         query can express.
 
         Tags like TimeTag/SeasonTag/AccessibilityTag produce no text, so a query
         with only those tags falls back to nearby search when geo is present.
+
+        `rejections`, when supplied, collects a `NonVenueDetection` for each
+        result the mapper rejected as non-venue geography — the caller can
+        narrate the rejection instead of seeing a silently thinner list.
         """
         loc = query.location
         has_geo = (
@@ -74,9 +89,9 @@ class GooglePlacesClient:
             and loc.radius_m is not None
         )
         if build_text_search_params(query)[0]:
-            return await self._text_search(query, limit)
+            return await self._text_search(query, limit, rejections=rejections)
         if has_geo:
-            return await self._nearby_search(query, limit)
+            return await self._nearby_search(query, limit, rejections=rejections)
         return []
 
     async def get_by_ids(self, provider_ids: list[str]) -> list[PlaceObject]:
@@ -117,6 +132,8 @@ class GooglePlacesClient:
         self,
         query: PlaceQuery,
         limit: int = 20,
+        *,
+        rejections: list[NonVenueDetection] | None = None,
     ) -> list[PlaceObject]:
         """Run Google :searchText, fanning out one request per place_name.
 
@@ -129,7 +146,9 @@ class GooglePlacesClient:
         if not param_sets:
             return []
         if len(param_sets) == 1:
-            return await self._search_text_once(query, param_sets[0], limit)
+            return await self._search_text_once(
+                query, param_sets[0], limit, rejections=rejections
+            )
 
         sem = asyncio.Semaphore(_TEXT_SEARCH_CONCURRENCY)
 
@@ -137,7 +156,9 @@ class GooglePlacesClient:
             params: tuple[str, str | None],
         ) -> list[PlaceObject]:
             async with sem:
-                return await self._search_text_once(query, params, limit)
+                return await self._search_text_once(
+                    query, params, limit, rejections=rejections
+                )
 
         batches = await asyncio.gather(*[_bounded(p) for p in param_sets])
         merged: list[PlaceObject] = []
@@ -159,6 +180,8 @@ class GooglePlacesClient:
         query: PlaceQuery,
         params: tuple[str, str | None],
         limit: int,
+        *,
+        rejections: list[NonVenueDetection] | None = None,
     ) -> list[PlaceObject]:
         text, included_type = params
         if not text:
@@ -205,10 +228,16 @@ class GooglePlacesClient:
         if included_type:
             body["includedType"] = included_type
         _apply_common_filters(body, query)
-        return await self._request("POST", ":searchText", _FIELD_MASK, body=body)
+        return await self._request(
+            "POST", ":searchText", _FIELD_MASK, body=body, rejections=rejections
+        )
 
     async def _nearby_search(
-        self, query: PlaceQuery, limit: int = 20
+        self,
+        query: PlaceQuery,
+        limit: int = 20,
+        *,
+        rejections: list[NonVenueDetection] | None = None,
     ) -> list[PlaceObject]:
         loc = query.location
         if not loc or loc.lat is None or loc.lng is None or loc.radius_m is None:
@@ -227,7 +256,9 @@ class GooglePlacesClient:
         if google_types:
             body["includedTypes"] = google_types
         _apply_common_filters(body, query)
-        return await self._request("POST", ":searchNearby", _FIELD_MASK, body=body)
+        return await self._request(
+            "POST", ":searchNearby", _FIELD_MASK, body=body, rejections=rejections
+        )
 
     async def _request(
         self,
@@ -236,6 +267,7 @@ class GooglePlacesClient:
         field_mask: str,
         body: dict[str, Any] | None = None,
         require_name: bool = True,
+        rejections: list[NonVenueDetection] | None = None,
     ) -> list[PlaceObject]:
         """Shared HTTP path: auth, error handling, JSON decode, Place parsing.
 
@@ -299,17 +331,55 @@ class GooglePlacesClient:
                 t.fail(exc)
                 return []
             raws = data.get("places") if "places" in data else [data]
-            now = datetime.now(UTC)
-            results = [
-                obj
-                for raw in (raws or [])
-                if (obj := map_place(raw, now, require_name=require_name)) is not None
-            ]
+            results = _parse_places(
+                raws or [],
+                datetime.now(UTC),
+                require_name=require_name,
+                rejections=rejections,
+            )
             # Google bills per request regardless of result count, so cost
             # lands on the call even when results is [] (no-match still cost).
             t.cost_usd = pricing.cost_for(endpoint_key)
             t.output = {"places": len(results)}
             return results
+
+
+def _parse_places(
+    raws: list[dict[str, Any]],
+    now: datetime,
+    *,
+    require_name: bool = True,
+    rejections: list[NonVenueDetection] | None = None,
+) -> list[PlaceObject]:
+    """Map raw Place dicts, collecting non-venue geography rejections.
+
+    Never a silent drop: when the caller supplies `rejections`, each
+    named search result the mapper refused as non-venue geography is
+    recorded so it can be narrated as a noted interest. Details-mode
+    responses (`require_name=False`) never gate, so they never reject.
+    """
+    results: list[PlaceObject] = []
+    for raw in raws:
+        obj = map_place(raw, now, require_name=require_name)
+        if obj is not None:
+            results.append(obj)
+            continue
+        if rejections is None or not require_name:
+            continue
+        types = raw.get("types") or []
+        name = (raw.get("displayName") or {}).get("text")
+        if name and is_non_venue_geography(types):
+            raw_id = raw.get("id")
+            rejections.append(
+                NonVenueDetection(
+                    name=name,
+                    provider_id=(
+                        f"{GOOGLE_PROVIDER_PREFIX}{raw_id}" if raw_id else None
+                    ),
+                    reason=NON_VENUE_GEOGRAPHY,
+                )
+            )
+    return results
 
 
 def _apply_common_filters(body: dict[str, Any], query: PlaceQuery) -> None:

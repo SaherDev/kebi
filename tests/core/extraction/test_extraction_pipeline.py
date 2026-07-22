@@ -27,11 +27,13 @@ from kebi.core.extraction.types import (
     ExtractionContext,
     KnownPlace,
     Medium,
+    PickOutcome,
     Producer,
     ValidatedCandidate,
 )
 from kebi.core.places import (
     LocationContext,
+    NonVenueDetection,
     PlaceCategory,
     PlaceObject,
     PlaceTag,
@@ -125,12 +127,20 @@ def _make_pipeline(
     picker_returns: list[ValidatedCandidate] | None = None,
     search_results_by_query: dict[str, list[PlaceObject]] | None = None,
     resolver: Any | None = None,
+    picker_non_venue_names: list[str] | None = None,
+    rejections_by_query: dict[str, list[NonVenueDetection]] | None = None,
 ) -> tuple[ExtractionPipeline, MagicMock, MagicMock]:
     picker = MagicMock()
-    picker.pick = AsyncMock(return_value=picker_returns or [])
+    picker.pick = AsyncMock(
+        return_value=PickOutcome(
+            candidates=picker_returns or [],
+            non_venue_names=picker_non_venue_names or [],
+        )
+    )
 
     search_service = MagicMock()
     results_map = search_results_by_query or {}
+    rejections_map = rejections_by_query or {}
 
     async def _find(query: Any, limit: int = 5) -> list[PlaceObject]:
         names = query.place_names or []
@@ -139,7 +149,17 @@ def _make_pipeline(
             merged.extend(results_map.get(name, []))
         return merged
 
+    async def _find_with_rejections(
+        query: Any, limit: int = 5
+    ) -> tuple[list[PlaceObject], list[NonVenueDetection]]:
+        names = query.place_names or []
+        rejected: list[NonVenueDetection] = []
+        for name in names:
+            rejected.extend(rejections_map.get(name, []))
+        return await _find(query, limit), rejected
+
     search_service.find = AsyncMock(side_effect=_find)
+    search_service.find_with_rejections = AsyncMock(side_effect=_find_with_rejections)
 
     @asynccontextmanager
     async def _factory() -> AsyncIterator[MagicMock]:
@@ -260,7 +280,7 @@ async def test_search_service_invoked_once_per_unique_name() -> None:
         },
     )
     await pipeline.run(url="https://x.com", user_id="u1", limit=_TEST_LIMIT)
-    assert search_service.find.await_count == 2
+    assert search_service.find_with_rejections.await_count == 2
 
 
 @pytest.mark.asyncio
@@ -297,7 +317,7 @@ async def test_resolver_cleans_queries_drops_noise_and_passes_shared_context() -
     )
     await pipeline.run(url="https://x.com", user_id="u1", limit=_TEST_LIMIT)
 
-    queries = [c.args[0] for c in search_service.find.call_args_list]
+    queries = [c.args[0] for c in search_service.find_with_rejections.call_args_list]
     searched_names = [n for q in queries for n in (q.place_names or [])]
     assert searched_names == ["Keep Me Cleaned"]  # cleaned; "Drop Me" skipped
     assert queries[0].location is not None
@@ -334,14 +354,14 @@ async def test_concurrent_fanout_uses_per_task_session_no_shared_session() -> No
 
     async def _pick(
         context: Any, search_set: Any, shared_tags: Any = None
-    ) -> list[ValidatedCandidate]:
+    ) -> PickOutcome:
         captured["search_set"] = dict(search_set)
-        return []
+        return PickOutcome(candidates=[])
 
     picker.pick = AsyncMock(side_effect=_pick)
 
     shared = MagicMock()
-    shared.find = AsyncMock(
+    shared.find_with_rejections = AsyncMock(
         side_effect=AssertionError("fan-out used the shared session")
     )
 
@@ -352,7 +372,9 @@ async def test_concurrent_fanout_uses_per_task_session_no_shared_session() -> No
         def __init__(self) -> None:
             self._active = False
 
-        async def find(self, query: Any, limit: int = 5) -> list[PlaceObject]:
+        async def find_with_rejections(
+            self, query: Any, limit: int = 5
+        ) -> tuple[list[PlaceObject], list[NonVenueDetection]]:
             if self._active:
                 raise RuntimeError(
                     "concurrent operations are not permitted"
@@ -361,7 +383,7 @@ async def test_concurrent_fanout_uses_per_task_session_no_shared_session() -> No
             try:
                 await asyncio.sleep(0)  # force interleave across tasks
                 name = (query.place_names or [""])[0]
-                return [_place_object(f"google:{name.lower()}", name)]
+                return [_place_object(f"google:{name.lower()}", name)], []
             finally:
                 self._active = False
 
@@ -423,7 +445,7 @@ async def test_cap_exceeded_raises_too_many_candidates() -> None:
         await pipeline.run(url="https://x.com", user_id="u1", limit=_TEST_LIMIT)
     assert exc.value.found == 30
     assert exc.value.limit == _TEST_LIMIT
-    search_service.find.assert_not_called()
+    search_service.find_with_rejections.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -465,7 +487,7 @@ async def test_caption_only_post_extracts_via_resolver_discovery() -> None:
     # The discovered name was searched via its resolver-cleaned query.
     searched = [
         n
-        for c in search_service.find.call_args_list
+        for c in search_service.find_with_rejections.call_args_list
         for n in (c.args[0].place_names or [])
     ]
     assert searched == ["Thip Samai Bangkok"]
@@ -504,7 +526,7 @@ async def test_resolver_discovery_re_enforces_candidate_cap() -> None:
     assert exc.value.found == 30
     assert exc.value.limit == _TEST_LIMIT
     # Re-check fires before the search fan-out.
-    search_service.find.assert_not_called()
+    search_service.find_with_rejections.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -555,7 +577,7 @@ async def test_per_candidate_location_biases_each_search() -> None:
 
     bias = {
         (c.args[0].place_names or [""])[0]: c.args[0].location
-        for c in search_service.find.call_args_list
+        for c in search_service.find_with_rejections.call_args_list
     }
     # Per-candidate override.
     assert bias["Inntel Hotel Zaandam"] is not None
@@ -563,3 +585,87 @@ async def test_per_candidate_location_biases_each_search() -> None:
     # No override → shared post location.
     assert bias["Rijksmuseum"] is not None
     assert bias["Rijksmuseum"].city == "Amsterdam"
+
+
+@pytest.mark.asyncio
+async def test_noted_non_venues_aggregate_from_search_and_picker() -> None:
+    """Detections from the validator and non-venue names from the picker
+    merge into PipelineResult.noted_non_venues, deduped by normalized name."""
+    inline = _StubLevel(
+        name="inline",
+        seeds=[
+            KnownPlace(
+                name="Ha Giang Loop",
+                producer=Producer.LLM_NER,
+                medium=Medium.CAPTION,
+            )
+        ],
+    )
+    detection = NonVenueDetection(
+        name="Ha Giang Loop",
+        provider_id="google:ChIJloop",
+        reason="non_venue_geography",
+    )
+    pipeline, _, _ = _make_pipeline(
+        levels=[inline],
+        picker_returns=[],
+        # picker also reports the same name (dedup) plus a second one
+        picker_non_venue_names=["ha giang loop", "Hai Van Pass"],
+        rejections_by_query={"Ha Giang Loop": [detection]},
+    )
+    result = await pipeline.run(url="https://x.com", user_id="u1", limit=_TEST_LIMIT)
+    assert result.candidates == []
+    assert result.noted_non_venues == ["Ha Giang Loop", "Hai Van Pass"]
+
+
+@pytest.mark.asyncio
+async def test_incident_vietnam_video_route_rejected_and_noted_no_candidate() -> None:
+    """Incident 1 shape: the share's only name is a route — the validator
+    rejects it, nothing reaches the picker, and the run ends with no
+    candidates but the noted interest present."""
+    inline = _StubLevel(
+        name="inline",
+        seeds=[
+            KnownPlace(
+                name="Ha Giang Loop",
+                producer=Producer.LLM_NER,
+                medium=Medium.CAPTION,
+            )
+        ],
+    )
+    detection = NonVenueDetection(
+        name="Ha Giang Loop",
+        provider_id="google:ChIJloop",
+        reason="non_venue_geography",
+    )
+    pipeline, picker, _ = _make_pipeline(
+        levels=[inline],
+        picker_returns=[],
+        # search returns nothing for the name — the mapper dropped it
+        search_results_by_query={},
+        rejections_by_query={"Ha Giang Loop": [detection]},
+    )
+    result = await pipeline.run(url="https://x.com", user_id="u1", limit=_TEST_LIMIT)
+    assert result.candidates == []
+    assert result.noted_non_venues == ["Ha Giang Loop"]
+
+
+@pytest.mark.asyncio
+async def test_noted_non_venues_present_alongside_candidates() -> None:
+    inline = _StubLevel(
+        name="inline",
+        seeds=[
+            KnownPlace(
+                name="Chez Claude", producer=Producer.LLM_NER, medium=Medium.CAPTION
+            )
+        ],
+    )
+    pipeline, _, _ = _make_pipeline(
+        levels=[inline],
+        picker_returns=[_candidate()],
+        search_results_by_query={"Chez Claude": [_place_object()]},
+        picker_non_venue_names=["Hai Van Pass"],
+    )
+    result = await pipeline.run(url="https://x.com", user_id="u1", limit=_TEST_LIMIT)
+    assert len(result.candidates) == 1
+    assert result.noted_non_venues == ["Hai Van Pass"]

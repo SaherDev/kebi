@@ -69,6 +69,7 @@ def _build_service(
     cache_hit_items: list[ExtractPlaceItem] | None = None,
     save_places_first_call_exc: Exception | None = None,
     content: HarvestContent | None = None,
+    noted_non_venues: list[str] | None = None,
 ) -> tuple[ExtractionService, MagicMock]:
     """Build ExtractionService with mocked collaborators.
 
@@ -91,6 +92,7 @@ def _build_service(
         return_value=PipelineResult(
             candidates=pipeline_result if pipeline_result is not None else [],
             content=content if content is not None else HarvestContent(),
+            noted_non_venues=noted_non_venues or [],
         ),
     )
     if pipeline_exc:
@@ -656,3 +658,58 @@ async def test_cache_hit_emits_extraction_cache_hit_marker(
     assert kwargs["session_id"] == "u-second"
     assert kwargs["metadata"]["source_ref"] == "https://www.tiktok.com/@x/video/1"
     assert kwargs["metadata"]["place_count"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Noted interests (location-kinds Step 1)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_all_non_venue_share_completes_with_noted_interests() -> None:
+    """A share containing only non-venue geography is a success with
+    nothing saved — not failed/no_candidates."""
+    service, container = _build_service(
+        pipeline_result=[], noted_non_venues=["Ha Giang Loop"]
+    )
+    resp = await service.run("https://www.tiktok.com/@u/video/1", user_id="u1")
+    assert resp.status == "completed"
+    assert resp.results == []
+    assert resp.failure_reason is None
+    assert [n.name for n in resp.noted_interests] == ["Ha Giang Loop"]
+    assert "Ha Giang Loop" in resp.noted_interests[0].message
+
+
+@pytest.mark.asyncio
+async def test_mixed_share_carries_results_and_noted_interests() -> None:
+    candidate = _candidate()
+    core = _persisted_core()
+    service, _ = _build_service(
+        pipeline_result=[candidate],
+        upsert_result=[core],
+        noted_non_venues=["Hai Van Pass"],
+    )
+    resp = await service.run("https://www.tiktok.com/@u/video/1", user_id="u1")
+    assert resp.status == "completed"
+    assert len(resp.results) == 1
+    assert [n.name for n in resp.noted_interests] == ["Hai Van Pass"]
+
+
+@pytest.mark.asyncio
+async def test_genuinely_empty_share_still_fails_no_candidates() -> None:
+    service, _ = _build_service(pipeline_result=[], noted_non_venues=[])
+    resp = await service.run("https://www.tiktok.com/@u/video/1", user_id="u1")
+    assert resp.status == "failed"
+    assert resp.failure_reason == "no_candidates"
+    assert resp.noted_interests == []
+
+
+@pytest.mark.asyncio
+async def test_noted_only_response_not_written_to_result_cache() -> None:
+    """ADR-074 cache stores results only; an acknowledge-only completed
+    response must not be cached (nothing to re-serve)."""
+    service, container = _build_service(
+        pipeline_result=[], noted_non_venues=["Ha Giang Loop"]
+    )
+    await service.run("https://www.tiktok.com/@u/video/1", user_id="u1")
+    container.result_cache.set.assert_not_awaited()

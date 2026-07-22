@@ -286,17 +286,16 @@ def map_place(
 
     types: list[str] = raw.get("types") or []
     mapped = _map_categories(types)
-    # ADR-082: a search matches an administrative area — a city, district,
-    # region, or road ("Da Nang", "Hoi An", "Sukhumvit Road") — when the query
-    # is itself a place name. Such a result carries an administrative Google
-    # type and maps to no venue category; it is not a savable place, so drop it
-    # here at validation before it can be persisted or handed to the picker
-    # (which would otherwise invent a `landmark` category for it). A place
-    # Google itself classifies as a venue keeps its category and survives,
-    # honoring the district-as-attraction carve-out. Only search results are
-    # filtered; the by-id details refresh (`require_name=False`) always maps its
+    # ADR-082/ADR-124: a search result that is non-venue geography — a city,
+    # district, road, or a route/pass/natural feature even when Google also
+    # stamps `tourist_attraction` on it ("Ha Giang Loop", "Hai Van Pass") — is
+    # not a savable place, so drop it here at validation before it can be
+    # persisted or handed to the picker. A place Google classifies with any
+    # specific venue type keeps its category and survives, honoring the
+    # district-as-attraction carve-out. Only search results are filtered; the
+    # by-id details refresh (`require_name=False`) always maps its
     # already-catalogued venue.
-    if require_name and not mapped and _is_administrative_type(types):
+    if require_name and is_non_venue_geography(types):
         return None
     categories = [PlaceCategory(c) for c in mapped]
 
@@ -402,6 +401,51 @@ _ADMINISTRATIVE_TYPES = frozenset(
 def _is_administrative_type(types: list[str]) -> bool:
     """True when any Google place type marks an administrative area."""
     return any(t in _ADMINISTRATIVE_TYPES for t in types)
+
+
+# Machine-readable reason stamped on a NonVenueDetection. Step 2 of the
+# location-kinds roadmap turns this rejection into venue-vs-area routing;
+# the constant is the stable identifier callers key on.
+NON_VENUE_GEOGRAPHY = "non_venue_geography"
+
+# Linear or natural geography — a road, scenic route, mountain pass, loop,
+# bay, peak. Google frequently co-stamps these `tourist_attraction`, which
+# maps to the generic `landmark` category; that generic mapping must not
+# rescue them, unlike the administrative carve-out below.
+_LINEAR_NATURAL_GEOGRAPHY_TYPES = frozenset({"route", "natural_feature"})
+
+_GENERIC_ATTRACTION_TYPE = "tourist_attraction"
+
+
+def is_non_venue_geography(types: list[str]) -> bool:
+    """True when Google's type signal marks non-venue geography.
+
+    The decision, in priority order:
+
+    1. Any *specific* venue type (restaurant, museum, beach, lake, ...)
+       wins outright — Google itself classifies the result as a venue.
+       `tourist_attraction` alone does not count: it is a generic marker
+       Google stamps on geography and venues alike.
+    2. Linear/natural geography (`route`, `natural_feature`) is non-venue
+       even when co-stamped `tourist_attraction` — a scenic loop or a
+       mountain pass is never a savable point venue.
+    3. An administrative type is non-venue unless `tourist_attraction` is
+       present — the district-as-attraction carve-out (ADR-124): a place
+       Google deems both a political area and an attraction stays a venue.
+
+    Pure type-signal per ADR-124 — never a name-shape heuristic. Named and
+    exported so the cleanup script reuses it and Step 2 can turn the same
+    decision into venue-vs-area routing.
+    """
+    if any(
+        t in _GOOGLE_TYPE_TO_CATEGORY and t != _GENERIC_ATTRACTION_TYPE for t in types
+    ):
+        return False
+    if any(t in _LINEAR_NATURAL_GEOGRAPHY_TYPES for t in types):
+        return True
+    if _is_administrative_type(types):
+        return _GENERIC_ATTRACTION_TYPE not in types
+    return False
 
 
 def _map_categories(types: list[str]) -> list[str]:

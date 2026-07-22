@@ -204,3 +204,15 @@ class ValidatedCandidate:
     # the per-user `user_places.source_label` (ungated) and, for
     # high-confidence picks, to the shared `place_name_aliases`.
     source_label: str | None = None
+
+
+@dataclass
+class PickOutcome:
+    """What one picker pass yields: the kept candidates plus the names the
+    picker rejected as non-venue geography (a route, region, town, natural
+    feature the post referenced). The names let the caller narrate the
+    rejection as a noted interest instead of dropping it silently; other
+    rejection kinds (wrong place, low confidence) stay log-only."""
+
+    candidates: list[ValidatedCandidate]
+    non_venue_names: list[str] = field(default_factory=list)
