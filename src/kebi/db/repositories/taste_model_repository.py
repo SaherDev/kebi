@@ -103,15 +103,23 @@ class SQLAlchemyTasteModelRepository:
             await session.commit()
 
     async def get_interactions(self, user_id: str) -> list[RawInteraction]:
-        """Raw interaction rows (type + place_core_id), ordered by created_at.
+        """Raw interaction rows (type + place_core_id + metadata), ordered by
+        created_at.
 
         Place data is NOT joined here — the service resolves place_core_id
         against the places catalog (ADR-077). The `interactions.place_id`
-        column carries the `places.id` value.
+        column carries the `places.id` value (or, for an `area_interest` row,
+        the area's entity_key). `metadata` carries the area name/kind or the
+        experience tags for the Step-3 signals, so the service builds those
+        rows without a second read.
         """
         async with self._session_factory() as session:
             stmt = (
-                select(Interaction.type, Interaction.place_id)
+                select(
+                    Interaction.type,
+                    Interaction.place_id,
+                    Interaction.metadata_,
+                )
                 .where(Interaction.user_id == user_id)
                 .order_by(Interaction.created_at)
             )
@@ -120,6 +128,7 @@ class SQLAlchemyTasteModelRepository:
                 RawInteraction(
                     type=(row.type.value if hasattr(row.type, "value") else row.type),
                     place_core_id=row.place_id,
+                    metadata=row.metadata_ or {},
                 )
                 for row in result
             ]

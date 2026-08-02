@@ -21,6 +21,8 @@ WEIGHTS = {
     "liked": 3,
     "liked_negative": 3,
     "rejected": 1,
+    "area_interest": 2,
+    "experience": 2,
 }
 
 
@@ -278,3 +280,87 @@ def test_default_weights_save_neutral_accepted_one() -> None:
 
     assert counts.categories == {"bar": 1}
     assert "cafe" not in counts.categories
+
+
+# ---------------------------------------------------------------------------
+# Location-kinds Step 3 — region-interest & experience signals
+# ---------------------------------------------------------------------------
+
+
+def test_area_interest_fills_region_bucket_and_total() -> None:
+    """An area_interest row lands in `region_interest` (keyed by name) and the
+    `area_interests` total — never in the venue-derived `location`."""
+    rows = [
+        InteractionRow(type="area_interest", region="Hoi An"),
+        InteractionRow(type="area_interest", region="Vietnam"),
+    ]
+    counts = aggregate_signal_counts(rows, weights=WEIGHTS)
+
+    assert counts.region_interest == {"Hoi An": 2, "Vietnam": 2}
+    assert counts.totals.area_interests == 2
+    # Kept distinct from a venue save's location context.
+    assert counts.location.city == {}
+    assert counts.location.country == {}
+
+
+def test_repeated_area_shares_accumulate() -> None:
+    """No once-per dedup for regions: sharing the same area twice is a louder
+    signal, not a merged one."""
+    rows = [
+        InteractionRow(type="area_interest", region="Hoi An"),
+        InteractionRow(type="area_interest", region="Hoi An"),
+    ]
+    counts = aggregate_signal_counts(rows, weights=WEIGHTS)
+    assert counts.region_interest == {"Hoi An": 4}
+
+
+def test_region_interest_never_merges_with_venue_location() -> None:
+    """A venue saved in a city and a region-interest of the same-named area
+    stay in separate buckets — the done-when distinctness guarantee."""
+    rows = [
+        _row(type="saved_recommendation", city="Hoi An", approved=True),
+        InteractionRow(type="area_interest", region="Hoi An"),
+    ]
+    counts = aggregate_signal_counts(rows, weights=WEIGHTS)
+
+    assert counts.location.city == {"Hoi An": 2}  # from the venue save
+    assert counts.region_interest == {"Hoi An": 2}  # from the area share
+    # Nothing crossed over.
+    assert "Hoi An" not in counts.region_interest.keys() - {"Hoi An"}
+
+
+def test_experience_fills_experience_bucket() -> None:
+    """An experience_interest row spreads its tags across the experience
+    bucket; it carries no place and no total."""
+    rows = [
+        InteractionRow(
+            type="experience_interest",
+            experience=["scenic_route", "motorbike_route"],
+        ),
+        InteractionRow(type="experience_interest", experience=["scenic_route"]),
+    ]
+    counts = aggregate_signal_counts(rows, weights=WEIGHTS)
+
+    assert counts.experience == {"scenic_route": 4, "motorbike_route": 2}
+    assert counts.totals.area_interests == 0
+
+
+def test_area_and_experience_are_positive_only() -> None:
+    """Neither signal ever touches the rejected branch."""
+    rows = [
+        InteractionRow(type="area_interest", region="Hoi An"),
+        InteractionRow(type="experience_interest", experience=["hiking"]),
+    ]
+    counts = aggregate_signal_counts(rows, weights=WEIGHTS)
+
+    assert counts.rejected.categories == {}
+    assert counts.rejected.location.city == {}
+
+
+def test_zero_weight_silences_region_bucket() -> None:
+    """A 0 weight leaves the bucket empty (config lever to mute the signal)."""
+    rows = [InteractionRow(type="area_interest", region="Hoi An")]
+    counts = aggregate_signal_counts(rows, weights={**WEIGHTS, "area_interest": 0})
+    assert counts.region_interest == {}
+    # Still counted as a raw event.
+    assert counts.totals.area_interests == 1

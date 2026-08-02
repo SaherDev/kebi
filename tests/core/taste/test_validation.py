@@ -118,6 +118,50 @@ def test_all_items_dropped_returns_empty(signal_counts: SignalCounts) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Location-kinds Step 3 — region_interest & experience grounding
+# ---------------------------------------------------------------------------
+
+
+def test_region_interest_line_is_grounded() -> None:
+    counts = SignalCounts(region_interest={"Hoi An": 2, "Vietnam": 2})
+    line = SummaryLine(
+        text="Drawn to the Hoi An region.",
+        signal_count=2,
+        source_field="region_interest",
+        source_value="Hoi An",
+    )
+    validated, dropped = validate_grounded(TasteArtifacts(summary=[line]), counts)
+    assert len(validated.summary) == 1
+    assert dropped == []
+
+
+def test_experience_line_is_grounded() -> None:
+    counts = SignalCounts(experience={"scenic_route": 2})
+    line = SummaryLine(
+        text="Likes scenic-route trips.",
+        signal_count=2,
+        source_field="experience",
+        source_value="scenic_route",
+    )
+    validated, dropped = validate_grounded(TasteArtifacts(summary=[line]), counts)
+    assert len(validated.summary) == 1
+    assert dropped == []
+
+
+def test_ungrounded_region_value_dropped() -> None:
+    counts = SignalCounts(region_interest={"Hoi An": 2})
+    line = SummaryLine(
+        text="Drawn to Tokyo.",
+        signal_count=2,
+        source_field="region_interest",
+        source_value="Tokyo",
+    )
+    validated, dropped = validate_grounded(TasteArtifacts(summary=[line]), counts)
+    assert validated.summary == []
+    assert len(dropped) == 1
+
+
+# ---------------------------------------------------------------------------
 # format_summary_for_agent
 # ---------------------------------------------------------------------------
 
@@ -140,8 +184,7 @@ def test_format_summary_for_agent_joins_lines() -> None:
     result = format_summary_for_agent(lines)
 
     assert result == (
-        "- Loves Japanese food [8 signals]\n"
-        "- Favors restaurant category [6 signals]"
+        "- Loves Japanese food [8 signals]\n- Favors restaurant category [6 signals]"
     )
 
 

@@ -42,6 +42,9 @@ class TotalCounts(BaseModel):
     accepted: int = 0
     rejected: int = 0
     saved_recommendations: int = 0
+    # Location-kinds Step 3: raw count of region-interest signals (a share's
+    # noted areas). Experience signals are tag-shaped, counted in `experience`.
+    area_interests: int = 0
 
 
 class LocationCounts(BaseModel):
@@ -74,6 +77,14 @@ class SignalCounts(BaseModel):
     tags: TagCounts = Field(default_factory=TagCounts)
     location: LocationCounts = Field(default_factory=LocationCounts)
     rejected: RejectedCounts = Field(default_factory=RejectedCounts)
+    # Location-kinds Step 3 — direct-interest buckets, kept top-level and
+    # separate from `location` (which is venue-derived): `region_interest` is
+    # keyed by a noted area's name, `experience` by experience-type tag. Both
+    # positive-only (a share is an interest, never a rejection), so there is
+    # no rejected mirror. Nested dict[str, int] keeps the grounding validator's
+    # dotted-path walk working unchanged.
+    region_interest: dict[str, int] = Field(default_factory=dict)
+    experience: dict[str, int] = Field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -166,6 +177,8 @@ def aggregate_signal_counts(
                 counts.totals.saved_recommendations += 1
             case "rejected":
                 counts.totals.rejected += 1
+            case "area_interest":
+                counts.totals.area_interests += 1
 
         if row.type in _SAVE_TYPES:
             # Source is link-share-save only (kebi is not a discovery channel),
@@ -202,5 +215,21 @@ def aggregate_signal_counts(
 
         elif row.type == "rejected":
             _apply_rejected(counts, row, weights.get("rejected", 1))
+
+        elif row.type == "area_interest":
+            # Region interest is its own bucket — never folded into the
+            # venue-derived `location`. Repeated shares of the same area
+            # accumulate (no once-per dedup): that IS the signal strength.
+            # A 0 weight silences the bucket (mirrors `save: 0`), the raw
+            # event still counted in totals above.
+            weight = weights.get("area_interest", 0)
+            if weight > 0:
+                _increment(counts.region_interest, row.region, weight)
+
+        elif row.type == "experience_interest":
+            weight = weights.get("experience", 0)
+            if weight > 0:
+                for exp in row.experience:
+                    _increment(counts.experience, exp, weight)
 
     return counts

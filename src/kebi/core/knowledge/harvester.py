@@ -41,6 +41,7 @@ from kebi.core.places import NON_VENUE_ROUTE
 
 if TYPE_CHECKING:
     from kebi.core.areas import AreaService
+    from kebi.core.areas.models import AreaEntity
     from kebi.providers.llm import InstructorClient
 
 logger = logging.getLogger(__name__)
@@ -192,17 +193,20 @@ class KnowledgeHarvester:
             t.output = {"count": len(claims)}
             return claims
 
-    async def _resolve_noted(self, noted: list[NotedAreaRef]) -> list[_Anchor]:
-        """Resolve noted non-venue names to area anchors, deduped by entity.
+    async def _resolve_noted_pairs(
+        self, noted: list[NotedAreaRef]
+    ) -> list[tuple[NotedAreaRef, AreaEntity]]:
+        """Resolve each noted non-venue name to the area entity its interest
+        belongs to, deduped by entity_key, keeping the ref alongside.
 
-        The subject-vs-container rule lives in the area service: an area
-        noted in its own right ("Hoi An") anchors itself; a route ("Ha
-        Giang Loop") anchors its containing area — the route detection
-        skips the doomed name-as-area probe. The route's own name stays
-        the anchor's display name so the model can cite it; its claims
-        key to the containing area's verified geo. Unresolvable names are
-        skipped (drop-don't-mis-key, ADR-126)."""
-        anchors: list[_Anchor] = []
+        The one resolution both harvest anchoring and the Step-3 region-
+        interest signal share. The subject-vs-container rule lives in the area
+        service: an area noted in its own right ("Hoi An") resolves to itself;
+        a route ("Ha Giang Loop") resolves to its containing area — the route
+        detection skips the doomed name-as-area probe. Unresolvable names are
+        dropped (ADR-126). Cheap to call twice for one share: the area service
+        memoizes, and a persisted entity is a store hit."""
+        pairs: list[tuple[NotedAreaRef, AreaEntity]] = []
         seen_keys: set[str] = set()
         for ref in noted:
             entity = await self._areas.resolve_noted_name(
@@ -219,13 +223,29 @@ class KnowledgeHarvester:
                     "harvest_noted_area_unresolvable", extra={"name": ref.name}
                 )
                 continue
+            if entity.entity_key in seen_keys:
+                continue
+            seen_keys.add(entity.entity_key)
+            pairs.append((ref, entity))
+        return pairs
+
+    async def resolve_area_interests(
+        self, noted: list[NotedAreaRef]
+    ) -> list[AreaEntity]:
+        """The resolved area entities a share's noted names belong to — the
+        Step-3 region-interest signal's source. Reuses `_resolve_noted_pairs`."""
+        return [entity for _, entity in await self._resolve_noted_pairs(noted)]
+
+    async def _resolve_noted(self, noted: list[NotedAreaRef]) -> list[_Anchor]:
+        """Area anchors for the claim-anchor list: each ref's original name is
+        the anchor's display name (so the model can cite "Ha Giang Loop") while
+        its claims key to the containing area's verified geo."""
+        anchors: list[_Anchor] = []
+        for ref, entity in await self._resolve_noted_pairs(noted):
             geo = ResolvedGeo(
                 country_code=entity.country_code,
                 city=entity.name if entity.entity_type == "city" else None,
             )
-            if entity.entity_key in seen_keys:
-                continue
-            seen_keys.add(entity.entity_key)
             anchors.append(_Anchor(kind="area", name=ref.name, geo=geo))
         return anchors
 
@@ -280,8 +300,7 @@ class KnowledgeHarvester:
                 # its resolved area too — the claim the model states
                 # about the route lands on the containing area's key.
                 if slugs_match(raw.entity_name, anchor.geo.city) or (
-                    anchor.kind == "area"
-                    and slugs_match(raw.entity_name, anchor.name)
+                    anchor.kind == "area" and slugs_match(raw.entity_name, anchor.name)
                 ):
                     geo = anchor.geo
                     if geo.city is None:

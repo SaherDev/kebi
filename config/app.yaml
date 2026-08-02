@@ -516,6 +516,12 @@ taste_model:
     liked: 3
     liked_negative: 3
     rejected: 1
+    # Location-kinds Step 3: a share's noted area (region interest) and a
+    # route/experience share (experience interest). A deliberate share is
+    # louder than a passive link-share save (0), quieter than a visited+liked
+    # venue. Set to 0 to silence the bucket.
+    area_interest: 2
+    experience: 2
 
 # ---------------------------------------------------------------------------
 # User Memory Configuration

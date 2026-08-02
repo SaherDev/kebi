@@ -218,9 +218,7 @@ class TestRunRegen:
         repo.get_by_user_id.return_value = None
 
         mock_llm = AsyncMock()
-        mock_llm.complete.return_value = json.dumps(
-            _sample_artifacts().model_dump()
-        )
+        mock_llm.complete.return_value = json.dumps(_sample_artifacts().model_dump())
         mock_get_llm.return_value = mock_llm
 
         service = _make_service(repo, cores={"p1": _core("p1")})
@@ -274,3 +272,127 @@ class TestRunRegen:
 
         repo.upsert_regen.assert_not_awaited()
         assert mock_llm.complete.await_count == 2  # retried once
+
+
+class TestAreaAndExperienceSignals:
+    """Location-kinds Step 3: region-interest & experience signals."""
+
+    async def test_handle_area_signal_logs_entity_key_and_metadata(self) -> None:
+        repo = _make_repo_mock()
+        service = _make_service(repo)
+
+        with patch("kebi.core.taste.debounce.regen_debouncer") as debouncer:
+            debouncer.schedule = MagicMock()
+            await service.handle_area_signal("user1", "vn/hoi-an", "city", "Hoi An")
+
+        repo.log_interaction.assert_awaited_once_with(
+            "user1",
+            InteractionType.AREA_INTEREST,
+            "vn/hoi-an",
+            metadata={"name": "Hoi An", "entity_type": "city"},
+        )
+
+    async def test_handle_experience_signal_logs_tags(self) -> None:
+        repo = _make_repo_mock()
+        service = _make_service(repo)
+
+        with patch("kebi.core.taste.debounce.regen_debouncer") as debouncer:
+            debouncer.schedule = MagicMock()
+            await service.handle_experience_signal("user1", ["scenic_route"])
+
+        repo.log_interaction.assert_awaited_once_with(
+            "user1",
+            InteractionType.EXPERIENCE_INTEREST,
+            None,
+            metadata={"experience": ["scenic_route"]},
+        )
+
+    async def test_handle_experience_signal_noop_on_empty(self) -> None:
+        repo = _make_repo_mock()
+        service = _make_service(repo)
+
+        with patch("kebi.core.taste.debounce.regen_debouncer") as debouncer:
+            debouncer.schedule = MagicMock()
+            await service.handle_experience_signal("user1", [])
+            debouncer.schedule.assert_not_called()
+        repo.log_interaction.assert_not_awaited()
+
+    @patch("kebi.core.taste.service.get_llm")
+    async def test_resolve_rows_partitions_by_type(
+        self, mock_get_llm: MagicMock
+    ) -> None:
+        """A mixed log — one venue save, one area interest, one experience —
+        aggregates all three from their own carriers: the venue via the
+        catalog, the area/experience straight from metadata (no catalog read)."""
+        repo = _make_repo_mock()
+        repo.get_interactions.return_value = [
+            RawInteraction(
+                type="area_interest",
+                place_core_id="vn/hoi-an",
+                metadata={"name": "Hoi An", "entity_type": "city"},
+            ),
+            RawInteraction(
+                type="experience_interest",
+                place_core_id=None,
+                metadata={"experience": ["scenic_route", "motorbike_route"]},
+            ),
+            RawInteraction(type="accepted", place_core_id="p1"),
+        ]
+        repo.get_by_user_id.return_value = None
+
+        mock_llm = AsyncMock()
+        mock_llm.complete.return_value = json.dumps({"summary": []})
+        mock_get_llm.return_value = mock_llm
+
+        service = _make_service(repo, cores={"p1": _core("p1")})
+        await service._run_regen("user1")
+
+        sc = repo.upsert_regen.call_args.kwargs["signal_counts"]
+        # Area interest → region bucket, not venue location.
+        assert sc["region_interest"] == {"Hoi An": 2}
+        assert sc["totals"]["area_interests"] == 1
+        # Experience interest → experience bucket.
+        assert sc["experience"] == {"scenic_route": 2, "motorbike_route": 2}
+        # Venue accept still resolves through the catalog (weight 1).
+        assert sc["categories"] == {"restaurant": 1}
+
+    @patch("kebi.core.taste.service.get_llm")
+    async def test_area_key_not_looked_up_in_places_catalog(
+        self, mock_get_llm: MagicMock
+    ) -> None:
+        """An area entity_key must never be fed to the places catalog read —
+        only true venue place_ids are (the entity_key isn't a places.id)."""
+        repo = _make_repo_mock()
+        repo.get_interactions.return_value = [
+            RawInteraction(
+                type="area_interest",
+                place_core_id="vn/hoi-an",
+                metadata={"name": "Hoi An", "entity_type": "city"},
+            ),
+            RawInteraction(type="accepted", place_core_id="p1"),
+            RawInteraction(type="accepted", place_core_id="p1"),
+        ]
+        repo.get_by_user_id.return_value = None
+
+        mock_llm = AsyncMock()
+        mock_llm.complete.return_value = json.dumps({"summary": []})
+        mock_get_llm.return_value = mock_llm
+
+        search = AsyncMock()
+        search.get_cores_by_ids = AsyncMock(return_value={"p1": _core("p1")})
+        up_repo = AsyncMock()
+        up_repo.get_by_user = AsyncMock(return_value=[])
+        up_repo.pill_state = AsyncMock(return_value=[])
+        from kebi.core.taste.service import TasteModelService
+
+        service = TasteModelService(
+            _async_ctx(AsyncMock()),
+            search_service_factory=lambda _s: search,
+            user_places_repo_factory=lambda _s: up_repo,
+        )
+        service._repo = repo
+        await service._run_regen("user1")
+
+        # Only the real venue id reached the catalog read.
+        called_ids = search.get_cores_by_ids.call_args.args[0]
+        assert called_ids == ["p1"]

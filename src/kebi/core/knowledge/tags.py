@@ -140,6 +140,11 @@ _CANONICAL: dict[str, str] = {
 
 CLAIM_TAG_VALUES: frozenset[str] = frozenset(_CANONICAL.values())
 
+# The experience-type values on their own — a route/region share's interest
+# collapses to these, and Step 3 lifts them out of the harvested claims into
+# an experience taste signal.
+EXPERIENCE_TAG_VALUES: frozenset[str] = frozenset(m.value for m in ExperienceTag)
+
 
 def normalize_claim_tags(tags: list[str]) -> list[str]:
     """Map raw tags onto the vocabulary: keep known ones in canonical form,

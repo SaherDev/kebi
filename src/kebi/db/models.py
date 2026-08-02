@@ -29,6 +29,14 @@ class InteractionType(PyEnum):
     # Saving a place kebi recommended — a stronger positive than a passive
     # link-share SAVE, carrying its own taste weight (not the same bucket).
     SAVED_RECOMMENDATION = "saved_recommendation"
+    # Location-kinds Step 3: a share's noted areas become their own taste
+    # signal, distinct from venue sentiment. AREA_INTEREST carries the area's
+    # entity_key in `place_id` and its display name / kind in `metadata`;
+    # EXPERIENCE_INTEREST (a route/experience share) carries no place — its
+    # experience tags ride `metadata`. Both are positive-only (a share is an
+    # interest, never a rejection).
+    AREA_INTEREST = "area_interest"
+    EXPERIENCE_INTEREST = "experience_interest"
 
 
 class TasteModel(Base):

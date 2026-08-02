@@ -82,3 +82,86 @@ async def test_failure_is_swallowed() -> None:
     await _handlers(
         reader=reader, harvester=AsyncMock(), ingestion=AsyncMock()
     ).on_content_harvest_requested(_EVENT)
+
+
+# ---------------------------------------------------------------------------
+# Location-kinds Step 3 — the harvest handler also trains taste from the
+# share's noted areas (region interest) and experience-tagged claims.
+# ---------------------------------------------------------------------------
+
+from kebi.core.areas.models import AreaEntity  # noqa: E402
+from kebi.core.knowledge.schemas import NotedAreaRef  # noqa: E402
+
+_NOTED_SNAPSHOT = HarvestSnapshot(
+    content=HarvestContent(caption="3 stops in Vietnam"),
+    places=[],
+    noted_areas=[
+        NotedAreaRef(name="Hoi An", country_code="vn", reason="non_venue_area"),
+        NotedAreaRef(name="Ha Giang Loop", country_code="vn", reason="non_venue_route"),
+    ],
+)
+
+
+def _area(entity_key: str, name: str) -> AreaEntity:
+    return AreaEntity(
+        entity_key=entity_key,
+        entity_type="city",
+        name=name,
+        country_code="vn",
+        lat=0.0,
+        lng=0.0,
+    )
+
+
+async def test_emits_region_signal_per_resolved_area() -> None:
+    reader = AsyncMock()
+    reader.get = AsyncMock(return_value=_NOTED_SNAPSHOT)
+    harvester = AsyncMock()
+    harvester.harvest = AsyncMock(return_value=[])
+    harvester.resolve_area_interests = AsyncMock(
+        return_value=[_area("vn/hoi-an", "Hoi An"), _area("vn/ha-giang", "Ha Giang")]
+    )
+    ingestion = AsyncMock()
+    ingestion.ingest = AsyncMock(return_value=[])
+    taste = AsyncMock()
+
+    handlers = _handlers(reader=reader, harvester=harvester, ingestion=ingestion)
+    handlers.taste_service = taste
+    await handlers.on_content_harvest_requested(_EVENT)
+
+    # One region-interest signal per resolved area, user-scoped to the sharer,
+    # even though the harvest LLM produced no claims.
+    assert taste.handle_area_signal.await_count == 2
+    keys = {c.args[1] for c in taste.handle_area_signal.await_args_list}
+    assert keys == {"vn/hoi-an", "vn/ha-giang"}
+
+
+async def test_experience_signal_from_experience_tagged_claims() -> None:
+    reader = AsyncMock()
+    reader.get = AsyncMock(return_value=_NOTED_SNAPSHOT)
+    claims = [
+        StructuredClaim(
+            scope="city",
+            entity_name="Ha Giang",
+            claim="A motorbike loop through karst mountains.",
+            tags=["motorbike_route", "scenic_route", "cheap_eats"],
+            confidence=0.8,
+            geo=ResolvedGeo(country_code="vn", city="Ha Giang"),
+        )
+    ]
+    harvester = AsyncMock()
+    harvester.harvest = AsyncMock(return_value=claims)
+    harvester.resolve_area_interests = AsyncMock(return_value=[])
+    ingestion = AsyncMock()
+    ingestion.ingest = AsyncMock(return_value=claims)
+    taste = AsyncMock()
+
+    handlers = _handlers(reader=reader, harvester=harvester, ingestion=ingestion)
+    handlers.taste_service = taste
+    await handlers.on_content_harvest_requested(_EVENT)
+
+    # Only the experience-type tags are lifted into the experience signal.
+    taste.handle_experience_signal.assert_awaited_once()
+    _, exps = taste.handle_experience_signal.await_args.args
+    assert set(exps) == {"motorbike_route", "scenic_route"}
+    assert "cheap_eats" not in exps

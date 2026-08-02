@@ -1,6 +1,6 @@
 # Location Kinds — Roadmap
 
-**Status:** direction decided 2026-07-21 · Step 1 done 2026-07-22 (ADR-133) · Step 2 done 2026-08-02 (ADR-134) · Step 3 is next up
+**Status:** direction decided 2026-07-21 · Step 1 done 2026-07-22 (ADR-133) · Step 2 done 2026-08-02 (ADR-134) · Step 3 done 2026-08-02 (ADR-135) · Step 4 is next up
 **Scope:** this is a roadmap, not an implementation plan. Each step below is a
 self-contained brief — plan and build each one as its own feature, in order.
 One plan doc + ADR per step when it starts.
@@ -170,26 +170,37 @@ degrade to clarification asks.
 
 ---
 
-## Step 3 — Saves that mean something
+## Step 3 — Saves that mean something  *(done 2026-08-02 — ADR-135, `feature/area-signals`)*
 
 **Problem it closes:** problem 7 — kind-blind signals.
 
-**Decided direction:**
-- A saved area renders as what it is in the library (kind on the library
-  DTO — a rendering contract change with the product repo, not a consult
-  change). Saved areas get a visually distinct treatment (own section or
-  extent-thumbnail card), never rows disguised as venues. Routes never appear
-  in the library. *This rendering half is demand-gated (see Decisions
-  locked); the signal/prior halves below are not.*
-- Saving an area emits its own signal class — region interest — distinct from
-  venue accept/like, feeding the taste model. Route-shaped shares contribute
-  experience-type signals (scenic ride, road trip) without any saved object.
-- Saved areas act as **geo priors**: consult can bias toward or scope by
-  entities the user saved (their extents), e.g. "somewhere for my Vietnam
-  trip."
+**Shipped direction:**
+- A share's noted areas now emit their own taste signal class — **region
+  interest** — distinct from venue accept/like, resolved to the ADR-134 entity
+  (a route collapsing to its containing area). Route/region shares also
+  contribute **experience-type** signals (scenic route, motorbike route,
+  hiking, …) with no saved object. Both are positive-only, fire automatically
+  off the share through the existing background harvest pass, and land in
+  their own top-level `signal_counts` buckets — never folded into the
+  venue-derived location context, which is what lets taste tell "interested in
+  a region" from "liked a restaurant".
+- **Geo prior is soft:** because the taste summary already feeds the agent
+  prompt and the candidate namer, region/experience interest biases later
+  open-ended suggestions with no new retrieval code.
+- **Deviations (in ADR-135):** trigger is **automatic from shares — no
+  explicit save action, no library rendering** (the user-visible half stays
+  demand-gated per Decisions locked); **soft prior only — hard extent-scoping
+  deferred to Step 4/5** (it rewrites the same geofence Step 4 owns); region
+  interest is harvest-LLM-independent while experience specificity rides
+  best-effort harvest output.
+
+**Rollout note:** one enum-values migration (`alembic upgrade head`) adds the
+two interaction types; nothing else rolls over (no Redis invalidation, no
+contract change).
 
 **Done when:** a shared route influences later suggestions in its region, and
-the taste model distinguishes "saved a region" from "liked a restaurant."
+the taste model distinguishes "showed interest in a region" from "liked a
+restaurant." *(met)*
 
 ---
 
