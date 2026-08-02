@@ -53,7 +53,7 @@ from kebi.core.extraction.types import (
     Producer,
     ValidatedCandidate,
 )
-from kebi.core.knowledge.schemas import HarvestContent
+from kebi.core.knowledge.schemas import HarvestContent, NotedAreaRef
 from kebi.core.places import (
     LocationContext,
     NonVenueDetection,
@@ -75,12 +75,28 @@ class PipelineResult:
 
     `noted_non_venues` carries the names the run detected as non-venue
     geography (a route, region, town, natural feature) — from the search
-    validator and the picker alike — deduped, in first-seen order. The
-    service narrates them as noted interests (never a silent drop)."""
+    validator and the picker alike — deduped, in first-seen order, each
+    with the location context the share placed it in (ADR-082) and the
+    rejection subtype. The service narrates them as noted interests
+    (never a silent drop) and hands them to the harvest as area anchors."""
 
     candidates: list[ValidatedCandidate]
     content: HarvestContent
-    noted_non_venues: list[str] = field(default_factory=list)
+    noted_non_venues: list[NotedAreaRef] = field(default_factory=list)
+
+
+def _noted_ref(
+    name: str, reason: str, location: LocationContext | None
+) -> NotedAreaRef:
+    """Pair a noted non-venue name with the share's location context —
+    the containing-area hint the harvest resolves against."""
+    return NotedAreaRef(
+        name=name,
+        city=location.city if location else None,
+        country=location.country if location else None,
+        country_code=location.country_code if location else None,
+        reason=reason,
+    )
 
 
 def _build_harvest_content(
@@ -289,8 +305,9 @@ class ExtractionPipeline:
         search_set: dict[str, AttributedSearchResult] = {}
         searched_queries: set[str] = set()
         # Non-venue geography noted across levels: normalized name → the
-        # first display name seen. Ordered dict keeps first-seen order.
-        noted: dict[str, str] = {}
+        # first ref seen (name + share context + rejection subtype).
+        # Ordered dict keeps first-seen order.
+        noted: dict[str, NotedAreaRef] = {}
 
         for level in self._levels:
             executed, fired = await level.run(context)
@@ -311,17 +328,22 @@ class ExtractionPipeline:
             # push the request past the candidate ceiling.
             _enforce_candidate_limit(context, limit, _emit)
 
-            detections = await self._extend_search_set(
+            noted_refs = await self._extend_search_set(
                 context, search_set, searched_queries, resolver_output
             )
-            for d in detections:
-                noted.setdefault(normalize_query(d.name), d.name)
+            for ref in noted_refs:
+                noted.setdefault(normalize_query(ref.name), ref)
 
             outcome = await self._picker.pick(
                 context, search_set, shared_tags=resolver_output.post_tags
             )
             for name in outcome.non_venue_names:
-                noted.setdefault(normalize_query(name), name)
+                loc = resolver_output.query_locations.get(
+                    normalize_query(name), resolver_output.location
+                )
+                noted.setdefault(
+                    normalize_query(name), _noted_ref(name, "non_venue", loc)
+                )
             results = outcome.candidates
 
             level_summary = level.summary_fn(context, fired, len(results))
@@ -354,12 +376,14 @@ class ExtractionPipeline:
         search_set: dict[str, AttributedSearchResult],
         searched_queries: set[str],
         resolver_output: ResolverOutput,
-    ) -> list[NonVenueDetection]:
+    ) -> list[NotedAreaRef]:
         """Fan out `PlacesSearchService.find_with_rejections()` over the
         resolver-cleaned producer names (skip queries already issued on an
         earlier level). Attribute each surviving result to the `KnownPlace`
         whose name produced it, and return the non-venue geography the
-        validator rejected so the run can narrate it as noted interests.
+        validator rejected — each with the query's own location context
+        (ADR-082) — so the run can narrate it as noted interests and the
+        harvest can anchor it to a real area.
 
         ADR-080: the string sent to the provider is the resolver's
         cleaned query; the raw `KnownPlace` name stays the attribution
@@ -450,11 +474,12 @@ class ExtractionPipeline:
 
         # Merge in `queries` order (not completion order) so cross-name dedup
         # stays deterministic — first producer to claim a provider_id wins.
-        detections: list[NonVenueDetection] = []
+        noted_refs: list[NotedAreaRef] = []
         for (raw, search_query, producer, medium), (results, rejected) in zip(
             queries, batches, strict=True
         ):
-            detections.extend(rejected)
+            for d in rejected:
+                noted_refs.append(_noted_ref(d.name, d.reason, _location_for(raw)))
             for place in results:
                 if not place.provider_id:
                     continue
@@ -471,7 +496,7 @@ class ExtractionPipeline:
                     ),
                 )
             searched_queries.add(normalize_query(raw))
-        return detections
+        return noted_refs
 
 
 __all__ = [

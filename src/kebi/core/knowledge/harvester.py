@@ -23,29 +23,33 @@ from typing import TYPE_CHECKING, Literal, cast
 from pydantic import BaseModel, ConfigDict, Field
 
 from kebi.core.agent._trace_context import traced_call
+from kebi.core.areas.models import AreaContext
 from kebi.core.config import get_prompt
-from kebi.core.knowledge.geo_resolve import EntityGeoResolver, slugs_match
 from kebi.core.knowledge.schemas import (
     HarvestContent,
     HarvestPlace,
+    NotedAreaRef,
     ResolvedGeo,
     ReviewStatus,
     SourceType,
     StructuredClaim,
     _slugify,
+    slugs_match,
 )
 from kebi.core.knowledge.tags import render_claim_tag_vocabulary
+from kebi.core.places import NON_VENUE_ROUTE
 
 if TYPE_CHECKING:
-    from kebi.core.places.nominatim_geocoding_client import NominatimGeocodingClient
+    from kebi.core.areas import AreaService
     from kebi.providers.llm import InstructorClient
 
 logger = logging.getLogger(__name__)
 
 
 class _HarvestedClaim(BaseModel):
-    """One claim as the model emits it — anchored to a place by index, not a
-    key. Resolved into a `StructuredClaim` before it reaches the writer."""
+    """One claim as the model emits it — anchored to an entry of the
+    indexed anchor list (venues and areas alike), never a key. Resolved
+    into a `StructuredClaim` before it reaches the writer."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -63,7 +67,21 @@ class _HarvesterResponse(BaseModel):
     claims: list[_HarvestedClaim] = Field(default_factory=list)
 
 
-def _render_content(content: HarvestContent, places: list[HarvestPlace]) -> str:
+class _Anchor(BaseModel):
+    """One entry of the combined indexed anchor list the model cites by
+    `place_index`. A venue anchor carries its catalog `place_id`; an area
+    anchor (a noted non-venue resolved through the area service) carries
+    only its verified geo — a `place`-scope claim citing it is dropped."""
+
+    model_config = ConfigDict(frozen=True)
+
+    kind: Literal["venue", "area"]
+    name: str
+    geo: ResolvedGeo
+    place_id: str | None = None
+
+
+def _render_content(content: HarvestContent, anchors: list[_Anchor]) -> str:
     lines: list[str] = []
     if content.platform:
         lines.append(f"Platform: {content.platform}")
@@ -79,13 +97,20 @@ def _render_content(content: HarvestContent, places: list[HarvestPlace]) -> str:
         lines.append(f"Location tag: {content.location_tag}")
     lines.append("")
     lines.append("Identified places:")
-    for idx, place in enumerate(places):
+    for idx, anchor in enumerate(anchors):
         where = ", ".join(
             p
-            for p in (place.geo.neighborhood, place.geo.city, place.geo.country_code)
+            for p in (
+                anchor.geo.neighborhood,
+                anchor.geo.city,
+                anchor.geo.country_code,
+            )
             if p
         )
-        lines.append(f"  [{idx}] {place.name}" + (f" — {where}" if where else ""))
+        marker = " (area of interest, not a venue)" if anchor.kind == "area" else ""
+        lines.append(
+            f"  [{idx}] {anchor.name}{marker}" + (f" — {where}" if where else "")
+        )
     return "\n".join(lines)
 
 
@@ -102,13 +127,13 @@ class KnowledgeHarvester:
     def __init__(
         self,
         instructor_client: InstructorClient,
-        geocoder: NominatimGeocodingClient,
+        area_service: AreaService,
         *,
         confidence_floor: float = 0.35,
         review_status: ReviewStatus = "approved",
     ) -> None:
         self._client = instructor_client
-        self._geocoder = geocoder
+        self._areas = area_service
         self.confidence_floor = confidence_floor
         self.review_status = review_status
 
@@ -116,12 +141,26 @@ class KnowledgeHarvester:
         self,
         content: HarvestContent,
         places: list[HarvestPlace],
+        noted_areas: list[NotedAreaRef] | None = None,
         *,
         user_id: str | None = None,
     ) -> list[StructuredClaim]:
         """Mine the content into resolved claims. Returns `[]` on any error
-        or when there is nothing to anchor to."""
-        if not places or content.is_empty():
+        or when there is nothing to anchor to.
+
+        Anchors are persisted places plus the resolved areas behind any
+        noted non-venue names (Step 2's harvest-gap fix): a share whose
+        every place was noted — a route video, a region roundup — still
+        harvests, its claims keyed to the areas the interest belongs to.
+        """
+        if content.is_empty():
+            return []
+        anchors = [
+            _Anchor(kind="venue", name=p.name, geo=p.geo, place_id=p.place_id)
+            for p in places
+        ]
+        anchors.extend(await self._resolve_noted(noted_areas or []))
+        if not anchors:
             return []
         async with traced_call(
             "knowledge_harvester.llm",
@@ -142,61 +181,122 @@ class KnowledgeHarvester:
                             + "\n\n"
                             + render_claim_tag_vocabulary(),
                         },
-                        {"role": "user", "content": _render_content(content, places)},
+                        {"role": "user", "content": _render_content(content, anchors)},
                     ],
                 )
             except Exception as exc:
                 logger.warning("knowledge harvest failed: %s", exc, exc_info=True)
                 t.fail(exc)
                 return []
-            claims = await self._resolve(cast(_HarvesterResponse, response), places)
+            claims = await self._resolve(cast(_HarvesterResponse, response), anchors)
             t.output = {"count": len(claims)}
             return claims
 
+    async def _resolve_noted(self, noted: list[NotedAreaRef]) -> list[_Anchor]:
+        """Resolve noted non-venue names to area anchors, deduped by entity.
+
+        The subject-vs-container rule lives in the area service: an area
+        noted in its own right ("Hoi An") anchors itself; a route ("Ha
+        Giang Loop") anchors its containing area — the route detection
+        skips the doomed name-as-area probe. The route's own name stays
+        the anchor's display name so the model can cite it; its claims
+        key to the containing area's verified geo. Unresolvable names are
+        skipped (drop-don't-mis-key, ADR-126)."""
+        anchors: list[_Anchor] = []
+        seen_keys: set[str] = set()
+        for ref in noted:
+            entity = await self._areas.resolve_noted_name(
+                ref.name,
+                AreaContext(
+                    city=ref.city,
+                    country=ref.country,
+                    country_code=ref.country_code,
+                ),
+                probe_name=ref.reason != NON_VENUE_ROUTE,
+            )
+            if entity is None:
+                logger.debug(
+                    "harvest_noted_area_unresolvable", extra={"name": ref.name}
+                )
+                continue
+            geo = ResolvedGeo(
+                country_code=entity.country_code,
+                city=entity.name if entity.entity_type == "city" else None,
+            )
+            if entity.entity_key in seen_keys:
+                continue
+            seen_keys.add(entity.entity_key)
+            anchors.append(_Anchor(kind="area", name=ref.name, geo=geo))
+        return anchors
+
     async def _resolve(
-        self, response: _HarvesterResponse, places: list[HarvestPlace]
+        self, response: _HarvesterResponse, anchors: list[_Anchor]
     ) -> list[StructuredClaim]:
         """Key each claim by the entity it names, verified (ADR-126).
 
-        The anchor place supplies the key only when the claim is *about* the
-        anchor (its name, neighborhood, or city — slug-matched). A city claim
-        naming a different city is resolved by structured geocoding within
-        the anchor's country; country claims are resolved by name. Anything
-        unverifiable is dropped — never keyed to the wrong entity.
+        The anchor supplies the key only when the claim is *about* the
+        anchor (its name, neighborhood, or city — slug-matched). A city
+        claim naming a different city is resolved through the area service
+        — store first, round-trip-verified geocode on miss, persisted as an
+        entity — within the anchor's country; country claims are resolved
+        by name. A `place`-scope claim citing an area anchor is dropped
+        (an area has no catalog id to key on). Anything unverifiable is
+        dropped — never keyed to the wrong entity.
         """
-        resolver = EntityGeoResolver(self._geocoder)
         resolved: list[StructuredClaim] = []
         for raw in response.claims:
-            if not (0 <= raw.place_index < len(places)):
+            if not (0 <= raw.place_index < len(anchors)):
                 continue
-            place = places[raw.place_index]
+            anchor = anchors[raw.place_index]
             place_ref: str | None = None
             geo: ResolvedGeo | None = None
+            scope = raw.scope
             if raw.scope == "place":
+                if anchor.place_id is None:
+                    logger.debug(
+                        "harvest_claim_dropped_place_scope_on_area",
+                        extra={"entity": raw.entity_name},
+                    )
+                    continue
                 if raw.entity_name and not _venue_names_match(
-                    raw.entity_name, place.name
+                    raw.entity_name, anchor.name
                 ):
                     logger.debug(
                         "harvest_claim_dropped_entity_mismatch",
                         extra={"scope": raw.scope, "entity": raw.entity_name},
                     )
                     continue
-                place_ref = place.place_id
+                place_ref = anchor.place_id
             elif raw.scope == "neighborhood":
-                if not slugs_match(raw.entity_name, place.geo.neighborhood):
+                if not slugs_match(raw.entity_name, anchor.geo.neighborhood):
                     logger.debug(
                         "harvest_claim_dropped_entity_mismatch",
                         extra={"scope": raw.scope, "entity": raw.entity_name},
                     )
                     continue
-                geo = place.geo
+                geo = anchor.geo
             elif raw.scope == "city":
-                if slugs_match(raw.entity_name, place.geo.city):
-                    geo = place.geo
-                elif place.geo.country_code:
-                    geo = await resolver.resolve_city(
-                        raw.entity_name, place.geo.country_code
+                # An area anchor's own name ("Ha Giang Loop") counts as
+                # its resolved area too — the claim the model states
+                # about the route lands on the containing area's key.
+                if slugs_match(raw.entity_name, anchor.geo.city) or (
+                    anchor.kind == "area"
+                    and slugs_match(raw.entity_name, anchor.name)
+                ):
+                    geo = anchor.geo
+                    if geo.city is None:
+                        # The anchor's containing area is a whole country
+                        # (the share gave no city context) — the fact
+                        # lands at the level the key can actually express.
+                        scope = "country"
+                elif anchor.geo.country_code:
+                    entity = await self._areas.resolve_city(
+                        raw.entity_name, anchor.geo.country_code
                     )
+                    if entity is not None:
+                        geo = ResolvedGeo(
+                            country_code=entity.country_code, city=entity.name
+                        )
                 if geo is None:
                     logger.debug(
                         "harvest_claim_dropped_unresolvable",
@@ -204,7 +304,9 @@ class KnowledgeHarvester:
                     )
                     continue
             else:  # country
-                geo = await resolver.resolve_country(raw.entity_name)
+                country = await self._areas.resolve_country(raw.entity_name)
+                if country is not None:
+                    geo = ResolvedGeo(country_code=country.country_code)
                 if geo is None:
                     logger.debug(
                         "harvest_claim_dropped_unresolvable",
@@ -213,8 +315,8 @@ class KnowledgeHarvester:
                     continue
             resolved.append(
                 StructuredClaim(
-                    scope=raw.scope,
-                    entity_name=raw.entity_name or place.name,
+                    scope=scope,
+                    entity_name=raw.entity_name or anchor.name,
                     claim=raw.claim,
                     tags=raw.tags,
                     confidence=raw.confidence,

@@ -267,6 +267,20 @@ external_services:
     timeout_seconds: 3.0
 
 # ---------------------------------------------------------------------------
+# Geocoding boundary (area layer). Google Geocoding API — forward, reverse,
+# and the by-place-id geometry refresh. Nominatim was removed: its public
+# instance caps at ~1 req/s and cannot back production. Reverse lookups sit
+# behind a Redis bucket cache; forward lookups are absorbed by the
+# area_entities store (each unique area geocodes once ever).
+# ---------------------------------------------------------------------------
+geocoding:
+  provider: google
+  timeout_seconds: 10.0
+  reverse_cache:
+    ttl_seconds: 2592000    # 30 days — the provider ToS cap, enforced in code
+    precision: 3            # ~110 m buckets
+
+# ---------------------------------------------------------------------------
 # Embeddings configuration
 # ADR-040: Voyage 4-lite chosen for 9.25% better retrieval quality
 # ---------------------------------------------------------------------------
@@ -318,6 +332,13 @@ prompts:
 # A single harvested mention is weak evidence; curated expertise is strong.
 # The writer floors each claim's model-estimated confidence by source trust.
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Area layer (location-kinds Step 2). Caps on the noted-interest resolution
+# path so one giant share can't fan out into unbounded geocode calls.
+# ---------------------------------------------------------------------------
+areas:
+  noted_resolution_limit: 5
+
 knowledge:
   harvest_confidence_floor: 0.35
   curator_confidence_floor: 0.9
@@ -401,9 +422,10 @@ agent:
     # first, then Google fallback when empty). Same pure-DB / single-provider
     # budget as find_saved.
     discover_places: 8
-    # research reads the claims store by indexed entity key (no LLM, no
-    # provider); at most one free Nominatim geocode when the asked-about
-    # area isn't the working location. Same budget as the pure-DB tools.
+    # research reads the claims store by indexed entity key (no LLM); at
+    # most one area-store lookup (geocode only on a store miss) when the
+    # asked-about area isn't the working location. Same budget as the
+    # pure-DB tools.
     research: 8
   # find_saved-specific knobs. `default_limit` is what the tool uses when
   # the agent omits the `limit` arg. `max_limit` caps any agent-supplied
@@ -616,6 +638,13 @@ pricing:
         ":searchText": 0.032       # $32 / 1k — Text Search Pro
         ":searchNearby": 0.032     # $32 / 1k — Nearby Search Pro
         "/{place_id}": 0.005       # $5 / 1k  — Place Details Essentials
+    google_geocoding:
+      # Google Geocoding API — verified 2026-08-02 — source: developers.google.com/maps/billing-and-pricing/pricing
+      # Forward + reverse geocoding for the area layer (replaces free
+      # Nominatim, which caps at ~1 req/s). Essentials tier, and the
+      # area_entities store + geo:rev Redis cache mean each unique area
+      # geocodes once ever — steady-state spend rounds to zero.
+      per_call: 0.005              # $5 / 1k — Geocoding Essentials
     apify:
       # Apify — verified 2026-05-24 — sources: actor pages on apify.com
       # Per-result × x-apify-pagination-total header — no follow-up call.

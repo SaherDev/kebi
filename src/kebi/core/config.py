@@ -288,6 +288,36 @@ class ExternalServicesConfig(BaseModel):
     )
 
 
+class GeocodingReverseCacheConfig(BaseModel):
+    """Redis cache in front of reverse geocoding.
+
+    `precision` is the coordinate rounding in decimal places (3 ≈ 110 m
+    buckets — city/neighborhood granularity). `ttl_seconds` is capped at
+    30 days in code to honor the provider's result-caching terms.
+    """
+
+    ttl_seconds: int = 30 * 24 * 60 * 60
+    precision: int = 3
+
+
+class AreasConfig(BaseModel):
+    """Area layer (location-kinds Step 2). `noted_resolution_limit` caps
+    how many noted non-venue names one share may resolve through the
+    geocoder — bounds fan-out and spend per harvest."""
+
+    noted_resolution_limit: int = 5
+
+
+class GeocodingConfig(BaseModel):
+    """Geocoding boundary (area layer). `provider` names the adapter —
+    swapping providers is a config + adapter change, never a call-site
+    change."""
+
+    provider: str = "google"
+    timeout_seconds: float = 10.0
+    reverse_cache: GeocodingReverseCacheConfig = GeocodingReverseCacheConfig()
+
+
 class EmbeddingsConfig(BaseModel):
     """Embedding configuration (ADR-054).
 
@@ -914,9 +944,21 @@ class ApifyPricing(BaseModel):
         return actor.per_result * item_count
 
 
+class GoogleGeocodingPricing(BaseModel):
+    """Per-call USD for the Google Geocoding API (forward + reverse).
+
+    One flat Essentials-tier rate — the API has no field masks or SKU
+    tiers. Defaulted so configs written before the geocoder switch still
+    validate.
+    """
+
+    per_call: float = 0.005
+
+
 class ExternalProviderPricing(BaseModel):
     google_places: GooglePlacesPricing
     apify: ApifyPricing
+    google_geocoding: GoogleGeocodingPricing = GoogleGeocodingPricing()
 
 
 class PricingConfig(BaseModel):
@@ -941,6 +983,8 @@ class AppConfig(BaseModel):
     extraction: ExtractionConfig
     providers: AppProvidersConfig = AppProvidersConfig()
     external_services: ExternalServicesConfig = ExternalServicesConfig()
+    geocoding: GeocodingConfig = GeocodingConfig()
+    areas: AreasConfig = AreasConfig()
     embeddings: EmbeddingsConfig = EmbeddingsConfig()
     system_prompts: SystemPromptsConfig = SystemPromptsConfig()
     taste_model: TasteModelConfig = TasteModelConfig()

@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 
-from kebi.core.places._google_mapper import NON_VENUE_GEOGRAPHY
+from kebi.core.places._google_mapper import NON_VENUE_ROUTE
 from kebi.core.places._google_query_builder import (
     build_text_search_param_sets,
     build_text_search_params,
@@ -486,7 +486,9 @@ class TestNonVenueRejectionCollection:
         assert len(rejections) == 1
         assert rejections[0].name == "Ha Giang Loop"
         assert rejections[0].provider_id == "google:ChIJloop"
-        assert rejections[0].reason == NON_VENUE_GEOGRAPHY
+        # The subtype is the Step 2 routing signal: a route never resolves
+        # to its own area entity.
+        assert rejections[0].reason == NON_VENUE_ROUTE
 
     def test_mixed_batch_keeps_venues_and_collects_rejections(self) -> None:
         rejections: list[NonVenueDetection] = []

@@ -269,3 +269,86 @@ class UserMemory(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
+
+
+class AreaEntityType(PyEnum):
+    """Kinds of geographic area entity (location-kinds Step 2).
+
+    Mirrors the geo half of `KnowledgeEntityType` (never `place` — venues
+    live in the places catalog). `neighborhood` is supported by the schema
+    but has no creation path yet: no verified structured resolution exists
+    for sub-city areas, so they keep riding their city's key.
+    """
+
+    COUNTRY = "country"
+    CITY = "city"
+    NEIGHBORHOOD = "neighborhood"
+
+
+class AreaEntity(Base):
+    """One row per verified geographic area — the shared area authority.
+
+    `entity_key` is the exact `build_geo_key` format the knowledge layer
+    already uses (`vn`, `vn/hoi-an`), so every existing knowledge_claims
+    row attaches to its entity with zero migration. Identity (key, name,
+    aliases, hierarchy) is kebi's own and permanent; `provider_id`
+    (`google:<place_id>`) is storable indefinitely under provider ToS,
+    while geometry (lat/lng/bbox) is provider content — `geo_refreshed_at`
+    tracks its age and the area service re-geocodes via the place ID when
+    it exceeds the 30-day compliance window (same discipline as
+    `places.refreshed_at`).
+
+    `parent_key` is a plain column, no FK — the service ensures the parent
+    country row from the same geocode response, but a row must never fail
+    to persist because its parent hasn't landed yet.
+    """
+
+    __tablename__ = "area_entities"
+    __table_args__ = (
+        Index("ix_area_entities_parent", "parent_key"),
+        Index("ix_area_entities_country", "country_code"),
+        Index(
+            "ix_area_entities_aliases",
+            "aliases",
+            postgresql_using="gin",
+        ),
+    )
+
+    entity_key: Mapped[str] = mapped_column(String, primary_key=True)
+    entity_type: Mapped[AreaEntityType] = mapped_column(
+        Enum(
+            AreaEntityType,
+            name="area_entity_type",
+            native_enum=True,
+            values_callable=lambda x: [e.value for e in x],
+        ),
+        nullable=False,
+    )
+    # Canonical display name from the geocoder ("Hội An" as romanised by
+    # the provider); aliases hold slugged variants seen in the wild so a
+    # colloquial spelling can find the row without a geocode call.
+    name: Mapped[str] = mapped_column(String, nullable=False)
+    aliases: Mapped[list] = mapped_column(  # type: ignore[type-arg]
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
+    country_code: Mapped[str] = mapped_column(String(2), nullable=False)
+    lat: Mapped[float] = mapped_column(Float, nullable=False)
+    lng: Mapped[float] = mapped_column(Float, nullable=False)
+    # [min_lat, max_lat, min_lng, max_lng] — the feature's real extent.
+    bbox: Mapped[list | None] = mapped_column(  # type: ignore[type-arg]
+        JSONB, nullable=True
+    )
+    # Provider classification ("locality", "administrative_area_level_1",
+    # "country") — the verification signal and the settlement-class slot.
+    place_type: Mapped[str | None] = mapped_column(String, nullable=True)
+    parent_key: Mapped[str | None] = mapped_column(String, nullable=True)
+    provider_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    geo_refreshed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )

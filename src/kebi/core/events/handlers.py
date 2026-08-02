@@ -132,7 +132,10 @@ class EventHandlers:
             if snapshot is None:
                 return
             claims = await self._harvester.harvest(
-                snapshot.content, snapshot.places, user_id=event.user_id
+                snapshot.content,
+                snapshot.places,
+                snapshot.noted_areas,
+                user_id=event.user_id,
             )
             written = await self._ingestion.ingest(
                 self._harvester,

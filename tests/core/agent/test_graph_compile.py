@@ -22,9 +22,15 @@ def test_build_graph_compiles_with_inmemorysaver(
     checkpointer: InMemorySaver,
     mock_resolver_llm: MagicMock,
     mock_geocoding_client: MagicMock,
+    mock_area_service: MagicMock,
 ) -> None:
     app = build_graph(
-        mock_llm, no_tools, checkpointer, mock_resolver_llm, mock_geocoding_client
+        mock_llm,
+        no_tools,
+        checkpointer,
+        mock_resolver_llm,
+        mock_geocoding_client,
+        mock_area_service,
     )
     assert app is not None
 
@@ -35,10 +41,16 @@ def test_build_graph_node_set(
     checkpointer: InMemorySaver,
     mock_resolver_llm: MagicMock,
     mock_geocoding_client: MagicMock,
+    mock_area_service: MagicMock,
 ) -> None:
     """Compiled graph must expose the four documented nodes."""
     app = build_graph(
-        mock_llm, no_tools, checkpointer, mock_resolver_llm, mock_geocoding_client
+        mock_llm,
+        no_tools,
+        checkpointer,
+        mock_resolver_llm,
+        mock_geocoding_client,
+        mock_area_service,
     )
     graph_repr = app.get_graph()
     node_names = set(graph_repr.nodes.keys())

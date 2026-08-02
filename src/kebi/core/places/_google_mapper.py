@@ -11,6 +11,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
+from ._address_components import country_code, map_address_components
 from .models import (
     LocationContext,
     PlaceCategory,
@@ -235,27 +236,6 @@ _GOOGLE_TYPE_TO_DIETARY: dict[str, list[DietaryTag]] = {
     "halal_restaurant": [DietaryTag.halal],
 }
 
-# addressComponents type → (LocationContext field, priority). Lower priority
-# wins; component order in Google's response never matters. The fallback
-# ranks exist because municipality-style cities (Đà Nẵng, Bangkok) arrive as
-# administrative_area_level_1 with the district as level_2 and NO locality —
-# without the fallback their city/neighborhood drop on the floor (ADR-119).
-# postal_town covers UK addresses. Accepted edge: where level_1 is a
-# state/province (US, AU) it becomes city only when Google supplies no
-# locality/postal_town at all — rare for venues, and better than null.
-_ADDR_COMPONENT_TO_FIELD: dict[str, tuple[str, int]] = {
-    "locality": ("city", 0),
-    "postal_town": ("city", 1),
-    "administrative_area_level_1": ("city", 2),
-    "sublocality_level_1": ("neighborhood", 0),
-    "neighborhood": ("neighborhood", 1),
-    # Japanese district names (Asakusa, Toyosu) arrive as level_2; the
-    # levels below that are chōme/block numbers and stay unmapped.
-    "sublocality_level_2": ("neighborhood", 2),
-    "administrative_area_level_2": ("neighborhood", 3),
-    "country": ("country", 0),
-}
-
 # ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
@@ -320,7 +300,7 @@ def map_place(
 
     raw_loc = raw.get("location") or {}
     components = raw.get("addressComponents") or []
-    addr = _map_address_components(components)
+    addr = map_address_components(components)
 
     return PlaceObject(
         provider_id=f"{GOOGLE_PROVIDER_PREFIX}{raw_id}",
@@ -334,26 +314,10 @@ def map_place(
             city=addr.get("city"),
             neighborhood=addr.get("neighborhood"),
             country=addr.get("country"),
-            country_code=_country_code(components),
+            country_code=country_code(components),
         ),
         cached_at=now,
     )
-
-
-def _country_code(components: list[dict[str, Any]]) -> str | None:
-    """ISO-3166 alpha-2 from the country component's `shortText`.
-
-    The country component carries both `longText` ("United Arab Emirates",
-    which populates the display `country`) and `shortText` ("AE"). The code
-    is what canonical geo keys need, so it is captured separately here and
-    returned lowercased.
-    """
-    for component in components:
-        if "country" in (component.get("types") or []):
-            short = component.get("shortText")
-            if isinstance(short, str) and short:
-                return short.strip().lower()
-    return None
 
 
 # ---------------------------------------------------------------------------
@@ -403,10 +367,14 @@ def _is_administrative_type(types: list[str]) -> bool:
     return any(t in _ADMINISTRATIVE_TYPES for t in types)
 
 
-# Machine-readable reason stamped on a NonVenueDetection. Step 2 of the
-# location-kinds roadmap turns this rejection into venue-vs-area routing;
-# the constant is the stable identifier callers key on.
+# Machine-readable reasons stamped on a NonVenueDetection — the routing
+# signal the location-kinds Step 2 seam promised: an administrative area
+# ("Hoi An") can resolve to itself as an area entity, while linear/natural
+# geography ("Ha Giang Loop") never can — it collapses to its containing
+# area. `NON_VENUE_GEOGRAPHY` remains the generic umbrella value.
 NON_VENUE_GEOGRAPHY = "non_venue_geography"
+NON_VENUE_ROUTE = "non_venue_route"
+NON_VENUE_AREA = "non_venue_area"
 
 # Linear or natural geography — a road, scenic route, mountain pass, loop,
 # bay, peak. Google frequently co-stamps these `tourist_attraction`, which
@@ -417,8 +385,9 @@ _LINEAR_NATURAL_GEOGRAPHY_TYPES = frozenset({"route", "natural_feature"})
 _GENERIC_ATTRACTION_TYPE = "tourist_attraction"
 
 
-def is_non_venue_geography(types: list[str]) -> bool:
-    """True when Google's type signal marks non-venue geography.
+def classify_non_venue_geography(types: list[str]) -> str | None:
+    """Classify Google's type signal: `None` for a venue, else the
+    non-venue subtype (`NON_VENUE_ROUTE` / `NON_VENUE_AREA`).
 
     The decision, in priority order:
 
@@ -433,19 +402,27 @@ def is_non_venue_geography(types: list[str]) -> bool:
        present — the district-as-attraction carve-out (ADR-124): a place
        Google deems both a political area and an attraction stays a venue.
 
-    Pure type-signal per ADR-124 — never a name-shape heuristic. Named and
-    exported so the cleanup script reuses it and Step 2 can turn the same
-    decision into venue-vs-area routing.
+    Pure type-signal per ADR-124 — never a name-shape heuristic. The
+    subtype is the venue-vs-area routing signal: `NON_VENUE_AREA` names
+    can resolve to their own area entity, `NON_VENUE_ROUTE` names always
+    collapse to their containing area.
     """
     if any(
         t in _GOOGLE_TYPE_TO_CATEGORY and t != _GENERIC_ATTRACTION_TYPE for t in types
     ):
-        return False
+        return None
     if any(t in _LINEAR_NATURAL_GEOGRAPHY_TYPES for t in types):
-        return True
-    if _is_administrative_type(types):
-        return _GENERIC_ATTRACTION_TYPE not in types
-    return False
+        return NON_VENUE_ROUTE
+    if _is_administrative_type(types) and _GENERIC_ATTRACTION_TYPE not in types:
+        return NON_VENUE_AREA
+    return None
+
+
+def is_non_venue_geography(types: list[str]) -> bool:
+    """True when Google's type signal marks non-venue geography — the
+    boolean face of `classify_non_venue_geography` (see its docstring for
+    the decision rules)."""
+    return classify_non_venue_geography(types) is not None
 
 
 def _map_categories(types: list[str]) -> list[str]:
@@ -466,20 +443,3 @@ def _map_categories(types: list[str]) -> list[str]:
     return result
 
 
-def _map_address_components(
-    components: list[dict[str, Any]],
-) -> dict[str, str]:
-    """Best-ranked component per field (see _ADDR_COMPONENT_TO_FIELD)."""
-    best: dict[str, tuple[int, str]] = {}
-    for component in components:
-        long_text = component.get("longText") or ""
-        if not long_text:
-            continue
-        for comp_type in component.get("types") or []:
-            mapped = _ADDR_COMPONENT_TO_FIELD.get(comp_type)
-            if mapped is None:
-                continue
-            field, rank = mapped
-            if field not in best or rank < best[field][0]:
-                best[field] = (rank, long_text)
-    return {field: text for field, (_, text) in best.items()}

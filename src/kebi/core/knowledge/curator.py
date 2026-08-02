@@ -1,10 +1,14 @@
 """Expert curator — the `curated_expert` knowledge writer (ADR-121).
 
 A travel expert writes prose; one LLM call structures it into geo-scoped
-claims, and each claim's area is resolved to a canonical `ResolvedGeo`
-through the same free geocoder the rest of the repo uses — so a curated
-claim keys identically to a harvested one and the two merge on the same
-entity. The resolved claims hand off to the shared `KnowledgeWriter`.
+claims, each naming its area as structured components (country, city)
+rather than a free-text query — free-text geocoding of bare names is
+banned (ADR-126). The components resolve through the shared
+`AreaService` (store first, round-trip-verified geocode on miss), so a
+curated claim keys identically to a harvested one and the two merge on
+the same entity. An unresolvable area falls back to the expert's
+location hint, else the claim is dropped — never mis-keyed. The
+resolved claims hand off to the shared `KnowledgeWriter`.
 
 v1 is geo-scoped (country / city / neighborhood): the curator has no place
 to anchor a place-scoped claim to. Place-level curation would need resolving
@@ -29,7 +33,7 @@ from kebi.core.knowledge.schemas import (
 from kebi.core.knowledge.tags import render_claim_tag_vocabulary
 
 if TYPE_CHECKING:
-    from kebi.core.places.nominatim_geocoding_client import NominatimGeocodingClient
+    from kebi.core.areas import AreaService
     from kebi.providers.llm import InstructorClient
 
 logger = logging.getLogger(__name__)
@@ -51,13 +55,15 @@ class LocationHint(BaseModel):
 
 
 class _CuratedClaim(BaseModel):
-    """One claim as the model emits it — area named for geocoding, not keyed."""
+    """One claim as the model emits it — area named as structured
+    components (never keyed, never a free-text query)."""
 
     model_config = ConfigDict(extra="forbid")
 
     scope: Literal["country", "city", "neighborhood"]
     entity_name: str
-    area_query: str
+    area_country: str | None = None
+    area_city: str | None = None
     claim: str
     tags: list[str] = Field(default_factory=list)
     confidence: float
@@ -89,13 +95,13 @@ class KnowledgeCurator:
     def __init__(
         self,
         instructor_client: InstructorClient,
-        geocoder: NominatimGeocodingClient,
+        area_service: AreaService,
         *,
         confidence_floor: float = 0.9,
         review_status: ReviewStatus = "approved",
     ) -> None:
         self._client = instructor_client
-        self._geocoder = geocoder
+        self._areas = area_service
         self.confidence_floor = confidence_floor
         self.review_status = review_status
 
@@ -143,10 +149,9 @@ class KnowledgeCurator:
         self, response: _CuratorResponse, hint: LocationHint | None
     ) -> list[StructuredClaim]:
         hint_geo = _hint_geo(hint)
-        cache: dict[str, ResolvedGeo | None] = {}
         resolved: list[StructuredClaim] = []
         for raw in response.claims:
-            geo = await self._resolve_area(raw.area_query, cache) or hint_geo
+            geo = await self._resolve_area(raw, hint) or hint_geo
             if geo is None:
                 continue
             resolved.append(
@@ -162,27 +167,29 @@ class KnowledgeCurator:
         return resolved
 
     async def _resolve_area(
-        self, query: str, cache: dict[str, ResolvedGeo | None]
+        self, raw: _CuratedClaim, hint: LocationHint | None
     ) -> ResolvedGeo | None:
-        """Geocode one area string to a canonical geo, memoized per request
-        (Nominatim is rate-limited). Returns None when it can't be resolved
-        to at least a country code."""
-        q = query.strip()
-        if not q:
-            return None
-        if q in cache:
-            return cache[q]
-        geo: ResolvedGeo | None = None
-        try:
-            result = await self._geocoder.search(query=q)
-        except Exception as exc:
-            logger.warning("curator geocode failed for %r: %s", q, exc)
-            result = None
-        if result is not None and result.country_code:
-            geo = ResolvedGeo(
-                country_code=result.country_code,
-                city=result.city,
-                neighborhood=result.neighborhood,
-            )
-        cache[q] = geo
-        return geo
+        """Resolve a claim's structured area components through the area
+        service (which memoizes per instance and refuses unverifiable
+        names). Returns None when nothing resolves to at least a country
+        code — the caller then tries the expert's hint, else drops."""
+        country_code: str | None = None
+        if raw.area_country:
+            country = await self._areas.resolve_country(raw.area_country)
+            if country is not None:
+                country_code = country.country_code
+        if country_code is None and hint is not None and hint.country_alpha2:
+            country_code = hint.country_alpha2.strip().lower()
+        if raw.area_city:
+            if not country_code:
+                return None
+            entity = await self._areas.resolve_city(raw.area_city, country_code)
+            if entity is None:
+                # Named a city that won't verify — let the hint (which may
+                # carry the full geo) take over rather than degrading a
+                # city-scoped claim to a country key the writer would drop.
+                return None
+            return ResolvedGeo(country_code=entity.country_code, city=entity.name)
+        if country_code:
+            return ResolvedGeo(country_code=country_code)
+        return None

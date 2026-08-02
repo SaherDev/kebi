@@ -10,8 +10,9 @@ from langchain_core.messages import HumanMessage
 from kebi.core.agent.graph import _CORRIDOR_ASK, make_resolve_location_node
 from kebi.core.agent.location import LocationResolution, resolve_radius
 from kebi.core.agent.state import LOCATION_INHERIT
+from kebi.core.areas.models import AreaEntity
 from kebi.core.config import get_config
-from kebi.core.places.nominatim_geocoding_client import GeocodeResult, GeocodingError
+from kebi.providers.geocoding import GeocodeResult, GeocodingError
 
 
 def _resolver_llm(resolution: LocationResolution | Exception) -> MagicMock:
@@ -30,26 +31,16 @@ def _resolver_llm(resolution: LocationResolution | Exception) -> MagicMock:
 
 
 def _geocoder(
-    forward: tuple[float, float] | None = None,
     reverse: dict[str, Any] | None = None,
     search: tuple[float, float] | None = None,
     place_type: str | None = None,
     bbox: list[float] | None = None,
 ) -> MagicMock:
-    """Fake geocoder. `forward`/`search` take `(lat, lng)` tuples and
-    `reverse` a `{country, city, ...}` dict — wrapped into `GeocodeResult`s.
-    `place_type` sets the density signal on every result."""
+    """Fake geocoder boundary. `search` (a `(lat, lng)` tuple) feeds
+    `search_area` — the coords-only path (corridor POI fallback,
+    neighborhood refinement); `reverse` a `{country, city, ...}` dict."""
     client = MagicMock()
-    client.forward = AsyncMock(
-        return_value=(
-            GeocodeResult(
-                lat=forward[0], lng=forward[1], place_type=place_type, bbox=bbox
-            )
-            if forward is not None
-            else None
-        )
-    )
-    client.search = AsyncMock(
+    client.search_area = AsyncMock(
         return_value=(
             GeocodeResult(
                 lat=search[0], lng=search[1], place_type=place_type, bbox=bbox
@@ -58,6 +49,7 @@ def _geocoder(
             else None
         )
     )
+    client.geocode_place_id = AsyncMock(return_value=None)
     client.reverse = AsyncMock(
         return_value=(
             GeocodeResult(
@@ -76,6 +68,60 @@ def _geocoder(
     return client
 
 
+def _area_service(
+    forward: tuple[float, float] | None = None,
+    place_type: str | None = None,
+    bbox: list[float] | None = None,
+    country_code: str = "xx",
+) -> MagicMock:
+    """Fake AreaService. With `forward` set, any named country/city resolves
+    to an entity whose centroid is the tuple; without it, resolution refuses
+    (returns None) — the round-trip-failed case."""
+    svc = MagicMock()
+
+    def _country(name: str) -> AreaEntity | None:
+        if forward is None:
+            return None
+        return AreaEntity(
+            entity_key=country_code,
+            entity_type="country",
+            name=name,
+            country_code=country_code,
+            lat=forward[0],
+            lng=forward[1],
+        )
+
+    def _city(name: str, cc: str) -> AreaEntity | None:
+        if forward is None:
+            return None
+        return AreaEntity(
+            entity_key=f"{cc}/{name.lower().replace(' ', '-')}",
+            entity_type="city",
+            name=name,
+            country_code=cc,
+            lat=forward[0],
+            lng=forward[1],
+            place_type=place_type,
+            bbox=bbox,
+        )
+
+    svc.resolve_country = AsyncMock(side_effect=_country)
+    svc.resolve_city = AsyncMock(side_effect=_city)
+    return svc
+
+
+def _node(
+    resolution: LocationResolution | Exception,
+    geocoder: MagicMock | None = None,
+    area_service: MagicMock | None = None,
+) -> Any:
+    return make_resolve_location_node(
+        _resolver_llm(resolution),
+        geocoder if geocoder is not None else _geocoder(),
+        area_service if area_service is not None else _area_service(),
+    )
+
+
 def _state(
     message: str = "ramen in Tokyo",
     user_location: dict[str, Any] | None = None,
@@ -91,13 +137,11 @@ def _state(
     }
 
 
-async def test_explicit_query_is_forward_geocoded() -> None:
+async def test_explicit_query_resolves_through_area_service() -> None:
     resolution = LocationResolution(
         source="explicit_query", country="Japan", city="Tokyo", neighborhood="Shibuya"
     )
-    node = make_resolve_location_node(
-        _resolver_llm(resolution), _geocoder(forward=(35.66, 139.70))
-    )
+    node = _node(resolution, area_service=_area_service(forward=(35.66, 139.70)))
     update = await node(_state())
     wl = update["working_location"]
     assert wl["city"] == "Tokyo"
@@ -118,7 +162,8 @@ async def test_carried_continuation_reuses_prior_working_location() -> None:
         "lng": 139.70,
     }
     geocoder = _geocoder()
-    node = make_resolve_location_node(_resolver_llm(resolution), geocoder)
+    areas = _area_service()
+    node = _node(resolution, geocoder, areas)
     update = await node(
         _state(message="and what else is there", working_location=prior)
     )
@@ -127,14 +172,14 @@ async def test_carried_continuation_reuses_prior_working_location() -> None:
     assert {k: wl[k] for k in prior} == prior
     # Scope (ADR-084) is still resolved fresh every turn, even on a carry.
     assert wl["search_radius_m"] > 0
-    geocoder.forward.assert_not_awaited()
     geocoder.reverse.assert_not_awaited()
+    areas.resolve_city.assert_not_awaited()
 
 
 async def test_carried_with_no_prior_falls_back_to_user_actual() -> None:
     resolution = LocationResolution(source="carried")
     geocoder = _geocoder(reverse={"country": "Thailand", "city": "Bangkok"})
-    node = make_resolve_location_node(_resolver_llm(resolution), geocoder)
+    node = _node(resolution, geocoder)
     update = await node(
         _state(message="what else", user_location={"lat": 13.73, "lng": 100.5})
     )
@@ -149,9 +194,7 @@ async def test_shift_resolves_the_new_place() -> None:
         neighborhood="Thonglor",
         is_shift=True,
     )
-    node = make_resolve_location_node(
-        _resolver_llm(resolution), _geocoder(forward=(13.73, 100.58))
-    )
+    node = _node(resolution, area_service=_area_service(forward=(13.73, 100.58)))
     update = await node(
         _state(
             message="actually what about Bangkok",
@@ -183,9 +226,7 @@ async def test_explicit_query_wins_over_far_user_actual() -> None:
         neighborhood="Old Town",
         is_shift=True,
     )
-    node = make_resolve_location_node(
-        _resolver_llm(resolution), _geocoder(forward=(18.79, 98.99))
-    )
+    node = _node(resolution, area_service=_area_service(forward=(18.79, 98.99)))
     update = await node(
         _state(
             message="I'm in old town chiang mai next week — famous food spots?",
@@ -197,8 +238,8 @@ async def test_explicit_query_wins_over_far_user_actual() -> None:
     assert wl["country"] == "Thailand"
     assert wl["city"] == "Chiang Mai"
     assert wl["neighborhood"] == "Old Town"
-    # Coords come from the forward-geocode of the named place, NOT from
-    # the user's actual location — locking the rule that explicit_query
+    # Coords come from the named place's resolved entity, NOT from the
+    # user's actual location — locking the rule that explicit_query
     # never falls back to GPS.
     assert wl["lat"] == 18.79
     assert wl["lng"] == 98.99
@@ -213,7 +254,7 @@ async def test_ambiguous_triggers_clarification() -> None:
         needs_clarification=True,
         clarification_reason="Cambridge UK or Massachusetts?",
     )
-    node = make_resolve_location_node(_resolver_llm(resolution), _geocoder())
+    node = _node(resolution)
     update = await node(_state(message="what about Cambridge"))
     assert update["working_location"] is None
     assert "Cambridge UK or Massachusetts?" in update["location_clarification"]
@@ -226,9 +267,7 @@ async def test_explicit_query_bare_city_resolves_without_neighborhood() -> None:
     resolution = LocationResolution(
         source="explicit_query", country="Thailand", city="Chiang Mai"
     )
-    node = make_resolve_location_node(
-        _resolver_llm(resolution), _geocoder(forward=(18.79, 98.99))
-    )
+    node = _node(resolution, area_service=_area_service(forward=(18.79, 98.99)))
     update = await node(_state(message="actually what about Chiang Mai"))
     wl = update["working_location"]
     assert wl is not None
@@ -240,9 +279,19 @@ async def test_explicit_query_bare_city_resolves_without_neighborhood() -> None:
 async def test_explicit_query_missing_city_clarifies() -> None:
     """With no usable city the location cannot be pinned — ask the user."""
     resolution = LocationResolution(source="explicit_query", country="Thailand")
-    node = make_resolve_location_node(
-        _resolver_llm(resolution), _geocoder(forward=(13.7, 100.5))
+    node = _node(resolution, area_service=_area_service(forward=(13.7, 100.5)))
+    update = await node(_state())
+    assert update["working_location"] is None
+    assert update["location_clarification"]
+
+
+async def test_explicit_query_unverifiable_city_clarifies() -> None:
+    """A named city the area service refuses (round-trip failure) asks the
+    user instead of silently resolving to a merely similar feature."""
+    resolution = LocationResolution(
+        source="explicit_query", country="Thailand", city="Bangk0k Cty"
     )
+    node = _node(resolution, area_service=_area_service(forward=None))
     update = await node(_state())
     assert update["working_location"] is None
     assert update["location_clarification"]
@@ -254,7 +303,7 @@ async def test_user_actual_reverse_geocodes_request_coords() -> None:
     be absent and that is accepted."""
     resolution = LocationResolution(source="user_actual")
     geocoder = _geocoder(reverse={"country": "Germany", "city": "Magdeburg"})
-    node = make_resolve_location_node(_resolver_llm(resolution), geocoder)
+    node = _node(resolution, geocoder)
     update = await node(
         _state(
             message="good places near me",
@@ -279,7 +328,7 @@ async def test_inherit_sentinel_on_fresh_thread_resolves_not_crashes() -> None:
     whole turn through to a clarification."""
     resolution = LocationResolution(source="user_actual")
     geocoder = _geocoder(reverse={"country": "Japan", "city": "Tokyo"})
-    node = make_resolve_location_node(_resolver_llm(resolution), geocoder)
+    node = _node(resolution, geocoder)
     update = await node(
         _state(
             message="any atm near me?",
@@ -297,7 +346,7 @@ async def test_inherit_sentinel_on_fresh_thread_resolves_not_crashes() -> None:
 async def test_user_actual_without_request_location_clarifies() -> None:
     """user_actual with no location in the request → ask the user."""
     resolution = LocationResolution(source="user_actual")
-    node = make_resolve_location_node(_resolver_llm(resolution), _geocoder())
+    node = _node(resolution)
     update = await node(_state(message="good places near me", user_location=None))
     assert update["working_location"] is None
     assert update["location_clarification"]
@@ -307,9 +356,9 @@ async def test_geocode_failure_fails_toward_clarification() -> None:
     resolution = LocationResolution(
         source="explicit_query", country="Japan", city="Tokyo", neighborhood="Shibuya"
     )
-    geocoder = MagicMock()
-    geocoder.forward = AsyncMock(side_effect=GeocodingError("nominatim down"))
-    node = make_resolve_location_node(_resolver_llm(resolution), geocoder)
+    areas = MagicMock()
+    areas.resolve_country = AsyncMock(side_effect=GeocodingError("provider down"))
+    node = _node(resolution, area_service=areas)
     update = await node(_state())
     assert update["working_location"] is None
     assert update["location_clarification"]
@@ -318,21 +367,21 @@ async def test_geocode_failure_fails_toward_clarification() -> None:
 
 
 async def test_llm_failure_fails_toward_clarification() -> None:
-    node = make_resolve_location_node(
-        _resolver_llm(RuntimeError("llm unreachable")), _geocoder()
-    )
+    node = _node(_resolver_llm_error())
     update = await node(_state())
     assert update["working_location"] is None
     assert update["location_clarification"]
+
+
+def _resolver_llm_error() -> Exception:
+    return RuntimeError("llm unreachable")
 
 
 async def test_emits_user_visible_reasoning_step() -> None:
     resolution = LocationResolution(
         source="explicit_query", country="Japan", city="Tokyo", neighborhood="Shibuya"
     )
-    node = make_resolve_location_node(
-        _resolver_llm(resolution), _geocoder(forward=(35.6, 139.7))
-    )
+    node = _node(resolution, area_service=_area_service(forward=(35.6, 139.7)))
     update = await node(_state())
     steps = update["reasoning_steps"]
     assert len(steps) == 1
@@ -354,9 +403,7 @@ async def test_scope_is_resolved_onto_the_working_location() -> None:
         scope_shape="area",
         effective_mode="walking",
     )
-    node = make_resolve_location_node(
-        _resolver_llm(resolution), _geocoder(forward=(35.66, 139.70))
-    )
+    node = _node(resolution, area_service=_area_service(forward=(35.66, 139.70)))
     wl = (await node(_state()))["working_location"]
     assert wl["scope_tier"] == "walkable"
     assert wl["scope_shape"] == "area"
@@ -376,9 +423,7 @@ async def test_day_trip_to_a_different_city_lands_shift_tier_and_mode() -> None:
         scope_tier="metro",
         effective_mode="driving",
     )
-    node = make_resolve_location_node(
-        _resolver_llm(resolution), _geocoder(forward=(12.93, 100.88))
-    )
+    node = _node(resolution, area_service=_area_service(forward=(12.93, 100.88)))
     update = await node(
         _state(
             message="actually let's do a day trip to Pattaya",
@@ -410,9 +455,7 @@ async def test_resolver_effective_mode_is_honored() -> None:
         neighborhood="Thonglor",
         effective_mode="driving",
     )
-    node = make_resolve_location_node(
-        _resolver_llm(resolution), _geocoder(forward=(13.73, 100.58))
-    )
+    node = _node(resolution, area_service=_area_service(forward=(13.73, 100.58)))
     update = await node(
         _state(
             message="what if I drive there",
@@ -436,9 +479,7 @@ async def test_no_resolver_mode_falls_back_to_first_capability() -> None:
         neighborhood="Thonglor",
         effective_mode=None,
     )
-    node = make_resolve_location_node(
-        _resolver_llm(resolution), _geocoder(forward=(13.73, 100.58))
-    )
+    node = _node(resolution, area_service=_area_service(forward=(13.73, 100.58)))
     update = await node(
         _state(
             message="somewhere further, I'm tired of walking",
@@ -460,9 +501,7 @@ async def test_no_profile_uses_config_fallback_first_capability() -> None:
         neighborhood="Thonglor",
         effective_mode=None,
     )
-    node = make_resolve_location_node(
-        _resolver_llm(resolution), _geocoder(forward=(13.73, 100.58))
-    )
+    node = _node(resolution, area_service=_area_service(forward=(13.73, 100.58)))
     update = await node(_state(movement_profile=None))
     assert (
         update["working_location"]["effective_mode"]
@@ -470,7 +509,10 @@ async def test_no_profile_uses_config_fallback_first_capability() -> None:
     )
 
 
-async def test_corridor_destination_is_eagerly_geocoded() -> None:
+async def test_corridor_poi_destination_falls_back_to_coords_lookup() -> None:
+    """A POI destination (an airport) refuses the area round-trip and falls
+    back to one coords-only geocode — an endpoint coordinate, not an
+    identity, so nothing is persisted."""
     resolution = LocationResolution(
         source="user_actual",
         scope_shape="corridor",
@@ -480,7 +522,7 @@ async def test_corridor_destination_is_eagerly_geocoded() -> None:
         reverse={"country": "Thailand", "city": "Bangkok"},
         search=(13.69, 100.75),
     )
-    node = make_resolve_location_node(_resolver_llm(resolution), geocoder)
+    node = _node(resolution, geocoder, _area_service(forward=None))
     update = await node(
         _state(
             message="a coffee place on my way to the airport",
@@ -494,9 +536,45 @@ async def test_corridor_destination_is_eagerly_geocoded() -> None:
     assert update["location_clarification"] is None
 
 
+async def test_corridor_area_destination_resolves_through_the_store() -> None:
+    """A destination that IS an area ("Hue") resolves through the area
+    service — verified within the working country and persisted, so both
+    corridor endpoints are stored entities."""
+    resolution = LocationResolution(
+        source="user_actual",
+        scope_shape="corridor",
+        corridor_destination="Hue",
+    )
+    geocoder = _geocoder(
+        reverse={
+            "country": "Vietnam",
+            "city": "Da Nang",
+            "country_code": "vn",
+        },
+    )
+    geocoder.reverse.return_value = GeocodeResult(
+        lat=16.05, lng=108.20, country="Vietnam", city="Da Nang", country_code="vn"
+    )
+    areas = _area_service(forward=(16.46, 107.59), country_code="vn")
+    node = _node(resolution, geocoder, areas)
+    update = await node(
+        _state(
+            message="stops on the way to Hue",
+            user_location={"lat": 16.05, "lng": 108.20},
+        )
+    )
+    wl = update["working_location"]
+    assert wl["corridor"]["name"] == "Hue"
+    assert wl["corridor"]["lat"] == 16.46
+    areas.resolve_city.assert_awaited_with("Hue", "vn")
+    # The coords-only fallback never ran — the area path answered.
+    geocoder.search_area.assert_not_awaited()
+
+
 async def test_corridor_unresolvable_destination_asks_not_area() -> None:
-    """An ungeocodable corridor destination ("home") asks the user — it must
-    NOT silently degrade to an area search around the current point."""
+    """A corridor destination that resolves nowhere ("home") asks the user —
+    it must NOT silently degrade to an area search around the current
+    point."""
     resolution = LocationResolution(
         source="user_actual",
         scope_shape="corridor",
@@ -504,9 +582,9 @@ async def test_corridor_unresolvable_destination_asks_not_area() -> None:
     )
     geocoder = _geocoder(
         reverse={"country": "Thailand", "city": "Bangkok"},
-        search=None,  # Nominatim finds no match for "home"
+        search=None,  # the provider finds no match for "home"
     )
-    node = make_resolve_location_node(_resolver_llm(resolution), geocoder)
+    node = _node(resolution, geocoder, _area_service(forward=None))
     update = await node(
         _state(
             message="coffee on my way home",
@@ -524,7 +602,7 @@ async def test_corridor_with_no_destination_asks() -> None:
         corridor_destination=None,
     )
     geocoder = _geocoder(reverse={"country": "Thailand", "city": "Bangkok"})
-    node = make_resolve_location_node(_resolver_llm(resolution), geocoder)
+    node = _node(resolution, geocoder)
     update = await node(
         _state(message="coffee on my way", user_location={"lat": 13.75, "lng": 100.50})
     )
@@ -539,14 +617,14 @@ async def test_density_from_geocoder_place_type_scales_the_radius() -> None:
     resolution = LocationResolution(
         source="user_actual", scope_tier="walkable", effective_mode="walking"
     )
-    dense = await make_resolve_location_node(
-        _resolver_llm(resolution),
+    dense = await _node(
+        resolution,
         _geocoder(
             reverse={"country": "Thailand", "city": "Bangkok"}, place_type="city"
         ),
     )(_state(message="near me", user_location={"lat": 13.75, "lng": 100.50}))
-    sparse = await make_resolve_location_node(
-        _resolver_llm(resolution),
+    sparse = await _node(
+        resolution,
         _geocoder(reverse={"country": "Thailand", "city": "Pai"}, place_type="village"),
     )(_state(message="near me", user_location={"lat": 19.36, "lng": 98.44}))
     assert dense["working_location"]["density"] == "dense"

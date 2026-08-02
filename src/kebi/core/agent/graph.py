@@ -42,8 +42,8 @@ from kebi.core.agent.reasoning import ReasoningStep
 from kebi.core.agent.state import AgentState
 from kebi.core.agent.stream_emit import emit_step_active, emit_step_done
 from kebi.core.config import get_config
-from kebi.core.places.nominatim_geocoding_client import GeocodingError
 from kebi.core.utils.geo import haversine_m
+from kebi.providers.geocoding import GeocodingError
 from kebi.providers.tracing import TracingSpan, get_tracing_client
 
 logger = logging.getLogger(__name__)
@@ -941,15 +941,21 @@ async def _build_working_location(
     resolution: LocationResolution,
     user_location: dict[str, Any] | None,
     prior_working_location: dict[str, Any] | None,
-    geocoding_client: Any,
+    geocoder: Any,
+    area_service: Any,
 ) -> WorkingLocation | None:
     """Turn a resolver decision into a complete `WorkingLocation`, or `None`.
 
     Coordinates are derived deterministically — never transcribed by the LLM:
       - `carried`        → reuse the prior turn's working location verbatim.
       - `user_actual`    → take the user's actual GPS coords from the request
-                           and reverse-geocode them for the place names.
-      - `explicit_query` → forward-geocode the place the resolver named.
+                           and reverse-geocode them for the place names (a
+                           pure lookup — never creates an area entity).
+      - `explicit_query` → resolve the named place through the area service:
+                           store first, verified geocode on miss, persisted.
+                           A name that fails the round-trip check refuses
+                           (→ clarification) instead of silently resolving
+                           to a merely similar feature.
 
     Returns `None` when the location cannot be completed; the caller maps
     that to a clarification. Both `explicit_query` and `user_actual` need
@@ -978,7 +984,7 @@ async def _build_working_location(
         lng = _coerce_coord(user_location.get("lng"))
         if lat is None or lng is None:
             return None
-        rev = await geocoding_client.reverse(lat=lat, lng=lng)
+        rev = await geocoder.reverse(lat=lat, lng=lng)
         if rev is None or not rev.country or not rev.city:
             return None
         return WorkingLocation(
@@ -992,7 +998,8 @@ async def _build_working_location(
             bbox=rev.bbox,
         )
 
-    # explicit_query — a place the resolver named; geocode it.
+    # explicit_query — a place the resolver named; resolve it to an area
+    # entity (repeat turns about the same city cost zero geocode calls).
     country = resolution.country
     city = resolution.city
     neighborhood = resolution.neighborhood
@@ -1000,42 +1007,74 @@ async def _build_working_location(
         # A user-named place must at least resolve to a city; neighborhood
         # is optional (a bare city is a complete working location).
         return None
-    geo = await geocoding_client.forward(
-        country=country, city=city, neighborhood=neighborhood
-    )
-    if geo is None:
+    country_entity = await area_service.resolve_country(country)
+    if country_entity is None:
         return None
+    city_entity = await area_service.resolve_city(
+        city, country_entity.country_code
+    )
+    if city_entity is None:
+        return None
+    lat, lng = city_entity.lat, city_entity.lng
+    bbox = city_entity.bbox
+    if neighborhood:
+        # Coordinate refinement only — the neighborhood stays display-level
+        # (no verified structured path exists for sub-city areas, so no
+        # entity is created); a miss keeps the city centroid.
+        try:
+            geo = await geocoder.search_area(
+                query=f"{neighborhood}, {city_entity.name}",
+                region_code=city_entity.country_code,
+            )
+        except Exception:
+            geo = None
+        if geo is not None:
+            lat, lng = geo.lat, geo.lng
+            bbox = geo.bbox or bbox
     return WorkingLocation(
         country=country,
         city=city,
         neighborhood=neighborhood,
-        country_code=geo.country_code,
-        lat=geo.lat,
-        lng=geo.lng,
-        density=density_class(geo.place_type),
-        bbox=geo.bbox,
+        country_code=city_entity.country_code,
+        lat=lat,
+        lng=lng,
+        density=density_class(city_entity.place_type),
+        bbox=bbox,
     )
 
 
 async def _resolve_corridor(
     destination: str | None,
     working: WorkingLocation,
-    geocoding_client: Any,
+    geocoder: Any,
+    area_service: Any,
 ) -> CorridorTarget | None:
-    """Eagerly geocode a corridor destination, scoped to the working city.
+    """Eagerly resolve a corridor destination, area-first.
 
-    Returns `None` when there is no destination name or it cannot be
-    geocoded. The resolver is instructed to flag implicit anchors ("home",
+    A destination that is itself an area ("Hue" from Da Nang) resolves
+    through the area service — verified within the working country and
+    persisted, so both corridor endpoints are stored entities (the Step 4
+    precondition). A destination that refuses the area round-trip is
+    usually a POI (an airport, a landmark); it falls back to one
+    coords-only geocode scoped to the working city — an endpoint
+    coordinate, not an identity, so nothing is persisted.
+
+    Returns `None` when there is no destination name or neither path
+    resolves. The resolver is instructed to flag implicit anchors ("home",
     "work" — kebi stores no user addresses) as needing clarification before
     they ever reach here; this is the second line of defence for a named
-    place that simply does not geocode. The caller maps `None` to a
+    place that simply does not resolve. The caller maps `None` to a
     clarification ask — never a silent fallback to an area search.
     """
     name = (destination or "").strip()
     if not name:
         return None
+    if working.country_code:
+        entity = await area_service.resolve_city(name, working.country_code)
+        if entity is not None:
+            return CorridorTarget(name=name, lat=entity.lat, lng=entity.lng)
     query = ", ".join(p for p in (name, working.city, working.country) if p)
-    geo = await geocoding_client.search(query=query)
+    geo = await geocoder.search_area(query=query, region_code=working.country_code)
     if geo is None:
         return None
     return CorridorTarget(name=name, lat=geo.lat, lng=geo.lng)
@@ -1045,7 +1084,8 @@ async def _resolve_search_scope(
     working: WorkingLocation,
     resolution: LocationResolution,
     movement_profile: dict[str, Any] | None,
-    geocoding_client: Any,
+    geocoder: Any,
+    area_service: Any,
 ) -> WorkingLocation | None:
     """Fold the resolved movement scope onto a working location (ADR-084 /
     ADR-085).
@@ -1063,7 +1103,7 @@ async def _resolve_search_scope(
     corridor: CorridorTarget | None = None
     if resolution.scope_shape == "corridor":
         corridor = await _resolve_corridor(
-            resolution.corridor_destination, working, geocoding_client
+            resolution.corridor_destination, working, geocoder, area_service
         )
         if corridor is None:
             return None
@@ -1144,8 +1184,12 @@ _LOCATION_ASK_CONFIRM = (
 _CORRIDOR_ASK = "I couldn't work out where your route ends — where are you headed?"
 
 
-def make_resolve_location_node(resolver_llm: Any, geocoding_client: Any) -> Any:
-    """Return the `resolve_location` node bound to its LLM + geocoding client.
+def make_resolve_location_node(
+    resolver_llm: Any, geocoder: Any, area_service: Any
+) -> Any:
+    """Return the `resolve_location` node bound to its LLM, the geocoding
+    boundary (reverse / coords-only lookups), and the area service
+    (named-area resolution through the entity store).
 
     The node resolves the turn's working location: one structured LLM call
     (priority + shift detection + ambiguity), then silent geocoding. It writes
@@ -1224,7 +1268,8 @@ def make_resolve_location_node(resolver_llm: Any, geocoding_client: Any) -> Any:
                 resolution,
                 state.get("user_location"),
                 _carried_working_location(state),
-                geocoding_client,
+                geocoder,
+                area_service,
             )
             if working is None:
                 return _location_clarification_update(
@@ -1236,7 +1281,8 @@ def make_resolve_location_node(resolver_llm: Any, geocoding_client: Any) -> Any:
                 working,
                 resolution,
                 state.get("movement_profile"),
-                geocoding_client,
+                geocoder,
+                area_service,
             )
         except GeocodingError as exc:
             logger.warning("resolve_location geocoding failed: %s", exc)
@@ -1461,7 +1507,8 @@ def build_graph(
     tools: list[Any],
     checkpointer: Any,
     resolver_llm: Any,
-    geocoding_client: Any,
+    geocoder: Any,
+    area_service: Any,
 ) -> Any:
     """Construct and compile the agent StateGraph (FR-025).
 
@@ -1481,7 +1528,7 @@ def build_graph(
     graph: StateGraph = StateGraph(AgentState)
     graph.add_node(
         NODE_RESOLVE_LOCATION,
-        make_resolve_location_node(resolver_llm, geocoding_client),
+        make_resolve_location_node(resolver_llm, geocoder, area_service),
     )
     graph.add_node(NODE_AGENT, make_agent_node(llm, tools))
     graph.add_node(

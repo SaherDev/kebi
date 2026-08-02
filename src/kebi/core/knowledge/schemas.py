@@ -175,16 +175,38 @@ class HarvestContent(BaseModel):
         )
 
 
+class NotedAreaRef(BaseModel):
+    """A non-venue name the extraction noted, with the location context the
+    share placed it in (ADR-082 per-candidate area).
+
+    The harvest's missing anchor for zero-venue shares: the name resolves
+    through the area service — itself when it IS an area ("Hoi An"), its
+    containing area when it is a route ("Ha Giang Loop") — and the resolved
+    entity anchors the share's claims. `reason` is the validator's
+    rejection subtype (`non_venue_route` / `non_venue_area`, or the generic
+    `non_venue` from the picker), which lets resolution skip the
+    name-as-area probe for routes."""
+
+    model_config = ConfigDict(frozen=True)
+
+    name: str
+    city: str | None = None
+    country: str | None = None
+    country_code: str | None = None
+    reason: str = "non_venue"
+
+
 class HarvestSnapshot(BaseModel):
     """The full bucket payload for one harvestable extraction event —
-    content plus the places it produced. Written to object storage under a
-    `harvest/{request_id}.json` key; the harvest event carries only the key,
-    and the handler reads this back."""
+    content plus the places it produced and the non-venue names it noted.
+    Written to object storage under a `harvest/{request_id}.json` key; the
+    harvest event carries only the key, and the handler reads this back."""
 
     model_config = ConfigDict(frozen=True)
 
     content: HarvestContent
     places: list[HarvestPlace] = []
+    noted_areas: list[NotedAreaRef] = []
 
 
 def _slugify(part: str) -> str:
@@ -207,6 +229,15 @@ def _slugify(part: str) -> str:
             out.append("-")
             prev_hyphen = True
     return "".join(out).strip("-")
+
+
+def slugs_match(a: str | None, b: str | None) -> bool:
+    """True when two names collapse to the same canonical slug — the
+    diacritic- and script-insensitive equality the key builder uses, so
+    "Hội An" matches "Hoi An"."""
+    if not a or not b:
+        return False
+    return _slugify(a) == _slugify(b)
 
 
 def build_place_key(place_id: str) -> str:

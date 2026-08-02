@@ -41,6 +41,7 @@ async def test_agent_decision_streams_active_then_done(
     checkpointer: InMemorySaver,
     mock_resolver_llm: MagicMock,
     mock_geocoding_client: MagicMock,
+    mock_area_service: MagicMock,
 ) -> None:
     """A direct-answer turn emits one active then one done agent frame."""
 
@@ -49,7 +50,12 @@ async def test_agent_decision_streams_active_then_done(
 
     mock_llm.ainvoke = MagicMock(side_effect=_answer)
     graph = build_graph(
-        mock_llm, no_tools, checkpointer, mock_resolver_llm, mock_geocoding_client
+        mock_llm,
+        no_tools,
+        checkpointer,
+        mock_resolver_llm,
+        mock_geocoding_client,
+        mock_area_service,
     )
 
     # "hi there" trips no location gate → straight to the agent node, so the
@@ -83,6 +89,7 @@ async def test_every_done_frame_has_a_prior_active(
     checkpointer: InMemorySaver,
     mock_resolver_llm: MagicMock,
     mock_geocoding_client: MagicMock,
+    mock_area_service: MagicMock,
 ) -> None:
     """Lifecycle contract holds end-to-end across whatever the turn emits."""
 
@@ -91,7 +98,12 @@ async def test_every_done_frame_has_a_prior_active(
 
     mock_llm.ainvoke = MagicMock(side_effect=_answer)
     graph = build_graph(
-        mock_llm, no_tools, checkpointer, mock_resolver_llm, mock_geocoding_client
+        mock_llm,
+        no_tools,
+        checkpointer,
+        mock_resolver_llm,
+        mock_geocoding_client,
+        mock_area_service,
     )
 
     frames = await _custom_frames(graph, "hi there")

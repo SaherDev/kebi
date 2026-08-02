@@ -13,6 +13,7 @@ from fastapi import BackgroundTasks, Depends, Header, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from kebi.core.agent.tools.candidate_namer import CandidateNamerService
+from kebi.core.areas import AreaService
 from kebi.core.chat.consult_quota import ConsultQuotaService
 from kebi.core.chat.service import ChatService
 from kebi.core.config import AppConfig, ExtractionConfig, get_config, get_env
@@ -30,7 +31,6 @@ from kebi.core.extraction.service import ExtractionService
 from kebi.core.home import HomeService
 from kebi.core.knowledge.curation_service import KnowledgeCurationService
 from kebi.core.knowledge.curator import KnowledgeCurator
-from kebi.core.knowledge.geo_resolve import EntityGeoResolver
 from kebi.core.knowledge.harvest_bucket import HarvestBucketReader, HarvestBucketWriter
 from kebi.core.knowledge.harvester import KnowledgeHarvester
 from kebi.core.knowledge.kebi_note import KebiNoteProducer
@@ -54,7 +54,6 @@ from kebi.core.places import (
     GooglePlacesClient,
     HybridSearchRepo,
     HybridSearchService,
-    NominatimGeocodingClient,
     PlacesRepo,
     PlacesSearchService,
     PlaceUpsertService,
@@ -68,7 +67,9 @@ from kebi.core.taste.service import TasteModelService
 from kebi.core.user.intent_service import UserIntentService
 from kebi.core.user.service import UserDataDeletionService
 from kebi.db.repositories import (
+    AreaEntityRepository,
     KnowledgeClaimRepository,
+    SQLAlchemyAreaEntityRepository,
     SQLAlchemyKnowledgeClaimRepository,
 )
 from kebi.db.repositories.user_intent_repository import (
@@ -78,6 +79,12 @@ from kebi.db.session import _get_session_factory, get_session
 from kebi.providers import get_instructor_client
 from kebi.providers.cache import CacheBackend
 from kebi.providers.embeddings import EmbedderProtocol, get_embedder
+from kebi.providers.geocoding import (
+    CachedGeocoder,
+    GeocoderProtocol,
+    GoogleGeocoder,
+    NullGeocoder,
+)
 from kebi.providers.http_client import get_shared_http_client
 from kebi.providers.llm import get_transcription_client, get_vision_extractor
 from kebi.providers.object_storage import (
@@ -520,15 +527,28 @@ def get_google_places_client() -> GooglePlacesClient:
     )
 
 
-def get_geocoding_client() -> NominatimGeocodingClient:
-    """FastAPI dependency providing NominatimGeocodingClient (OSM geocoding).
+def get_geocoder() -> GeocoderProtocol:
+    """FastAPI dependency providing the geocoding boundary (area layer).
 
-    Free, no API key — the OSM usage policy only requires an identifying
-    User-Agent. Backed by the process-wide httpx.AsyncClient.
+    GoogleGeocoder over the Geocoding API (forward + reverse + place-id
+    refresh), with reverse lookups behind the Redis bucket cache. Falls
+    back to the NullGeocoder when no GOOGLE_API_KEY is set so dev/test
+    environments still boot; every lookup then resolves to no-match and
+    callers degrade (clarify / fail open).
     """
-    return NominatimGeocodingClient(
-        http=get_shared_http_client(),
-        user_agent=f"{get_config().app.name}/1.0 (location-resolver)",
+    cfg = get_config().geocoding
+    api_key = get_env().GOOGLE_API_KEY
+    if not api_key:
+        return NullGeocoder()
+    return CachedGeocoder(
+        GoogleGeocoder(
+            api_key=api_key,
+            http=get_shared_http_client(),
+            timeout_seconds=cfg.timeout_seconds,
+        ),
+        get_redis_client(get_env().REDIS_URL),
+        ttl_seconds=cfg.reverse_cache.ttl_seconds,
+        precision=cfg.reverse_cache.precision,
     )
 
 
@@ -818,6 +838,22 @@ def get_harvest_bucket_reader(
     return HarvestBucketReader(storage=storage)
 
 
+def get_area_entity_repository() -> AreaEntityRepository:
+    """FastAPI dependency providing the AreaEntityRepository (Step 2).
+
+    Uses session_factory — each method opens its own session, so it is safe
+    in both the request path and the background harvest handler.
+    """
+    return SQLAlchemyAreaEntityRepository(_get_session_factory())
+
+
+def get_area_service() -> AreaService:
+    """FastAPI dependency providing the AreaService — the only area
+    resolution path: store first, geocode on miss, verified or refused.
+    A fresh instance per call keeps the memo request-scoped."""
+    return AreaService(get_area_entity_repository(), get_geocoder())
+
+
 def get_knowledge_claim_repository() -> KnowledgeClaimRepository:
     """FastAPI dependency providing the KnowledgeClaimRepository (ADR-120).
 
@@ -854,12 +890,13 @@ def get_knowledge_harvester() -> KnowledgeHarvester:
     A `shared_content` ClaimProducer; its trust floor and review status come
     from config, so gating harvested claims later is a config change. Claims
     naming an entity other than their anchor place are re-keyed through the
-    shared free Nominatim geocoder, verified (ADR-126).
+    shared AreaService — store first, round-trip-verified geocode on miss
+    (ADR-126) — persisting the named area as an entity as a side effect.
     """
     knowledge = get_config().knowledge
     return KnowledgeHarvester(
         get_instructor_client("knowledge_harvester"),
-        get_geocoding_client(),
+        get_area_service(),
         confidence_floor=knowledge.harvest_confidence_floor,
         review_status=knowledge.harvest_review_status,
     )
@@ -868,14 +905,15 @@ def get_knowledge_harvester() -> KnowledgeHarvester:
 def get_knowledge_curator() -> KnowledgeCurator:
     """FastAPI dependency providing the KnowledgeCurator (ADR-121/122).
 
-    A `curated_expert` ClaimProducer; resolves each claim's area through the
-    shared free Nominatim geocoder so a curated claim keys identically to a
-    harvested one. Trust floor and review status come from config.
+    A `curated_expert` ClaimProducer; resolves each claim's structured area
+    components through the shared AreaService so a curated claim keys
+    identically to a harvested one. Trust floor and review status come from
+    config.
     """
     knowledge = get_config().knowledge
     return KnowledgeCurator(
         get_instructor_client("knowledge_curator"),
-        get_geocoding_client(),
+        get_area_service(),
         confidence_floor=knowledge.curator_confidence_floor,
         review_status=knowledge.curator_review_status,
     )
@@ -941,15 +979,15 @@ def get_research_service(
     """FastAPI dependency providing the ResearchService.
 
     The knowledge layer's agent-facing reader behind the `research` tool:
-    staged verified-or-refuse entity resolution over the free Nominatim
-    geocoder, then an entity-bounded, approved-only claims read ranked
-    in memory. Limits, weights, and thresholds come from config
-    (`agent.research`, `knowledge.research`).
+    staged verified-or-refuse entity resolution over the AreaService
+    (store first, geocode on miss), then an entity-bounded, approved-only
+    claims read ranked in memory. Limits, weights, and thresholds come
+    from config (`agent.research`, `knowledge.research`).
     """
     cfg = get_config()
     research_cfg = cfg.knowledge.research
     resolver = ResearchEntityResolver(
-        EntityGeoResolver(get_geocoding_client()),
+        get_area_service(),
         confidence_min=research_cfg.entity_confidence_min,
     )
     return ResearchService(
@@ -1036,16 +1074,18 @@ def get_home_service(
     """FastAPI dependency providing HomeService (ADR-111).
 
     Wraps the process-wide `get_instructor_client("home_suggester")` client,
-    the shared Redis client, and the Nominatim geocoder (for the
-    coordinates→city fallback). `taste_service` is pulled from its existing
-    factory so the request graph reuses one instance (ADR-019). The service
-    fails open, so a missing Redis URL / unreachable geocoder degrades to the
-    static fallback rather than erroring.
+    the shared Redis client, and the geocoding boundary (for the
+    coordinates→city fallback — reverse lookups sit behind the Redis bucket
+    cache, so repeat opens from the same spot cost nothing). `taste_service`
+    is pulled from its existing factory so the request graph reuses one
+    instance (ADR-019). The service fails open, so a missing Redis URL /
+    unreachable geocoder degrades to the static fallback rather than
+    erroring.
     """
     return HomeService(
         instructor_client=get_instructor_client("home_suggester"),
         taste_service=taste_service,
-        geocoder=get_geocoding_client(),
+        geocoder=get_geocoder(),
         redis=get_redis_client(get_env().REDIS_URL),
         config=get_config().home,
     )
@@ -1121,7 +1161,8 @@ def get_agent_graph(
         ),
         checkpointer,
         resolver_llm,
-        get_geocoding_client(),
+        get_geocoder(),
+        get_area_service(),
     )
 
 

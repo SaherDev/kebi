@@ -13,8 +13,7 @@ from kebi.core.utils.geo import bounding_box
 
 from ._google_mapper import (
     GOOGLE_PROVIDER_PREFIX,
-    NON_VENUE_GEOGRAPHY,
-    is_non_venue_geography,
+    classify_non_venue_geography,
     map_place,
 )
 from ._google_query_builder import (
@@ -368,7 +367,8 @@ def _parse_places(
             continue
         types = raw.get("types") or []
         name = (raw.get("displayName") or {}).get("text")
-        if name and is_non_venue_geography(types):
+        reason = classify_non_venue_geography(types) if name else None
+        if name and reason is not None:
             raw_id = raw.get("id")
             rejections.append(
                 NonVenueDetection(
@@ -376,7 +376,7 @@ def _parse_places(
                     provider_id=(
                         f"{GOOGLE_PROVIDER_PREFIX}{raw_id}" if raw_id else None
                     ),
-                    reason=NON_VENUE_GEOGRAPHY,
+                    reason=reason,
                 )
             )
     return results

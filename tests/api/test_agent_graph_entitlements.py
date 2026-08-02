@@ -20,7 +20,8 @@ def _call(identity: GatewayIdentity) -> tuple[MagicMock, MagicMock]:
         patch("kebi.providers.llm.get_langchain_chat_model", llm_factory),
         patch("kebi.core.agent.tools.build_tools", tools_factory),
         patch("kebi.core.agent.graph.build_graph", MagicMock(return_value="GRAPH")),
-        patch("kebi.api.deps.get_geocoding_client", MagicMock()),
+        patch("kebi.api.deps.get_geocoder", MagicMock()),
+        patch("kebi.api.deps.get_area_service", MagicMock()),
     ):
         graph = get_agent_graph(
             identity=identity,
