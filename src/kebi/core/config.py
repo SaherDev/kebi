@@ -388,6 +388,11 @@ class SignalWeightsConfig(BaseModel):
     liked: int = 3
     liked_negative: int = 3
     rejected: int = 1
+    # Location-kinds Step 3 direct-interest signals. A deliberate share of an
+    # area/route is louder than a passive link-share `save` (0) but quieter
+    # than a visited+liked venue. A 0 here silences the bucket entirely.
+    area_interest: int = 2
+    experience: int = 2
 
     def as_mapping(self) -> dict[str, int]:
         """Flat lever→weight map passed to aggregate_signal_counts."""
@@ -484,8 +489,7 @@ class KnowledgeResearchConfig(BaseModel):
         ):
             if not (0.0 <= value <= 1.0):
                 raise ValueError(
-                    f"knowledge.research.{name} must be in [0.0, 1.0] "
-                    f"(got {value})"
+                    f"knowledge.research.{name} must be in [0.0, 1.0] (got {value})"
                 )
         for name, value in (
             ("w_tag", self.w_tag),

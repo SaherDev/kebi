@@ -18,16 +18,20 @@ from pydantic import BaseModel, Field
 class RawInteraction(BaseModel):
     """One interactions row, place data not yet resolved.
 
-    The repository returns these (type + place_core_id only); the service
-    resolves place_core_id against the places catalog and builds the
-    richer InteractionRow. `place_core_id` is the `places.id` value
-    stored in the `interactions.place_id` column (the column name is
-    unchanged; only the field disambiguates it from user_place_id /
-    provider_id).
+    The repository returns these (type + place_core_id + metadata); the
+    service resolves place_core_id against the places catalog and builds the
+    richer InteractionRow. `place_core_id` is the `places.id` value stored in
+    the `interactions.place_id` column (the column name is unchanged; only the
+    field disambiguates it from user_place_id / provider_id) — except for an
+    `area_interest` row, where it carries the area's entity_key. `metadata`
+    carries the area's display name / kind (area_interest) or the experience
+    tags (experience_interest), so the service builds those rows without a
+    second read (location-kinds Step 3).
     """
 
     type: str
     place_core_id: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class InteractionRow(BaseModel):
@@ -52,6 +56,15 @@ class InteractionRow(BaseModel):
     neighborhood: str | None = None
     city: str | None = None
     country: str | None = None
+    # Location-kinds Step 3 area/experience signals. `region` is a noted
+    # area's display name (area_interest rows); `experience` are the
+    # experience-type tags a route/region share collapsed to
+    # (experience_interest rows). Kept in their own buckets at aggregation,
+    # never merged into the venue-derived location context above — that
+    # separation is what lets taste tell "interested in a region" from
+    # "liked a restaurant".
+    region: str | None = None
+    experience: list[str] = Field(default_factory=list)
     source: str | None = None  # UserPlace.source, save-only at aggregation
     # Snapshot of the saved place's current Library pills (save-type rows only;
     # ignored for accepted/rejected). Defaults are the neutral, eligible state.

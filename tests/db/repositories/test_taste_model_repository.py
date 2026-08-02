@@ -75,11 +75,17 @@ async def test_log_interaction_without_metadata_stores_null() -> None:
 
 @pytest.mark.asyncio
 async def test_get_interactions_returns_raw_rows_no_join() -> None:
-    """get_interactions selects type + place_id only (no places JOIN)."""
+    """get_interactions selects type + place_id + metadata (no places JOIN)."""
     factory, session = _mock_session_factory()
     rows = [
-        SimpleNamespace(type=InteractionType.SAVE, place_id="pv2-a"),
-        SimpleNamespace(type="rejected", place_id=None),
+        SimpleNamespace(type=InteractionType.SAVE, place_id="pv2-a", metadata_=None),
+        SimpleNamespace(type="rejected", place_id=None, metadata_=None),
+        # A Step-3 area_interest row carries its area name/kind in metadata.
+        SimpleNamespace(
+            type=InteractionType.AREA_INTEREST,
+            place_id="vn/hoi-an",
+            metadata_={"name": "Hoi An", "entity_type": "city"},
+        ),
     ]
     session.execute = AsyncMock(return_value=rows)
     repo = SQLAlchemyTasteModelRepository(factory)
@@ -88,7 +94,9 @@ async def test_get_interactions_returns_raw_rows_no_join() -> None:
 
     # Enum coerced to its value; None place_core_id preserved. The DB
     # column stays `place_id`; RawInteraction exposes it as place_core_id.
-    assert [(r.type, r.place_core_id) for r in result] == [
-        ("save", "pv2-a"),
-        ("rejected", None),
+    # metadata rides through (empty dict when NULL).
+    assert [(r.type, r.place_core_id, r.metadata) for r in result] == [
+        ("save", "pv2-a", {}),
+        ("rejected", None, {}),
+        ("area_interest", "vn/hoi-an", {"name": "Hoi An", "entity_type": "city"}),
     ]

@@ -182,3 +182,26 @@ async def test_nothing_resolvable_and_no_venues_short_circuits() -> None:
     )
     assert out == []
     client.extract.assert_not_awaited()
+
+
+async def test_resolve_area_interests_returns_deduped_entities() -> None:
+    """The Step-3 region-interest source: noted names resolve to their area
+    entities (the route to its containing area), deduped by entity_key, with
+    no LLM call — independent of the harvest itself."""
+    harvester, client = _harvester([])
+    entities = await harvester.resolve_area_interests(_NOTED)
+
+    keys = [e.entity_key for e in entities]
+    # Ha Giang Loop collapses to its containing area vn/ha-giang.
+    assert set(keys) == {"vn/hoi-an", "vn/mui-ne", "vn/ha-giang"}
+    client.extract.assert_not_awaited()
+
+
+async def test_resolve_area_interests_skips_unresolvable() -> None:
+    harvester, _ = _harvester([])
+    entities = await harvester.resolve_area_interests(
+        [NotedAreaRef(name="Atlantis", reason="non_venue_area"), *_NOTED[1:]]
+    )
+    keys = {e.entity_key for e in entities}
+    assert "vn/hoi-an" in keys and "vn/mui-ne" in keys
+    assert all("atlantis" not in k for k in keys)

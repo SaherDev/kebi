@@ -42,6 +42,11 @@ from kebi.providers.llm import get_llm
 
 logger = logging.getLogger(__name__)
 
+# Interaction types resolved against the places catalog. The Step-3
+# area_interest / experience_interest rows are self-contained (metadata) and
+# resolve without a catalog read.
+_VENUE_TYPES = frozenset({"save", "saved_recommendation", "accepted", "rejected"})
+
 
 def _pill_fingerprint(rows: list[tuple[str, bool, bool, bool | None]]) -> str:
     """Order-independent digest of the user's Library-pill state.
@@ -81,6 +86,41 @@ class TasteModelService:
     ) -> None:
         """Write interaction row, schedule debounced regen."""
         await self._repo.log_interaction(user_id, signal_type, place_core_id)
+        self._schedule_regen(user_id)
+
+    async def handle_area_signal(
+        self, user_id: str, entity_key: str, entity_type: str, name: str
+    ) -> None:
+        """Record region interest in an area (location-kinds Step 3).
+
+        A share's noted area — resolved to a verified entity — is a taste
+        signal in its own right, distinct from any venue sentiment. The
+        entity_key rides `place_id`; the display name (what the region bucket
+        is keyed by) and kind ride `metadata`, so regen needs no second read.
+        """
+        await self._repo.log_interaction(
+            user_id,
+            InteractionType.AREA_INTEREST,
+            entity_key,
+            metadata={"name": name, "entity_type": entity_type},
+        )
+        self._schedule_regen(user_id)
+
+    async def handle_experience_signal(
+        self, user_id: str, experiences: list[str]
+    ) -> None:
+        """Record experience-type interest from a route/experience share
+        (location-kinds Step 3). No saved object and no place — the experience
+        tags ride `metadata`. A no-op when the share yielded no experience
+        tags."""
+        if not experiences:
+            return
+        await self._repo.log_interaction(
+            user_id,
+            InteractionType.EXPERIENCE_INTEREST,
+            None,
+            metadata={"experience": experiences},
+        )
         self._schedule_regen(user_id)
 
     def schedule_regen(self, user_id: str) -> None:
@@ -150,7 +190,11 @@ class TasteModelService:
         contributes no evidence. Interactions whose place_core_id no longer
         resolves (TTL-wiped / orphaned) are skipped.
         """
-        place_core_ids = list({r.place_core_id for r in raw if r.place_core_id})
+        # Only venue-type rows resolve against the places catalog; the Step-3
+        # area/experience rows carry everything they need in `metadata`.
+        place_core_ids = list(
+            {r.place_core_id for r in raw if r.place_core_id and r.type in _VENUE_TYPES}
+        )
         async with self._session_factory() as session:
             search = self._search_service_factory(session)
             user_places_repo = self._user_places_repo_factory(session)
@@ -161,6 +205,16 @@ class TasteModelService:
         up_by_core_id = {up.place_id: up for up in user_places}
         rows: list[InteractionRow] = []
         for r in raw:
+            if r.type == "area_interest":
+                # Region interest — its name (the bucket key) was stamped at
+                # signal time, so no catalog read. No venue tags, no location
+                # context: kept deliberately distinct from a venue save.
+                rows.append(InteractionRow(type=r.type, region=r.metadata.get("name")))
+                continue
+            if r.type == "experience_interest":
+                exps = r.metadata.get("experience") or []
+                rows.append(InteractionRow(type=r.type, experience=list(exps)))
+                continue
             if not r.place_core_id:
                 continue
             core = cores.get(r.place_core_id)

@@ -37,6 +37,7 @@ Hard constraints (must be true of every candidate — these are the user's state
 
 Taste signal (the user's prior preferences — use to break ties, never to override hard constraints):
 {taste_block}
+When the taste signal names regions or experience types the user is drawn to (e.g. a region they keep sharing, or scenic-route / hiking trips), lean an open-ended request toward candidates that fit those — a tie-breaker within the working location, never a reason to leave it or to override a hard constraint.
 
 # How many names
 

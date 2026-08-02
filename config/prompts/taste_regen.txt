@@ -21,12 +21,23 @@ Input is JSON following this shape:
     "city": {"<value>": count},
     "country": {"<value>": count}
   },
+  "region_interest": {"<area name>": count},
+  "experience": {"<experience type>": count},
   "rejected": {
     "categories": {"<category>": count},
     "tags": { same shape as tags },
     "location": { same shape as location }
   }
 }
+
+`region_interest` is areas the user showed direct interest in by sharing them
+(a region, town, or the containing area of a shared route) — distinct from
+`location`, which is where their saved *venues* happen to be. `experience` is
+the kind of trip a shared route/region stands for (e.g. scenic_route,
+motorbike_route, hiking). Treat both as positive interest signals; describe
+them as region/experience preferences, e.g. "Drawn to the Hoi An region." or
+"Likes scenic-route trips.", citing source_field "region_interest" /
+"experience".
 
 Rules for summary:
 - Each summary item has: text (the human-readable pattern), signal_count (integer), source_field (JSON path in the input), source_value (the key at that path, or null for aggregate claims).
@@ -65,3 +76,10 @@ INPUT:
 
 OUTPUT:
 {"summary": [{"text": "Favors boutique category.", "signal_count": 18, "source_field": "categories", "source_value": "boutique"}, {"text": "Favors night_market category.", "signal_count": 14, "source_field": "categories", "source_value": "night_market"}, {"text": "Primary save source is TikTok.", "signal_count": 30, "source_field": "source", "source_value": "tiktok"}, {"text": "Prefers budget price over moderate.", "signal_count": 25, "source_field": "tags.price", "source_value": "budget"}, {"text": "Saves cluster in Shimokitazawa neighborhood.", "signal_count": 15, "source_field": "location.neighborhood", "source_value": "Shimokitazawa"}]}
+
+Example 5 — traveler who shares regions and routes:
+INPUT:
+{"totals": {"saves": 9, "accepted": 2, "rejected": 0, "area_interests": 4}, "categories": {"restaurant": 5, "cafe": 3}, "source": {"tiktok": 9}, "tags": {"cuisine": {"vietnamese": 4}}, "location": {"city": {"Hoi An": 3}}, "region_interest": {"Hoi An": 2, "Vietnam": 2, "Mui Ne": 1}, "experience": {"scenic_route": 2, "motorbike_route": 1}}
+
+OUTPUT:
+{"summary": [{"text": "Favors restaurant category.", "signal_count": 5, "source_field": "categories", "source_value": "restaurant"}, {"text": "Drawn to the Hoi An region.", "signal_count": 2, "source_field": "region_interest", "source_value": "Hoi An"}, {"text": "Interested in Vietnam broadly.", "signal_count": 2, "source_field": "region_interest", "source_value": "Vietnam"}, {"text": "Likes scenic-route trips.", "signal_count": 2, "source_field": "experience", "source_value": "scenic_route"}]}
