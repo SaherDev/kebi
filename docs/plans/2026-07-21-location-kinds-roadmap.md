@@ -83,7 +83,9 @@ scenic route — each stored, ranked, and rendered as what it actually is.
   the correct model.
 - Order of work: Step 1 → 2 → 3 → 4 → 5 → 6, in sequence. Step 5 depends on 4
   (revising a one-item answer is thin; the journeys worth revising come from
-  corridor geometry). Step 6 depends on 5 for the item shape.
+  corridor geometry). Step 6 depends on 5 for the item shape. **Step 7 is
+  outside the chain** — no dependencies, runnable in parallel from now, and
+  should start before Step 6 since claims accrete over time.
 - **Areas as answers are no longer demand-gated (revised 2026-08-02).** The
   original gate existed because rendering an area needs a card the app didn't
   have; the app now renders both venues and areas, so the condition is gone
@@ -316,19 +318,49 @@ without anything being written to the database.
 zoom-in affordance and everything behind it is deferred (see Out of scope).
 An area answer stands on its own or it isn't ready to ship.
 
-**Check before planning this step:** claim coverage is not symmetric. Venue
-claims have accreted since ADR-120; area claims only started with Step 2 and
-only for areas that appeared in shares or research. Ranking neighborhoods
-needs enough claims *per entity* to discriminate — "An Thuong vs Son Tra" is
-a far finer judgement than "Da Nang vs Hue". Count claims per area entity by
-hierarchy depth first; if the tail is thin, this step grows a backfill
-(curator sweep over the areas users actually ask about) before ranking is
-worth building. Measure at plan time, not before — claims accrete
-continuously, so a count taken now describes a dataset that won't exist by
-then.
+**Depends on data, not just code:** ranking areas needs enough claims per
+entity to discriminate between them. That's Step 7's job — it has no
+dependency on this step or any other and should be running before this one
+starts.
 
 **Done when:** "which neighborhood should I stay in?" returns a ranked area
 answer rather than a hotel or a paragraph of prose.
+
+---
+
+## Step 7 — Area knowledge depth  *(no dependencies — runnable in parallel from now)*
+
+**Problem it closes:** areas are identified but thinly known — Step 6 can rank
+them only as well as the knowledge layer describes them.
+
+**Why it stands alone:** Steps 4 → 5 → 6 are a chain; this one depends on
+nothing in it and nothing depends on it except Step 6's answer *quality*. It
+is numbered last but should start first — claims accrete over time, so
+starting early is the whole point. Numbered 7 rather than inserted earlier to
+keep existing step numbers stable.
+
+**Decided direction:**
+- **Measure before building.** Count claims per area entity by hierarchy
+  depth. Coverage is not symmetric: venue claims have accreted since ADR-120,
+  area claims only since Step 2 and only for areas that happened to appear in
+  shares or research. The count decides whether this step is an afternoon or
+  a sustained effort — scope it from the number, not from a guess.
+- **Depth matters more than breadth.** "Da Nang vs Hue" is an easy
+  discrimination; "An Thuong vs Son Tra" is the real bar. Neighborhood-depth
+  entities are where thin coverage will hurt, so measure and enrich by depth
+  rather than by entity count.
+- **Enrich through the existing curator**, targeting the areas users actually
+  ask about (research and consult logs), not a speculative sweep of world
+  geography.
+
+**Constraints:** no new storage and no second rich-area database — claims land
+in `knowledge_claims` against the existing geo-slug entity keys, exactly as
+today. Background-only: nothing here is user-visible or touches the product
+repo contract.
+
+**Done when:** the areas users ask about most carry enough claims to
+distinguish neighbors from each other, and a spot-check of ranked candidates
+reads as informed rather than generic.
 
 ---
 
