@@ -316,6 +316,17 @@ without anything being written to the database.
 zoom-in affordance and everything behind it is deferred (see Out of scope).
 An area answer stands on its own or it isn't ready to ship.
 
+**Check before planning this step:** claim coverage is not symmetric. Venue
+claims have accreted since ADR-120; area claims only started with Step 2 and
+only for areas that appeared in shares or research. Ranking neighborhoods
+needs enough claims *per entity* to discriminate — "An Thuong vs Son Tra" is
+a far finer judgement than "Da Nang vs Hue". Count claims per area entity by
+hierarchy depth first; if the tail is thin, this step grows a backfill
+(curator sweep over the areas users actually ask about) before ranking is
+worth building. Measure at plan time, not before — claims accrete
+continuously, so a count taken now describes a dataset that won't exist by
+then.
+
 **Done when:** "which neighborhood should I stay in?" returns a ranked area
 answer rather than a hotel or a paragraph of prose.
 
