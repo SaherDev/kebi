@@ -615,7 +615,8 @@ async def test_noted_non_venues_aggregate_from_search_and_picker() -> None:
     )
     result = await pipeline.run(url="https://x.com", user_id="u1", limit=_TEST_LIMIT)
     assert result.candidates == []
-    assert result.noted_non_venues == ["Ha Giang Loop", "Hai Van Pass"]
+    noted_names = [r.name for r in result.noted_non_venues]
+    assert noted_names == ["Ha Giang Loop", "Hai Van Pass"]
 
 
 @pytest.mark.asyncio
@@ -647,7 +648,8 @@ async def test_incident_vietnam_video_route_rejected_and_noted_no_candidate() ->
     )
     result = await pipeline.run(url="https://x.com", user_id="u1", limit=_TEST_LIMIT)
     assert result.candidates == []
-    assert result.noted_non_venues == ["Ha Giang Loop"]
+    assert [r.name for r in result.noted_non_venues] == ["Ha Giang Loop"]
+    assert result.noted_non_venues[0].reason == "non_venue_geography"
 
 
 @pytest.mark.asyncio
@@ -668,4 +670,4 @@ async def test_noted_non_venues_present_alongside_candidates() -> None:
     )
     result = await pipeline.run(url="https://x.com", user_id="u1", limit=_TEST_LIMIT)
     assert len(result.candidates) == 1
-    assert result.noted_non_venues == ["Hai Van Pass"]
+    assert [r.name for r in result.noted_non_venues] == ["Hai Van Pass"]

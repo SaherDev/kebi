@@ -10,9 +10,9 @@ from __future__ import annotations
 from unittest.mock import AsyncMock
 
 from kebi.core.agent.location import WorkingLocation
-from kebi.core.knowledge.geo_resolve import EntityGeoResolver
+from kebi.core.areas.models import AreaEntity
 from kebi.core.knowledge.research_resolver import ResearchEntityResolver
-from kebi.core.knowledge.schemas import ResolvedGeo
+from kebi.core.knowledge.schemas import ResolvedGeo, _slugify
 
 
 def _wl(
@@ -32,19 +32,43 @@ def _wl(
     )
 
 
+def _entity(geo: ResolvedGeo | None) -> AreaEntity | None:
+    """Wrap a test's ResolvedGeo shorthand into the AreaEntity the
+    AreaService now returns."""
+    if geo is None:
+        return None
+    if geo.city:
+        return AreaEntity(
+            entity_key=f"{geo.country_code}/{_slugify(geo.city)}",
+            entity_type="city",
+            name=geo.city,
+            country_code=geo.country_code or "",
+            lat=0.0,
+            lng=0.0,
+        )
+    return AreaEntity(
+        entity_key=geo.country_code or "",
+        entity_type="country",
+        name=(geo.country_code or "").upper(),
+        country_code=geo.country_code or "",
+        lat=0.0,
+        lng=0.0,
+    )
+
+
 def _geo(
     *,
     cities: dict[tuple[str, str], ResolvedGeo | None] | None = None,
     countries: dict[str, ResolvedGeo | None] | None = None,
 ) -> AsyncMock:
-    """Stub EntityGeoResolver keyed by (name, country_code) / name."""
-    geo = AsyncMock(spec=EntityGeoResolver)
+    """Stub AreaService keyed by (name, country_code) / name."""
+    geo = AsyncMock()
 
-    async def _city(name: str, country_code: str) -> ResolvedGeo | None:
-        return (cities or {}).get((name, country_code))
+    async def _city(name: str, country_code: str) -> AreaEntity | None:
+        return _entity((cities or {}).get((name, country_code)))
 
-    async def _country(name: str) -> ResolvedGeo | None:
-        return (countries or {}).get(name)
+    async def _country(name: str) -> AreaEntity | None:
+        return _entity((countries or {}).get(name))
 
     geo.resolve_city = AsyncMock(side_effect=_city)
     geo.resolve_country = AsyncMock(side_effect=_country)

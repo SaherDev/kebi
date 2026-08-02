@@ -28,11 +28,9 @@ from kebi.core.taste.schemas import SummaryLine
 if TYPE_CHECKING:
     from redis.asyncio import Redis
 
-    from kebi.core.places.nominatim_geocoding_client import (
-        NominatimGeocodingClient,
-    )
     from kebi.core.taste.schemas import TasteProfile
     from kebi.core.taste.service import TasteModelService
+    from kebi.providers.geocoding import GeocoderProtocol
     from kebi.providers.llm import InstructorClient
 
 logger = logging.getLogger(__name__)
@@ -94,7 +92,7 @@ class HomeService:
         self,
         instructor_client: InstructorClient,
         taste_service: TasteModelService,
-        geocoder: NominatimGeocodingClient,
+        geocoder: GeocoderProtocol,
         redis: Redis,
         config: HomeConfig,
     ) -> None:

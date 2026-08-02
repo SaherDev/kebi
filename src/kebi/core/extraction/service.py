@@ -54,6 +54,7 @@ from kebi.core.knowledge.schemas import (
     HarvestContent,
     HarvestPlace,
     HarvestSnapshot,
+    NotedAreaRef,
     ResolvedGeo,
 )
 from kebi.core.places import (
@@ -102,22 +103,23 @@ def _failed_response(
     )
 
 
-def _noted_interests(names: list[str]) -> list[NotedInterest]:
+def _noted_interests(refs: list[NotedAreaRef]) -> list[NotedInterest]:
     """Build the acknowledgment entries for detected non-venue geography.
 
-    Acknowledge-only: nothing is persisted for a noted interest — the
-    message keeps the user's action visible (never a silent drop) until
-    the area model gives these a real home."""
+    Nothing venue-shaped is persisted for a noted interest — the message
+    keeps the user's action visible (never a silent drop). Behind the
+    scenes the same refs anchor the knowledge harvest to their resolved
+    areas (location-kinds Step 2)."""
     return [
         NotedInterest(
-            name=name,
+            name=ref.name,
             message=(
-                f"'{name}' looks like a route or region rather than a "
+                f"'{ref.name}' looks like a route or region rather than a "
                 f"single place — I've noted it as a travel interest "
                 f"instead of saving it."
             ),
         )
-        for name in names
+        for ref in refs
     ]
 
 
@@ -387,8 +389,17 @@ class ExtractionService:
         if not candidates:
             # A share that contained only non-venue geography (a route, a
             # region) is a success with nothing saved — the acknowledgment
-            # IS the outcome, not a failure.
+            # IS the outcome, not a failure. The noted refs still anchor
+            # the knowledge harvest (Step 2): the share's durable facts
+            # attach to the resolved areas, not to any venue.
             if noted:
+                await self._maybe_harvest(
+                    rid,
+                    user_id,
+                    pipeline_result.content,
+                    [],
+                    pipeline_result.noted_non_venues,
+                )
                 return ExtractPlaceResponse(
                     status="completed",
                     results=[],
@@ -408,7 +419,13 @@ class ExtractionService:
             )
 
         items = await self._persist_and_build_items(
-            candidates, user_id, rid, source, parsed.url, pipeline_result.content
+            candidates,
+            user_id,
+            rid,
+            source,
+            parsed.url,
+            pipeline_result.content,
+            pipeline_result.noted_non_venues,
         )
         if not items:
             if noted:
@@ -509,6 +526,7 @@ class ExtractionService:
         source: PlaceSource | None,
         source_ref: str | None,
         content: HarvestContent,
+        noted: list[NotedAreaRef] | None = None,
     ) -> list[ExtractPlaceItem]:
         """Inline v2 persistence flow (ADR-070, ADR-071).
 
@@ -579,8 +597,11 @@ class ExtractionService:
         # ADR-121: snapshot the content + identified places to the bucket and
         # fire the background harvest. Only on this pipeline-run path (a
         # cache hit re-derives nothing and was harvested at first extraction),
-        # and only when there is content worth mining and a place to anchor.
-        await self._maybe_harvest(request_id, user_id, content, eligible_cores)
+        # and only when there is content worth mining and an anchor — a
+        # persisted place or a noted area (Step 2's harvest-gap fix).
+        await self._maybe_harvest(
+            request_id, user_id, content, eligible_cores, noted or []
+        )
         return items
 
     async def _maybe_harvest(
@@ -589,15 +610,22 @@ class ExtractionService:
         user_id: str,
         content: HarvestContent,
         places: list[PlaceCore],
+        noted: list[NotedAreaRef] | None = None,
     ) -> None:
         """Persist a harvest snapshot and dispatch `ContentHarvestRequested`.
 
-        No-op when the content is empty or no place anchors it. The event
-        carries only the bucket key — the durable content lives in the
-        bucket, so the background handler reads it back off the critical
-        path (the snapshot write and dispatch already run after the HTTP
-        response via the event bus / non-fatal bucket write)."""
-        if content.is_empty() or not places:
+        No-op when the content is empty or nothing anchors it — an anchor
+        is a persisted place OR a noted non-venue area (Step 2: a share
+        whose every place is a noted route/region still harvests, its
+        claims keyed to the resolved areas). Noted refs are capped by
+        config so one giant share can't fan out into unbounded geocode
+        calls. The event carries only the bucket key — the durable
+        content lives in the bucket, so the background handler reads it
+        back off the critical path (the snapshot write and dispatch
+        already run after the HTTP response via the event bus / non-fatal
+        bucket write)."""
+        noted_refs = (noted or [])[: get_config().areas.noted_resolution_limit]
+        if content.is_empty() or (not places and not noted_refs):
             return
         harvest_places = [
             HarvestPlace(
@@ -608,9 +636,11 @@ class ExtractionService:
             for p in places
             if p.id
         ]
-        if not harvest_places:
+        if not harvest_places and not noted_refs:
             return
-        snapshot = HarvestSnapshot(content=content, places=harvest_places)
+        snapshot = HarvestSnapshot(
+            content=content, places=harvest_places, noted_areas=noted_refs
+        )
         key = await self._harvest_writer.write(request_id=request_id, snapshot=snapshot)
         if key is None:
             return  # bucket write failed (already logged) — nothing to harvest

@@ -1,16 +1,22 @@
-"""Tests for KnowledgeHarvester — verified claim resolution (ADR-121/126)."""
+"""Tests for KnowledgeHarvester — verified claim resolution (ADR-121/126).
+
+Round-trip verification itself lives in (and is tested with) the
+AreaService; these tests fake it and assert the harvester's keying rules:
+anchor-supplied keys, cross-anchor resolution through the service, and
+drop-don't-mis-key on refusal.
+"""
 
 from __future__ import annotations
 
 from unittest.mock import AsyncMock
 
+from kebi.core.areas.models import AreaEntity
 from kebi.core.knowledge.harvester import (
     KnowledgeHarvester,
     _HarvestedClaim,
     _HarvesterResponse,
 )
 from kebi.core.knowledge.schemas import HarvestContent, HarvestPlace, ResolvedGeo
-from kebi.core.places.nominatim_geocoding_client import GeocodeResult
 
 _PLACE = HarvestPlace(
     place_id="p1",
@@ -20,15 +26,43 @@ _PLACE = HarvestPlace(
 _CONTENT = HarvestContent(caption="late-night ramen in Shibuya", source_ref="u")
 
 
+def _city_entity(name: str, cc: str) -> AreaEntity:
+    return AreaEntity(
+        entity_key=f"{cc}/{name.lower()}",
+        entity_type="city",
+        name=name,
+        country_code=cc,
+        lat=34.9,
+        lng=135.7,
+    )
+
+
+def _country_entity(cc: str) -> AreaEntity:
+    return AreaEntity(
+        entity_key=cc,
+        entity_type="country",
+        name=cc.upper(),
+        country_code=cc,
+        lat=36.0,
+        lng=138.0,
+    )
+
+
+def _areas(
+    city: AreaEntity | None = None, country: AreaEntity | None = None
+) -> AsyncMock:
+    svc = AsyncMock()
+    svc.resolve_city = AsyncMock(return_value=city)
+    svc.resolve_country = AsyncMock(return_value=country)
+    return svc
+
+
 def _harvester(
-    claims: list[_HarvestedClaim], geocoder: AsyncMock | None = None
+    claims: list[_HarvestedClaim], areas: AsyncMock | None = None
 ) -> KnowledgeHarvester:
     client = AsyncMock()
     client.extract = AsyncMock(return_value=_HarvesterResponse(claims=claims))
-    if geocoder is None:
-        geocoder = AsyncMock()
-        geocoder.search_structured = AsyncMock(return_value=None)
-    return KnowledgeHarvester(client, geocoder)
+    return KnowledgeHarvester(client, areas if areas is not None else _areas())
 
 
 def _claim(scope: str, entity_name: str, **overrides: object) -> _HarvestedClaim:
@@ -90,85 +124,42 @@ async def test_neighborhood_claim_naming_other_area_dropped() -> None:
     assert await h.harvest(_CONTENT, [_PLACE]) == []
 
 
-async def test_city_claim_matching_anchor_skips_geocoder() -> None:
-    geocoder = AsyncMock()
-    geocoder.search_structured = AsyncMock()
+async def test_city_claim_matching_anchor_skips_area_service() -> None:
+    areas = _areas()
     # Diacritic/script variance still counts as the anchor's own city.
-    h = _harvester([_claim("city", "tōkyō")], geocoder)
+    h = _harvester([_claim("city", "tōkyō")], areas)
     out = await h.harvest(_CONTENT, [_PLACE])
     assert out[0].geo == _PLACE.geo
-    geocoder.search_structured.assert_not_called()
+    areas.resolve_city.assert_not_called()
 
 
 async def test_city_claim_naming_other_city_resolved_and_rekeyed() -> None:
-    geocoder = AsyncMock()
-    geocoder.search_structured = AsyncMock(
-        return_value=GeocodeResult(lat=34.9, lng=135.7, country_code="jp", city="Kyoto")
-    )
-    h = _harvester([_claim("city", "Kyoto")], geocoder)
+    areas = _areas(city=_city_entity("Kyoto", "jp"))
+    h = _harvester([_claim("city", "Kyoto")], areas)
     out = await h.harvest(_CONTENT, [_PLACE])
     assert out[0].geo == ResolvedGeo(country_code="jp", city="Kyoto")
-    geocoder.search_structured.assert_awaited_once_with(city="Kyoto", countrycodes="jp")
+    areas.resolve_city.assert_awaited_once_with("Kyoto", "jp")
 
 
-async def test_city_claim_failing_round_trip_dropped() -> None:
-    # Top hit is some feature *containing* the name in a different city —
-    # the returned city component doesn't match, so the claim drops.
-    geocoder = AsyncMock()
-    geocoder.search_structured = AsyncMock(
-        return_value=GeocodeResult(lat=16.4, lng=107.5, country_code="vn", city="Huế")
-    )
-    h = _harvester([_claim("city", "Paris")], geocoder)
-    assert await h.harvest(_CONTENT, [_PLACE]) == []
-
-
-async def test_city_claim_unresolvable_dropped() -> None:
-    h = _harvester([_claim("city", "Muine")])  # default geocoder returns None
-    assert await h.harvest(_CONTENT, [_PLACE]) == []
-
-
-async def test_city_claim_geocoder_error_dropped_not_raised() -> None:
-    geocoder = AsyncMock()
-    geocoder.search_structured = AsyncMock(side_effect=RuntimeError("down"))
-    h = _harvester([_claim("city", "Kyoto")], geocoder)
+async def test_city_claim_refused_by_area_service_dropped() -> None:
+    # The area service refuses unverifiable names (round-trip failure,
+    # "Muine"-style misses) — the claim drops, never mis-keys.
+    h = _harvester([_claim("city", "Muine")], _areas(city=None))
     assert await h.harvest(_CONTENT, [_PLACE]) == []
 
 
 async def test_country_claim_resolved_by_name() -> None:
-    geocoder = AsyncMock()
-    geocoder.search_structured = AsyncMock(
-        return_value=GeocodeResult(
-            lat=36.0, lng=138.0, country_code="jp", place_type="country"
-        )
-    )
-    h = _harvester([_claim("country", "Japan")], geocoder)
+    areas = _areas(country=_country_entity("jp"))
+    h = _harvester([_claim("country", "Japan")], areas)
     out = await h.harvest(_CONTENT, [_PLACE])
     assert out[0].geo == ResolvedGeo(country_code="jp")
-    geocoder.search_structured.assert_awaited_once_with(country="Japan")
+    areas.resolve_country.assert_awaited_once_with("Japan")
 
 
-async def test_country_claim_matching_non_country_feature_dropped() -> None:
-    geocoder = AsyncMock()
-    geocoder.search_structured = AsyncMock(
-        return_value=GeocodeResult(
-            lat=35.6, lng=139.7, country_code="jp", place_type="restaurant"
-        )
-    )
-    h = _harvester([_claim("country", "Japan Curry House")], geocoder)
+async def test_country_claim_refused_dropped() -> None:
+    # "Japan Curry House" matches no country feature — the service refuses.
+    h = _harvester([_claim("country", "Japan Curry House")], _areas(country=None))
     assert await h.harvest(_CONTENT, [_PLACE]) == []
-
-
-async def test_repeated_entity_names_geocoded_once() -> None:
-    geocoder = AsyncMock()
-    geocoder.search_structured = AsyncMock(
-        return_value=GeocodeResult(lat=34.9, lng=135.7, country_code="jp", city="Kyoto")
-    )
-    h = _harvester(
-        [_claim("city", "Kyoto"), _claim("city", "Kyōto", claim="y")], geocoder
-    )
-    out = await h.harvest(_CONTENT, [_PLACE])
-    assert len(out) == 2
-    geocoder.search_structured.assert_awaited_once()
 
 
 async def test_out_of_range_place_index_dropped() -> None:
@@ -179,7 +170,7 @@ async def test_out_of_range_place_index_dropped() -> None:
 async def test_empty_content_short_circuits_without_llm() -> None:
     client = AsyncMock()
     client.extract = AsyncMock()
-    h = KnowledgeHarvester(client, AsyncMock())
+    h = KnowledgeHarvester(client, _areas())
     out = await h.harvest(HarvestContent(), [_PLACE])
     assert out == []
     client.extract.assert_not_called()
@@ -188,7 +179,7 @@ async def test_empty_content_short_circuits_without_llm() -> None:
 async def test_no_places_short_circuits() -> None:
     client = AsyncMock()
     client.extract = AsyncMock()
-    out = await KnowledgeHarvester(client, AsyncMock()).harvest(_CONTENT, [])
+    out = await KnowledgeHarvester(client, _areas()).harvest(_CONTENT, [])
     assert out == []
     client.extract.assert_not_called()
 
@@ -196,5 +187,5 @@ async def test_no_places_short_circuits() -> None:
 async def test_llm_error_swallowed() -> None:
     client = AsyncMock()
     client.extract = AsyncMock(side_effect=RuntimeError("boom"))
-    out = await KnowledgeHarvester(client, AsyncMock()).harvest(_CONTENT, [_PLACE])
+    out = await KnowledgeHarvester(client, _areas()).harvest(_CONTENT, [_PLACE])
     assert out == []

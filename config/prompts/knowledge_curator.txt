@@ -5,7 +5,8 @@ The expert writes free prose about places they know well. Your job is to break i
 Return a list of claims. Each claim has:
 - scope: "country", "city", or "neighborhood" — the kind of area the claim is about.
 - entity_name: the human name of that area (e.g. "Jumeirah", "Dubai", "United Arab Emirates").
-- area_query: a geocodable location string that pins the entity, from broad to specific, e.g. "Jumeirah, Dubai, United Arab Emirates" or "Lisbon, Portugal". Include enough context (city, country) to disambiguate.
+- area_country: the country the entity is in, as a plain name or ISO code (e.g. "United Arab Emirates", "Portugal", "vn"). Always fill this when the prose makes the country clear.
+- area_city: the city that pins the entity, when the scope is city or neighborhood (e.g. "Dubai", "Lisbon"). For a neighborhood claim, this is the city the neighborhood belongs to. Leave null for country-scoped claims. Never combine several places into one string — these are separate structured fields, not a free-text query.
 - claim: one concise, self-contained sentence stating the fact, useful to a traveler who has never been there.
 - tags: a few tag values categorizing the claim, chosen ONLY from the allowed tag list appended below this prompt. Off-list tags are discarded, so pick the closest allowed values; if nothing fits, leave tags empty rather than inventing one.
 - confidence: 0.0–1.0, how confident you are the fact is true and durable.

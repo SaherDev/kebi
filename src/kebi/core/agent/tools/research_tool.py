@@ -17,9 +17,9 @@ claims that don't touch the asked topic all come back as an
 `empty_reason` + clarification — the prompt turns those into a clarifying
 question, never a fabricated tip and never a fall-through to discovery.
 
-No LLM call, no paid provider: one indexed claims read plus at most one
-free Nominatim geocode when the asked-about area isn't the working
-location.
+No LLM call: one indexed claims read plus at most one area-store lookup
+(geocoding only on a store miss) when the asked-about area isn't the
+working location.
 """
 
 from __future__ import annotations

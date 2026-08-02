@@ -71,7 +71,7 @@ def build_tools(
     hit Google Places at real marginal cost) are withheld for tiers that
     do not pay for new-place discovery. `research` is ungated — a
     knowledge-layer read costs nothing external (at most one free
-    Nominatim geocode), so every tier can ask what kebi knows.
+    geocode), so every tier can ask what kebi knows.
     """
     tools: list[BaseTool] = [build_find_saved_tool(hybrid_search)]
     if discovery_enabled:

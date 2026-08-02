@@ -78,6 +78,22 @@ class EtiquetteTag(str, Enum):
     local_custom = "local_custom"
 
 
+class ExperienceTag(str, Enum):
+    """Experience types an area offers — the interest signal a noted
+    route/region collapses to (location-kinds Step 2). A named route is
+    never its own entity; its claims land on the containing area tagged
+    with the kind of experience it stands for."""
+
+    scenic_route = "scenic_route"
+    road_trip = "road_trip"
+    motorbike_route = "motorbike_route"
+    hiking = "hiking"
+    trekking = "trekking"
+    diving_snorkeling = "diving_snorkeling"
+    surfing = "surfing"
+    island_hopping = "island_hopping"
+
+
 class TimingTrickTag(str, Enum):
     """When to go — the tricks a local knows."""
 
@@ -105,6 +121,7 @@ CLAIM_TAG_TYPES: dict[str, type[Enum]] = {
     "transport": TransportTag,
     "etiquette": EtiquetteTag,
     "timing_trick": TimingTrickTag,
+    "experience": ExperienceTag,
 }
 
 

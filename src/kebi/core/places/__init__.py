@@ -3,7 +3,13 @@
 Public surface: models, protocols, concrete implementations, services.
 """
 
-from ._google_mapper import NON_VENUE_GEOGRAPHY, is_non_venue_geography
+from ._google_mapper import (
+    NON_VENUE_AREA,
+    NON_VENUE_GEOGRAPHY,
+    NON_VENUE_ROUTE,
+    classify_non_venue_geography,
+    is_non_venue_geography,
+)
 from .cache import RedisPlacesCache
 from .cached_embedder import CachedEmbedder
 from .embedding_service import EmbeddingService
@@ -29,11 +35,6 @@ from .models import (
     UserPlace,
     UserPlaceStatusUpdate,
     normalize_icon,
-)
-from .nominatim_geocoding_client import (
-    GeocodeResult,
-    GeocodingError,
-    NominatimGeocodingClient,
 )
 from .place_wipe_service import PlaceWipeService
 from .places_repo import PlacesRepo
@@ -128,7 +129,6 @@ __all__ = [
     "UserPlacesRepo",
     "RedisPlacesCache",
     "GooglePlacesClient",
-    "NominatimGeocodingClient",
     # services
     "EmbeddingService",
     "HybridSearchService",
@@ -136,16 +136,16 @@ __all__ = [
     "PlaceUpsertService",
     "PlaceWipeService",
     "UserPlacesService",
-    # geocoding
-    "GeocodeResult",
     # errors
     "DuplicateUserPlaceError",
     "PlaceNotFoundError",
     "SaveLimitExceededError",
-    "GeocodingError",
     # constants
     "EMBEDDING_DIMENSIONS",
+    "NON_VENUE_AREA",
     "NON_VENUE_GEOGRAPHY",
+    "NON_VENUE_ROUTE",
+    "classify_non_venue_geography",
     # detection
     "is_non_venue_geography",
 ]

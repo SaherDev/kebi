@@ -1,6 +1,6 @@
 # Location Kinds — Roadmap
 
-**Status:** direction decided 2026-07-21 · Step 1 done 2026-07-22 (ADR-133) · Step 2 is next up
+**Status:** direction decided 2026-07-21 · Step 1 done 2026-07-22 (ADR-133) · Step 2 done 2026-08-02 (ADR-134) · Step 3 is next up
 **Scope:** this is a roadmap, not an implementation plan. Each step below is a
 self-contained brief — plan and build each one as its own feature, in order.
 One plan doc + ADR per step when it starts.
@@ -122,50 +122,51 @@ the library contains no venue-typed non-venues.
 
 ---
 
-## Step 2 — One notion of "an area"
+## Step 2 — One notion of "an area"  *(done 2026-08-02 — ADR-134, `feature/area-entities`)*
 
 **Problem it closes:** problems 1 and 6 — no kind dimension, and fragmented,
 ephemeral area knowledge.
 
-**Decided direction:**
-- A **persistent area entity store**: hierarchical entity key, canonical
-  name + aliases, country code, centroid, **bbox/extent**, settlement
-  type/density. Creation path is structured geocode + round-trip verification
-  only (the ADR-126 recipe) — never free-text.
-- A provider-agnostic geocoding boundary (protocol + adapter; Nominatim is the
-  first adapter), subsuming today's direct call sites: agent location
-  resolution, corridor destination, home greeting, knowledge curator/harvester,
-  research resolution. Read-through: store first, geocode on miss.
-- **`kind: venue | area`** on places; existing rows are `venue`. Non-venue
-  identity reuses the namespaced provider-id convention (`osm:` / entity key)
-  so ADR-054 dedup holds.
-- **Two-validator routing:** Google validates venues; the area service
-  validates areas; the LLM layer (picker/namer) decides which door. Step 1's
-  rejections become this routing.
-- Extraction applies the **subject-vs-container rule:** an area with child
-  venues in the same share is an anchor (resolved, persisted, not saved to the
-  library); an area recommended in its own right is saved, typed. A route
-  name is never persisted as its own entity — it resolves to its verified
-  containing area's extent plus experience-type tags (never silently
-  dropped).
-- **Harvest from noted-interest-only shares** (gap exposed by Step 1,
-  2026-07-23): the knowledge harvest is anchored to persisted places
-  (ADR-121/126 — the anchor supplies the geo identity that constrains claim
-  resolution), so a share whose every place is a noted non-venue now
-  produces **no claims at all** — pre-Step-1 it harvested only because the
-  mislabeled venue wrongly anchored it. Verified live: the Vietnam
-  video (Ha Giang Loop / Hoi An / Mui Ne) yields three noted interests and
-  zero claims. Step 2's area entities become the missing anchor: a
-  noted-interest share resolves its areas through the entity store and
-  harvests against them.
+**Shipped direction:**
+- A **persistent area entity store** (`area_entities`): entity key in the
+  existing claim-key format (`vn`, `vn/hoi-an` — all existing claims attach
+  with zero migration; hierarchy via `parent_key`), canonical name + learned
+  aliases, country code, centroid, **bbox/extent**, provider feature type.
+  Creation path is structured geocode + round-trip verification only (the
+  ADR-126 recipe) — never free-text.
+- A provider-agnostic geocoding boundary (protocol + adapter). **Deviation:
+  Nominatim was removed entirely** — its ~1 req/s public cap can't back
+  production; the Google Geocoding API (Essentials tier, $5/1k, 10k
+  free/month) backs forward + reverse + the by-place-id geometry refresh.
+  All five direct call sites (agent location, corridor, home greeting,
+  curator/harvester, research) go through the boundary. Read-through: store
+  first, geocode on miss. Reverse sits behind a Redis coordinate-bucket
+  cache. ToS compliance: place IDs stored forever; geometry re-geocoded
+  through the stored ID when older than 30 days.
+- **Deviation: no `kind` column on places** — areas live in their own
+  table, `places` stays venue-shaped; revisit at Step 3 if library
+  rendering needs it. No `osm:` provider ids (Google place IDs, `google:`
+  namespaced, ADR-054).
+- **Two-validator routing:** the Step 1 rejection reason is now a subtype
+  (`non_venue_area` resolves to itself; `non_venue_route` collapses to its
+  containing area). Noted names carry their share's location context
+  (ADR-082) into resolution.
+- Extraction applies the **subject-vs-container rule** in harvest anchoring;
+  no library saves of areas in this step (waits for Step 3 rendering).
+- **Harvest from noted-interest-only shares** — closed: noted refs ride the
+  harvest snapshot, resolve through the area service, and anchor the
+  share's claims; a zero-venue share now harvests. Experience-type tags
+  (`experience`: scenic_route, motorbike_route, hiking, …) joined the
+  claim-tag vocabulary so route interest survives as tagged area knowledge.
+- Curator emits structured area components (country, city) instead of a
+  free-text query.
 
-**Constraints:** knowledge layer stays the rich-data owner — the entity store
-holds identity + geometry only. Consult answers stay venue-only in this step.
+**Constraints held:** knowledge layer stays the rich-data owner — the entity
+store holds identity + geometry only. Consult answers stay venue-only.
 
-**Done when:** all former direct geocode call sites go through the service;
-sharing the Vietnam video records Ha Giang Loop as interest in its containing
-area (typed, with a real extent) plus experience tags — no venue row, no
-route row; venue consult never returns a non-venue.
+**Rollout note:** the Geocoding API must be enabled on the GCP project
+(one-time, free tier) — without it every geocode refuses and location turns
+degrade to clarification asks.
 
 ---
 

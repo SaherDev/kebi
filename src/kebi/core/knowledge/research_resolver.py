@@ -17,10 +17,12 @@ Stages:
    named area does NOT match, the working location is *not* used — that
    refusal is what closes the wrong-entity swap.
 2. **Verified geocode (confidence 0.8)** — resolve the name through the
-   round-trip-verified `EntityGeoResolver`, constrained to a country: the
-   agent-passed country first (the orchestrator usually knows which country
-   the asked-about city is in — a stale working location's country alone
-   would wrongly fail a cross-country question), then the working location's.
+   round-trip-verified `AreaService` (store first, geocode on miss — a
+   research turn's verified lookups seed the area entity store),
+   constrained to a country: the agent-passed country first (the
+   orchestrator usually knows which country the asked-about city is in — a
+   stale working location's country alone would wrongly fail a
+   cross-country question), then the working location's.
 3. **Clarify** — no country context at all (`ambiguous`) or a name that
    won't verify (`unresolved`): a `ResolvedEntity` with
    `needs_clarification=True` and a plain-language reason. Never a key for a
@@ -41,11 +43,11 @@ from typing import TYPE_CHECKING, Literal
 
 from pydantic import BaseModel, ConfigDict
 
-from kebi.core.knowledge.geo_resolve import EntityGeoResolver, slugs_match
-from kebi.core.knowledge.schemas import EntityType, build_geo_key
+from kebi.core.knowledge.schemas import EntityType, build_geo_key, slugs_match
 
 if TYPE_CHECKING:
     from kebi.core.agent.location import WorkingLocation
+    from kebi.core.areas import AreaService
 
 logger = logging.getLogger(__name__)
 
@@ -83,8 +85,8 @@ def _clarify(
 class ResearchEntityResolver:
     """Resolve the asked-about area to a verified entity key, or refuse."""
 
-    def __init__(self, geo: EntityGeoResolver, *, confidence_min: float = 0.5) -> None:
-        self._geo = geo
+    def __init__(self, areas: AreaService, *, confidence_min: float = 0.5) -> None:
+        self._areas = areas
         self._confidence_min = confidence_min
 
     async def resolve(
@@ -148,10 +150,10 @@ class ResearchEntityResolver:
             return self._country_entity(
                 country.lower(), country.upper(), confidence=_GEOCODED_CONFIDENCE
             )
-        geo = await self._geo.resolve_country(country)
-        if geo is not None and geo.country_code:
+        entity = await self._areas.resolve_country(country)
+        if entity is not None:
             return self._country_entity(
-                geo.country_code, country, confidence=_GEOCODED_CONFIDENCE
+                entity.country_code, country, confidence=_GEOCODED_CONFIDENCE
             )
         return _clarify(
             f"could not verify a country called '{country}'", empty="unresolved"
@@ -193,11 +195,11 @@ class ResearchEntityResolver:
                 f"'{city_name}' — which country is that in?", empty="ambiguous"
             )
         for code in codes:
-            geo = await self._geo.resolve_city(city_name, code)
-            if geo is not None and geo.country_code and geo.city:
+            entity = await self._areas.resolve_city(city_name, code)
+            if entity is not None:
                 return self._geo_entity(
-                    geo.country_code,
-                    geo.city,
+                    entity.country_code,
+                    entity.name,
                     neighborhood,
                     confidence=_GEOCODED_CONFIDENCE,
                 )
@@ -215,8 +217,8 @@ class ResearchEntityResolver:
         checkpointed before that field existed."""
         if wl.country_code:
             return wl.country_code
-        geo = await self._geo.resolve_country(wl.country)
-        return geo.country_code if geo is not None else None
+        entity = await self._areas.resolve_country(wl.country)
+        return entity.country_code if entity is not None else None
 
     async def _candidate_country_codes(
         self, country: str | None, wl: WorkingLocation | None
@@ -228,9 +230,9 @@ class ResearchEntityResolver:
             if _ALPHA2_RE.match(country):
                 codes.append(country.lower())
             else:
-                geo = await self._geo.resolve_country(country)
-                if geo is not None and geo.country_code:
-                    codes.append(geo.country_code)
+                entity = await self._areas.resolve_country(country)
+                if entity is not None:
+                    codes.append(entity.country_code)
         if wl is not None:
             code = await self._working_country_code(wl)
             if code and code not in codes:

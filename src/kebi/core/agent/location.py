@@ -74,23 +74,27 @@ SCOPE_TIER_ORDER: tuple[ScopeTier, ...] = (
 )
 _REACH_SHIFT: dict[str, int] = {"compact": -1, "normal": 0, "far": 1}
 
-# Geocoder place types that read as dense / sparse. Anything else (notably
-# "town") is treated as medium. Kept generous on the dense side — a city's
-# districts and suburbs are still city-dense.
+# Geocoder place types that read as dense / sparse. Anything else is treated
+# as medium. The sets carry both vocabularies: Google's (the current
+# provider — note its `locality` means any settlement, so it deliberately
+# maps to medium, not sparse) and Nominatim's legacy settlement types, kept
+# so working locations checkpointed before the provider switch still
+# classify. Google exposes no settlement-size signal, so most current
+# lookups land on the medium default — an accepted coarsening.
 _DENSE_PLACE_TYPES = frozenset(
     {"city", "borough", "city_district", "district", "suburb", "quarter"}
 )
 _SPARSE_PLACE_TYPES = frozenset(
-    {"village", "hamlet", "isolated_dwelling", "farm", "locality", "allotments"}
+    {"village", "hamlet", "isolated_dwelling", "farm", "allotments"}
 )
 
 
 def density_class(place_type: str | None) -> DensityClass:
     """Map a geocoder place type to a density class.
 
-    `place_type` is Nominatim's settlement type for the working location
-    ("city", "town", "village", …) — read from the geocode response, not a
-    static table. An unknown or missing type degrades to `medium`.
+    `place_type` is the geocoder's classification of the working location,
+    read from the geocode response, not a static table. An unknown or
+    missing type degrades to `medium`.
     """
     if not place_type:
         return "medium"

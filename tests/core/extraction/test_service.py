@@ -19,7 +19,7 @@ from kebi.core.extraction.types import (
     ValidatedCandidate,
 )
 from kebi.core.knowledge.harvest_bucket import HarvestBucketWriter
-from kebi.core.knowledge.schemas import HarvestContent
+from kebi.core.knowledge.schemas import HarvestContent, NotedAreaRef
 from kebi.core.places import (
     DuplicateUserPlaceError,
     PlaceCategory,
@@ -69,7 +69,7 @@ def _build_service(
     cache_hit_items: list[ExtractPlaceItem] | None = None,
     save_places_first_call_exc: Exception | None = None,
     content: HarvestContent | None = None,
-    noted_non_venues: list[str] | None = None,
+    noted_non_venues: list[str] | None = None,  # names; wrapped into refs
 ) -> tuple[ExtractionService, MagicMock]:
     """Build ExtractionService with mocked collaborators.
 
@@ -92,7 +92,9 @@ def _build_service(
         return_value=PipelineResult(
             candidates=pipeline_result if pipeline_result is not None else [],
             content=content if content is not None else HarvestContent(),
-            noted_non_venues=noted_non_venues or [],
+            noted_non_venues=[
+                NotedAreaRef(name=n) for n in (noted_non_venues or [])
+            ],
         ),
     )
     if pipeline_exc:
@@ -713,3 +715,40 @@ async def test_noted_only_response_not_written_to_result_cache() -> None:
     )
     await service.run("https://www.tiktok.com/@u/video/1", user_id="u1")
     container.result_cache.set.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_noted_only_share_still_dispatches_harvest() -> None:
+    """Step 2 harvest-gap fix: a share whose every place is a noted
+    non-venue still snapshots and fires ContentHarvestRequested — the
+    noted refs ride the snapshot as the harvest's area anchors."""
+    from kebi.core.events.events import ContentHarvestRequested
+
+    service, c = _build_service(
+        pipeline_result=[],
+        noted_non_venues=["Ha Giang Loop"],
+        content=HarvestContent(caption="the loop", source_ref="u"),
+    )
+    resp = await service.run("https://www.tiktok.com/@u/video/1", user_id="u1")
+    assert resp.status == "completed"
+    c.object_storage.put_json.assert_awaited_once()
+    payload = c.object_storage.put_json.await_args.args[1]
+    assert payload["places"] == []
+    assert [n["name"] for n in payload["noted_areas"]] == ["Ha Giang Loop"]
+    events = [call.args[0] for call in c.event_dispatcher.dispatch.await_args_list]
+    assert any(isinstance(e, ContentHarvestRequested) for e in events)
+
+
+@pytest.mark.asyncio
+async def test_noted_only_share_without_content_skips_harvest() -> None:
+    """Acknowledgment still returns, but empty content mines nothing."""
+    from kebi.core.events.events import ContentHarvestRequested
+
+    service, c = _build_service(
+        pipeline_result=[], noted_non_venues=["Ha Giang Loop"]
+    )
+    resp = await service.run("https://www.tiktok.com/@u/video/1", user_id="u1")
+    assert resp.status == "completed"
+    c.object_storage.put_json.assert_not_awaited()
+    events = [call.args[0] for call in c.event_dispatcher.dispatch.await_args_list]
+    assert not any(isinstance(e, ContentHarvestRequested) for e in events)

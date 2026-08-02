@@ -134,10 +134,16 @@ def test_graph_includes_finalize_node(
     mock_llm: MagicMock,
     mock_resolver_llm: MagicMock,
     mock_geocoding_client: MagicMock,
+    mock_area_service: MagicMock,
 ) -> None:
     checkpointer = InMemorySaver()
     app = build_graph(
-        mock_llm, [], checkpointer, mock_resolver_llm, mock_geocoding_client
+        mock_llm,
+        [],
+        checkpointer,
+        mock_resolver_llm,
+        mock_geocoding_client,
+        mock_area_service,
     )
     graph_repr = app.get_graph()
     assert NODE_FINALIZE in graph_repr.nodes
@@ -148,6 +154,7 @@ async def test_finalize_runs_and_strips_in_compiled_graph(
     mock_llm: MagicMock,
     mock_resolver_llm: MagicMock,
     mock_geocoding_client: MagicMock,
+    mock_area_service: MagicMock,
 ) -> None:
     """End-to-end: invoke the compiled graph, confirm final state has no
     ToolMessage and no tool-only AIMessage."""
@@ -155,7 +162,12 @@ async def test_finalize_runs_and_strips_in_compiled_graph(
     # so the graph routes agent → finalize → END without touching tools.
     checkpointer = InMemorySaver()
     app = build_graph(
-        mock_llm, [], checkpointer, mock_resolver_llm, mock_geocoding_client
+        mock_llm,
+        [],
+        checkpointer,
+        mock_resolver_llm,
+        mock_geocoding_client,
+        mock_area_service,
     )
     config = {"configurable": {"thread_id": "thread-1"}}
     final = await app.ainvoke(

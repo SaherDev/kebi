@@ -70,17 +70,15 @@ def mock_resolver_llm() -> MagicMock:
 
 @pytest.fixture
 def mock_geocoding_client() -> MagicMock:
-    """Fake NominatimGeocodingClient — forward/reverse/search are AsyncMocks
-    returning `GeocodeResult`s (ADR-084)."""
-    from kebi.core.places.nominatim_geocoding_client import GeocodeResult
+    """Fake geocoding boundary — search_area/reverse/geocode_place_id are
+    AsyncMocks returning `GeocodeResult`s (ADR-084)."""
+    from kebi.providers.geocoding import GeocodeResult
 
     client = MagicMock()
-    client.forward = AsyncMock(
+    client.search_area = AsyncMock(
         return_value=GeocodeResult(lat=13.75, lng=100.5, place_type="city")
     )
-    client.search = AsyncMock(
-        return_value=GeocodeResult(lat=13.75, lng=100.5, place_type="city")
-    )
+    client.geocode_place_id = AsyncMock(return_value=None)
     client.reverse = AsyncMock(
         return_value=GeocodeResult(
             lat=13.75,
@@ -91,3 +89,36 @@ def mock_geocoding_client() -> MagicMock:
         )
     )
     return client
+
+
+@pytest.fixture
+def mock_area_service() -> MagicMock:
+    """Fake AreaService — any named country/city resolves to an entity."""
+    from kebi.core.areas.models import AreaEntity
+
+    svc = MagicMock()
+
+    async def _country(name: str) -> AreaEntity:
+        return AreaEntity(
+            entity_key="th",
+            entity_type="country",
+            name=name,
+            country_code="th",
+            lat=13.75,
+            lng=100.5,
+        )
+
+    async def _city(name: str, cc: str) -> AreaEntity:
+        return AreaEntity(
+            entity_key=f"{cc}/{name.lower().replace(' ', '-')}",
+            entity_type="city",
+            name=name,
+            country_code=cc,
+            lat=13.75,
+            lng=100.5,
+            place_type="locality",
+        )
+
+    svc.resolve_country = AsyncMock(side_effect=_country)
+    svc.resolve_city = AsyncMock(side_effect=_city)
+    return svc
