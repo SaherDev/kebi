@@ -1,6 +1,6 @@
 # Location Kinds — Roadmap
 
-**Status:** direction decided 2026-07-21 · Step 1 done 2026-07-22 (ADR-133) · Step 2 done 2026-08-02 (ADR-134) · Step 3 done 2026-08-02 (ADR-135) · Step 4 is next up
+**Status:** direction decided 2026-07-21 · Step 1 done 2026-07-22 (ADR-133) · Step 2 done 2026-08-02 (ADR-134) · Step 3 done 2026-08-02 (ADR-135) · Steps 4–6 re-scoped 2026-08-02 · Step 4 is next up
 **Scope:** this is a roadmap, not an implementation plan. Each step below is a
 self-contained brief — plan and build each one as its own feature, in order.
 One plan doc + ADR per step when it starts.
@@ -36,6 +36,11 @@ One plan doc + ADR per step when it starts.
    type) is flattened.
 8. **The library already contains bad rows** — non-venues stored as point
    venues.
+9. **An answer is final, not workable.** Every answer is delivered as a
+   finished output. A user who says "take that one out", "change this stop",
+   "find me an alternative" has no path — the only move is to re-ask from
+   scratch, losing everything that was right about the answer. This bites
+   hardest on the multi-stop journeys Step 4 makes possible.
 
 ## Goal
 
@@ -55,11 +60,13 @@ scenic route — each stored, ranked, and rendered as what it actually is.
   **No trip objects, ever** — connected-places answers are ordered lists,
   never persisted itineraries.
 - **One answer contract**: the agent decides per query what kinds the answer
-  contains, and a recommended area becomes the conversation's anchor —
-  follow-ups zoom in (area → venues inside it), out (venue → its area), and
-  across (sibling alternatives).
+  contains, and each item carries its kind for rendering.
+- **An answer is a working set, not a verdict.** Whatever kebi puts forward —
+  one venue, an area, a multi-stop journey — the user can revise in
+  conversation: drop it, swap it, ask for an alternative. The revision lives
+  for the conversation and is never persisted.
 
-## Decisions locked (2026-07-21)
+## Decisions locked (2026-07-21, revised 2026-08-02)
 
 - Direction is **accept-and-type**, not reject: areas and routes become
   first-class kinds. Step 1's rejections are a temporary bleed-stopper whose
@@ -71,19 +78,18 @@ scenic route — each stored, ranked, and rendered as what it actually is.
 - **All granularities** are in scope for area recommendations: neighborhood,
   city, region/country, and routes/experiences.
 - **Surfacing**: one answer contract; the agent decides per query which kinds
-  the curated list contains (required by the follow-up navigation goal — a
-  distinct area-answer type would fight it).
+  the curated list contains — a distinct area-answer type would fragment it.
 - **Existing mislabeled rows are deleted**, not migrated. Users re-save under
   the correct model.
-- Order of work: Step 1 → 2 → 3 → 4 → 5. Steps 3–5 build on 2 but are
-  independent of each other.
-- **The visible surface is demand-gated (2026-07-21).** Steps 1, 2, 4 and the
-  background half of Step 3 (signals, geo priors) proceed unconditionally —
-  they're needed under any direction and invisible to the product repo. The
-  two user-visible pieces — library kind rendering (Step 3) and areas as
-  answers (Step 5) — ship only when research/consult logs show real
-  area-granularity demand. Background-only is a staging posture, not a
-  terminal state.
+- Order of work: Step 1 → 2 → 3 → 4 → 5 → 6, in sequence. Step 5 depends on 4
+  (revising a one-item answer is thin; the journeys worth revising come from
+  corridor geometry). Step 6 depends on 5 for the item shape.
+- **Areas as answers are no longer demand-gated (revised 2026-08-02).** The
+  original gate existed because rendering an area needs a card the app didn't
+  have; the app now renders both venues and areas, so the condition is gone
+  and Step 6 is scheduled work like any other step. **Library kind rendering
+  stays gated** — nothing in this roadmap depends on it, and no demand for it
+  has appeared.
 - **Never silent drops.** From Step 1 onward, a detected non-venue is
   acknowledged in chat as an interest ("noted for your trip"), never silently
   discarded or saved as a fake venue. A user action always has a visible
@@ -93,6 +99,18 @@ scenic route — each stored, ranked, and rendered as what it actually is.
   object — it resolves to its verified containing area plus an
   experience-type interest signal. The only routes the user ever sees are
   journeys the agent composes itself from validated data (Step 4).
+- **A journey has no home but the conversation (2026-08-02).** There is no
+  route table and there will not be one: a journey is a tool result plus the
+  agent's ordering, held in session state for one conversation and then gone.
+  This is what "no trip objects, ever" means in practice. The user can still
+  save individual venues out of a journey — that path already exists and is
+  venue-shaped, so it needs no change.
+- **Kind navigation is deferred (2026-08-02).** The conversation anchor and
+  zoom in / out / across were cut from the area-answer work. Areas can *win*
+  an answer without being *navigable*. Deferring them also resolves the Step 3
+  geofence question: zoom-in was hard extent-scoping's only consumer, so
+  corridor geometry (Step 4) is now the roadmap's sole geometry consumer and
+  region interest stays a soft prior.
 
 ---
 
@@ -220,14 +238,61 @@ restaurant." *(met)*
 
 **Constraints:** straight-line waypoint sampling is v1 — road-shape routing is
 explicitly out of scope (OSM routing exists if it ever matters). No new
-geo infrastructure; reuse the existing radius-search path.
+geo infrastructure; reuse the existing radius-search path. The journey is
+composed at answer time and never persisted — corridor search returns
+validated venues, the agent supplies the ordering and the narration.
+
+**Note:** with kind navigation deferred, this is the roadmap's only consumer
+of real geometry — the hard extent-scoping deferred out of Step 3 lands here
+or nowhere. A corridor endpoint that resolves to a venue rather than an area
+has no `area_entities` row; decide at plan time whether such endpoints
+degrade to their containing area or are handled directly.
 
 **Done when:** "trip from Da Nang to Hue" returns an ordered set of real,
 validated stops along the route instead of one famous landmark.
 
 ---
 
-## Step 5 — Areas as recommendations + kind navigation
+## Step 5 — Answers you can work on
+
+**Problem it closes:** problem 9 — answers are final, not workable.
+
+**Decided direction:**
+- Whatever kebi puts forward becomes a **working set the user revises in
+  conversation**. Four operations: **remove** ("take that one out"),
+  **alternative** ("find me something else for this"), **add** ("put a coffee
+  stop between 2 and 3"), **reorder** ("museum before lunch").
+- **Every answer is revisable, ops adapt to shape.** Remove and alternative
+  apply to any answer — a single venue, an area, a journey. Add and reorder
+  only mean anything when the answer is a multi-item list, and only surface
+  there.
+- **The working set lives in session state (Redis), never a row.** With no
+  route table by design, there is nowhere else for it to be — and this repo
+  owns Redis exclusively. A new consult in the same thread replaces the
+  working set; the conversation ending discards it.
+- **Answer items get a stable shape** so "this one" can be resolved: each
+  item carries an `id` the agent maps natural language onto ("the ramen
+  place", "the second one"), so the product repo only echoes an id back.
+  Ship the *full* item shape here — `id`, `kind`, `extent` — with `kind`
+  always `venue` and `extent` always null for now, so Step 6 needs no second
+  contract change and the app integrates once.
+- Alternatives exclude everything already shown for that slot: asking twice
+  never returns the same place.
+
+**Constraints:** reorder is accepted silently in v1 — no "that adds 40km of
+backtracking" commentary, even though reordering breaks the route-progress
+sort Step 4 produces. Revision is free up to a per-answer cap (config value,
+start at 5) and counts against consult quota beyond it (ADR-112) — every
+revision is a real search, and uncapped free refinement turns one consult into
+an unmetered search feed.
+
+**Done when:** a user can take a stop out of a Da Nang→Hue journey, swap
+another for an alternative, and add one in between — without re-asking, and
+without anything being written to the database.
+
+---
+
+## Step 6 — Areas as recommendations
 
 **Problem it closes:** problem 4 — legitimate area answers are impossible.
 
@@ -237,26 +302,22 @@ validated stops along the route instead of one famous landmark.
   region/country ("where in November?"). Route-shaped asks ("scenic drive
   near Da Nang") get an agent-composed journey (the Step 4 shape) — never a
   stored route object. Kebi answers like a traveler who's local everywhere.
-- One answer contract: the agent decides per query which kinds the curated
-  list contains; each item carries its kind (plus extent for non-venues) for
-  rendering.
-- Rendering principles: an area renders as a shaded extent on the map — never
-  a pin — with a one-line why and a zoom-in affordance ("show places here");
-  a composed journey renders as ordered venue stops along the way (there is
-  no route card). Every answer bottoms out in venues; area cards are
-  doorways, not dead ends. No kind jargon or entity internals in the UI.
-- The recommended entity becomes the **conversation anchor** (generalizing
-  ADR-131's conversation-scoped research area into one shared notion across
-  tools). Follow-up navigation:
-  - **zoom in** — "good cafés there?" → venue consult scoped to the anchor's
-    extent (real geometry, not string matching);
-  - **zoom out** — a venue's containing area, via the entity hierarchy;
-  - **zoom across** — sibling areas under the same parent, ranked by taste.
+- The agent decides per query which kinds the curated list contains. **No
+  contract change** — Step 5 already shipped `kind` and `extent`; this step
+  starts populating them and lets areas win.
 - Area ranking draws on the knowledge layer's claims + the taste model — the
   rich data accreted since Step 2.
+- Rendering principles: an area renders as a shaded extent on the map — never
+  a pin — with a one-line why; a composed journey renders as ordered venue
+  stops along the way (there is no route card). No kind jargon or entity
+  internals in the UI.
+
+**Constraints:** area answers are recommendations, not doorways — the
+zoom-in affordance and everything behind it is deferred (see Out of scope).
+An area answer stands on its own or it isn't ready to ship.
 
 **Done when:** "which neighborhood should I stay in?" returns a ranked area
-answer, and "what's good to eat there?" as the next turn searches inside it.
+answer rather than a hotel or a paragraph of prose.
 
 ---
 
@@ -265,6 +326,18 @@ answer, and "what's good to eat there?" as the next turn searches inside it.
 - Persisted trips/itineraries — decided no; Kebi is a decision engine.
 - A second rich-area database — the knowledge layer owns rich data.
 - Road-shape corridor routing — straight-line sampling is v1.
-- Mixed-kind consult answers before Step 5.
+- Mixed-kind consult answers before Step 6.
 - Trusting or persisting externally named routes — route names collapse to
   containing-area interest; journeys are agent-composed only.
+- **Kind navigation — deferred, parked not killed (2026-08-02).** The
+  conversation anchor (generalizing ADR-131's conversation-scoped research
+  area across tools) and the three follow-up moves: **zoom in** (area →
+  venues inside its extent), **zoom out** (venue → containing area, via the
+  entity hierarchy), **zoom across** (sibling areas under the same parent,
+  ranked by taste). Deferred because it carries most of the complexity of
+  area answers — real extent-scoped retrieval, hierarchy traversal, sibling
+  ranking — while areas-as-answers stands alone without it. Revisit after
+  Step 6 ships and the logs show whether people try to navigate from an area
+  answer.
+- Library kind rendering — still demand-gated; nothing in this roadmap
+  depends on it.
