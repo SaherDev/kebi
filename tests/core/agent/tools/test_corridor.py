@@ -98,13 +98,38 @@ class TestIsCorridor:
 
 class TestHalfWidth:
     def test_uses_the_turn_radius_when_it_is_tight(self) -> None:
+        """The utility clamp narrows the radius for an errand — "an ATM on the
+        way" stays close to the road even on a long drive."""
         working = _working(stops=[("Hue", _HUE)], radius_m=2_000.0)
         assert half_width_m(working, _CFG) == 2_000.0
 
-    def test_config_ceiling_caps_a_sprawling_radius(self) -> None:
-        """A metro-tier driving turn resolves past 100 km — unchecked, that
-        would make "along the way" mean "anywhere in the country"."""
+    def test_scales_with_route_length(self) -> None:
+        """The route is a straight chord and the road is not, so tolerance
+        grows with distance. An 84 km drive gets more room than a 10 km one."""
+        short = _working(stops=[("Lang Co", _LANG_CO)], radius_m=117_000.0)
+        long = _working(stops=[("Hue", _HUE)], radius_m=117_000.0)
+        assert half_width_m(short, _CFG) < half_width_m(long, _CFG)
+
+    def test_covers_the_real_da_nang_hue_road(self) -> None:
+        """The regression this replaced a flat cap for: Lang Co is the stop
+        everyone makes on this drive, and the coast road puts it ~16 km off
+        the straight line. A flat 15 km tolerance dropped it."""
         working = _working(stops=[("Hue", _HUE)], radius_m=117_000.0)
+        assert half_width_m(working, _CFG) > 16_000.0
+
+    def test_floor_keeps_a_short_corridor_usable(self) -> None:
+        near = (16.06, 108.21)  # a couple of km from the origin
+        working = _working(stops=[("Nearby", near)], radius_m=117_000.0)
+        assert half_width_m(working, _CFG) == _CFG.corridor.min_half_width_m
+
+    def test_ceiling_keeps_a_long_route_a_route(self) -> None:
+        """Unchecked, a country-length route would make "along the way" mean
+        "anywhere in the country"."""
+        working = _working(
+            stops=[("Hue", _HUE), ("Hoi An", _HOI_AN)],
+            origin=_HANOI,
+            radius_m=117_000.0,
+        )
         assert half_width_m(working, _CFG) == _CFG.corridor.max_half_width_m
 
 

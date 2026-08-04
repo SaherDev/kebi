@@ -71,13 +71,22 @@ def route_points(working: WorkingLocation) -> list[Point]:
 def half_width_m(working: WorkingLocation, movement_cfg: MovementConfig) -> float:
     """How far off the route a place still counts as "on the way", in metres.
 
-    The turn's own search radius is the starting point — it already encodes
-    mode, density and reach, and a utility clamp (`_scope.py`) has already
-    tightened it for errands. The config ceiling stops a metro-tier driving
-    radius (45 km × 2.6) from swallowing everything either side of the route
-    and making "along the way" meaningless.
+    Scales with route length, because the route is a straight chord and the
+    road is not: the longer the route, the further the real road bows away
+    from the line. On the 84 km Da Nang → Hue drive the coastal road runs
+    ~16 km off the chord, which is exactly where Lang Co — the stop everyone
+    makes — sits. A flat tolerance drops it. The floor keeps a short urban
+    corridor from collapsing to a hairline, the ceiling keeps a long one from
+    becoming a country-wide search.
+
+    The turn's own search radius still wins when it is *tighter*: the utility
+    clamp (`_scope.py`) narrows the radius for an errand, and "an ATM on the
+    way" should stay close to the road even on a long drive.
     """
-    return min(working.search_radius_m, movement_cfg.corridor.max_half_width_m)
+    cfg = movement_cfg.corridor
+    scaled = path_length_m(route_points(working)) * cfg.half_width_ratio
+    bounded = min(max(scaled, cfg.min_half_width_m), cfg.max_half_width_m)
+    return min(working.search_radius_m, bounded)
 
 
 def oversized_legs(path: list[Point], cfg: CorridorConfig) -> frozenset[int]:

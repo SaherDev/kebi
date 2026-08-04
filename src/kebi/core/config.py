@@ -879,12 +879,22 @@ class CorridorConfig(BaseModel):
     is the length gate: past it, nothing is meaningfully "on the way" and
     venue stops stop being an honest answer (areas become the right answer,
     which consult cannot return until the roadmap's Step 6).
+
+    The half-width — how far off the route a place still counts — scales with
+    route length rather than being flat. The route is a straight chord and a
+    road is not, so the approximation error grows with distance: on the 84 km
+    Da Nang → Hue coastal drive the real road bows ~16 km off the chord, and
+    Lang Co (the canonical stop) sits out there. A flat tolerance either drops
+    the obvious stops on a long route or drags in half a city on a short one.
+    `half_width_ratio` sets the slope; the floor and ceiling bound it.
     """
 
     waypoint_spacing_m: float = 25_000.0
     min_waypoints: int = 2
     max_waypoints: int = 5
-    max_half_width_m: float = 15_000.0
+    half_width_ratio: float = 0.25
+    min_half_width_m: float = 5_000.0
+    max_half_width_m: float = 25_000.0
     max_stops: int = 5
     max_venue_route_m: float = 300_000.0
 

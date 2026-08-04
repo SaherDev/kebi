@@ -500,7 +500,12 @@ movement:
     waypoint_spacing_m: 25000    # target spacing between sampled points
     min_waypoints: 2             # both endpoints, always
     max_waypoints: 5             # cap on billed fan-out per route turn
-    max_half_width_m: 15000      # ceiling on "how far off the route counts"
+    # "How far off the route still counts" scales with route length — the
+    # route is a straight chord, the road is not, and the gap grows with
+    # distance (the Da Nang→Hue coast road bows ~16 km off the line).
+    half_width_ratio: 0.25       # of total route length
+    min_half_width_m: 5000       # floor, for short urban corridors
+    max_half_width_m: 25000      # ceiling, so a long route stays a route
     max_stops: 5                 # ordered destinations resolved per turn
     max_venue_route_m: 300000    # per leg: above this, venue stops aren't real
 
