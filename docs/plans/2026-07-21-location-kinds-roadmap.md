@@ -1,6 +1,6 @@
 # Location Kinds — Roadmap
 
-**Status:** direction decided 2026-07-21 · Step 1 done 2026-07-22 (ADR-133) · Step 2 done 2026-08-02 (ADR-134) · Step 3 done 2026-08-02 (ADR-135) · Steps 4–6 re-scoped 2026-08-02 · Step 4 done 2026-08-04 (ADR-136) · Step 5 is next up; Step 7 runnable in parallel
+**Status:** direction decided 2026-07-21 · Step 1 done 2026-07-22 (ADR-133) · Step 2 done 2026-08-02 (ADR-134) · Step 3 done 2026-08-02 (ADR-135) · Steps 4–6 re-scoped 2026-08-02 · Step 4 done 2026-08-04 (ADR-136) · Step 5 is next up; Steps 7 and 8 runnable in parallel
 **Scope:** this is a roadmap, not an implementation plan. Each step below is a
 self-contained brief — plan and build each one as its own feature, in order.
 One plan doc + ADR per step when it starts.
@@ -106,6 +106,31 @@ One plan doc + ADR per step when it starts.
    an answer and be saved as one. It does not make extraction look for venues
    at a refused name. The two compose (an area gives the extent to search
    inside) but neither depends on the other, and this one is not blocked.
+
+13. **An answer is places without the conditions around them** *(added
+   2026-08-04, comparing a Hanoi→Saigon answer against a general assistant)*.
+   Kebi returned nine good stops with durations and transport costs. The
+   assistant returned twelve plus the things that actually shape the trip:
+   the central coast's **September–December rain**, the choice between
+   Highway 1A and the emptier inland Ho Chi Minh Highway, that people rent a
+   motorbike one-way Hanoi→Saigon, and what to **skip**. Kebi said none of it,
+   and never tells anyone what isn't worth doing.
+
+   The same shape showed up earlier on a Hanoi itinerary: the assistant named
+   egg coffee and a water puppet show — things you *do* — while kebi listed
+   only places you go.
+
+   **Cause:** we ask the agent for places, so we get places. Conditions and
+   experiences aren't attached to a pin, and nothing in the prompt or the
+   pipeline reaches for them, even though ADR-137 already permits the agent to
+   say them. Coverage suffers for the same reason — the prompt asks for stops
+   along a route, never for the complete set, so the model stops at a good
+   list. Compounding it, `route_too_long` suppresses **every** card on a
+   long route, including venues the agent named correctly and which validate
+   today (Cu Chi Tunnels, War Remnants Museum, Trang An) — a gate meant to
+   stop *inventing* stops is also blocking verification of real ones.
+
+   *Owned by Step 8.*
 
 ## Goal
 
@@ -521,6 +546,51 @@ repo contract.
 **Done when:** the areas users ask about most carry enough claims to
 distinguish neighbors from each other, and a spot-check of ranked candidates
 reads as informed rather than generic.
+
+---
+
+## Step 8 — A trip answer is places *and* conditions  *(no dependencies)*
+
+**Problem it closes:** problem 13 — kebi asks the agent for places, so it gets
+places. A trip answer needs the layer around them.
+
+**Decided direction:**
+- **Conditions become part of a trip answer**: when to go and when not to
+  (the central coast's September–December rain is the single most
+  decision-changing fact in a Hanoi→Saigon answer, and kebi omitted it),
+  which road (Highway 1A versus the emptier inland Ho Chi Minh Highway), how
+  people actually do it (one-way motorbike rentals Hanoi→Saigon), and what to
+  **skip** — kebi never tells anyone what isn't worth it.
+- **Experiences count as answer items too** — egg coffee in Hanoi, a water
+  puppet show, a beer on the track at Train Street. Things you *do*, which
+  the venue-shaped pipeline never reaches for even though the prose layer is
+  free to name them (ADR-137).
+- **Ask for completeness on a trip.** A 1,700 km route answer returned 9 stops
+  where a general assistant gave 12, missing Da Lat, Vung Tau and My Son. The
+  prompt asks for stops along a route and never asks for the full set, so the
+  model stops at a good list rather than a complete one.
+- **A country-scale answer still pins what it can.** `route_too_long`
+  currently suppresses every card, including venues the agent named correctly
+  and that validate today — Cu Chi Tunnels, War Remnants Museum, Trang An.
+  The gate exists to stop *inventing* stops across a country, not to stop
+  verifying real ones. Sampling stays off; validation of agent-named places
+  turns back on.
+
+**Constraints:** conditions are knowledge, not a data feed — no weather API,
+no live prices, no booking (ADR-139). Seasonality and road character come from
+the agent's own knowledge under ADR-137's line: prose may carry it, a card
+must still be validated, and operating facts stay tool-only. The durable home
+for this is the knowledge layer — a claim that the central coast floods in
+October belongs against the area, which is Step 7's substrate.
+
+**Also fix here (small, unrelated to the above):** the agent leaked tool
+mechanics into a user-visible answer — *"the tool confirmed it's too long"* —
+despite the movement context instructing it to phrase this as an observation
+about the trip. The instruction exists and did not hold.
+
+**Done when:** a long-route answer says when to go, which way, and what to
+skip alongside where to stop — and the stops that can be verified still come
+back as cards.
 
 ---
 
