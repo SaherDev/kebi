@@ -470,6 +470,23 @@ Note this needs geometry the provider will not give — Google returns a 0.4 km
 bbox for a ~20 km road — so the extent has to come from elsewhere (OSM holds
 the actual way) or the render degrades to a point. Decide that here.
 
+**Areas are search anchors, not just cards** *(added 2026-08-04)*. This step
+is governed by **ADR-140** — *the agent suggests, and kebi searches around what
+it suggests*. That already holds for venues; here it holds for areas. The agent
+names the areas worth going to, and kebi searches **anchored on each one** —
+the user's saves, validated venues, discovery — rather than on a disc around
+the turn's origin or on coordinates sampled off a chord between them.
+
+So an area is an **input** to retrieval, not only an output of it, and the step
+is designed around that first; the card shape follows. Reading it the other way
+— resolve an area, rank it, render it — is what produces a trip answer that
+names Hue, Hoi An and the pass in prose while pinning nothing at any of them.
+
+Two consequences. Extent stops being cosmetic: searching inside an area needs a
+real bounding box, so the viewport-versus-bounds problem below is load-bearing.
+And this is **not** the deferred zoom-in affordance — zoom-in is a user action
+on an answer already given; this is how the answer gets built.
+
 **Constraints:** area answers are recommendations, not doorways — the
 zoom-in affordance and everything behind it is deferred (see Out of scope).
 An area answer stands on its own or it isn't ready to ship.
