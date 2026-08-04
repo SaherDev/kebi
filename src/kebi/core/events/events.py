@@ -5,6 +5,8 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
+from kebi.core.knowledge.schemas import NotedAreaRef
+
 
 class DomainEvent(BaseModel):
     """Base class for all domain events"""
@@ -38,6 +40,26 @@ class ContentHarvestRequested(DomainEvent):
     event_type: str = "content_harvest_requested"
     harvest_key: str
     source_ref: str | None = None
+
+
+class AreaInterestNoted(DomainEvent):
+    """Event: extraction noted non-venue geography the user is interested in.
+
+    A route or region the user named is never saved as a place — it is
+    acknowledged and resolved to its containing area, and that resolution
+    trains their taste (ADR-135's region-interest signal).
+
+    Deliberately **separate from `ContentHarvestRequested`**: region interest
+    is a fact of what the user named, not of what a harvest managed to mine,
+    so it must survive content that has nothing to harvest. Typing a route
+    name as plain text produces exactly that — no caption, no transcript —
+    and folding this into the harvest event made the signal disappear on that
+    path while working on shares. Experience interest is the other half and
+    stays with the harvest, because it rides the tags the harvest surfaces.
+    """
+
+    event_type: str = "area_interest_noted"
+    noted_areas: list[NotedAreaRef] = Field(default_factory=list)
 
 
 class RecommendationAccepted(DomainEvent):

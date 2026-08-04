@@ -106,6 +106,16 @@ places them, and pins them. Retrieval serves the agent's judgement rather than
 replacing it — which is why an answer can be as good as a well-travelled
 local's *and* carry real coordinates, saves, and taste behind it.
 
+**This is the edge over a general assistant.** ChatGPT or Claude can lay out
+the Da Nang→Hue road as well as kebi can — that stretch of the goal is table
+stakes, not a moat. What they cannot do is what happens *around* the route:
+pull the real places along it, verified and pinned with coordinates, hours and
+a save action; layer the user's own saved places and taste over them; and carry
+the insider knowledge kebi has accreted — claims harvested from shares,
+research and curation, tied to the area rather than recalled from a training
+set. A general assistant hands you prose you then have to go re-look-up. Kebi
+hands you the same judgement already grounded in places you can act on.
+
 - Two stored first-class kinds: **venue, area** — accept-and-type, never
   reject-or-mislabel. **Route is an answer shape, not an entity**: journeys
   are composed by the agent from kebi's own validated venues, knowledge, and
@@ -440,6 +450,15 @@ is numbered last but should start first — claims accrete over time, so
 starting early is the whole point. Numbered 7 rather than inserted earlier to
 keep existing step numbers stable.
 
+**Why it compounds:** every turn names entities, and every named entity is a
+chance to know it better — so usage itself builds the store, and the store is
+what the agent pulls from on the next question. That is the third leg of
+ADR-141's moat: a general assistant recalls a country from a training set,
+while kebi reads back what it has accumulated about *that* city, *that*
+neighborhood, *that* stop. It is also why this step is worth running long
+before Step 6 needs it — a knowledge base is not something you build in a
+sprint, it is something you have been collecting.
+
 **Decided direction:**
 - **Measure before building.** Count claims per area entity by hierarchy
   depth. Coverage is not symmetric: venue claims have accreted since ADR-120,
@@ -453,6 +472,26 @@ keep existing step numbers stable.
 - **Enrich through the existing curator**, targeting the areas users actually
   ask about (research and consult logs), not a speculative sweep of world
   geography.
+- **Every mention is a harvest trigger.** A turn that names Hanoi, then Hue,
+  then Hoi An has just told kebi exactly which three entities are worth
+  knowing better — and the same holds for a route's containing area, a
+  corridor's endpoints and waypoints, and the venues that come back as stops.
+  Rather than mining logs after the fact, resolution itself queues enrichment:
+  whenever an entity is resolved in a turn, it is marked for a knowledge pass
+  if its claims are thin or stale. Enrichment runs in the background and never
+  blocks the answer — this turn's user does not wait for it, the next one
+  benefits.
+- **Harvest up the hierarchy, not just at the mention.** Naming Hoi An is also
+  a signal about Quang Nam and about Vietnam: country- and region-level claims
+  (when to go, how people move between cities, what the food is about) are what
+  make a multi-city answer read as informed, and they are cheap because one
+  pass serves every entity beneath them. Walk `parent_key` upward from each
+  mentioned entity and fill thin ancestors too, with the depth-first priority
+  above deciding what gets the effort.
+- **Venues harvest the same way.** A validated stop is an entity with claims
+  like any area — the tips that make a place worth stopping at (go early, sit
+  upstairs, skip the set menu) accrete on the venue, so the mechanism is one
+  mechanism, not an area-only one.
 
 **Constraints:** no new storage and no second rich-area database — claims land
 in `knowledge_claims` against the existing geo-slug entity keys, exactly as

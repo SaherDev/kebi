@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock
 
-from kebi.core.events.events import ContentHarvestRequested
+from kebi.core.events.events import AreaInterestNoted, ContentHarvestRequested
 from kebi.core.events.handlers import EventHandlers
 from kebi.core.knowledge.schemas import (
     HarvestContent,
@@ -25,7 +25,7 @@ _EVENT = ContentHarvestRequested(
 )
 
 
-def _handlers(*, reader, harvester, ingestion) -> EventHandlers:
+def _handlers(*, reader=None, harvester=None, ingestion=None) -> EventHandlers:
     return EventHandlers(
         taste_service=AsyncMock(),
         memory_service=AsyncMock(),
@@ -114,12 +114,34 @@ def _area(entity_key: str, name: str) -> AreaEntity:
 
 
 async def test_emits_region_signal_per_resolved_area() -> None:
+    """Region interest is written by its own handler, so it does not depend on
+    the harvest having anything to mine."""
+    harvester = AsyncMock()
+    harvester.resolve_area_interests = AsyncMock(
+        return_value=[_area("vn/hoi-an", "Hoi An"), _area("vn/ha-giang", "Ha Giang")]
+    )
+    taste = AsyncMock()
+
+    handlers = _handlers(harvester=harvester)
+    handlers.taste_service = taste
+    await handlers.on_area_interest_noted(
+        AreaInterestNoted(user_id="u1", noted_areas=_NOTED_SNAPSHOT.noted_areas)
+    )
+
+    assert taste.handle_area_signal.await_count == 2
+    keys = {c.args[1] for c in taste.handle_area_signal.await_args_list}
+    assert keys == {"vn/hoi-an", "vn/ha-giang"}
+
+
+async def test_harvest_handler_does_not_also_write_region_signals() -> None:
+    """The region half moved out of the harvest handler. If it were emitted in
+    both places, every share would write its region signal twice."""
     reader = AsyncMock()
     reader.get = AsyncMock(return_value=_NOTED_SNAPSHOT)
     harvester = AsyncMock()
     harvester.harvest = AsyncMock(return_value=[])
     harvester.resolve_area_interests = AsyncMock(
-        return_value=[_area("vn/hoi-an", "Hoi An"), _area("vn/ha-giang", "Ha Giang")]
+        return_value=[_area("vn/hoi-an", "Hoi An")]
     )
     ingestion = AsyncMock()
     ingestion.ingest = AsyncMock(return_value=[])
@@ -129,11 +151,20 @@ async def test_emits_region_signal_per_resolved_area() -> None:
     handlers.taste_service = taste
     await handlers.on_content_harvest_requested(_EVENT)
 
-    # One region-interest signal per resolved area, user-scoped to the sharer,
-    # even though the harvest LLM produced no claims.
-    assert taste.handle_area_signal.await_count == 2
-    keys = {c.args[1] for c in taste.handle_area_signal.await_args_list}
-    assert keys == {"vn/hoi-an", "vn/ha-giang"}
+    taste.handle_area_signal.assert_not_awaited()
+
+
+async def test_area_signal_failure_is_swallowed() -> None:
+    """Best-effort like its siblings (ADR-043) — the place work already
+    succeeded, so a taste failure must not surface."""
+    harvester = AsyncMock()
+    harvester.resolve_area_interests = AsyncMock(side_effect=RuntimeError("boom"))
+
+    handlers = _handlers(harvester=harvester)
+    handlers.taste_service = AsyncMock()
+    await handlers.on_area_interest_noted(
+        AreaInterestNoted(user_id="u1", noted_areas=_NOTED_SNAPSHOT.noted_areas)
+    )
 
 
 async def test_experience_signal_from_experience_tagged_claims() -> None:

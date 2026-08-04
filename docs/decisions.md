@@ -17,6 +17,26 @@ Format:
 
 ---
 
+## ADR-141: The moat is what surrounds the answer, not the answer itself
+
+**Date:** 2026-08-04\
+**Status:** accepted — a standing positioning claim, not a feature\
+**Context:** ADR-140 sets the floor: kebi must be at least as good as the frontier model it embeds. That raises the question it does not answer — if the model can already narrate the route, what is kebi *for*? Getting this wrong in either direction is expensive. Believing the narration is the product leads to building a better travel writer, which is a race against the model vendors and unwinnable. Believing the narration is worthless leads back to the retrieval-first instinct ADR-140 was written against, where a list of pins replaces judgement. The distinction needs to be stated once, because every feature decision from here is really a question about which side of it the work falls on.\
+**Decision:** The prose a general assistant can produce is **table stakes, not the moat**. A frontier model asked for a road trip already names the stops, the timing and the local advice, and kebi will not out-write it — it embeds the same class of model to say those things. The moat is everything *around* that answer, and it is what no general assistant can reach: the named places come back **verified and placed** — real coordinates, a card, a save action — rather than prose the user must go re-look-up; the answer is **shaped by that user**, their saved places along the route and their taste over the candidates; and it carries **knowledge kebi accreted**, claims harvested from shares, research and curation and tied to a durable area identity, rather than recalled from a training set. Stated as a test for new work: *would this be materially better than pasting the question into a general assistant?* If the only difference is wording, it is not worth building; if the difference is verification, personalisation or accumulated local knowledge, it is.\
+**Consequences:** Feature bets get judged against where the defensibility actually is, and the recurring temptation to compete on narration quality has a written answer. It also sets what has to hold for the positioning to be true, which is where the roadmap's remaining work sits: identity and knowledge have to persist and deepen or the third leg is empty, and the answer has to be actionable — pinned, saved, revisable — or the first leg collapses back into prose. The cost is accepted: on a question with no personalisation and no local knowledge to bring, kebi's answer is roughly the model's answer with pins on it, and that is the honest floor rather than a defect.
+
+---
+
+## ADR-141: Region interest is a fact of what the user named, so it rides its own event
+
+**Date:** 2026-08-04\
+**Status:** accepted — restores ADR-135's stated intent\
+**Context:** ADR-135 decided that a share's noted areas train taste, and that region interest is "a fact of the share" surviving "even when the content harvest yields nothing", while experience specificity rides best-effort harvest output. The wiring did not match: both signals were emitted inside the content-harvest handler, which only runs once a snapshot of mineable content exists. Typing a route name as plain text produces no caption and no transcript, so the harvest short-circuits and the handler never runs — meaning naming a route by typing it trained nothing at all, while naming the same route by sharing a link trained correctly. The user still saw the acknowledgement ("noted as a travel interest"), which made the gap invisible: kebi said it had noted the interest and then recorded nothing.\
+**Decision:** The two signals separate along the line ADR-135 already drew. **Region interest gets its own event**, dispatched by extraction whenever non-venue names were noted, regardless of whether there is anything to harvest — it depends only on what the user named. Experience interest stays with the harvest, because the experience vocabulary comes from the tags a harvest surfaces and genuinely has nothing to say without content. The area half lives in exactly one handler, not both, so a share emits one signal per area rather than two. The harvest gate itself is unchanged: claims still require content, and a typed place name is not sent to the harvest model for nothing.\
+**Consequences:** Noting a route or region trains taste on every path it can be noted from, which is what "never a silent drop" was supposed to mean — the acknowledgement and the recorded interest now agree. No migration: both interaction types already exist from ADR-135. The general lesson is worth keeping: a signal that an ADR describes as independent of a pipeline should not be emitted from inside that pipeline's handler, because it silently inherits every precondition the pipeline has.
+
+---
+
 ## ADR-140: The agent suggests, and kebi searches around what it suggests
 
 **Date:** 2026-08-04\
