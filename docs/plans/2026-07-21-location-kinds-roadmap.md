@@ -87,6 +87,26 @@ One plan doc + ADR per step when it starts.
    venue row. Until Step 6 runs, a user can save a pass into their library as a
    venue — accepted knowingly while usage is still internal.
 
+12. **A refused non-venue is a dead end — kebi never offers what's actually
+   there** *(added 2026-08-04)*. Saving "Hanoi Train Street" is refused
+   ("looks like a route or region — noted as a travel interest") and stops.
+   But Train Street is a famous attraction: people sit at cafés on the track
+   and have a beer waiting for the train to pass. Google has no attraction
+   record for the street — only the alley, typed `route` — **while the cafés
+   on it are all ordinary valid venues**: *Train track cafe*, *RAILWAY TUAN
+   CAFE*, *Train Street Hanoi coffee*, *CAFE 61 TRAIN ST.* The thing the user
+   actually wants is savable; kebi just never looks for it.
+
+   So the refusal is unhelpful rather than wrong. Having identified where the
+   named geography is, the next move is to offer the venues *at* it — "the
+   street itself isn't a place to pin, but here's what's on it" — which is
+   also the honest version of "never a silent drop".
+
+   **Not covered by Step 6.** Step 6 makes the street an *area*, so it can be
+   an answer and be saved as one. It does not make extraction look for venues
+   at a refused name. The two compose (an area gives the extent to search
+   inside) but neither depends on the other, and this one is not blocked.
+
 ## Goal
 
 **Kebi is a traveler who's local everywhere.** It answers at whatever
