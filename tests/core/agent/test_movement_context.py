@@ -90,6 +90,11 @@ def test_renders_multi_stop_route_in_order() -> None:
     assert "Hanoi → Hue → Hoi An" in text
     assert "ORDERED" in text
     assert "route_too_long" in text
+    # The composition rule: saves enrich the journey, they never replace it.
+    # Answering a journey question with only the user's saves is worse than
+    # what they'd get from asking anyone else.
+    assert "find_saved" in text
+    assert "place_names" in text
 
 
 def test_no_profile_flags_fallback_on_resolved_turn() -> None:
