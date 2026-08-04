@@ -34,6 +34,12 @@ from kebi.core.agent.location import WorkingLocation
 from kebi.core.agent.reasoning import ReasoningStep
 from kebi.core.agent.state import AgentState
 from kebi.core.agent.stream_emit import emit_step_active, emit_step_done
+from kebi.core.agent.tools._corridor import (
+    enclosing_context,
+    filter_and_order,
+    is_corridor,
+    place_coords,
+)
 from kebi.core.agent.tools._search_args import (
     CATEGORIES_DESC,
     CITY_DESC,
@@ -75,6 +81,15 @@ def _assemble_filters(
 ) -> HybridSearchFilters:
     """Build the HybridSearchFilters payload sent to the search service.
 
+    On a **route turn** the geofence is the whole journey, not a disc around
+    where it starts (ADR-136): the SQL predicate is a single circle, so the
+    corridor's enclosing circle goes in here as a coarse prefilter and the
+    exact "is it actually on the route" test runs in Python on the way back.
+    A named area does NOT override this — on a route the resolver owns the
+    geography, the same rule `suggest_places` and `discover_places` follow —
+    because "my saved places in Hue" is a different question from "my saved
+    places on the way to Hue", and the user asked the second one.
+
     Named-area args from the agent (neighborhood / city / country) win
     over the WorkingLocation-derived geofence. With no named area, fall
     back to lat/lng + the scope-derived radius computed at resolve time.
@@ -90,6 +105,16 @@ def _assemble_filters(
     on the island. After stripping, the turn uses the geofence and
     the saves surface.
     """
+    if working is not None and is_corridor(working):
+        enclosing = enclosing_context(working, get_config().movement)
+        return HybridSearchFilters(
+            categories=categories or None,
+            tags=tags or None,
+            lat=enclosing.lat,
+            lng=enclosing.lng,
+            radius_m=enclosing.radius_m,
+        )
+
     eff_neighborhood = (
         None
         if (working is not None and _eq_ci(neighborhood, working.neighborhood))
@@ -255,6 +280,7 @@ async def _run_find_saved_impl(
 
     working = maybe_working_location(state)
     has_named_area = bool(neighborhood or city or country)
+    on_route = working is not None and is_corridor(working)
 
     filters = _assemble_filters(
         categories=categories,
@@ -265,12 +291,29 @@ async def _run_find_saved_impl(
         working=working,
     )
 
+    # The corridor's enclosing circle is a coarse prefilter, so a route turn
+    # over-fetches and lets the exact route test do the narrowing. Saves are a
+    # small, local, already-paid-for pool — over-fetching costs one wider DB
+    # read, and under-fetching would let a handful of off-route saves crowd
+    # out the ones actually on the way.
+    movement_cfg = get_config().movement
+    fetch_limit = limit * movement_cfg.corridor.saved_overfetch if on_route else limit
+
     hits = await hybrid_search.search(
         user_id=user_id,
         query=query,
         filters=filters,
-        limit=limit,
+        limit=fetch_limit,
     )
+
+    if on_route:
+        assert working is not None  # narrowed by on_route
+        hits = filter_and_order(
+            hits,
+            working,
+            movement_cfg,
+            coords=lambda hit: place_coords(hit.place),
+        )[:limit]
 
     candidates = [
         ConsultCandidate(

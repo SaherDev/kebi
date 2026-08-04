@@ -897,6 +897,11 @@ class CorridorConfig(BaseModel):
     max_half_width_m: float = 25_000.0
     max_stops: int = 5
     max_venue_route_m: float = 300_000.0
+    # The enclosing circle a saved-place search fences by is coarse, so a route
+    # turn reads wider than it returns and lets the exact route test narrow it.
+    # Without it a handful of off-route saves crowd out the ones actually on
+    # the way. Saves are a small local pool — the wider read is one DB query.
+    saved_overfetch: int = 4
 
 
 class MovementConfig(BaseModel):

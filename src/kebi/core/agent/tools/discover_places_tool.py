@@ -410,8 +410,18 @@ async def _run_discover_places_impl(
     )
 
     def _query_at(location: LocationContext) -> PlaceQuery:
+        # At a route waypoint the free-text query is dropped on purpose. The
+        # provider treats text search's location as a soft *bias*, so a text
+        # query at a waypoint returns whatever is most prominent in the wider
+        # region rather than what is actually there — searching "viewpoint"
+        # 6 km from the Hai Van summit returns Da Nang's riverfront
+        # viewpoints, 20 km back down the road. Dropping the text routes the
+        # call to nearby search, whose location is a hard restriction, so the
+        # results are genuinely at the waypoint. Categories and tags still
+        # steer it, and the whole point of sampling waypoints is coverage of
+        # the route, which a drifting text search silently destroys.
         return PlaceQuery(
-            place_names=[query] if query else None,
+            place_names=None if on_route else ([query] if query else None),
             categories=categories,
             tags=tags,
             location=location,

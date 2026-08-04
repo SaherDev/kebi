@@ -41,6 +41,31 @@ One plan doc + ADR per step when it starts.
    "find me an alternative" has no path — the only move is to re-ask from
    scratch, losing everything that was right about the answer. This bites
    hardest on the multi-stop journeys Step 4 makes possible.
+10. **The agent's own knowledge is locked out of the answer** *(added
+   2026-08-04, after Step 4 live-testing)*. Asked "trip from Da Nang to Hue",
+   a plain LLM answers with Marble Mountains → Hai Van Pass (stop at the
+   bunkers, go early before the haze) → Lang Co → Lap An Lagoon → Elephant
+   Springs. Kebi returned one or two venues and apologised. Three causes, none
+   of them retrieval: **(a)** every one of those stops *validates* in kebi's
+   pipeline — they were never proposed, because naming is delegated to a
+   small helper model while the orchestrator, which knows the road, is not
+   allowed to name anything; **(b)** the agent prompt forbade it — "names you
+   mention must come from a tool result", and timing/fee/safety tips "never
+   from your own general knowledge"; **(c)** Google has almost no venue data
+   on a mountain pass, so no amount of better search invents what isn't
+   there. The value of that stretch is *experience knowledge*, which no layer
+   was permitted to voice.
+
+   **Direction:** the agent proposes what it knows and kebi searches around
+   it — its names go to validation and come back as real cards, so knowledge
+   and pins are one answer rather than two competing ones. A journey answer
+   has three layers: the agent's knowledge as the spine, validated places as
+   pins where they exist, and the user's saved places along the route. The
+   line that keeps this honest: **prose may carry knowledge; a card must be
+   validated** — plus never inventing operating facts (hours, prices, "open
+   24h"), which are checkable and send people to locked doors. This narrows
+   ADR-133 to what it was actually written against — a route *saved* as a
+   venue, or *pinned* as a place card — both still blocked.
 
 ## Goal
 
@@ -53,6 +78,13 @@ scenic route — each stored, ranked, and rendered as what it actually is.
 the way" is a spatial filter like "near me", not a routing product: routing
 belongs to maps apps, and what's worth stopping at belongs here. Everything
 below follows from that.
+
+**The agent suggests, and kebi searches around what it suggests.** The
+orchestrator's own knowledge of the world is a first-class source, not a
+fallback: it names the places and areas worth going to, and kebi verifies them,
+places them, and pins them. Retrieval serves the agent's judgement rather than
+replacing it — which is why an answer can be as good as a well-travelled
+local's *and* carry real coordinates, saves, and taste behind it.
 
 - Two stored first-class kinds: **venue, area** — accept-and-type, never
   reject-or-mislabel. **Route is an answer shape, not an entity**: journeys

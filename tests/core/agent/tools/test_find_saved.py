@@ -17,7 +17,7 @@ import pytest
 from langchain_core.messages import ToolMessage
 from langgraph.types import Command
 
-from kebi.core.agent.location import WorkingLocation
+from kebi.core.agent.location import CorridorPath, CorridorTarget, WorkingLocation
 from kebi.core.agent.tools.consult_models import ConsultResult
 from kebi.core.agent.tools.find_saved_tool import (
     _assemble_filters,
@@ -26,11 +26,13 @@ from kebi.core.agent.tools.find_saved_tool import (
 )
 from kebi.core.places.models import (
     HybridSearchHit,
+    LocationContext,
     PlaceCategory,
     PlaceCore,
     PlaceSource,
     UserPlace,
 )
+from kebi.core.utils.geo import haversine_m
 
 
 def _make_place(name: str = "Test Place", place_id: str = "p1") -> PlaceCore:
@@ -560,3 +562,177 @@ async def test_tool_degrades_on_exception() -> None:
     assert cmd.update["error_count"] == 1
     assert cmd.update["tool_calls_used"] == 1
     assert cmd.update["reasoning_steps"][-1].step == "find_saved.failure"
+
+
+# ---------------------------------------------------------------------------
+# Saved places along a route (ADR-137)
+# ---------------------------------------------------------------------------
+
+_DA_NANG = (16.0544, 108.2022)
+_HUE = (16.4637, 107.5909)
+_HOI_AN = (15.8801, 108.3380)
+_LANG_CO = (16.2333, 108.0667)
+
+
+def _route_working(
+    *,
+    stops: list[tuple[str, tuple[float, float]]],
+    origin: tuple[float, float] = _DA_NANG,
+) -> dict[str, Any]:
+    return WorkingLocation(
+        country="Vietnam",
+        city="Da Nang",
+        lat=origin[0],
+        lng=origin[1],
+        country_code="vn",
+        effective_mode="driving",
+        scope_tier="city",
+        scope_shape="corridor",
+        search_radius_m=9_000.0,
+        corridor=CorridorPath(
+            stops=[CorridorTarget(name=n, lat=p[0], lng=p[1]) for n, p in stops]
+        ),
+    ).model_dump()
+
+
+def _located_hit(name: str, point: tuple[float, float]) -> HybridSearchHit:
+    return HybridSearchHit(
+        place=PlaceCore(
+            id=name,
+            provider_id=f"google:{name}",
+            place_name=name,
+            categories=[PlaceCategory.restaurant],
+            location=LocationContext(lat=point[0], lng=point[1]),
+        ),
+        user_data=_make_user_place(name),
+        rrf_score=0.5,
+        vector_rank=1,
+        text_rank=1,
+    )
+
+
+def _search_stub(hits: list[HybridSearchHit]) -> MagicMock:
+    service = MagicMock()
+    service.search = AsyncMock(return_value=hits)
+    return service
+
+
+async def _run_route(
+    *, working: dict[str, Any], hits: list[HybridSearchHit], limit: int = 10
+) -> tuple[ConsultResult, MagicMock]:
+    service = _search_stub(hits)
+    command = await _run_find_saved(
+        hybrid_search=service,
+        state=_state(working_location=working),
+        tool_call_id="tc-route",
+        query="anything good",
+        categories=None,
+        tags=None,
+        neighborhood=None,
+        city=None,
+        country=None,
+        limit=limit,
+    )
+    message = command.update["messages"][0]
+    assert isinstance(message, ToolMessage)
+    return ConsultResult.model_validate_json(str(message.content)), service
+
+
+class TestSavedPlacesAlongTheRoute:
+    def test_route_turn_fences_by_the_whole_journey(self) -> None:
+        """The SQL predicate is one circle, so the corridor's enclosing circle
+        goes in — a disc around the origin would miss everything past it."""
+        working = WorkingLocation.model_validate(
+            _route_working(stops=[("Hue", _HUE)])
+        )
+        filters = _assemble_filters(
+            categories=None,
+            tags=None,
+            neighborhood=None,
+            city=None,
+            country=None,
+            working=working,
+        )
+        assert filters.lat is not None and filters.radius_m is not None
+        for point in (_DA_NANG, _HUE):
+            assert (
+                haversine_m(filters.lat, filters.lng or 0.0, *point)
+                <= filters.radius_m
+            )
+
+    def test_named_area_does_not_suppress_the_route(self) -> None:
+        """"My saves in Hue" and "my saves on the way to Hue" are different
+        questions; on a route the resolver owns geography."""
+        working = WorkingLocation.model_validate(
+            _route_working(stops=[("Hue", _HUE)])
+        )
+        filters = _assemble_filters(
+            categories=None,
+            tags=None,
+            neighborhood=None,
+            city="Hue",
+            country=None,
+            working=working,
+        )
+        assert filters.radius_m is not None
+        assert filters.city is None
+
+    async def test_saves_come_back_ordered_along_the_route(self) -> None:
+        result, _ = await _run_route(
+            working=_route_working(stops=[("Hue", _HUE)]),
+            hits=[
+                _located_hit("hue-save", _HUE),
+                _located_hit("lang-co-save", _LANG_CO),
+                _located_hit("da-nang-save", _DA_NANG),
+            ],
+        )
+        assert [c.place.place_name for c in result.candidates] == [
+            "da-nang-save",
+            "lang-co-save",
+            "hue-save",
+        ]
+
+    async def test_off_route_save_is_dropped(self) -> None:
+        """Hoi An is the wrong way for a Hue trip — it passes the enclosing
+        circle but not the route itself."""
+        result, _ = await _run_route(
+            working=_route_working(stops=[("Hue", _HUE)]),
+            hits=[
+                _located_hit("hoi-an-save", _HOI_AN),
+                _located_hit("lang-co-save", _LANG_CO),
+            ],
+        )
+        assert [c.place.place_name for c in result.candidates] == ["lang-co-save"]
+
+    async def test_route_turn_reads_wider_than_it_returns(self) -> None:
+        """Over-fetch, then narrow: otherwise a few off-route saves ranked
+        high by relevance crowd out the ones actually on the way."""
+        _, service = await _run_route(
+            working=_route_working(stops=[("Hue", _HUE)]),
+            hits=[_located_hit("lang-co-save", _LANG_CO)],
+            limit=5,
+        )
+        assert service.search.await_args.kwargs["limit"] > 5
+
+    async def test_result_is_capped_back_to_the_requested_limit(self) -> None:
+        result, _ = await _run_route(
+            working=_route_working(stops=[("Hue", _HUE)]),
+            hits=[_located_hit(f"save-{i}", _LANG_CO) for i in range(8)],
+            limit=3,
+        )
+        assert len(result.candidates) == 3
+
+    async def test_no_length_gate_on_a_users_own_saves(self) -> None:
+        """Venue *discovery* is gated on a country-length route because
+        inventing stops is dishonest. The user's own saves are neither
+        invented nor thin, so they still surface."""
+        hanoi, saigon = (21.0278, 105.8342), (10.8231, 106.6297)
+        # On the Hanoi–Saigon chord, not on the coast: the straight line runs
+        # inland while the country bulges east, so a coastal save really is
+        # ~190 km off it. Route filtering still applies on a long trip — what
+        # does not apply is the discovery gate.
+        result, _ = await _run_route(
+            working=_route_working(stops=[("Saigon", saigon)], origin=hanoi),
+            hits=[_located_hit("mid-trip-save", (16.0, 106.22))],
+        )
+        assert [c.place.place_name for c in result.candidates] == ["mid-trip-save"]

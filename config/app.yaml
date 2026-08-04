@@ -508,6 +508,7 @@ movement:
     max_half_width_m: 25000      # ceiling, so a long route stays a route
     max_stops: 5                 # ordered destinations resolved per turn
     max_venue_route_m: 300000    # per leg: above this, venue stops aren't real
+    saved_overfetch: 4           # read this much wider for saves on a route
 
 # ---------------------------------------------------------------------------
 # Taste Model Configuration

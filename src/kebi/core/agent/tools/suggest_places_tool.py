@@ -71,6 +71,7 @@ from kebi.core.agent.tools._search_args import (
     COUNTRY_DESC,
     LIMIT_DESC,
     NEIGHBORHOOD_DESC,
+    PLACE_NAMES_DESC,
     QUERY_DESC,
     TAGS_DESC,
 )
@@ -201,6 +202,9 @@ def build_suggest_places_tool(
         query: Annotated[str, Field(description=QUERY_DESC)],
         tool_call_id: Annotated[str, InjectedToolCallId],
         state: Annotated[AgentState, InjectedState],
+        place_names: Annotated[
+            list[str] | None, Field(description=PLACE_NAMES_DESC)
+        ] = None,
         categories: Annotated[
             list[PlaceCategory] | None, Field(description=CATEGORIES_DESC)
         ] = None,
@@ -232,6 +236,7 @@ def build_suggest_places_tool(
                 state=state,
                 tool_call_id=tool_call_id,
                 query=query,
+                place_names=place_names,
                 categories=categories,
                 tags=tags,
                 neighborhood_override=neighborhood,
@@ -261,6 +266,9 @@ async def _run_suggest_places(
     limit: int,
     name_count: int,
     concurrency: int,
+    # Defaulted so the many existing call sites (and tests) that predate
+    # agent-supplied naming keep the namer path unchanged.
+    place_names: list[str] | None = None,
 ) -> Command[Any]:
     """Inner body — runs the namer + provider phases. Wrapped by with_timeout."""
     with set_tool(_TOOL_NAME):
@@ -270,6 +278,7 @@ async def _run_suggest_places(
             state=state,
             tool_call_id=tool_call_id,
             query=query,
+            place_names=place_names,
             categories=categories,
             tags=tags,
             neighborhood_override=neighborhood_override,
@@ -296,6 +305,7 @@ async def _run_suggest_places_impl(
     limit: int,
     name_count: int,
     concurrency: int,
+    place_names: list[str] | None = None,
 ) -> Command[Any]:
     """The agent-supplied area overrides (neighborhood / city / country)
     are accepted to keep the arg schema byte-identical to `find_saved`,
@@ -379,16 +389,34 @@ async def _run_suggest_places_impl(
     else:
         _trace("locate", f"looking around {_location_label(working)}")
 
-    namer_result = await namer.generate(
-        intent=query,
-        working=working,
-        categories=categories,
-        tags=tags,
-        taste_summary=state.get("taste_profile_summary") or "",
-        count=name_count,
-        user_id=user_id,
-    )
-    proposed: list[CandidateName] = namer_result.candidates
+    # The agent may supply the names itself when it already knows the area
+    # (ADR-137). It is the strongest model in the turn, so its own knowledge of
+    # what is worth going to beats a helper model's — and validation is
+    # identical either way, so a name it invents is dropped exactly like one
+    # the namer invents. The namer stays as the fallback for when the agent
+    # has nothing specific in mind.
+    supplied = [name.strip() for name in (place_names or []) if name.strip()]
+    if supplied:
+        proposed = [
+            # The agent writes the user-facing rationale in its own prose, so
+            # the per-candidate reason stays empty here rather than being
+            # invented by the tool layer.
+            CandidateName(name=name, reason="", icon=None)
+            for name in supplied
+        ]
+        _trace("agent_names", f"checking {len(proposed)} you had in mind")
+    else:
+        namer_result = await namer.generate(
+            intent=query,
+            working=working,
+            categories=categories,
+            tags=tags,
+            taste_summary=state.get("taste_profile_summary") or "",
+            count=name_count,
+            user_id=user_id,
+        )
+        proposed = namer_result.candidates
+
     if not proposed:
         _finish("nothing specific came to mind here", kind="namer_empty")
         return _build_command(
@@ -467,7 +495,10 @@ async def _run_suggest_places_impl(
             user_data=None,
             source="suggested",
             rrf_score=0.0,
-            reason=reason,
+            # Empty when the agent named this itself — it writes the rationale
+            # in its own prose, and an empty string would render as a blank
+            # reason line rather than no reason at all.
+            reason=reason or None,
         )
         for place, reason in final
     ]

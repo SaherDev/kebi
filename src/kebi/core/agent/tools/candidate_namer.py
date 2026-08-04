@@ -36,10 +36,18 @@ logger = logging.getLogger(__name__)
 
 
 class CandidateName(BaseModel):
-    """One proposed place name and the LLM's reason for proposing it."""
+    """One proposed place name and the reason for proposing it.
+
+    `reason` is empty only when the **agent** supplied the name directly
+    (ADR-137) rather than the namer producing it — there the agent writes the
+    user-facing rationale in its own prose, so a tool-layer reason would be
+    invented. The namer prompt still requires a reason for every name it
+    proposes; the schema no longer enforces it because the same shape now
+    carries both origins.
+    """
 
     name: str = Field(min_length=1)
-    reason: str = Field(min_length=1)
+    reason: str = ""
     icon: str | None = Field(
         default=None,
         description=(
@@ -105,8 +113,8 @@ def _render_corridor_block(working: WorkingLocation) -> str:
         "the journey, not clustered at the start or the end. A candidate that "
         "sits far off the route is dropped before the user sees it, so a place "
         "near the middle of a leg is worth more here than a famous one back at "
-        "the origin. Still never name the road, pass, loop, or route itself — "
-        "only places a person stops AT."
+        "the origin. Name the landmark stretch itself only when it genuinely "
+        "is the highlight of the drive, and then by its plain canonical name."
     )
 
 

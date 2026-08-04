@@ -669,8 +669,17 @@ async def test_non_utility_category_keeps_broad_radius() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_tool_factory_exposes_same_arg_schema_as_find_saved() -> None:
-    """Byte-identical arg surface keeps the agent prompt small."""
+def test_tool_factory_shares_the_find_saved_arg_surface_plus_place_names() -> None:
+    """The shared arg surface keeps the agent prompt small; `place_names` is
+    the one deliberate divergence (ADR-137).
+
+    `suggest_places` is the propose-and-validate tool, so it is the only one
+    the agent can hand its own known place names to. `find_saved` searches a
+    corpus the user already owns and `discover_places` asks the provider
+    directly — neither has anything to validate on the agent's behalf. The
+    extra arg is also a useful signal to the agent about which tool to reach
+    for when it already knows the area.
+    """
     namer = _make_namer([])
     factory, search = _make_search_factory(by_name={})
 
@@ -680,6 +689,7 @@ def test_tool_factory_exposes_same_arg_schema_as_find_saved() -> None:
     schema_fields = set(tool.tool_call_schema.model_fields.keys())
     assert schema_fields == {
         "query",
+        "place_names",
         "categories",
         "tags",
         "neighborhood",
@@ -986,3 +996,117 @@ class TestRouteShapedSuggest:
         assert result.empty_reason == "route_too_long"
         namer.generate.assert_not_awaited()
         search.find.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# Agent-supplied candidate names (ADR-137)
+# ---------------------------------------------------------------------------
+
+
+async def _run_with_names(
+    *,
+    working: dict[str, Any],
+    names: list[str] | None,
+    by_name: dict[str, list[PlaceObject]],
+    namer_candidates: list[CandidateName] | None = None,
+    limit: int = 5,
+) -> tuple[ConsultResult, MagicMock, MagicMock]:
+    namer = _make_namer(namer_candidates or [])
+    factory, search = _make_search_factory(by_name=by_name)
+    command = await _run_suggest_places(
+        namer=namer,
+        places_search_factory=factory,
+        state=_state(working_location=working),
+        tool_call_id="call-names",
+        query="somewhere to stop",
+        place_names=names,
+        categories=None,
+        tags=None,
+        neighborhood_override=None,
+        city_override=None,
+        country_override=None,
+        limit=limit,
+        name_count=8,
+        concurrency=5,
+    )
+    message = command.update["messages"][0]
+    assert isinstance(message, ToolMessage)
+    return ConsultResult.model_validate_json(str(message.content)), namer, search
+
+
+class TestAgentSuppliedNames:
+    async def test_agent_names_skip_the_namer_entirely(self) -> None:
+        """The orchestrator is the strongest model in the turn — when it knows
+        the area, asking a weaker helper to guess is wasted latency and cost."""
+        result, namer, _ = await _run_with_names(
+            working=_bangkok_working(),
+            names=["Wat Pho"],
+            by_name={"Wat Pho": [_place("Wat Pho", place_id="p-wp")]},
+        )
+        namer.generate.assert_not_awaited()
+        assert [c.place.place_name for c in result.candidates] == ["Wat Pho"]
+
+    async def test_agent_names_are_still_validated(self) -> None:
+        """A name the agent invents is dropped exactly like one the namer
+        invents — this is what keeps "a card must be validated" true."""
+        result, _, _ = await _run_with_names(
+            working=_bangkok_working(),
+            names=["Wat Pho", "Entirely Made Up Place"],
+            by_name={"Wat Pho": [_place("Wat Pho", place_id="p-wp")]},
+        )
+        assert [c.place.place_name for c in result.candidates] == ["Wat Pho"]
+
+    async def test_agent_named_candidates_carry_no_tool_reason(self) -> None:
+        """The agent writes the rationale in its own prose; a tool-layer reason
+        would be invented, and an empty string would render as a blank line."""
+        result, _, _ = await _run_with_names(
+            working=_bangkok_working(),
+            names=["Wat Pho"],
+            by_name={"Wat Pho": [_place("Wat Pho", place_id="p-wp")]},
+        )
+        assert result.candidates[0].reason is None
+
+    async def test_blank_names_are_ignored(self) -> None:
+        result, namer, _ = await _run_with_names(
+            working=_bangkok_working(),
+            names=["   ", ""],
+            namer_candidates=[CandidateName(name="Wat Pho", reason="iconic")],
+            by_name={"Wat Pho": [_place("Wat Pho", place_id="p-wp")]},
+        )
+        # All names were blank, so this is the same as supplying none: the
+        # namer runs as the fallback rather than the turn returning empty.
+        namer.generate.assert_awaited()
+        assert [c.place.place_name for c in result.candidates] == ["Wat Pho"]
+
+    async def test_no_names_leaves_the_namer_path_untouched(self) -> None:
+        result, namer, _ = await _run_with_names(
+            working=_bangkok_working(),
+            names=None,
+            namer_candidates=[CandidateName(name="Wat Pho", reason="iconic")],
+            by_name={"Wat Pho": [_place("Wat Pho", place_id="p-wp")]},
+        )
+        namer.generate.assert_awaited()
+        assert result.candidates[0].reason == "iconic"
+
+    async def test_agent_names_on_a_route_are_filtered_and_ordered(self) -> None:
+        """The two features compose: the agent names the stops it knows, and
+        the route geometry still decides which are on the way and in what
+        order."""
+        result, namer, _ = await _run_with_names(
+            working=_route_working(stops=[("Hue", _HUE)]),
+            names=["Hue Spot", "Hoi An Spot", "Da Nang Spot"],
+            by_name={
+                "Hue Spot": [_located("Hue Spot", place_id="p-h", point=_HUE)],
+                "Hoi An Spot": [
+                    _located("Hoi An Spot", place_id="p-ha", point=_HOI_AN)
+                ],
+                "Da Nang Spot": [
+                    _located("Da Nang Spot", place_id="p-dn", point=_DA_NANG)
+                ],
+            },
+        )
+        namer.generate.assert_not_awaited()
+        assert [c.place.place_name for c in result.candidates] == [
+            "Da Nang Spot",
+            "Hue Spot",
+        ]
