@@ -27,7 +27,7 @@ never how the route is sampled, filtered, or ordered.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, TypeVar
+from typing import TYPE_CHECKING, NamedTuple, TypeVar
 
 from kebi.core.agent.location import WorkingLocation
 from kebi.core.places.models import LocationContext
@@ -96,6 +96,43 @@ def oversized_legs(path: list[Point], cfg: CorridorConfig) -> frozenset[int]:
         for i, length in enumerate(leg_lengths_m(path))
         if length > cfg.max_venue_route_m
     )
+
+
+class LegSummary(NamedTuple):
+    """One leg of the route, as the agent needs to reason about it."""
+
+    origin: str
+    destination: str
+    km: float
+    drivable: bool
+
+
+def leg_summaries(
+    working: WorkingLocation, movement_cfg: MovementConfig
+) -> list[LegSummary]:
+    """The route broken into legs, each with its length and whether it is a drive.
+
+    A multi-city trip is not one journey at one scale: "Hanoi, then Hue, then
+    Hoi An" is a 548 km hop nobody drives followed by a 105 km coastal road
+    that is the whole point of going. The gate that decides this is already
+    computed for sampling — this exposes it to the answer, so the agent can
+    treat a long leg as a transport question and its endpoints as destinations
+    instead of inventing stops along a line no one travels.
+    """
+    assert working.corridor is not None  # narrowed by is_corridor
+    path = route_points(working)
+    lengths = leg_lengths_m(path)
+    oversized = oversized_legs(path, movement_cfg.corridor)
+    names = [working.city, *(stop.name for stop in working.corridor.stops)]
+    return [
+        LegSummary(
+            origin=names[i],
+            destination=names[i + 1],
+            km=length / 1000.0,
+            drivable=i not in oversized,
+        )
+        for i, length in enumerate(lengths)
+    ]
 
 
 def is_route_too_long(working: WorkingLocation, movement_cfg: MovementConfig) -> bool:

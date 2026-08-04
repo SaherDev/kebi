@@ -381,6 +381,57 @@ def _render_location_context(state: AgentState) -> str:
     )
 
 
+def _render_legs(working: dict[str, Any]) -> str:
+    """Describe each leg of the route and whether it is actually a drive.
+
+    A multi-city trip is several trips at different scales. "Hanoi, then Hue,
+    then Hoi An" is a 548 km hop everyone flies followed by a 105 km coastal
+    road that is the reason to go at all. The search already knows this — it
+    skips sampling the long leg — but without saying so the agent narrates a
+    road trip through the middle of a leg nobody drives, inventing stops for
+    it. Naming the scale per leg is what lets the answer switch register:
+    transport question here, stop-by-stop drive there.
+
+    Defensive: `working` is raw checkpointed state, so a shape that no longer
+    validates degrades to no leg block rather than failing the turn.
+    """
+    from kebi.core.agent.tools._corridor import leg_summaries
+
+    try:
+        parsed = WorkingLocation.model_validate(working)
+        legs = leg_summaries(parsed, get_config().movement)
+    except Exception:  # noqa: BLE001 - rendering must never break a turn
+        logger.warning("could not summarise corridor legs", exc_info=True)
+        return ""
+    if not legs:
+        return ""
+
+    lines = [
+        f"- {leg.origin} → {leg.destination}: {leg.km:.0f} km — "
+        + (
+            "a real drive; this is where stop-by-stop belongs."
+            if leg.drivable
+            else "TOO FAR TO DRIVE WITH STOPS."
+        )
+        for leg in legs
+    ]
+    block = "The legs of this trip:\n" + "\n".join(lines)
+    if all(leg.drivable for leg in legs):
+        return block
+    return (
+        block + "\n"
+        "For a leg marked TOO FAR TO DRIVE WITH STOPS: do NOT narrate a drive "
+        "or invent places along it — nothing is 'on the way' across a "
+        "distance like that. Say how people actually cover it (a flight, an "
+        "overnight train, a sleeper bus), roughly how long it takes and "
+        "roughly what it costs, from your own knowledge — that is judgement "
+        "about a trip, not a booking service, so no timetables and no exact "
+        "fares. Then treat BOTH ends as destinations in their own right: what "
+        "is worth doing in each, and how long to give it. The drivable legs "
+        "still get the stop-by-stop treatment."
+    )
+
+
 def _render_movement_context(state: AgentState) -> str:
     """Render the `{movement_context}` slot — the turn's resolved search scope.
 
@@ -416,6 +467,7 @@ def _render_movement_context(state: AgentState) -> str:
     if shape == "corridor" and isinstance(corridor, dict) and corridor.get("stops"):
         stops = [s.get("name") for s in corridor["stops"] if s.get("name")]
         route = " → ".join([working.get("city") or "here", *stops])
+        parts.append(_render_legs(working))
         parts.append(
             f"This turn is a journey: {route}. **Give the whole journey.** "
             "The complete answer is the drive as you would describe it to a "
@@ -440,7 +492,13 @@ def _render_movement_context(state: AgentState) -> str:
             "leg; that spends your budget and returns the same places. "
             "Results come back ALREADY ORDERED from where the user starts to "
             "where they end up — narrate them in that order, grouping by "
-            "stretch as you go, not as a ranked list. A famous pass or scenic "
+            "stretch as you go, not as a ranked list. **Name what is worth "
+            "doing AT each named stop, not only between them** — a trip "
+            "through several places is mostly about those places, so someone "
+            "going Hanoi → Hue → Hoi An wants what to do in Hanoi and in Hue, "
+            "not only what sits on the road. The search covers the named stops "
+            "as well as the stretches between them, so put them all in the one "
+            "call. A famous pass or scenic "
             "stretch belongs in the answer when it is the reason people make "
             "the drive: say what to do there and where to pull over. Add the "
             "texture that makes a stop worth it — when the light is good, "

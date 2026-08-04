@@ -15,6 +15,7 @@ from kebi.core.agent.tools._corridor import (
     half_width_m,
     is_corridor,
     is_route_too_long,
+    leg_summaries,
     place_coords,
     route_summary,
     waypoint_contexts,
@@ -258,3 +259,31 @@ class TestRouteSummary:
         summary = route_summary(working)
         assert summary.startswith("Da Nang → Hue → Hoi An")
         assert "km" in summary
+
+
+class TestLegSummaries:
+    def test_single_leg_is_one_drivable_summary(self) -> None:
+        legs = leg_summaries(_working(stops=[("Hue", _HUE)]), _CFG)
+        assert len(legs) == 1
+        assert legs[0].origin == "Da Nang"
+        assert legs[0].destination == "Hue"
+        assert legs[0].drivable is True
+        assert 70 < legs[0].km < 100
+
+    def test_mixed_scale_chain_marks_only_the_long_leg(self) -> None:
+        """The case that motivated this: Hanoi→Hue is a flight, Hue→Hoi An is
+        the drive people come for. One trip, two scales."""
+        working = _working(
+            stops=[("Hue", _HUE), ("Hoi An", _HOI_AN)], origin=_HANOI, city="Hanoi"
+        )
+        legs = leg_summaries(working, _CFG)
+        assert [(leg.origin, leg.destination) for leg in legs] == [
+            ("Hanoi", "Hue"),
+            ("Hue", "Hoi An"),
+        ]
+        assert legs[0].drivable is False
+        assert legs[1].drivable is True
+
+    def test_country_crossing_has_no_drivable_leg(self) -> None:
+        working = _working(stops=[("Saigon", _SAIGON)], origin=_HANOI, city="Hanoi")
+        assert [leg.drivable for leg in leg_summaries(working, _CFG)] == [False]

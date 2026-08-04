@@ -96,6 +96,7 @@ from kebi.core.agent.tools.consult_models import ConsultCandidate, ConsultResult
 from kebi.core.config import get_config
 from kebi.core.extraction.candidate_mapper import normalize_query
 from kebi.core.extraction.extraction_pipeline import SearchServiceFactory
+from kebi.core.knowledge.schemas import _slugify
 from kebi.core.places.models import (
     LocationContext,
     PlaceCategory,
@@ -464,6 +465,15 @@ async def _run_suggest_places_impl(
             steps=steps,
         )
 
+    # Drop anything another tool already returned this turn — the user's own
+    # save has already been shown as theirs, and showing it again as a fresh
+    # suggestion is one place rendered as two cards.
+    surfaced = _already_surfaced_ids(state)
+    if surfaced:
+        validated = [
+            pair for pair in validated if (pair[0].provider_id or "") not in surfaced
+        ]
+
     # Safety values (dietary/accessibility) exclude; other tag values are
     # preference signals — the FULL tag list already steered the namer's
     # name proposals and the validation query, so its work is done. A
@@ -509,6 +519,95 @@ async def _run_suggest_places_impl(
         result=ConsultResult(candidates=candidates, empty_reason=None),
         steps=steps,
     )
+
+
+def _already_surfaced_ids(state: AgentState) -> set[str]:
+    """Provider ids another tool has already returned this turn.
+
+    The consult tools each dedupe internally but not against each other, so a
+    place the user has saved comes back from `find_saved` AND again from
+    `suggest_places` — two cards for one place, under two different
+    `recommendation_id`s, which also means a later accept/save signal could
+    attribute to the wrong recommendation.
+
+    Tools run one at a time (`parallel_tool_calls=False`), so by the time this
+    runs the earlier `ToolMessage` is already in `messages`. The saved copy
+    wins because it carries `user_data` — "you've been meaning to go here" is
+    a better card than "here's a suggestion".
+    """
+    seen: set[str] = set()
+    for message in state.get("messages") or []:
+        if not isinstance(message, ToolMessage):
+            continue
+        try:
+            result = ConsultResult.model_validate_json(str(message.content))
+        except Exception:  # noqa: BLE001 - a non-consult tool payload, skip it
+            continue
+        for candidate in result.candidates:
+            if candidate.place.provider_id:
+                seen.add(candidate.place.provider_id)
+    return seen
+
+
+# How many provider results to consider per proposed name. Google bills the
+# request, not the result count (the field mask is what sets the tier), so
+# asking for a few costs the same as asking for one and gives the name match
+# something to choose between.
+_NAME_MATCH_CANDIDATES = 5
+
+
+def _best_name_match(asked: str, hits: list[PlaceObject]) -> PlaceObject | None:
+    """Pick the hit that best answers the name that was asked for.
+
+    Nearest-first ordering is right for a brand ("the closest Watsons") and
+    wrong for a landmark: asking for "Tam Coc" returned *Tam Coc Homestay Of
+    Ms Loan* because a guesthouse happened to sit closer to the search centre
+    than the karst boat ride, and "Marble Mountains" returned the *Ticket
+    Booth (Gate A1)* rather than the mountains. Both correct places were in
+    the results; distance simply outranked them.
+
+    So: an exact name match wins outright, then a name that merely wraps the
+    asked-for one (fewest extra words first, so "The Marble Mountains" beats
+    "Marble Mountains Ticket Booth (Gate A1)"), and failing both, the
+    provider's own nearest-first order stands.
+
+    Deliberately a preference, not a filter — falling through to the first hit
+    keeps every result today's behaviour would have kept. A strict name filter
+    would reject "Bach Ma National Park" → *Vườn Quốc Gia Bạch Mã*, which is
+    the same place under its Vietnamese name.
+    """
+    if not hits:
+        return None
+
+    asked_slug = _slugify(asked)
+    if not asked_slug:
+        return hits[0]
+
+    exact: PlaceObject | None = None
+    wrapping: tuple[int, int, PlaceObject] | None = None
+    for hit in hits:
+        hit_slug = _slugify(hit.place_name)
+        if not hit_slug:
+            continue
+        if hit_slug == asked_slug:
+            exact = exact or hit
+            continue
+        if asked_slug in hit_slug:
+            # Rank by how much the provider's name adds beyond what was
+            # asked: extra words first, then raw length as the tie-break.
+            # "The Marble Mountains" and "Marble Mountains Elevator" both add
+            # one word, and the shorter is the mountains themselves rather
+            # than a facility at them.
+            extra = len(hit_slug.split("-")) - len(asked_slug.split("-"))
+            rank = (extra, len(hit_slug))
+            if wrapping is None or rank < (wrapping[0], wrapping[1]):
+                wrapping = (extra, len(hit_slug), hit)
+
+    if exact is not None:
+        return exact
+    if wrapping is not None:
+        return wrapping[2]
+    return hits[0]
 
 
 async def _validate_candidates(
@@ -583,7 +682,7 @@ async def _validate_candidates(
                         # normal upsert (ADR-117).
                         icon_hint=candidate.icon,
                     ),
-                    limit=1,
+                    limit=_NAME_MATCH_CANDIDATES,
                 )
         except Exception as exc:
             logger.warning(
@@ -593,7 +692,7 @@ async def _validate_candidates(
                 exc_info=True,
             )
             return None
-        return hits[0] if hits else None
+        return _best_name_match(candidate.name, hits)
 
     hit_objs = await asyncio.gather(*(_lookup(c) for c in proposed))
     results: list[tuple[PlaceCore, str]] = []

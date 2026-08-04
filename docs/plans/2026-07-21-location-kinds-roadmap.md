@@ -67,6 +67,24 @@ One plan doc + ADR per step when it starts.
    ADR-133 to what it was actually written against — a route *saved* as a
    venue, or *pinned* as a place card — both still blocked.
 
+11. **A validated non-venue can be saved as a venue** *(added 2026-08-04 —
+   opened by ADR-137, owned by no step)*. ADR-137 lets a place that validates
+   become a card, which is what finally allowed Hai Van Pass to be offered as
+   a stop. But a card carries a save action, and the save path cannot tell a
+   mountain pass from a restaurant: the provider holds **two** records for
+   that pass — one typed as natural geography, which ADR-133 correctly drops,
+   and one typed `historical_landmark`, which is indistinguishable from any
+   other venue. So a type-based guard is impossible, and ADR-133's guarantee
+   ("no venue-typed non-venues in the library") currently rests on nobody
+   tapping save.
+
+   **Not covered anywhere else:** Steps 5 and 6 put `kind` on the *answer
+   item* — how something renders — while ADR-134 explicitly declined a `kind`
+   column on `places`, and library kind rendering sits in Out of scope. This
+   is the persistence question neither owns, and it needs its own decision:
+   what marks a stored place as non-venue when the provider's types don't,
+   and what the save does about it.
+
 ## Goal
 
 **Kebi is a traveler who's local everywhere.** It answers at whatever
