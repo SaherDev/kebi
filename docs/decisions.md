@@ -17,6 +17,26 @@ Format:
 
 ---
 
+## ADR-140: The agent suggests, and kebi searches around what it suggests
+
+**Date:** 2026-08-04\
+**Status:** accepted — a standing principle, not a feature\
+**Context:** Like the scope boundary beside it, this has been decided and acted on but only recorded inside the feature that forced it, so it keeps being rediscovered — usually the expensive way. The default instinct when building a retrieval product is that retrieval produces the answer and the model formats it. Following that instinct here made kebi *worse than the model it runs on*: naming was delegated to a small helper model while the orchestrator, which knew the roads, was forbidden from naming anything, and answers came back thinner than what the same question got from a general assistant. The correction is worth stating as a principle because the instinct will return with every new tool.\
+**Decision:** The orchestrator's own knowledge of the world is a first-class source, and retrieval serves its judgement rather than replacing it. **The agent names the places and areas worth going to; kebi verifies them, places them, and pins them.** A helper model proposing candidates is a fallback for when the agent has nothing specific in mind, never the primary. Two things keep it honest, both already decided: a card must be earned — anything tappable, savable or pinned comes from a tool result — while prose may carry the agent's knowledge; and operating facts (hours, prices, "open 24h") come only from a tool, because they are checkable, they change, and a wrong one sends someone to a locked door. **Kebi embeds a frontier model, so the answer that model would give unprompted is the FLOOR, not the ceiling.** An answer worse than that is a bug in how we constrained it, not a limitation of the data — every instance found so far has been exactly that.\
+**Consequences:** Answer quality tracks the orchestrator rather than the weakest model in the chain, and adding a tool no longer means routing judgement away from the model best placed to exercise it. It also names what kebi is actually for: the model supplies what anyone could know, and kebi supplies what only it knows — verified coordinates, the user's saves and taste, and accumulated local claims. The cost is accepted: model knowledge can be stale or wrong, bounded by keeping cards verified and operating facts tool-only, and answered durably by the knowledge layer rather than by silence. A useful standing test follows from the floor rule — if kebi's answer is worse than what its own orchestrator would say unprompted, that is a defect to be found and fixed.
+
+---
+
+## ADR-139: Kebi is a places engine, not a route solution
+
+**Date:** 2026-08-04\
+**Status:** accepted — a standing boundary, not a feature\
+**Context:** This principle has been decided and acted on repeatedly, but only ever recorded inside the context of whichever feature was in front of it, so each new piece of trip-shaped work has had to rediscover it. The pressure is real and recurring: once a turn knows an origin, a destination and the stops between them, road-shape routing, drive times, per-leg schedules and booking all look like the obvious next step, and every one of them is a different product with different data, different costs and different competitors.\
+**Decision:** Kebi surfaces places — areas and venues — near a point, on the way between two, or anywhere the question points. **"On the way" is a spatial filter exactly like "near me"**: a shape the place search takes, never a routing product. Routing belongs to maps apps; what is worth stopping at belongs here. What follows from that, and what has already been decided case by case: corridor geometry is straight-line sampling, because road-shape routing would cross the line; a journey is an ordered list composed at answer time and never a persisted itinerary; and the engine holds no timetables, no fares and no bookings. The boundary is about *systems*, not *speech* — the agent may say a leg is a flight rather than a drive, roughly how long it takes and roughly what it costs, because that is judgement about a trip of the same kind as "go early, it hazes by midday". Building a service that answers it is what is out of scope.\
+**Consequences:** Trip-shaped features get evaluated against a written boundary instead of an implicit one, and the recurring "should we add routing?" question has a durable answer. The cost is accepted: kebi will be worse than a maps app at anything involving the road itself — turn-by-turn, real drive times, live traffic — and that is the correct trade, because those are solved elsewhere and neither is what makes a stop worth making. Where a genuinely better answer needs road geometry (a corridor that follows the actual road rather than a chord), the move is to *consume* a routing source as data, never to become one.
+
+---
+
 ## ADR-138: A trip is several trips — each leg answered at its own scale, and a card must be the place that was asked for
 
 **Date:** 2026-08-04\
