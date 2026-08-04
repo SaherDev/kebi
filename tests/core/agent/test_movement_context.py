@@ -59,13 +59,37 @@ def test_renders_corridor_scope_with_destination() -> None:
     wl = {
         **_AREA_WL,
         "scope_shape": "corridor",
-        "corridor": {"name": "Suvarnabhumi Airport", "lat": 13.69, "lng": 100.75},
+        "corridor": {
+            "stops": [{"name": "Suvarnabhumi Airport", "lat": 13.69, "lng": 100.75}]
+        },
     }
     text = _render_movement_context(
         _state(working_location=wl, movement_profile=_PROFILE)
     )
     assert "Suvarnabhumi Airport" in text
-    assert "route" in text
+    assert "journey" in text
+
+
+def test_renders_multi_stop_route_in_order() -> None:
+    """A chain names every stop, in the order the user said them — the agent
+    narrates the journey, so it must see the whole route (ADR-136)."""
+    wl = {
+        **_AREA_WL,
+        "city": "Hanoi",
+        "scope_shape": "corridor",
+        "corridor": {
+            "stops": [
+                {"name": "Hue", "lat": 16.46, "lng": 107.59},
+                {"name": "Hoi An", "lat": 15.88, "lng": 108.33},
+            ]
+        },
+    }
+    text = _render_movement_context(
+        _state(working_location=wl, movement_profile=_PROFILE)
+    )
+    assert "Hanoi → Hue → Hoi An" in text
+    assert "ORDERED" in text
+    assert "route_too_long" in text
 
 
 def test_no_profile_flags_fallback_on_resolved_turn() -> None:

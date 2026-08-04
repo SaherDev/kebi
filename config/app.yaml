@@ -491,6 +491,18 @@ movement:
   fallback:            # used when the request carries no movement_profile
     reach: normal
     available_modes: [walking, transit]
+  # Route-shaped turns (ADR-136). The turn's route is an ordered polyline;
+  # these bound how it is sampled and how far off it a place still counts.
+  # A named stop is ALWAYS searched — max_waypoints caps interior sampling,
+  # never the user's own stops. max_venue_route_m is the honesty gate: past
+  # it, nothing is meaningfully "on the way" and the answer is city-scale.
+  corridor:
+    waypoint_spacing_m: 25000    # target spacing between sampled points
+    min_waypoints: 2             # both endpoints, always
+    max_waypoints: 5             # cap on billed fan-out per route turn
+    max_half_width_m: 15000      # ceiling on "how far off the route counts"
+    max_stops: 5                 # ordered destinations resolved per turn
+    max_venue_route_m: 300000    # per leg: above this, venue stops aren't real
 
 # ---------------------------------------------------------------------------
 # Taste Model Configuration

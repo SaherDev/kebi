@@ -49,6 +49,11 @@ TITLES = {
 # Shared empty-outcome result lines for the location-anchored tools.
 NEED_LOCATION = "need a rough location first"
 NONE_FIT = "none fit your requirements"
+# Route-shaped turn whose legs are too long for venue stops (ADR-136). Reads as
+# a scale observation, not an error — the agent's prose asks which stretch.
+ROUTE_TOO_LONG = "that route is city-scale, not stop-scale"
+# Route-shaped turn where nothing validated near the route itself.
+NOTHING_ON_ROUTE = "nothing turned up along that route"
 
 
 def found_summary(names: Sequence[str], *, dropped: int = 0) -> str:

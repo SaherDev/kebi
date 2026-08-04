@@ -36,11 +36,15 @@ logger = logging.getLogger(__name__)
 # Provider ToS: geocoded coordinates may be cached at most 30 days.
 _GEOMETRY_MAX_AGE = timedelta(days=30)
 
-# Google result types accepted as a "city" entity. Admin levels are
+# Google result types accepted as a "city" entity. Public because the
+# corridor resolver reuses it to tell a real settlement from a fuzzy
+# establishment match (ADR-136) — widening it there, not here, since a
+# corridor endpoint is only a coordinate while an entity is an identity.
+# Admin levels are
 # deliberately included so provinces resolve (Hà Giang is an
 # administrative_area_level_1) — ADR-124 already classifies provinces,
 # islands, and towns at city scope.
-_CITY_LEVEL_TYPES = frozenset(
+CITY_LEVEL_TYPES = frozenset(
     {
         "locality",
         "postal_town",
@@ -171,7 +175,7 @@ class AreaService:
         result = await self._search(query=name, region_code=cc)
         if result is None or result.country_code != cc:
             return None
-        if result.place_type not in _CITY_LEVEL_TYPES:
+        if result.place_type not in CITY_LEVEL_TYPES:
             return None
         # Round-trip: the matched feature must BE the asked-for name —
         # its own name or the component that forms the key (ADR-126).

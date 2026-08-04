@@ -26,12 +26,13 @@ import pytest
 from langchain_core.messages import ToolMessage
 from langgraph.types import Command
 
-from kebi.core.agent.location import WorkingLocation
+from kebi.core.agent.location import CorridorPath, CorridorTarget, WorkingLocation
 from kebi.core.agent.tools.consult_models import ConsultResult
 from kebi.core.agent.tools.discover_places_tool import (
     _run_discover_places,
     build_discover_places_tool,
 )
+from kebi.core.config import get_config
 from kebi.core.places.models import (
     LocationContext,
     PlaceCategory,
@@ -534,3 +535,203 @@ async def test_non_utility_category_keeps_broad_radius() -> None:
     )
     loc = search.find.await_args_list[0].args[0].location
     assert loc.radius_m == 9800
+
+
+# ---------------------------------------------------------------------------
+# Route-shaped turns (ADR-136)
+# ---------------------------------------------------------------------------
+
+_DA_NANG = (16.0544, 108.2022)
+_HUE = (16.4637, 107.5909)
+_HOI_AN = (15.8801, 108.3380)
+_SAIGON = (10.8231, 106.6297)
+_HANOI = (21.0278, 105.8342)
+_LANG_CO = (16.2333, 108.0667)
+
+
+def _route_working(
+    *,
+    stops: list[tuple[str, tuple[float, float]]],
+    origin: tuple[float, float] = _DA_NANG,
+    city: str = "Da Nang",
+) -> dict[str, Any]:
+    return WorkingLocation(
+        country="Vietnam",
+        city=city,
+        lat=origin[0],
+        lng=origin[1],
+        country_code="vn",
+        effective_mode="driving",
+        scope_tier="city",
+        scope_shape="corridor",
+        search_radius_m=9_000.0,
+        corridor=CorridorPath(
+            stops=[CorridorTarget(name=n, lat=p[0], lng=p[1]) for n, p in stops]
+        ),
+    ).model_dump()
+
+
+def _located(name: str, *, place_id: str, point: tuple[float, float]) -> PlaceObject:
+    return PlaceObject(
+        id=place_id,
+        provider_id=f"google:{place_id}",
+        place_name=name,
+        categories=[PlaceCategory.restaurant],
+        location=LocationContext(lat=point[0], lng=point[1]),
+        cached_at=datetime.now(UTC),
+    )
+
+
+def _make_geo_search_factory(
+    near: list[tuple[tuple[float, float], PlaceObject]],
+    *,
+    fail_at: set[int] | None = None,
+) -> tuple[Callable[[], AbstractAsyncContextManager[MagicMock]], MagicMock]:
+    """Factory whose `find` answers from whichever waypoint it was asked at.
+
+    Each entry pairs a location with the place that sits there; a call
+    returns the places within ~20 km of the query's centre. That makes the
+    waypoint fan-out observable: a place only comes back if some sampled
+    point was actually near it. `fail_at` raises on the given call indices to
+    exercise partial-failure handling.
+    """
+    from kebi.core.utils.geo import haversine_m
+
+    search = MagicMock()
+    calls = {"n": 0}
+
+    async def _find(query: Any, limit: int = 10) -> list[PlaceObject]:
+        index = calls["n"]
+        calls["n"] += 1
+        if fail_at and index in fail_at:
+            raise RuntimeError("provider down")
+        centre = query.location
+        return [
+            place
+            for point, place in near
+            if haversine_m(centre.lat, centre.lng, *point) <= 20_000
+        ]
+
+    search.find = AsyncMock(side_effect=_find)
+
+    @asynccontextmanager
+    async def _factory() -> AsyncIterator[MagicMock]:
+        yield search
+
+    return _factory, search
+
+
+async def _run_route(
+    *,
+    working: dict[str, Any],
+    factory: Callable[[], AbstractAsyncContextManager[MagicMock]],
+) -> ConsultResult:
+    command = await _run_discover_places(
+        places_search_factory=factory,
+        state=_state(working_location=working),
+        tool_call_id="tc-route",
+        query="somewhere to stop",
+        categories=None,
+        tags=None,
+        limit=10,
+    )
+    message = command.update["messages"][0]
+    assert isinstance(message, ToolMessage)
+    return ConsultResult.model_validate_json(str(message.content))
+
+
+class TestRouteShapedDiscover:
+    async def test_searches_every_sampled_waypoint(self) -> None:
+        """The fix for "one disc around the origin": a mid-route place is
+        only reachable because a waypoint was sampled near it."""
+        factory, search = _make_geo_search_factory(
+            [(_LANG_CO, _located("Lang Co Spot", place_id="p-lc", point=_LANG_CO))]
+        )
+        result = await _run_route(
+            working=_route_working(stops=[("Hue", _HUE)]), factory=factory
+        )
+        assert search.find.await_count > 1
+        assert [c.place.place_name for c in result.candidates] == ["Lang Co Spot"]
+
+    async def test_fan_out_respects_the_billed_cap(self) -> None:
+        factory, search = _make_geo_search_factory([])
+        await _run_route(
+            working=_route_working(stops=[("Hue", _HUE)]), factory=factory
+        )
+        assert search.find.await_count <= get_config().movement.corridor.max_waypoints
+
+    async def test_overlapping_waypoints_do_not_duplicate_a_place(self) -> None:
+        """Waypoint discs overlap by construction, so the same place comes
+        back from several calls — the union is deduped on provider_id."""
+        place = _located("Lang Co Spot", place_id="p-lc", point=_LANG_CO)
+        factory, _ = _make_geo_search_factory([(_LANG_CO, place)])
+        result = await _run_route(
+            working=_route_working(stops=[("Hue", _HUE)]), factory=factory
+        )
+        assert len(result.candidates) == 1
+
+    async def test_results_are_ordered_along_the_route(self) -> None:
+        factory, _ = _make_geo_search_factory(
+            [
+                (_HUE, _located("Hue Spot", place_id="p-hue", point=_HUE)),
+                (_DA_NANG, _located("Da Nang Spot", place_id="p-dn", point=_DA_NANG)),
+            ]
+        )
+        result = await _run_route(
+            working=_route_working(stops=[("Hue", _HUE)]), factory=factory
+        )
+        assert [c.place.place_name for c in result.candidates] == [
+            "Da Nang Spot",
+            "Hue Spot",
+        ]
+
+    async def test_off_route_place_near_a_waypoint_is_dropped(self) -> None:
+        """A waypoint disc is a circle; the route is a line. A place inside
+        the circle but off the line is not on the way."""
+        off_route = (16.2333, 108.28)  # ~20 km east of the line, near a waypoint
+        factory, _ = _make_geo_search_factory(
+            [(off_route, _located("Off Route", place_id="p-off", point=off_route))]
+        )
+        result = await _run_route(
+            working=_route_working(stops=[("Hue", _HUE)]), factory=factory
+        )
+        assert result.candidates == []
+        assert result.empty_reason == "no_match"
+
+    async def test_partial_waypoint_failure_still_answers(self) -> None:
+        """A route answer missing one waypoint beats no answer at all."""
+        factory, _ = _make_geo_search_factory(
+            [(_LANG_CO, _located("Lang Co Spot", place_id="p-lc", point=_LANG_CO))],
+            fail_at={0},
+        )
+        result = await _run_route(
+            working=_route_working(stops=[("Hue", _HUE)]), factory=factory
+        )
+        assert [c.place.place_name for c in result.candidates] == ["Lang Co Spot"]
+
+    async def test_city_scale_route_makes_no_provider_call(self) -> None:
+        factory, search = _make_geo_search_factory([])
+        result = await _run_route(
+            working=_route_working(
+                stops=[("Saigon", _SAIGON)], origin=_HANOI, city="Hanoi"
+            ),
+            factory=factory,
+        )
+        assert result.empty_reason == "route_too_long"
+        search.find.assert_not_awaited()
+
+    async def test_multi_stop_route_covers_every_leg(self) -> None:
+        factory, _ = _make_geo_search_factory(
+            [
+                (_HOI_AN, _located("Hoi An Spot", place_id="p-ha", point=_HOI_AN)),
+                (_HUE, _located("Hue Spot", place_id="p-hue", point=_HUE)),
+            ]
+        )
+        result = await _run_route(
+            working=_route_working(stops=[("Hue", _HUE), ("Hoi An", _HOI_AN)]),
+            factory=factory,
+        )
+        assert [c.place.place_name for c in result.candidates] == [
+            "Hue Spot",
+            "Hoi An Spot",
+        ]

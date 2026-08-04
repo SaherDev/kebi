@@ -52,6 +52,14 @@ from kebi.core.agent.location import WorkingLocation
 from kebi.core.agent.reasoning import ReasoningStep
 from kebi.core.agent.state import AgentState
 from kebi.core.agent.stream_emit import emit_step_active, emit_step_done
+from kebi.core.agent.tools._corridor import (
+    enclosing_context,
+    filter_and_order,
+    is_corridor,
+    is_route_too_long,
+    place_coords,
+    route_summary,
+)
 from kebi.core.agent.tools._hard_constraints import (
     hard_constraints_satisfied,
     split_constraints,
@@ -69,6 +77,8 @@ from kebi.core.agent.tools._search_args import (
 from kebi.core.agent.tools._summaries import (
     NEED_LOCATION,
     NONE_FIT,
+    NOTHING_ON_ROUTE,
+    ROUTE_TOO_LONG,
     TITLES,
     found_summary,
 )
@@ -347,9 +357,27 @@ async def _run_suggest_places_impl(
     # Utility errands ("ATM near me") are walked to — clamp to a walkable
     # radius so the namer scope and provider locationBias stay tight and the
     # nearest branch wins, not a prominent one across town.
-    working = clamp_to_walkable_for_utility(working, categories, get_config().movement)
-    location_label = _location_label(working)
-    _trace("locate", f"looking around {location_label}")
+    movement_cfg = get_config().movement
+    working = clamp_to_walkable_for_utility(working, categories, movement_cfg)
+
+    # Route-shaped turn (ADR-136). The length gate runs before the namer so an
+    # all-oversized route ("Hanoi to Saigon") costs nothing at all: no LLM
+    # call, no provider call, and an honest city-scale answer instead of five
+    # unrelated venues strung across a country.
+    on_route = is_corridor(working)
+    if on_route and is_route_too_long(working, movement_cfg):
+        _finish(ROUTE_TOO_LONG, kind="route_too_long")
+        return _build_command(
+            state=state,
+            tool_call_id=tool_call_id,
+            result=ConsultResult(candidates=[], empty_reason="route_too_long"),
+            steps=steps,
+        )
+
+    if on_route:
+        _trace("locate", f"looking along {route_summary(working)}")
+    else:
+        _trace("locate", f"looking around {_location_label(working)}")
 
     namer_result = await namer.generate(
         intent=query,
@@ -374,15 +402,33 @@ async def _run_suggest_places_impl(
     extra = "" if len(proposed) <= 2 else f", +{len(proposed) - 2} more"
     _trace("brainstorm", f"a few ideas — {preview}{extra}")
 
-    place_loc = _build_location_context(working)
+    # On a route, one wide disc covering the whole path replaces the disc
+    # around the origin — so a name anywhere along the way still validates in
+    # the SAME one call per name. It is coarse on purpose; `filter_and_order`
+    # below is what makes the result actually route-shaped.
+    place_loc = (
+        enclosing_context(working, movement_cfg)
+        if on_route
+        else _build_location_context(working)
+    )
     validated = await _validate_candidates(
         places_search_factory=places_search_factory,
         proposed=proposed,
         location=place_loc,
         concurrency=concurrency,
     )
+    if on_route:
+        validated = filter_and_order(
+            validated,
+            working,
+            movement_cfg,
+            coords=lambda pair: place_coords(pair[0]),
+        )
     if not validated:
-        _finish("none of those turned up near you", kind="no_provider_hits")
+        _finish(
+            NOTHING_ON_ROUTE if on_route else "none of those turned up near you",
+            kind="no_provider_hits",
+        )
         return _build_command(
             state=state,
             tool_call_id=tool_call_id,

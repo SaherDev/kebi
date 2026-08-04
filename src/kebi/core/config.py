@@ -870,6 +870,25 @@ class MovementFallback(BaseModel):
     available_modes: list[MovementMode] = ["walking", "transit"]
 
 
+class CorridorConfig(BaseModel):
+    """Route-shaped search geometry (ADR-136).
+
+    A corridor turn samples points along the route and searches around each.
+    `max_waypoints` caps the billed fan-out per turn, but never drops a stop
+    the user named — it bounds the *interior* sampling. `max_venue_route_m`
+    is the length gate: past it, nothing is meaningfully "on the way" and
+    venue stops stop being an honest answer (areas become the right answer,
+    which consult cannot return until the roadmap's Step 6).
+    """
+
+    waypoint_spacing_m: float = 25_000.0
+    min_waypoints: int = 2
+    max_waypoints: int = 5
+    max_half_width_m: float = 15_000.0
+    max_stops: int = 5
+    max_venue_route_m: float = 300_000.0
+
+
 class MovementConfig(BaseModel):
     """Movement / search-scope configuration (ADR-084).
 
@@ -895,6 +914,7 @@ class MovementConfig(BaseModel):
         "sparse": 1.6,
     }
     fallback: MovementFallback = MovementFallback()
+    corridor: CorridorConfig = CorridorConfig()
 
 
 class VoyagePricing(BaseModel):

@@ -82,6 +82,34 @@ def _render_mobility_block(working: WorkingLocation) -> str:
     )
 
 
+def _render_corridor_block(working: WorkingLocation) -> str:
+    """The turn's route, when there is one (ADR-136).
+
+    A route turn changes what a good candidate *is*: the location block's
+    single point is only the starting line, and clustering every suggestion
+    around it is the failure this step exists to fix. So the block names the
+    legs in order and asks for coverage across them. It stays deliberately
+    quiet — a fixed placeholder — on an ordinary area turn, since the slot is
+    always rendered.
+    """
+    from kebi.core.agent.tools._corridor import is_corridor, route_summary
+
+    if not is_corridor(working):
+        return "(not a journey — this is a search around one point)"
+    assert working.corridor is not None  # narrowed by is_corridor
+    legs = " → ".join([working.city, *(s.name for s in working.corridor.stops)])
+    return (
+        f"This is a JOURNEY, not a search around one point: {route_summary(working)}.\n"
+        f"Stops in order: {legs}\n"
+        "Propose visitable stops spread ALONG the way — across every stretch of "
+        "the journey, not clustered at the start or the end. A candidate that "
+        "sits far off the route is dropped before the user sees it, so a place "
+        "near the middle of a leg is worth more here than a famous one back at "
+        "the origin. Still never name the road, pass, loop, or route itself — "
+        "only places a person stops AT."
+    )
+
+
 def _render_list_block(items: list[str] | None, label: str) -> str:
     """Render an optional list as a single-line block, or 'none' when absent."""
     if not items:
@@ -134,6 +162,7 @@ class CandidateNamerService:
             intent=wrap_untrusted(intent.strip(), "user_intent"),
             location_block=_render_location_block(working),
             mobility_block=_render_mobility_block(working),
+            corridor_block=_render_corridor_block(working),
             categories_block=_render_list_block(
                 [c.value for c in categories] if categories else None,
                 "categories",

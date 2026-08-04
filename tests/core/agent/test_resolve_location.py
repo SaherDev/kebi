@@ -516,7 +516,7 @@ async def test_corridor_poi_destination_falls_back_to_coords_lookup() -> None:
     resolution = LocationResolution(
         source="user_actual",
         scope_shape="corridor",
-        corridor_destination="Suvarnabhumi Airport",
+        corridor_destinations=["Suvarnabhumi Airport"],
     )
     geocoder = _geocoder(
         reverse={"country": "Thailand", "city": "Bangkok"},
@@ -531,8 +531,8 @@ async def test_corridor_poi_destination_falls_back_to_coords_lookup() -> None:
     )
     wl = update["working_location"]
     assert wl["scope_shape"] == "corridor"
-    assert wl["corridor"]["name"] == "Suvarnabhumi Airport"
-    assert wl["corridor"]["lat"] == 13.69
+    assert wl["corridor"]["stops"][0]["name"] == "Suvarnabhumi Airport"
+    assert wl["corridor"]["stops"][0]["lat"] == 13.69
     assert update["location_clarification"] is None
 
 
@@ -543,7 +543,7 @@ async def test_corridor_area_destination_resolves_through_the_store() -> None:
     resolution = LocationResolution(
         source="user_actual",
         scope_shape="corridor",
-        corridor_destination="Hue",
+        corridor_destinations=["Hue"],
     )
     geocoder = _geocoder(
         reverse={
@@ -564,8 +564,8 @@ async def test_corridor_area_destination_resolves_through_the_store() -> None:
         )
     )
     wl = update["working_location"]
-    assert wl["corridor"]["name"] == "Hue"
-    assert wl["corridor"]["lat"] == 16.46
+    assert wl["corridor"]["stops"][0]["name"] == "Hue"
+    assert wl["corridor"]["stops"][0]["lat"] == 16.46
     areas.resolve_city.assert_awaited_with("Hue", "vn")
     # The coords-only fallback never ran — the area path answered.
     geocoder.search_area.assert_not_awaited()
@@ -578,7 +578,7 @@ async def test_corridor_unresolvable_destination_asks_not_area() -> None:
     resolution = LocationResolution(
         source="user_actual",
         scope_shape="corridor",
-        corridor_destination="home",
+        corridor_destinations=["home"],
     )
     geocoder = _geocoder(
         reverse={"country": "Thailand", "city": "Bangkok"},
@@ -599,7 +599,7 @@ async def test_corridor_with_no_destination_asks() -> None:
     resolution = LocationResolution(
         source="user_actual",
         scope_shape="corridor",
-        corridor_destination=None,
+        corridor_destinations=[],
     )
     geocoder = _geocoder(reverse={"country": "Thailand", "city": "Bangkok"})
     node = _node(resolution, geocoder)
@@ -633,3 +633,168 @@ async def test_density_from_geocoder_place_type_scales_the_radius() -> None:
         sparse["working_location"]["search_radius_m"]
         > dense["working_location"]["search_radius_m"]
     )
+
+
+# ---------------------------------------------------------------------------
+# Multi-stop routes (ADR-136)
+# ---------------------------------------------------------------------------
+
+
+def _multi_area_service(coords: dict[str, tuple[float, float]]) -> MagicMock:
+    """AreaService that resolves only the named cities it was given.
+
+    Anything else refuses, which is how an unresolvable stop reaches the
+    all-or-nothing check.
+    """
+    svc = MagicMock()
+
+    def _city(name: str, cc: str) -> AreaEntity | None:
+        point = coords.get(name)
+        if point is None:
+            return None
+        return AreaEntity(
+            entity_key=f"{cc}/{name.lower().replace(' ', '-')}",
+            entity_type="city",
+            name=name,
+            country_code=cc,
+            lat=point[0],
+            lng=point[1],
+        )
+
+    svc.resolve_country = AsyncMock(return_value=None)
+    svc.resolve_city = AsyncMock(side_effect=_city)
+    return svc
+
+
+def _vietnam_geocoder() -> MagicMock:
+    geocoder = _geocoder(reverse={"country": "Vietnam", "city": "Hanoi"})
+    geocoder.reverse.return_value = GeocodeResult(
+        lat=21.03, lng=105.83, country="Vietnam", city="Hanoi", country_code="vn"
+    )
+    return geocoder
+
+
+async def test_multi_stop_route_resolves_every_stop_in_order() -> None:
+    """A chain is one route with several stops — and the order the user said
+    them IS the order of the journey."""
+    resolution = LocationResolution(
+        source="user_actual",
+        scope_shape="corridor",
+        corridor_destinations=["Hue", "Hoi An"],
+    )
+    areas = _multi_area_service({"Hue": (16.46, 107.59), "Hoi An": (15.88, 108.33)})
+    node = _node(resolution, _vietnam_geocoder(), areas)
+    update = await node(
+        _state(
+            message="Hanoi, then Hue, then Hoi An",
+            user_location={"lat": 21.03, "lng": 105.83},
+        )
+    )
+    stops = update["working_location"]["corridor"]["stops"]
+    assert [s["name"] for s in stops] == ["Hue", "Hoi An"]
+    assert stops[0]["lat"] == 16.46
+    assert update["location_clarification"] is None
+
+
+async def test_one_unresolvable_stop_asks_rather_than_dropping_it() -> None:
+    """All-or-nothing: answering a route that quietly lost a stop answers a
+    different question than the one the user asked."""
+    resolution = LocationResolution(
+        source="user_actual",
+        scope_shape="corridor",
+        corridor_destinations=["Hue", "somewhere imaginary"],
+    )
+    areas = _multi_area_service({"Hue": (16.46, 107.59)})
+    geocoder = _vietnam_geocoder()
+    geocoder.search_area = AsyncMock(return_value=None)
+    node = _node(resolution, geocoder, areas)
+    update = await node(
+        _state(
+            message="Hanoi, then Hue, then somewhere imaginary",
+            user_location={"lat": 21.03, "lng": 105.83},
+        )
+    )
+    assert update["working_location"] is None
+    assert update["location_clarification"] == _CORRIDOR_ASK
+
+
+async def test_stop_count_is_capped(monkeypatch: Any) -> None:
+    """A runaway resolver list cannot fan out into unbounded geocodes."""
+    resolution = LocationResolution(
+        source="user_actual",
+        scope_shape="corridor",
+        corridor_destinations=[f"City {i}" for i in range(12)],
+    )
+    areas = _multi_area_service({f"City {i}": (16.0 + i, 107.0) for i in range(12)})
+    node = _node(resolution, _vietnam_geocoder(), areas)
+    update = await node(
+        _state(message="a long list", user_location={"lat": 21.03, "lng": 105.83})
+    )
+    stops = update["working_location"]["corridor"]["stops"]
+    assert len(stops) == get_config().movement.corridor.max_stops
+
+
+async def test_corridor_endpoint_prefers_the_country_scoped_lookup() -> None:
+    """The Saigon bug: qualifying a destination by the ORIGIN city misdirects
+    the geocoder. "Saigon, Hanoi, Vietnam" comes back as a plus-code
+    establishment on the edge of Hanoi — a 10 km route instead of a 1,100 km
+    one, which then silently passes the length gate. Country scope first."""
+    resolution = LocationResolution(
+        source="user_actual",
+        scope_shape="corridor",
+        corridor_destinations=["Saigon"],
+    )
+    geocoder = _vietnam_geocoder()
+
+    async def _search(*, query: str, region_code: str | None = None) -> Any:
+        if "Hanoi" in query:  # the origin-qualified query — the wrong answer
+            return GeocodeResult(
+                lat=20.99, lng=105.78, name="XQXP+Q2X", place_type="establishment"
+            )
+        return GeocodeResult(
+            lat=10.82, lng=106.63, name="Ho Chi Minh City", place_type="locality"
+        )
+
+    geocoder.search_area = AsyncMock(side_effect=_search)
+    # The area store refuses: "Saigon" doesn't round-trip to "Ho Chi Minh City".
+    node = _node(resolution, geocoder, _multi_area_service({}))
+    update = await node(
+        _state(
+            message="road trip from Hanoi to Saigon",
+            user_location={"lat": 21.03, "lng": 105.83},
+        )
+    )
+    stop = update["working_location"]["corridor"]["stops"][0]
+    assert stop["lat"] == 10.82
+
+
+async def test_corridor_endpoint_falls_back_to_city_scope_for_a_local_poi() -> None:
+    """A generic POI name only means something locally: "the airport, Vietnam"
+    resolves to the country itself, so the city-qualified query must still
+    run when the country-scoped one is not a settlement."""
+    resolution = LocationResolution(
+        source="user_actual",
+        scope_shape="corridor",
+        corridor_destinations=["the airport"],
+    )
+    geocoder = _vietnam_geocoder()
+
+    async def _search(*, query: str, region_code: str | None = None) -> Any:
+        if "Hanoi" in query:
+            return GeocodeResult(
+                lat=21.22, lng=105.80, name="Noi Bai Airport", place_type="airport"
+            )
+        return GeocodeResult(
+            lat=14.06, lng=108.28, name="Vietnam", place_type="country"
+        )
+
+    geocoder.search_area = AsyncMock(side_effect=_search)
+    node = _node(resolution, geocoder, _multi_area_service({}))
+    update = await node(
+        _state(
+            message="coffee on the way to the airport",
+            user_location={"lat": 21.03, "lng": 105.83},
+        )
+    )
+    stop = update["working_location"]["corridor"]["stops"][0]
+    assert stop["lat"] == 21.22

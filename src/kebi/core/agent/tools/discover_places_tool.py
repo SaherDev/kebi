@@ -45,6 +45,7 @@ lat/lng + positive `search_radius_m` the tool returns immediately with
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Annotated, Any
 
@@ -59,6 +60,14 @@ from kebi.core.agent.location import WorkingLocation
 from kebi.core.agent.reasoning import ReasoningStep
 from kebi.core.agent.state import AgentState
 from kebi.core.agent.stream_emit import emit_step_active, emit_step_done
+from kebi.core.agent.tools._corridor import (
+    filter_and_order,
+    is_corridor,
+    is_route_too_long,
+    place_coords,
+    route_summary,
+    waypoint_contexts,
+)
 from kebi.core.agent.tools._hard_constraints import (
     hard_constraints_satisfied,
     split_constraints,
@@ -76,6 +85,8 @@ from kebi.core.agent.tools._search_args import (
 from kebi.core.agent.tools._summaries import (
     NEED_LOCATION,
     NONE_FIT,
+    NOTHING_ON_ROUTE,
+    ROUTE_TOO_LONG,
     TITLES,
     found_summary,
 )
@@ -90,12 +101,67 @@ from kebi.core.extraction.extraction_pipeline import SearchServiceFactory
 from kebi.core.places.models import (
     LocationContext,
     PlaceCategory,
+    PlaceObject,
     PlaceQuery,
 )
 
 logger = logging.getLogger(__name__)
 
 _TOOL_NAME = "discover_places"
+
+
+async def _search_contexts(
+    *,
+    places_search_factory: SearchServiceFactory,
+    queries: list[PlaceQuery],
+    limit: int,
+    concurrency: int,
+) -> list[PlaceObject]:
+    """Run each query concurrently and return the deduped union, in order.
+
+    One query on an ordinary turn; one per sampled waypoint on a route. **Each
+    concurrent lookup opens its own `PlacesSearchService` via the factory** so
+    each gets its own `AsyncSession` — SQLAlchemy / asyncpg sessions are not
+    concurrency-safe, the same rule `suggest_places._validate_candidates`
+    follows.
+
+    Waypoint discs overlap, so the same place surfaces from several points;
+    dedup keeps the first occurrence, which is the earliest waypoint along the
+    route. A *partial* failure is survivable — a route answer missing one
+    waypoint still beats no answer — so a failed lookup is logged and skipped.
+    Only a total failure raises, which the caller reports as a provider error.
+    """
+    sem = asyncio.Semaphore(max(1, concurrency))
+
+    async def _run(query: PlaceQuery) -> list[PlaceObject]:
+        async with sem, places_search_factory() as svc:
+            return await svc.find(query, limit=limit)
+
+    outcomes = await asyncio.gather(*(_run(q) for q in queries), return_exceptions=True)
+
+    results: list[PlaceObject] = []
+    seen: set[str] = set()
+    failures: list[BaseException] = []
+    for outcome in outcomes:
+        if isinstance(outcome, BaseException):
+            failures.append(outcome)
+            continue
+        for place in outcome:
+            key = place.provider_id or place.id or place.place_name
+            if key in seen:
+                continue
+            seen.add(key)
+            results.append(place)
+
+    if failures and len(failures) == len(outcomes):
+        raise failures[0]
+    if failures:
+        logger.warning(
+            "discover_places: %d of %d waypoint lookups failed",
+            len(failures),
+            len(outcomes),
+        )
+    return results
 
 
 def _build_location_context(working: WorkingLocation) -> LocationContext:
@@ -312,22 +378,52 @@ async def _run_discover_places_impl(
 
     assert working is not None  # narrowed by _is_anchored
     # Utility errands are walked to — clamp to a walkable radius (same rule as
-    # suggest_places) so this fallback can't reintroduce a far result.
-    working = clamp_to_walkable_for_utility(working, categories, get_config().movement)
-    location_label = _location_label(working)
-    _trace("start", f"checking around {location_label}")
+    # suggest_places) so this fallback can't reintroduce a far result. On a
+    # route the clamp narrows the corridor's half-width, which is the right
+    # meaning for "an ATM on the way".
+    movement_cfg = get_config().movement
+    working = clamp_to_walkable_for_utility(working, categories, movement_cfg)
 
-    place_loc = _build_location_context(working)
-    place_query = PlaceQuery(
-        place_names=[query] if query else None,
-        categories=categories,
-        tags=tags,
-        location=place_loc,
+    # Route-shaped turn (ADR-136) — the length gate first, so an all-oversized
+    # route spends no provider call at all.
+    on_route = is_corridor(working)
+    if on_route and is_route_too_long(working, movement_cfg):
+        _finish(ROUTE_TOO_LONG, kind="route_too_long")
+        return _build_command(
+            state=state,
+            tool_call_id=tool_call_id,
+            result=ConsultResult(candidates=[], empty_reason="route_too_long"),
+            steps=steps,
+        )
+
+    if on_route:
+        _trace("start", f"checking along {route_summary(working)}")
+    else:
+        _trace("start", f"checking around {_location_label(working)}")
+
+    # One search per sampled waypoint on a route (capped by config), a single
+    # search around the working point otherwise.
+    contexts = (
+        waypoint_contexts(working, movement_cfg)
+        if on_route
+        else [_build_location_context(working)]
     )
 
+    def _query_at(location: LocationContext) -> PlaceQuery:
+        return PlaceQuery(
+            place_names=[query] if query else None,
+            categories=categories,
+            tags=tags,
+            location=location,
+        )
+
     try:
-        async with places_search_factory() as svc:
-            hits = await svc.find(place_query, limit=limit)
+        hits = await _search_contexts(
+            places_search_factory=places_search_factory,
+            queries=[_query_at(ctx) for ctx in contexts],
+            limit=limit,
+            concurrency=get_config().agent.suggest_places.provider_concurrency,
+        )
     except Exception as exc:
         logger.warning("discover_places provider lookup failed: %s", exc, exc_info=True)
         _finish("place search hit an error", kind="provider_error")
@@ -341,9 +437,18 @@ async def _run_discover_places_impl(
     # Administrative areas (cities, districts, roads) are rejected upstream at
     # validation (`_google_mapper`, ADR-082), so the provider never returns them.
     venues = hits
+    if on_route:
+        # Waypoint discs overlap and each one is a circle, so the union carries
+        # places that sit near a sample point but not near the route. Drop
+        # those, then order what survives origin → final destination: this is
+        # what turns a set of places into a journey.
+        venues = filter_and_order(venues, working, movement_cfg, coords=place_coords)
 
     if not venues:
-        _finish("nothing nearby matched that", kind="no_match")
+        _finish(
+            NOTHING_ON_ROUTE if on_route else "nothing nearby matched that",
+            kind="no_match",
+        )
         return _build_command(
             state=state,
             tool_call_id=tool_call_id,

@@ -1,6 +1,6 @@
 # Location Kinds — Roadmap
 
-**Status:** direction decided 2026-07-21 · Step 1 done 2026-07-22 (ADR-133) · Step 2 done 2026-08-02 (ADR-134) · Step 3 done 2026-08-02 (ADR-135) · Steps 4–6 re-scoped 2026-08-02 · Step 4 is next up
+**Status:** direction decided 2026-07-21 · Step 1 done 2026-07-22 (ADR-133) · Step 2 done 2026-08-02 (ADR-134) · Step 3 done 2026-08-02 (ADR-135) · Steps 4–6 re-scoped 2026-08-02 · Step 4 done 2026-08-04 (ADR-136) · Step 5 is next up; Step 7 runnable in parallel
 **Scope:** this is a roadmap, not an implementation plan. Each step below is a
 self-contained brief — plan and build each one as its own feature, in order.
 One plan doc + ADR per step when it starts.
@@ -47,6 +47,12 @@ One plan doc + ADR per step when it starts.
 **Kebi is a traveler who's local everywhere.** It answers at whatever
 granularity the question demands — a café, a neighborhood, a city, a region, a
 scenic route — each stored, ranked, and rendered as what it actually is.
+
+**Kebi is a places engine, not a route solution.** It surfaces areas and venues
+— near a point, on the way between two, or anywhere the question points. "On
+the way" is a spatial filter like "near me", not a routing product: routing
+belongs to maps apps, and what's worth stopping at belongs here. Everything
+below follows from that.
 
 - Two stored first-class kinds: **venue, area** — accept-and-type, never
   reject-or-mislabel. **Route is an answer shape, not an entity**: journeys
@@ -224,34 +230,59 @@ restaurant." *(met)*
 
 ---
 
-## Step 4 — Trip-shaped queries answer from data
+## Step 4 — Trip-shaped queries answer from data  *(done 2026-08-04 — ADR-136, `feature/corridor-search`)*
 
 **Problem it closes:** problem 5 — corridor is prose-only.
 
-**Decided direction:**
-- Corridor search becomes real geometry: both endpoints are stored entities;
-  sample waypoints between centroids (count scaled by corridor length); union
-  of the existing disc searches at each waypoint; dedup; order results by
-  progress along the route.
-- The candidate namer receives corridor context so proposals are along the
-  way.
+**Shipped direction:**
+- Corridor search is real geometry: waypoints sampled along the route, union
+  of the existing disc searches, dedup, off-route filtering, and ordering by
+  progress along the route. Both place tools share one geometry helper —
+  `suggest_places` covers the whole route with a single coarse bound so its
+  call count is unchanged, `discover_places` fans out across the sampled
+  points under a config cap.
+- The candidate namer receives route context, so proposals spread along the
+  way instead of clustering at the origin.
 - The answer stays within the existing one-list contract (ADR-091), ordered by
   route progress and narrated as a journey.
 
-**Constraints:** straight-line waypoint sampling is v1 — road-shape routing is
-explicitly out of scope (OSM routing exists if it ever matters). No new
-geo infrastructure; reuse the existing radius-search path. The journey is
-composed at answer time and never persisted — corridor search returns
-validated venues, the agent supplies the ordering and the narration.
+**Deviations (in ADR-136), each grounded:**
+- **A route is an ordered chain, not one segment.** "Hanoi, then Hue, then Hoi
+  An" is a normal way to describe a trip; a single-destination path is just a
+  one-stop chain. Stops resolve all-or-nothing — silently dropping one answers
+  a different question.
+- **Scale is gated, per leg.** Venue stops are honest up to roughly a long
+  day's drive; across a country the real stops are cities, which consult
+  cannot return until Step 6. An over-long leg gets no interior sampling, and
+  a trip with no answerable leg returns a distinct outcome that spends **no**
+  model or provider call — the agent says the trip is city-scale and works out
+  which stretch the user wants. That outcome is an answer, not a failure.
+- **POI endpoints are handled directly** (the open question above): the
+  geometry consumes coordinates only, so an endpoint with no `area_entities`
+  row needs no degrade-to-containing-area.
+- **Endpoint resolution reordered.** Qualifying a destination by the *origin*
+  city — the previous single-destination behaviour — resolved "Saigon" from
+  Hanoi to an unrelated address on Hanoi's edge, a 10 km route instead of
+  1,100 km. Resolution is now store → country-scoped (settlement only) →
+  locally-qualified.
+- **Hard extent-scoping still did not land.** Corridor geometry turned out not
+  to need it: the route's own half-width is the fence. Extent-scoping remains
+  unbuilt and unclaimed.
 
-**Note:** with kind navigation deferred, this is the roadmap's only consumer
-of real geometry — the hard extent-scoping deferred out of Step 3 lands here
-or nowhere. A corridor endpoint that resolves to a venue rather than an area
-has no `area_entities` row; decide at plan time whether such endpoints
-degrade to their containing area or are handled directly.
+**Constraints held:** straight-line waypoint sampling is v1 — road-shape
+routing stays out of scope, and is what would make this a routing product
+rather than a spatial filter. No new geo infrastructure; the existing
+radius-search path is reused unchanged. The journey is composed at answer time
+and never persisted.
+
+**Rollout note:** config-only. No migration, no contract change, no cache
+invalidation. Checkpointed conversations carrying the old single-destination
+shape are coerced forward explicitly, so a turn in flight survives the deploy.
 
 **Done when:** "trip from Da Nang to Hue" returns an ordered set of real,
-validated stops along the route instead of one famous landmark.
+validated stops along the route instead of one famous landmark. *(met —
+verified live at all three scales: single leg, multi-stop chain, and a
+country-length trip that declines to invent stops)*
 
 ---
 

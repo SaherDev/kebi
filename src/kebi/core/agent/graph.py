@@ -31,6 +31,7 @@ from langgraph.prebuilt import ToolNode
 
 from kebi.core.agent._trace_context import feature_span
 from kebi.core.agent.location import (
+    CorridorPath,
     CorridorTarget,
     LocationResolution,
     WorkingLocation,
@@ -41,6 +42,7 @@ from kebi.core.agent.messages import extract_text_content
 from kebi.core.agent.reasoning import ReasoningStep
 from kebi.core.agent.state import AgentState
 from kebi.core.agent.stream_emit import emit_step_active, emit_step_done
+from kebi.core.areas.service import CITY_LEVEL_TYPES
 from kebi.core.config import get_config
 from kebi.core.utils.geo import haversine_m
 from kebi.providers.geocoding import GeocodingError
@@ -411,10 +413,28 @@ def _render_movement_context(state: AgentState) -> str:
         "per-turn signal overrides the user's default for this turn only."
     ]
     corridor = working.get("corridor")
-    if shape == "corridor" and corridor:
+    if shape == "corridor" and isinstance(corridor, dict) and corridor.get("stops"):
+        stops = [s.get("name") for s in corridor["stops"] if s.get("name")]
+        route = " → ".join([working.get("city") or "here", *stops])
         parts.append(
-            f"The user is looking along the route toward {corridor.get('name')} "
-            "— reason about places on the way, not a circle around one point."
+            f"This turn is a journey: {route}. ONE place search already covers "
+            "the WHOLE route — the search is aimed along the entire journey, "
+            "not at one end of it. Do NOT call a place tool again per stretch, "
+            "per city, or per leg; that spends your tool budget and returns the "
+            "same places. Search once, then write the answer. Results come back "
+            "ALREADY ORDERED from where the user starts to where they end up — "
+            "narrate them in that order as a journey, grouping by stretch as "
+            "you go, not as a ranked list. Reason about places on the way, "
+            "never a circle around one point. NEVER put a road, pass, loop, "
+            "highway, or route forward "
+            "as a stop — not from a tool and not from your own knowledge. A "
+            "stop is somewhere a person arrives AT; a pass is something they "
+            "drive THROUGH. Name the viewpoint, the beach, the café — not the "
+            "road it sits on. If a search comes back route_too_long, the trip "
+            "is city-scale: say so in your own words as an observation about "
+            "the trip, never as a remark about tools or searches, and work out "
+            "with the user which stretch or which cities they want — do not "
+            "invent stops and do not fall back to the starting point."
         )
     if is_fallback:
         parts.append(
@@ -1043,41 +1063,96 @@ async def _build_working_location(
     )
 
 
-async def _resolve_corridor(
+# A country-scoped geocode is trusted for a corridor endpoint when it comes
+# back as a real settlement. `sublocality` joins the entity-level set because
+# an endpoint is only a coordinate, never an identity — a town that is a
+# sublocality (Hoi An) is a perfectly good place for a journey to end, even
+# though it would not earn its own area entity.
+_ENDPOINT_SETTLEMENT_TYPES = CITY_LEVEL_TYPES | {"sublocality", "neighborhood"}
+
+
+async def _resolve_corridor_stop(
     destination: str | None,
     working: WorkingLocation,
     geocoder: Any,
     area_service: Any,
 ) -> CorridorTarget | None:
-    """Eagerly resolve a corridor destination, area-first.
+    """Eagerly resolve one corridor stop, most-specific-identity first.
 
-    A destination that is itself an area ("Hue" from Da Nang) resolves
-    through the area service — verified within the working country and
-    persisted, so both corridor endpoints are stored entities (the Step 4
-    precondition). A destination that refuses the area round-trip is
-    usually a POI (an airport, a landmark); it falls back to one
-    coords-only geocode scoped to the working city — an endpoint
-    coordinate, not an identity, so nothing is persisted.
+    Three attempts, in order of how much they can be trusted:
 
-    Returns `None` when there is no destination name or neither path
-    resolves. The resolver is instructed to flag implicit anchors ("home",
-    "work" — kebi stores no user addresses) as needing clarification before
-    they ever reach here; this is the second line of defence for a named
-    place that simply does not resolve. The caller maps `None` to a
-    clarification ask — never a silent fallback to an area search.
+    1. **The area store** — a stop that is itself an area ("Hue") resolves to
+       a verified, persisted entity (ADR-134).
+    2. **A country-scoped geocode**, accepted only when it returns a real
+       settlement. This is what catches a name the store refuses on the
+       round-trip: "Saigon" does not slug-match "Ho Chi Minh City", but the
+       country-scoped lookup lands on the right city.
+    3. **A city-scoped geocode**, for a generic POI name that only means
+       anything locally — "the airport" is Danang International near Da Nang,
+       and nothing at all at country scope.
+
+    The order matters, and getting it wrong is not subtle: qualifying by the
+    *origin* city first turns "Saigon" (from Hanoi) into a plus-code
+    establishment on the outskirts of Hanoi — a 10 km route instead of a
+    1,100 km one, which then silently passes the length gate. Coordinates are
+    all the route geometry consumes, so a POI endpoint needs no area entity
+    and is handled directly rather than degraded to its containing area
+    (ADR-136).
+
+    Returns `None` when there is no name or no attempt resolves.
     """
     name = (destination or "").strip()
     if not name:
         return None
+
     if working.country_code:
         entity = await area_service.resolve_city(name, working.country_code)
         if entity is not None:
             return CorridorTarget(name=name, lat=entity.lat, lng=entity.lng)
+
+    if working.country:
+        wide = await geocoder.search_area(
+            query=f"{name}, {working.country}", region_code=working.country_code
+        )
+        if wide is not None and wide.place_type in _ENDPOINT_SETTLEMENT_TYPES:
+            return CorridorTarget(name=name, lat=wide.lat, lng=wide.lng)
+
     query = ", ".join(p for p in (name, working.city, working.country) if p)
     geo = await geocoder.search_area(query=query, region_code=working.country_code)
     if geo is None:
         return None
     return CorridorTarget(name=name, lat=geo.lat, lng=geo.lng)
+
+
+async def _resolve_corridor_path(
+    destinations: list[str],
+    working: WorkingLocation,
+    geocoder: Any,
+    area_service: Any,
+) -> CorridorPath | None:
+    """Resolve the turn's ordered route (ADR-136).
+
+    Stops resolve **in the order the user said them**, and the resolution is
+    **all-or-nothing**: one unresolvable stop returns `None`, which the caller
+    maps to a clarification ask. Silently dropping a stop would answer a
+    different question than the one asked — the same discipline the
+    single-destination path has always followed for an unresolvable endpoint.
+
+    The number of stops is capped by config so a runaway resolver list cannot
+    fan out into unbounded geocodes; extra stops are truncated, not resolved.
+    """
+    names = [name for name in (d.strip() for d in destinations) if name]
+    if not names:
+        return None
+    names = names[: get_config().movement.corridor.max_stops]
+
+    stops: list[CorridorTarget] = []
+    for name in names:
+        stop = await _resolve_corridor_stop(name, working, geocoder, area_service)
+        if stop is None:
+            return None
+        stops.append(stop)
+    return CorridorPath(stops=stops)
 
 
 async def _resolve_search_scope(
@@ -1100,10 +1175,10 @@ async def _resolve_search_scope(
     fallback_mode = available[0] if available else "transit"
     effective_mode = resolution.effective_mode or fallback_mode
 
-    corridor: CorridorTarget | None = None
+    corridor: CorridorPath | None = None
     if resolution.scope_shape == "corridor":
-        corridor = await _resolve_corridor(
-            resolution.corridor_destination, working, geocoder, area_service
+        corridor = await _resolve_corridor_path(
+            resolution.corridor_destinations, working, geocoder, area_service
         )
         if corridor is None:
             return None
