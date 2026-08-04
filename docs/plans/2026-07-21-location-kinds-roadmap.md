@@ -78,12 +78,14 @@ One plan doc + ADR per step when it starts.
    ("no venue-typed non-venues in the library") currently rests on nobody
    tapping save.
 
-   **Not covered anywhere else:** Steps 5 and 6 put `kind` on the *answer
-   item* — how something renders — while ADR-134 explicitly declined a `kind`
-   column on `places`, and library kind rendering sits in Out of scope. This
-   is the persistence question neither owns, and it needs its own decision:
-   what marks a stored place as non-venue when the provider's types don't,
-   and what the save does about it.
+   **Assigned to Step 6 (2026-08-04).** A save-time guard was investigated and
+   abandoned — the geocoder types Hai Van Pass and Lang Co Beach identically as
+   `natural_feature`, so any guard that blocks the pass also blocks beaches,
+   lagoons and springs, which are among the best saves on that very route. The
+   answer is the model, not a guard: a pass is geography with extent, so it
+   should be an **area**, and then saving it is an area save rather than a
+   venue row. Until Step 6 runs, a user can save a pass into their library as a
+   venue — accepted knowingly while usage is still internal.
 
 ## Goal
 
@@ -394,6 +396,24 @@ without anything being written to the database.
   a pin — with a one-line why; a composed journey renders as ordered venue
   stops along the way (there is no route card). No kind jargon or entity
   internals in the UI.
+
+**Also closes problem 11 — a named natural feature is an area, not a venue**
+*(added 2026-08-04)*. Hai Van Pass ships today as a venue card because Google
+types it `historical_landmark`, and it is savable as one. Guarding the save was
+investigated and abandoned: the provider holds two records for it, and the
+geocoder types the pass and Lang Co Beach identically as `natural_feature`, so
+no signal separates "geography you drive through" from "a beach you go to".
+
+The way out is not a guard but the right model — **a pass is geography with
+extent, which is what an area is.** Made an area entity it renders as a shaded
+extent rather than a pin, and the save problem dissolves, because saving it is
+an area save and never a venue row. Two things block that today and belong in
+this step: `AreaEntityType` carries only country/city/neighborhood, and the
+resolver accepts settlement-level types only, so `natural_feature` refuses.
+
+Note this needs geometry the provider will not give — Google returns a 0.4 km
+bbox for a ~20 km road — so the extent has to come from elsewhere (OSM holds
+the actual way) or the render degrades to a point. Decide that here.
 
 **Constraints:** area answers are recommendations, not doorways — the
 zoom-in affordance and everything behind it is deferred (see Out of scope).
