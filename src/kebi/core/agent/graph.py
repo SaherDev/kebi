@@ -31,6 +31,7 @@ from langgraph.prebuilt import ToolNode
 
 from kebi.core.agent._trace_context import feature_span
 from kebi.core.agent.location import (
+    CorridorPath,
     CorridorTarget,
     LocationResolution,
     WorkingLocation,
@@ -41,6 +42,7 @@ from kebi.core.agent.messages import extract_text_content
 from kebi.core.agent.reasoning import ReasoningStep
 from kebi.core.agent.state import AgentState
 from kebi.core.agent.stream_emit import emit_step_active, emit_step_done
+from kebi.core.areas.service import CITY_LEVEL_TYPES
 from kebi.core.config import get_config
 from kebi.core.utils.geo import haversine_m
 from kebi.providers.geocoding import GeocodingError
@@ -379,6 +381,57 @@ def _render_location_context(state: AgentState) -> str:
     )
 
 
+def _render_legs(working: dict[str, Any]) -> str:
+    """Describe each leg of the route and whether it is actually a drive.
+
+    A multi-city trip is several trips at different scales. "Hanoi, then Hue,
+    then Hoi An" is a 548 km hop everyone flies followed by a 105 km coastal
+    road that is the reason to go at all. The search already knows this — it
+    skips sampling the long leg — but without saying so the agent narrates a
+    road trip through the middle of a leg nobody drives, inventing stops for
+    it. Naming the scale per leg is what lets the answer switch register:
+    transport question here, stop-by-stop drive there.
+
+    Defensive: `working` is raw checkpointed state, so a shape that no longer
+    validates degrades to no leg block rather than failing the turn.
+    """
+    from kebi.core.agent.tools._corridor import leg_summaries
+
+    try:
+        parsed = WorkingLocation.model_validate(working)
+        legs = leg_summaries(parsed, get_config().movement)
+    except Exception:  # noqa: BLE001 - rendering must never break a turn
+        logger.warning("could not summarise corridor legs", exc_info=True)
+        return ""
+    if not legs:
+        return ""
+
+    lines = [
+        f"- {leg.origin} → {leg.destination}: {leg.km:.0f} km — "
+        + (
+            "a real drive; this is where stop-by-stop belongs."
+            if leg.drivable
+            else "TOO FAR TO DRIVE WITH STOPS."
+        )
+        for leg in legs
+    ]
+    block = "The legs of this trip:\n" + "\n".join(lines)
+    if all(leg.drivable for leg in legs):
+        return block
+    return (
+        block + "\n"
+        "For a leg marked TOO FAR TO DRIVE WITH STOPS: do NOT narrate a drive "
+        "or invent places along it — nothing is 'on the way' across a "
+        "distance like that. Say how people actually cover it (a flight, an "
+        "overnight train, a sleeper bus), roughly how long it takes and "
+        "roughly what it costs, from your own knowledge — that is judgement "
+        "about a trip, not a booking service, so no timetables and no exact "
+        "fares. Then treat BOTH ends as destinations in their own right: what "
+        "is worth doing in each, and how long to give it. The drivable legs "
+        "still get the stop-by-stop treatment."
+    )
+
+
 def _render_movement_context(state: AgentState) -> str:
     """Render the `{movement_context}` slot — the turn's resolved search scope.
 
@@ -411,10 +464,52 @@ def _render_movement_context(state: AgentState) -> str:
         "per-turn signal overrides the user's default for this turn only."
     ]
     corridor = working.get("corridor")
-    if shape == "corridor" and corridor:
+    if shape == "corridor" and isinstance(corridor, dict) and corridor.get("stops"):
+        stops = [s.get("name") for s in corridor["stops"] if s.get("name")]
+        route = " → ".join([working.get("city") or "here", *stops])
+        parts.append(_render_legs(working))
         parts.append(
-            f"The user is looking along the route toward {corridor.get('name')} "
-            "— reason about places on the way, not a circle around one point."
+            f"This turn is a journey: {route}. **Give the whole journey.** "
+            "The complete answer is the drive as you would describe it to a "
+            "friend — every stop worth making, in order, with what to do at "
+            "each. That is the FLOOR, not the goal: never answer a journey "
+            "question with a partial list because one tool happened to return "
+            "something. In particular, the user's own saved places are an "
+            "ENRICHMENT of that answer, never a replacement for it — a reply "
+            "that is only their saves is a worse answer than they would get "
+            "from asking anyone else, no matter how well it is written.\n"
+            "So on a journey turn, do BOTH in the same turn: name the stops "
+            "you know and pass them to `suggest_places` as `place_names` so "
+            "they come back verified as real cards, AND call `find_saved` for "
+            "anything of theirs along the route. Weave the saves into the "
+            "journey at the point where they fall, called out as theirs "
+            "('you've got X saved right here — still haven't been'). That "
+            "combination is the whole point: the answer anyone could give, "
+            "plus the part only you know about this person.\n"
+            "ONE place search already covers the WHOLE route — the search is "
+            "aimed along the entire journey, not at one end of it. Do NOT "
+            "call the same place tool again per stretch, per city, or per "
+            "leg; that spends your budget and returns the same places. "
+            "Results come back ALREADY ORDERED from where the user starts to "
+            "where they end up — narrate them in that order, grouping by "
+            "stretch as you go, not as a ranked list. **Name what is worth "
+            "doing AT each named stop, not only between them** — a trip "
+            "through several places is mostly about those places, so someone "
+            "going Hanoi → Hue → Hoi An wants what to do in Hanoi and in Hue, "
+            "not only what sits on the road. The search covers the named stops "
+            "as well as the stretches between them, so put them all in the one "
+            "call. A famous pass or scenic "
+            "stretch belongs in the answer when it is the reason people make "
+            "the drive: say what to do there and where to pull over. Add the "
+            "texture that makes a stop worth it — when the light is good, "
+            "what to order, how long to linger, what to skip if time is "
+            "short. Never narrate your own reasoning about what counts as a "
+            "stop — just write the answer. If a search comes back "
+            "route_too_long, the trip "
+            "is city-scale: say so in your own words as an observation about "
+            "the trip, never as a remark about tools or searches, and work out "
+            "with the user which stretch or which cities they want — do not "
+            "invent stops and do not fall back to the starting point."
         )
     if is_fallback:
         parts.append(
@@ -1043,41 +1138,96 @@ async def _build_working_location(
     )
 
 
-async def _resolve_corridor(
+# A country-scoped geocode is trusted for a corridor endpoint when it comes
+# back as a real settlement. `sublocality` joins the entity-level set because
+# an endpoint is only a coordinate, never an identity — a town that is a
+# sublocality (Hoi An) is a perfectly good place for a journey to end, even
+# though it would not earn its own area entity.
+_ENDPOINT_SETTLEMENT_TYPES = CITY_LEVEL_TYPES | {"sublocality", "neighborhood"}
+
+
+async def _resolve_corridor_stop(
     destination: str | None,
     working: WorkingLocation,
     geocoder: Any,
     area_service: Any,
 ) -> CorridorTarget | None:
-    """Eagerly resolve a corridor destination, area-first.
+    """Eagerly resolve one corridor stop, most-specific-identity first.
 
-    A destination that is itself an area ("Hue" from Da Nang) resolves
-    through the area service — verified within the working country and
-    persisted, so both corridor endpoints are stored entities (the Step 4
-    precondition). A destination that refuses the area round-trip is
-    usually a POI (an airport, a landmark); it falls back to one
-    coords-only geocode scoped to the working city — an endpoint
-    coordinate, not an identity, so nothing is persisted.
+    Three attempts, in order of how much they can be trusted:
 
-    Returns `None` when there is no destination name or neither path
-    resolves. The resolver is instructed to flag implicit anchors ("home",
-    "work" — kebi stores no user addresses) as needing clarification before
-    they ever reach here; this is the second line of defence for a named
-    place that simply does not resolve. The caller maps `None` to a
-    clarification ask — never a silent fallback to an area search.
+    1. **The area store** — a stop that is itself an area ("Hue") resolves to
+       a verified, persisted entity (ADR-134).
+    2. **A country-scoped geocode**, accepted only when it returns a real
+       settlement. This is what catches a name the store refuses on the
+       round-trip: "Saigon" does not slug-match "Ho Chi Minh City", but the
+       country-scoped lookup lands on the right city.
+    3. **A city-scoped geocode**, for a generic POI name that only means
+       anything locally — "the airport" is Danang International near Da Nang,
+       and nothing at all at country scope.
+
+    The order matters, and getting it wrong is not subtle: qualifying by the
+    *origin* city first turns "Saigon" (from Hanoi) into a plus-code
+    establishment on the outskirts of Hanoi — a 10 km route instead of a
+    1,100 km one, which then silently passes the length gate. Coordinates are
+    all the route geometry consumes, so a POI endpoint needs no area entity
+    and is handled directly rather than degraded to its containing area
+    (ADR-136).
+
+    Returns `None` when there is no name or no attempt resolves.
     """
     name = (destination or "").strip()
     if not name:
         return None
+
     if working.country_code:
         entity = await area_service.resolve_city(name, working.country_code)
         if entity is not None:
             return CorridorTarget(name=name, lat=entity.lat, lng=entity.lng)
+
+    if working.country:
+        wide = await geocoder.search_area(
+            query=f"{name}, {working.country}", region_code=working.country_code
+        )
+        if wide is not None and wide.place_type in _ENDPOINT_SETTLEMENT_TYPES:
+            return CorridorTarget(name=name, lat=wide.lat, lng=wide.lng)
+
     query = ", ".join(p for p in (name, working.city, working.country) if p)
     geo = await geocoder.search_area(query=query, region_code=working.country_code)
     if geo is None:
         return None
     return CorridorTarget(name=name, lat=geo.lat, lng=geo.lng)
+
+
+async def _resolve_corridor_path(
+    destinations: list[str],
+    working: WorkingLocation,
+    geocoder: Any,
+    area_service: Any,
+) -> CorridorPath | None:
+    """Resolve the turn's ordered route (ADR-136).
+
+    Stops resolve **in the order the user said them**, and the resolution is
+    **all-or-nothing**: one unresolvable stop returns `None`, which the caller
+    maps to a clarification ask. Silently dropping a stop would answer a
+    different question than the one asked — the same discipline the
+    single-destination path has always followed for an unresolvable endpoint.
+
+    The number of stops is capped by config so a runaway resolver list cannot
+    fan out into unbounded geocodes; extra stops are truncated, not resolved.
+    """
+    names = [name for name in (d.strip() for d in destinations) if name]
+    if not names:
+        return None
+    names = names[: get_config().movement.corridor.max_stops]
+
+    stops: list[CorridorTarget] = []
+    for name in names:
+        stop = await _resolve_corridor_stop(name, working, geocoder, area_service)
+        if stop is None:
+            return None
+        stops.append(stop)
+    return CorridorPath(stops=stops)
 
 
 async def _resolve_search_scope(
@@ -1100,10 +1250,10 @@ async def _resolve_search_scope(
     fallback_mode = available[0] if available else "transit"
     effective_mode = resolution.effective_mode or fallback_mode
 
-    corridor: CorridorTarget | None = None
+    corridor: CorridorPath | None = None
     if resolution.scope_shape == "corridor":
-        corridor = await _resolve_corridor(
-            resolution.corridor_destination, working, geocoder, area_service
+        corridor = await _resolve_corridor_path(
+            resolution.corridor_destinations, working, geocoder, area_service
         )
         if corridor is None:
             return None

@@ -52,6 +52,14 @@ from kebi.core.agent.location import WorkingLocation
 from kebi.core.agent.reasoning import ReasoningStep
 from kebi.core.agent.state import AgentState
 from kebi.core.agent.stream_emit import emit_step_active, emit_step_done
+from kebi.core.agent.tools._corridor import (
+    enclosing_context,
+    filter_and_order,
+    is_corridor,
+    is_route_too_long,
+    place_coords,
+    route_summary,
+)
 from kebi.core.agent.tools._hard_constraints import (
     hard_constraints_satisfied,
     split_constraints,
@@ -63,12 +71,15 @@ from kebi.core.agent.tools._search_args import (
     COUNTRY_DESC,
     LIMIT_DESC,
     NEIGHBORHOOD_DESC,
+    PLACE_NAMES_DESC,
     QUERY_DESC,
     TAGS_DESC,
 )
 from kebi.core.agent.tools._summaries import (
     NEED_LOCATION,
     NONE_FIT,
+    NOTHING_ON_ROUTE,
+    ROUTE_TOO_LONG,
     TITLES,
     found_summary,
 )
@@ -85,6 +96,7 @@ from kebi.core.agent.tools.consult_models import ConsultCandidate, ConsultResult
 from kebi.core.config import get_config
 from kebi.core.extraction.candidate_mapper import normalize_query
 from kebi.core.extraction.extraction_pipeline import SearchServiceFactory
+from kebi.core.knowledge.schemas import _slugify
 from kebi.core.places.models import (
     LocationContext,
     PlaceCategory,
@@ -191,6 +203,9 @@ def build_suggest_places_tool(
         query: Annotated[str, Field(description=QUERY_DESC)],
         tool_call_id: Annotated[str, InjectedToolCallId],
         state: Annotated[AgentState, InjectedState],
+        place_names: Annotated[
+            list[str] | None, Field(description=PLACE_NAMES_DESC)
+        ] = None,
         categories: Annotated[
             list[PlaceCategory] | None, Field(description=CATEGORIES_DESC)
         ] = None,
@@ -222,6 +237,7 @@ def build_suggest_places_tool(
                 state=state,
                 tool_call_id=tool_call_id,
                 query=query,
+                place_names=place_names,
                 categories=categories,
                 tags=tags,
                 neighborhood_override=neighborhood,
@@ -251,6 +267,9 @@ async def _run_suggest_places(
     limit: int,
     name_count: int,
     concurrency: int,
+    # Defaulted so the many existing call sites (and tests) that predate
+    # agent-supplied naming keep the namer path unchanged.
+    place_names: list[str] | None = None,
 ) -> Command[Any]:
     """Inner body — runs the namer + provider phases. Wrapped by with_timeout."""
     with set_tool(_TOOL_NAME):
@@ -260,6 +279,7 @@ async def _run_suggest_places(
             state=state,
             tool_call_id=tool_call_id,
             query=query,
+            place_names=place_names,
             categories=categories,
             tags=tags,
             neighborhood_override=neighborhood_override,
@@ -286,6 +306,7 @@ async def _run_suggest_places_impl(
     limit: int,
     name_count: int,
     concurrency: int,
+    place_names: list[str] | None = None,
 ) -> Command[Any]:
     """The agent-supplied area overrides (neighborhood / city / country)
     are accepted to keep the arg schema byte-identical to `find_saved`,
@@ -347,20 +368,56 @@ async def _run_suggest_places_impl(
     # Utility errands ("ATM near me") are walked to — clamp to a walkable
     # radius so the namer scope and provider locationBias stay tight and the
     # nearest branch wins, not a prominent one across town.
-    working = clamp_to_walkable_for_utility(working, categories, get_config().movement)
-    location_label = _location_label(working)
-    _trace("locate", f"looking around {location_label}")
+    movement_cfg = get_config().movement
+    working = clamp_to_walkable_for_utility(working, categories, movement_cfg)
 
-    namer_result = await namer.generate(
-        intent=query,
-        working=working,
-        categories=categories,
-        tags=tags,
-        taste_summary=state.get("taste_profile_summary") or "",
-        count=name_count,
-        user_id=user_id,
-    )
-    proposed: list[CandidateName] = namer_result.candidates
+    # Route-shaped turn (ADR-136). The length gate runs before the namer so an
+    # all-oversized route ("Hanoi to Saigon") costs nothing at all: no LLM
+    # call, no provider call, and an honest city-scale answer instead of five
+    # unrelated venues strung across a country.
+    on_route = is_corridor(working)
+    if on_route and is_route_too_long(working, movement_cfg):
+        _finish(ROUTE_TOO_LONG, kind="route_too_long")
+        return _build_command(
+            state=state,
+            tool_call_id=tool_call_id,
+            result=ConsultResult(candidates=[], empty_reason="route_too_long"),
+            steps=steps,
+        )
+
+    if on_route:
+        _trace("locate", f"looking along {route_summary(working)}")
+    else:
+        _trace("locate", f"looking around {_location_label(working)}")
+
+    # The agent may supply the names itself when it already knows the area
+    # (ADR-137). It is the strongest model in the turn, so its own knowledge of
+    # what is worth going to beats a helper model's — and validation is
+    # identical either way, so a name it invents is dropped exactly like one
+    # the namer invents. The namer stays as the fallback for when the agent
+    # has nothing specific in mind.
+    supplied = [name.strip() for name in (place_names or []) if name.strip()]
+    if supplied:
+        proposed = [
+            # The agent writes the user-facing rationale in its own prose, so
+            # the per-candidate reason stays empty here rather than being
+            # invented by the tool layer.
+            CandidateName(name=name, reason="", icon=None)
+            for name in supplied
+        ]
+        _trace("agent_names", f"checking {len(proposed)} you had in mind")
+    else:
+        namer_result = await namer.generate(
+            intent=query,
+            working=working,
+            categories=categories,
+            tags=tags,
+            taste_summary=state.get("taste_profile_summary") or "",
+            count=name_count,
+            user_id=user_id,
+        )
+        proposed = namer_result.candidates
+
     if not proposed:
         _finish("nothing specific came to mind here", kind="namer_empty")
         return _build_command(
@@ -374,21 +431,48 @@ async def _run_suggest_places_impl(
     extra = "" if len(proposed) <= 2 else f", +{len(proposed) - 2} more"
     _trace("brainstorm", f"a few ideas — {preview}{extra}")
 
-    place_loc = _build_location_context(working)
+    # On a route, one wide disc covering the whole path replaces the disc
+    # around the origin — so a name anywhere along the way still validates in
+    # the SAME one call per name. It is coarse on purpose; `filter_and_order`
+    # below is what makes the result actually route-shaped.
+    place_loc = (
+        enclosing_context(working, movement_cfg)
+        if on_route
+        else _build_location_context(working)
+    )
     validated = await _validate_candidates(
         places_search_factory=places_search_factory,
         proposed=proposed,
         location=place_loc,
         concurrency=concurrency,
     )
+    if on_route:
+        validated = filter_and_order(
+            validated,
+            working,
+            movement_cfg,
+            coords=lambda pair: place_coords(pair[0]),
+        )
     if not validated:
-        _finish("none of those turned up near you", kind="no_provider_hits")
+        _finish(
+            NOTHING_ON_ROUTE if on_route else "none of those turned up near you",
+            kind="no_provider_hits",
+        )
         return _build_command(
             state=state,
             tool_call_id=tool_call_id,
             result=ConsultResult(candidates=[], empty_reason="no_match"),
             steps=steps,
         )
+
+    # Drop anything another tool already returned this turn — the user's own
+    # save has already been shown as theirs, and showing it again as a fresh
+    # suggestion is one place rendered as two cards.
+    surfaced = _already_surfaced_ids(state)
+    if surfaced:
+        validated = [
+            pair for pair in validated if (pair[0].provider_id or "") not in surfaced
+        ]
 
     # Safety values (dietary/accessibility) exclude; other tag values are
     # preference signals — the FULL tag list already steered the namer's
@@ -421,7 +505,10 @@ async def _run_suggest_places_impl(
             user_data=None,
             source="suggested",
             rrf_score=0.0,
-            reason=reason,
+            # Empty when the agent named this itself — it writes the rationale
+            # in its own prose, and an empty string would render as a blank
+            # reason line rather than no reason at all.
+            reason=reason or None,
         )
         for place, reason in final
     ]
@@ -432,6 +519,95 @@ async def _run_suggest_places_impl(
         result=ConsultResult(candidates=candidates, empty_reason=None),
         steps=steps,
     )
+
+
+def _already_surfaced_ids(state: AgentState) -> set[str]:
+    """Provider ids another tool has already returned this turn.
+
+    The consult tools each dedupe internally but not against each other, so a
+    place the user has saved comes back from `find_saved` AND again from
+    `suggest_places` — two cards for one place, under two different
+    `recommendation_id`s, which also means a later accept/save signal could
+    attribute to the wrong recommendation.
+
+    Tools run one at a time (`parallel_tool_calls=False`), so by the time this
+    runs the earlier `ToolMessage` is already in `messages`. The saved copy
+    wins because it carries `user_data` — "you've been meaning to go here" is
+    a better card than "here's a suggestion".
+    """
+    seen: set[str] = set()
+    for message in state.get("messages") or []:
+        if not isinstance(message, ToolMessage):
+            continue
+        try:
+            result = ConsultResult.model_validate_json(str(message.content))
+        except Exception:  # noqa: BLE001 - a non-consult tool payload, skip it
+            continue
+        for candidate in result.candidates:
+            if candidate.place.provider_id:
+                seen.add(candidate.place.provider_id)
+    return seen
+
+
+# How many provider results to consider per proposed name. Google bills the
+# request, not the result count (the field mask is what sets the tier), so
+# asking for a few costs the same as asking for one and gives the name match
+# something to choose between.
+_NAME_MATCH_CANDIDATES = 5
+
+
+def _best_name_match(asked: str, hits: list[PlaceObject]) -> PlaceObject | None:
+    """Pick the hit that best answers the name that was asked for.
+
+    Nearest-first ordering is right for a brand ("the closest Watsons") and
+    wrong for a landmark: asking for "Tam Coc" returned *Tam Coc Homestay Of
+    Ms Loan* because a guesthouse happened to sit closer to the search centre
+    than the karst boat ride, and "Marble Mountains" returned the *Ticket
+    Booth (Gate A1)* rather than the mountains. Both correct places were in
+    the results; distance simply outranked them.
+
+    So: an exact name match wins outright, then a name that merely wraps the
+    asked-for one (fewest extra words first, so "The Marble Mountains" beats
+    "Marble Mountains Ticket Booth (Gate A1)"), and failing both, the
+    provider's own nearest-first order stands.
+
+    Deliberately a preference, not a filter — falling through to the first hit
+    keeps every result today's behaviour would have kept. A strict name filter
+    would reject "Bach Ma National Park" → *Vườn Quốc Gia Bạch Mã*, which is
+    the same place under its Vietnamese name.
+    """
+    if not hits:
+        return None
+
+    asked_slug = _slugify(asked)
+    if not asked_slug:
+        return hits[0]
+
+    exact: PlaceObject | None = None
+    wrapping: tuple[int, int, PlaceObject] | None = None
+    for hit in hits:
+        hit_slug = _slugify(hit.place_name)
+        if not hit_slug:
+            continue
+        if hit_slug == asked_slug:
+            exact = exact or hit
+            continue
+        if asked_slug in hit_slug:
+            # Rank by how much the provider's name adds beyond what was
+            # asked: extra words first, then raw length as the tie-break.
+            # "The Marble Mountains" and "Marble Mountains Elevator" both add
+            # one word, and the shorter is the mountains themselves rather
+            # than a facility at them.
+            extra = len(hit_slug.split("-")) - len(asked_slug.split("-"))
+            rank = (extra, len(hit_slug))
+            if wrapping is None or rank < (wrapping[0], wrapping[1]):
+                wrapping = (extra, len(hit_slug), hit)
+
+    if exact is not None:
+        return exact
+    if wrapping is not None:
+        return wrapping[2]
+    return hits[0]
 
 
 async def _validate_candidates(
@@ -506,7 +682,7 @@ async def _validate_candidates(
                         # normal upsert (ADR-117).
                         icon_hint=candidate.icon,
                     ),
-                    limit=1,
+                    limit=_NAME_MATCH_CANDIDATES,
                 )
         except Exception as exc:
             logger.warning(
@@ -516,7 +692,7 @@ async def _validate_candidates(
                 exc_info=True,
             )
             return None
-        return hits[0] if hits else None
+        return _best_name_match(candidate.name, hits)
 
     hit_objs = await asyncio.gather(*(_lookup(c) for c in proposed))
     results: list[tuple[PlaceCore, str]] = []

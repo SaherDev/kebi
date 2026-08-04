@@ -55,6 +55,12 @@ class ConsultResult(BaseModel):
     small enum otherwise so the agent can pick the right prose
     (acknowledge no saves vs. no match vs. no location resolved).
 
+    `route_too_long` (ADR-136) is not a failure — it is an answer. The turn
+    is a journey whose legs are too long for venue stops to mean anything
+    ("road trip from Hanoi to Saigon"): the honest stops are cities, which
+    consult cannot yet return. The tool spends nothing (no LLM, no provider
+    call) and the agent asks which stretch the user wants.
+
     The tool layer does not contribute filters of its own — the agent
     builds every filter from the memory + taste context it has been
     given. So there is no "applied_hard_constraints" surfaced back:
@@ -69,5 +75,7 @@ class ConsultResult(BaseModel):
     """
 
     candidates: list[ConsultCandidate] = Field(default_factory=list)
-    empty_reason: Literal["no_saves", "no_match", "no_location", "error"] | None = None
+    empty_reason: (
+        Literal["no_saves", "no_match", "no_location", "route_too_long", "error"] | None
+    ) = None
     recommendation_id: str = Field(default_factory=lambda: str(uuid4()))

@@ -25,6 +25,17 @@ QUERY_DESC = (
     "rich but tight; do not embed constraint values that already live in `tags`."
 )
 
+PLACE_NAMES_DESC = (
+    "Specific real places YOU already know are right for this intent, by "
+    "canonical name (e.g. ['Marble Mountains', 'Lang Co Beach', 'Hai Van "
+    "Pass']). Supply these whenever you genuinely know the area — your own "
+    "knowledge of what is worth going to is better than a generic search, "
+    "and each name is verified against the place provider before the user "
+    "sees it, so a name that does not exist is simply dropped. Leave empty "
+    "when you do not know the area well; a helper then proposes names "
+    "instead. Names only — never coordinates, never an area or a city."
+)
+
 CATEGORIES_DESC = (
     "OR-combined coarse categories the result must match one of (e.g. "
     "['restaurant', 'cafe']). Omit when the query alone is specific enough."

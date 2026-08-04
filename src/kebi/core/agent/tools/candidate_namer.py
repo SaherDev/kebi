@@ -36,10 +36,18 @@ logger = logging.getLogger(__name__)
 
 
 class CandidateName(BaseModel):
-    """One proposed place name and the LLM's reason for proposing it."""
+    """One proposed place name and the reason for proposing it.
+
+    `reason` is empty only when the **agent** supplied the name directly
+    (ADR-137) rather than the namer producing it — there the agent writes the
+    user-facing rationale in its own prose, so a tool-layer reason would be
+    invented. The namer prompt still requires a reason for every name it
+    proposes; the schema no longer enforces it because the same shape now
+    carries both origins.
+    """
 
     name: str = Field(min_length=1)
-    reason: str = Field(min_length=1)
+    reason: str = ""
     icon: str | None = Field(
         default=None,
         description=(
@@ -79,6 +87,34 @@ def _render_mobility_block(working: WorkingLocation) -> str:
     return (
         f"Effective mode: {working.effective_mode}\n"
         f"Scope: {working.scope_tier} {working.scope_shape}"
+    )
+
+
+def _render_corridor_block(working: WorkingLocation) -> str:
+    """The turn's route, when there is one (ADR-136).
+
+    A route turn changes what a good candidate *is*: the location block's
+    single point is only the starting line, and clustering every suggestion
+    around it is the failure this step exists to fix. So the block names the
+    legs in order and asks for coverage across them. It stays deliberately
+    quiet — a fixed placeholder — on an ordinary area turn, since the slot is
+    always rendered.
+    """
+    from kebi.core.agent.tools._corridor import is_corridor, route_summary
+
+    if not is_corridor(working):
+        return "(not a journey — this is a search around one point)"
+    assert working.corridor is not None  # narrowed by is_corridor
+    legs = " → ".join([working.city, *(s.name for s in working.corridor.stops)])
+    return (
+        f"This is a JOURNEY, not a search around one point: {route_summary(working)}.\n"
+        f"Stops in order: {legs}\n"
+        "Propose visitable stops spread ALONG the way — across every stretch of "
+        "the journey, not clustered at the start or the end. A candidate that "
+        "sits far off the route is dropped before the user sees it, so a place "
+        "near the middle of a leg is worth more here than a famous one back at "
+        "the origin. Name the landmark stretch itself only when it genuinely "
+        "is the highlight of the drive, and then by its plain canonical name."
     )
 
 
@@ -134,6 +170,7 @@ class CandidateNamerService:
             intent=wrap_untrusted(intent.strip(), "user_intent"),
             location_block=_render_location_block(working),
             mobility_block=_render_mobility_block(working),
+            corridor_block=_render_corridor_block(working),
             categories_block=_render_list_block(
                 [c.value for c in categories] if categories else None,
                 "categories",

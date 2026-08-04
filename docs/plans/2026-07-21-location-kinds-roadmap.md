@@ -1,6 +1,6 @@
 # Location Kinds — Roadmap
 
-**Status:** direction decided 2026-07-21 · Step 1 done 2026-07-22 (ADR-133) · Step 2 done 2026-08-02 (ADR-134) · Step 3 done 2026-08-02 (ADR-135) · Steps 4–6 re-scoped 2026-08-02 · Step 4 is next up
+**Status:** direction decided 2026-07-21 · Step 1 done 2026-07-22 (ADR-133) · Step 2 done 2026-08-02 (ADR-134) · Step 3 done 2026-08-02 (ADR-135) · Steps 4–6 re-scoped 2026-08-02 · Step 4 done 2026-08-04 (ADR-136) · Step 5 is next up; Steps 7 and 8 runnable in parallel
 **Scope:** this is a roadmap, not an implementation plan. Each step below is a
 self-contained brief — plan and build each one as its own feature, in order.
 One plan doc + ADR per step when it starts.
@@ -41,12 +41,125 @@ One plan doc + ADR per step when it starts.
    "find me an alternative" has no path — the only move is to re-ask from
    scratch, losing everything that was right about the answer. This bites
    hardest on the multi-stop journeys Step 4 makes possible.
+10. **The agent's own knowledge is locked out of the answer** *(added
+   2026-08-04, after Step 4 live-testing)*. Asked "trip from Da Nang to Hue",
+   a plain LLM answers with Marble Mountains → Hai Van Pass (stop at the
+   bunkers, go early before the haze) → Lang Co → Lap An Lagoon → Elephant
+   Springs. Kebi returned one or two venues and apologised. Three causes, none
+   of them retrieval: **(a)** every one of those stops *validates* in kebi's
+   pipeline — they were never proposed, because naming is delegated to a
+   small helper model while the orchestrator, which knows the road, is not
+   allowed to name anything; **(b)** the agent prompt forbade it — "names you
+   mention must come from a tool result", and timing/fee/safety tips "never
+   from your own general knowledge"; **(c)** Google has almost no venue data
+   on a mountain pass, so no amount of better search invents what isn't
+   there. The value of that stretch is *experience knowledge*, which no layer
+   was permitted to voice.
+
+   **Direction:** the agent proposes what it knows and kebi searches around
+   it — its names go to validation and come back as real cards, so knowledge
+   and pins are one answer rather than two competing ones. A journey answer
+   has three layers: the agent's knowledge as the spine, validated places as
+   pins where they exist, and the user's saved places along the route. The
+   line that keeps this honest: **prose may carry knowledge; a card must be
+   validated** — plus never inventing operating facts (hours, prices, "open
+   24h"), which are checkable and send people to locked doors. This narrows
+   ADR-133 to what it was actually written against — a route *saved* as a
+   venue, or *pinned* as a place card — both still blocked.
+
+11. **A validated non-venue can be saved as a venue** *(added 2026-08-04 —
+   opened by ADR-137, owned by no step)*. ADR-137 lets a place that validates
+   become a card, which is what finally allowed Hai Van Pass to be offered as
+   a stop. But a card carries a save action, and the save path cannot tell a
+   mountain pass from a restaurant: the provider holds **two** records for
+   that pass — one typed as natural geography, which ADR-133 correctly drops,
+   and one typed `historical_landmark`, which is indistinguishable from any
+   other venue. So a type-based guard is impossible, and ADR-133's guarantee
+   ("no venue-typed non-venues in the library") currently rests on nobody
+   tapping save.
+
+   **Assigned to Step 6 (2026-08-04).** A save-time guard was investigated and
+   abandoned — the geocoder types Hai Van Pass and Lang Co Beach identically as
+   `natural_feature`, so any guard that blocks the pass also blocks beaches,
+   lagoons and springs, which are among the best saves on that very route. The
+   answer is the model, not a guard: a pass is geography with extent, so it
+   should be an **area**, and then saving it is an area save rather than a
+   venue row. Until Step 6 runs, a user can save a pass into their library as a
+   venue — accepted knowingly while usage is still internal.
+
+12. **A refused non-venue is a dead end — kebi never offers what's actually
+   there** *(added 2026-08-04)*. Saving "Hanoi Train Street" is refused
+   ("looks like a route or region — noted as a travel interest") and stops.
+   But Train Street is a famous attraction: people sit at cafés on the track
+   and have a beer waiting for the train to pass. Google has no attraction
+   record for the street — only the alley, typed `route` — **while the cafés
+   on it are all ordinary valid venues**: *Train track cafe*, *RAILWAY TUAN
+   CAFE*, *Train Street Hanoi coffee*, *CAFE 61 TRAIN ST.* The thing the user
+   actually wants is savable; kebi just never looks for it.
+
+   So the refusal is unhelpful rather than wrong. Having identified where the
+   named geography is, the next move is to offer the venues *at* it — "the
+   street itself isn't a place to pin, but here's what's on it" — which is
+   also the honest version of "never a silent drop".
+
+   **Not covered by Step 6.** Step 6 makes the street an *area*, so it can be
+   an answer and be saved as one. It does not make extraction look for venues
+   at a refused name. The two compose (an area gives the extent to search
+   inside) but neither depends on the other, and this one is not blocked.
+
+13. **An answer is places without the conditions around them** *(added
+   2026-08-04, comparing a Hanoi→Saigon answer against a general assistant)*.
+   Kebi returned nine good stops with durations and transport costs. The
+   assistant returned twelve plus the things that actually shape the trip:
+   the central coast's **September–December rain**, the choice between
+   Highway 1A and the emptier inland Ho Chi Minh Highway, that people rent a
+   motorbike one-way Hanoi→Saigon, and what to **skip**. Kebi said none of it,
+   and never tells anyone what isn't worth doing.
+
+   The same shape showed up earlier on a Hanoi itinerary: the assistant named
+   egg coffee and a water puppet show — things you *do* — while kebi listed
+   only places you go.
+
+   **Cause:** we ask the agent for places, so we get places. Conditions and
+   experiences aren't attached to a pin, and nothing in the prompt or the
+   pipeline reaches for them, even though ADR-137 already permits the agent to
+   say them. Coverage suffers for the same reason — the prompt asks for stops
+   along a route, never for the complete set, so the model stops at a good
+   list. Compounding it, `route_too_long` suppresses **every** card on a
+   long route, including venues the agent named correctly and which validate
+   today (Cu Chi Tunnels, War Remnants Museum, Trang An) — a gate meant to
+   stop *inventing* stops is also blocking verification of real ones.
+
+   *Owned by Step 8.*
 
 ## Goal
 
 **Kebi is a traveler who's local everywhere.** It answers at whatever
 granularity the question demands — a café, a neighborhood, a city, a region, a
 scenic route — each stored, ranked, and rendered as what it actually is.
+
+**Kebi is a places engine, not a route solution.** It surfaces areas and venues
+— near a point, on the way between two, or anywhere the question points. "On
+the way" is a spatial filter like "near me", not a routing product: routing
+belongs to maps apps, and what's worth stopping at belongs here. Everything
+below follows from that.
+
+**The agent suggests, and kebi searches around what it suggests.** The
+orchestrator's own knowledge of the world is a first-class source, not a
+fallback: it names the places and areas worth going to, and kebi verifies them,
+places them, and pins them. Retrieval serves the agent's judgement rather than
+replacing it — which is why an answer can be as good as a well-travelled
+local's *and* carry real coordinates, saves, and taste behind it.
+
+**This is the edge over a general assistant.** ChatGPT or Claude can lay out
+the Da Nang→Hue road as well as kebi can — that stretch of the goal is table
+stakes, not a moat. What they cannot do is what happens *around* the route:
+pull the real places along it, verified and pinned with coordinates, hours and
+a save action; layer the user's own saved places and taste over them; and carry
+the insider knowledge kebi has accreted — claims harvested from shares,
+research and curation, tied to the area rather than recalled from a training
+set. A general assistant hands you prose you then have to go re-look-up. Kebi
+hands you the same judgement already grounded in places you can act on.
 
 - Two stored first-class kinds: **venue, area** — accept-and-type, never
   reject-or-mislabel. **Route is an answer shape, not an entity**: journeys
@@ -224,34 +337,59 @@ restaurant." *(met)*
 
 ---
 
-## Step 4 — Trip-shaped queries answer from data
+## Step 4 — Trip-shaped queries answer from data  *(done 2026-08-04 — ADR-136, `feature/corridor-search`)*
 
 **Problem it closes:** problem 5 — corridor is prose-only.
 
-**Decided direction:**
-- Corridor search becomes real geometry: both endpoints are stored entities;
-  sample waypoints between centroids (count scaled by corridor length); union
-  of the existing disc searches at each waypoint; dedup; order results by
-  progress along the route.
-- The candidate namer receives corridor context so proposals are along the
-  way.
+**Shipped direction:**
+- Corridor search is real geometry: waypoints sampled along the route, union
+  of the existing disc searches, dedup, off-route filtering, and ordering by
+  progress along the route. Both place tools share one geometry helper —
+  `suggest_places` covers the whole route with a single coarse bound so its
+  call count is unchanged, `discover_places` fans out across the sampled
+  points under a config cap.
+- The candidate namer receives route context, so proposals spread along the
+  way instead of clustering at the origin.
 - The answer stays within the existing one-list contract (ADR-091), ordered by
   route progress and narrated as a journey.
 
-**Constraints:** straight-line waypoint sampling is v1 — road-shape routing is
-explicitly out of scope (OSM routing exists if it ever matters). No new
-geo infrastructure; reuse the existing radius-search path. The journey is
-composed at answer time and never persisted — corridor search returns
-validated venues, the agent supplies the ordering and the narration.
+**Deviations (in ADR-136), each grounded:**
+- **A route is an ordered chain, not one segment.** "Hanoi, then Hue, then Hoi
+  An" is a normal way to describe a trip; a single-destination path is just a
+  one-stop chain. Stops resolve all-or-nothing — silently dropping one answers
+  a different question.
+- **Scale is gated, per leg.** Venue stops are honest up to roughly a long
+  day's drive; across a country the real stops are cities, which consult
+  cannot return until Step 6. An over-long leg gets no interior sampling, and
+  a trip with no answerable leg returns a distinct outcome that spends **no**
+  model or provider call — the agent says the trip is city-scale and works out
+  which stretch the user wants. That outcome is an answer, not a failure.
+- **POI endpoints are handled directly** (the open question above): the
+  geometry consumes coordinates only, so an endpoint with no `area_entities`
+  row needs no degrade-to-containing-area.
+- **Endpoint resolution reordered.** Qualifying a destination by the *origin*
+  city — the previous single-destination behaviour — resolved "Saigon" from
+  Hanoi to an unrelated address on Hanoi's edge, a 10 km route instead of
+  1,100 km. Resolution is now store → country-scoped (settlement only) →
+  locally-qualified.
+- **Hard extent-scoping still did not land.** Corridor geometry turned out not
+  to need it: the route's own half-width is the fence. Extent-scoping remains
+  unbuilt and unclaimed.
 
-**Note:** with kind navigation deferred, this is the roadmap's only consumer
-of real geometry — the hard extent-scoping deferred out of Step 3 lands here
-or nowhere. A corridor endpoint that resolves to a venue rather than an area
-has no `area_entities` row; decide at plan time whether such endpoints
-degrade to their containing area or are handled directly.
+**Constraints held:** straight-line waypoint sampling is v1 — road-shape
+routing stays out of scope, and is what would make this a routing product
+rather than a spatial filter. No new geo infrastructure; the existing
+radius-search path is reused unchanged. The journey is composed at answer time
+and never persisted.
+
+**Rollout note:** config-only. No migration, no contract change, no cache
+invalidation. Checkpointed conversations carrying the old single-destination
+shape are coerced forward explicitly, so a turn in flight survives the deploy.
 
 **Done when:** "trip from Da Nang to Hue" returns an ordered set of real,
-validated stops along the route instead of one famous landmark.
+validated stops along the route instead of one famous landmark. *(met —
+verified live at all three scales: single leg, multi-stop chain, and a
+country-length trip that declines to invent stops)*
 
 ---
 
@@ -314,6 +452,24 @@ without anything being written to the database.
   stops along the way (there is no route card). No kind jargon or entity
   internals in the UI.
 
+**Also closes problem 11 — a named natural feature is an area, not a venue**
+*(added 2026-08-04)*. Hai Van Pass ships today as a venue card because Google
+types it `historical_landmark`, and it is savable as one. Guarding the save was
+investigated and abandoned: the provider holds two records for it, and the
+geocoder types the pass and Lang Co Beach identically as `natural_feature`, so
+no signal separates "geography you drive through" from "a beach you go to".
+
+The way out is not a guard but the right model — **a pass is geography with
+extent, which is what an area is.** Made an area entity it renders as a shaded
+extent rather than a pin, and the save problem dissolves, because saving it is
+an area save and never a venue row. Two things block that today and belong in
+this step: `AreaEntityType` carries only country/city/neighborhood, and the
+resolver accepts settlement-level types only, so `natural_feature` refuses.
+
+Note this needs geometry the provider will not give — Google returns a 0.4 km
+bbox for a ~20 km road — so the extent has to come from elsewhere (OSM holds
+the actual way) or the render degrades to a point. Decide that here.
+
 **Constraints:** area answers are recommendations, not doorways — the
 zoom-in affordance and everything behind it is deferred (see Out of scope).
 An area answer stands on its own or it isn't ready to ship.
@@ -339,6 +495,15 @@ is numbered last but should start first — claims accrete over time, so
 starting early is the whole point. Numbered 7 rather than inserted earlier to
 keep existing step numbers stable.
 
+**Why it compounds:** every turn names entities, and every named entity is a
+chance to know it better — so usage itself builds the store, and the store is
+what the agent pulls from on the next question. That is the third leg of
+ADR-141's moat: a general assistant recalls a country from a training set,
+while kebi reads back what it has accumulated about *that* city, *that*
+neighborhood, *that* stop. It is also why this step is worth running long
+before Step 6 needs it — a knowledge base is not something you build in a
+sprint, it is something you have been collecting.
+
 **Decided direction:**
 - **Measure before building.** Count claims per area entity by hierarchy
   depth. Coverage is not symmetric: venue claims have accreted since ADR-120,
@@ -352,6 +517,26 @@ keep existing step numbers stable.
 - **Enrich through the existing curator**, targeting the areas users actually
   ask about (research and consult logs), not a speculative sweep of world
   geography.
+- **Every mention is a harvest trigger.** A turn that names Hanoi, then Hue,
+  then Hoi An has just told kebi exactly which three entities are worth
+  knowing better — and the same holds for a route's containing area, a
+  corridor's endpoints and waypoints, and the venues that come back as stops.
+  Rather than mining logs after the fact, resolution itself queues enrichment:
+  whenever an entity is resolved in a turn, it is marked for a knowledge pass
+  if its claims are thin or stale. Enrichment runs in the background and never
+  blocks the answer — this turn's user does not wait for it, the next one
+  benefits.
+- **Harvest up the hierarchy, not just at the mention.** Naming Hoi An is also
+  a signal about Quang Nam and about Vietnam: country- and region-level claims
+  (when to go, how people move between cities, what the food is about) are what
+  make a multi-city answer read as informed, and they are cheap because one
+  pass serves every entity beneath them. Walk `parent_key` upward from each
+  mentioned entity and fill thin ancestors too, with the depth-first priority
+  above deciding what gets the effort.
+- **Venues harvest the same way.** A validated stop is an entity with claims
+  like any area — the tips that make a place worth stopping at (go early, sit
+  upstairs, skip the set menu) accrete on the venue, so the mechanism is one
+  mechanism, not an area-only one.
 
 **Constraints:** no new storage and no second rich-area database — claims land
 in `knowledge_claims` against the existing geo-slug entity keys, exactly as
@@ -361,6 +546,51 @@ repo contract.
 **Done when:** the areas users ask about most carry enough claims to
 distinguish neighbors from each other, and a spot-check of ranked candidates
 reads as informed rather than generic.
+
+---
+
+## Step 8 — A trip answer is places *and* conditions  *(no dependencies)*
+
+**Problem it closes:** problem 13 — kebi asks the agent for places, so it gets
+places. A trip answer needs the layer around them.
+
+**Decided direction:**
+- **Conditions become part of a trip answer**: when to go and when not to
+  (the central coast's September–December rain is the single most
+  decision-changing fact in a Hanoi→Saigon answer, and kebi omitted it),
+  which road (Highway 1A versus the emptier inland Ho Chi Minh Highway), how
+  people actually do it (one-way motorbike rentals Hanoi→Saigon), and what to
+  **skip** — kebi never tells anyone what isn't worth it.
+- **Experiences count as answer items too** — egg coffee in Hanoi, a water
+  puppet show, a beer on the track at Train Street. Things you *do*, which
+  the venue-shaped pipeline never reaches for even though the prose layer is
+  free to name them (ADR-137).
+- **Ask for completeness on a trip.** A 1,700 km route answer returned 9 stops
+  where a general assistant gave 12, missing Da Lat, Vung Tau and My Son. The
+  prompt asks for stops along a route and never asks for the full set, so the
+  model stops at a good list rather than a complete one.
+- **A country-scale answer still pins what it can.** `route_too_long`
+  currently suppresses every card, including venues the agent named correctly
+  and that validate today — Cu Chi Tunnels, War Remnants Museum, Trang An.
+  The gate exists to stop *inventing* stops across a country, not to stop
+  verifying real ones. Sampling stays off; validation of agent-named places
+  turns back on.
+
+**Constraints:** conditions are knowledge, not a data feed — no weather API,
+no live prices, no booking (ADR-139). Seasonality and road character come from
+the agent's own knowledge under ADR-137's line: prose may carry it, a card
+must still be validated, and operating facts stay tool-only. The durable home
+for this is the knowledge layer — a claim that the central coast floods in
+October belongs against the area, which is Step 7's substrate.
+
+**Also fix here (small, unrelated to the above):** the agent leaked tool
+mechanics into a user-visible answer — *"the tool confirmed it's too long"* —
+despite the movement context instructing it to phrase this as an observation
+about the trip. The instruction exists and did not hold.
+
+**Done when:** a long-route answer says when to go, which way, and what to
+skip alongside where to stop — and the stops that can be verified still come
+back as cards.
 
 ---
 

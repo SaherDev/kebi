@@ -43,7 +43,7 @@ If you find one, output **source "explicit_query"** with the country and
 city filled in (and a neighborhood ONLY when the user named one). You are
 done with Step 1; do not proceed to Step 2.
 
-Two — and only two — things demote an explicit name out of this branch:
+Three things change what you do with an explicit name:
 
   (a) The named place is so ambiguous that you cannot pick a single
       country+city (e.g. bare "Cambridge", bare "Springfield"). In that
@@ -51,6 +51,20 @@ Two — and only two — things demote an explicit name out of this branch:
       true and needs_clarification true.
   (b) There is no recognisable place name in the message at all (then
       proceed to Step 2).
+  (c) The message names a JOURNEY — somewhere the user starts and
+      somewhere they end up ("trip from Da Nang to Hue", "driving from
+      Bangkok to Hua Hin", "Hanoi, then Hue, then Hoi An", "what's on the
+      way to the airport"). Then the working location is where the journey
+      **STARTS**, not where it ends: the country/city you output is the
+      origin, and every later place goes to corridor_destinations in order
+      (see scope_shape below). The end of a journey is a destination, not
+      the place the turn is about — anchoring there loses the whole
+      stretch the user is asking about.
+      Example: "trip from Da Nang to Hue" → country Vietnam, city **Da
+      Nang**, scope_shape corridor, corridor_destinations ["Hue"].
+      When the journey names no origin ("what's on the way to Hue?"), the
+      origin is wherever the user already is — apply Step 2 for the point
+      and still set the corridor.
 
 A future visit, a planning question ("what's worth seeing in Chiang Rai
 next month?"), a travel plan ("I'm in old town chiang mai next week —
@@ -177,15 +191,30 @@ point is Chiang Mai, scope_tier city.
   Example: "cheap dinner nearby" → area.
 - corridor — the user is travelling a route and wants places along the way.
   "on my way home", "on my way to work", "somewhere on the route to the
-  airport".
+  airport", and equally any trip phrased with a start and an end: "trip
+  from Da Nang to Hue", "driving down to Hua Hin", "Hanoi, then Hue, then
+  Hoi An". If the user is going from somewhere to somewhere, it is a
+  corridor — the phrasing "on my way" is not required.
   Example: "a coffee place on my way to the airport" → corridor,
-  corridor_destination "the airport".
+  corridor_destinations ["the airport"].
 
-For a corridor, set corridor_destination to the place the user named. If the
-destination is an implicit personal anchor with no real place name — "home",
-"work", "my place", "the office" — you do NOT know where that is. Set
+For a corridor, set corridor_destinations to the places the user named, **in
+the order they said them** — this is the order of their journey. A trip with
+one destination is a one-element list; a trip with several is a chain.
+Example: "trip from Da Nang to Hue" → corridor, corridor_destinations ["Hue"].
+Example: "Hanoi, then Hue, then Hoi An" → corridor, corridor_destinations
+["Hue", "Hoi An"] — the starting point is the working location, so it is NOT
+repeated in the list.
+
+Only list places the user actually named as somewhere they are going. Do not
+invent intermediate stops, and do not add a place just because it sits between
+two others — the system finds what's on the way.
+
+If a destination is an implicit personal anchor with no real place name —
+"home", "work", "my place", "the office" — you do NOT know where that is. Set
 needs_clarification true with a clarification_reason asking where they are
-headed; leave corridor_destination empty.
+headed; leave corridor_destinations empty. The same applies when only one stop
+of a chain is implicit: ask, rather than resolving a partial route.
 Example: "coffee on my way home" → needs_clarification true,
 clarification_reason "I don't know where home is from here — where are you
 headed?".

@@ -752,3 +752,43 @@ async def test_noted_only_share_without_content_skips_harvest() -> None:
     c.object_storage.put_json.assert_not_awaited()
     events = [call.args[0] for call in c.event_dispatcher.dispatch.await_args_list]
     assert not any(isinstance(e, ContentHarvestRequested) for e in events)
+
+
+@pytest.mark.asyncio
+async def test_noted_area_interest_fires_without_harvestable_content() -> None:
+    """The bug this fixes: typing a route name produces no caption or
+    transcript, so `content.is_empty()` short-circuits the harvest — and the
+    region-interest signal used to die with it. It rides its own event now,
+    because what the user named is a fact independent of what a harvest could
+    mine (ADR-135)."""
+    from kebi.core.events.events import AreaInterestNoted, ContentHarvestRequested
+
+    service, c = _build_service(
+        pipeline_result=[],
+        noted_non_venues=["Hanoi Train Street"],
+        content=HarvestContent(),  # nothing to harvest — the plain-text case
+    )
+    resp = await service.run("Hanoi Train Street", user_id="u1")
+
+    assert resp.status == "completed"
+    assert [n.name for n in resp.noted_interests] == ["Hanoi Train Street"]
+    events = [call.args[0] for call in c.event_dispatcher.dispatch.await_args_list]
+    area = [e for e in events if isinstance(e, AreaInterestNoted)]
+    assert len(area) == 1
+    assert [r.name for r in area[0].noted_areas] == ["Hanoi Train Street"]
+    # The harvest itself is still correctly skipped — there is nothing to mine.
+    assert not any(isinstance(e, ContentHarvestRequested) for e in events)
+
+
+@pytest.mark.asyncio
+async def test_no_noted_names_dispatches_no_area_interest() -> None:
+    from kebi.core.events.events import AreaInterestNoted
+
+    service, c = _build_service(
+        pipeline_result=[_candidate()],
+        upsert_result=[_persisted_core()],
+        noted_non_venues=[],
+    )
+    await service.run("some cafe", user_id="u1")
+    events = [call.args[0] for call in c.event_dispatcher.dispatch.await_args_list]
+    assert not any(isinstance(e, AreaInterestNoted) for e in events)

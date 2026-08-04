@@ -25,7 +25,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
 
 if TYPE_CHECKING:
     from kebi.core.config import MovementConfig
@@ -107,12 +107,16 @@ def density_class(place_type: str | None) -> DensityClass:
 
 
 class CorridorTarget(BaseModel):
-    """An eagerly geocoded corridor destination ("on my way to <name>").
+    """One eagerly geocoded stop on the turn's route ("on my way to <name>").
 
-    The resolver names the destination in free text; the resolve node
-    forward-geocodes it. A destination that cannot be geocoded (an implicit
-    anchor like "home" — kebi stores no user addresses) is not recorded here;
-    it triggers a location clarification instead.
+    The resolver names each stop in free text; the resolve node resolves it
+    area-first (the persisted entity store) and falls back to a coords-only
+    geocode for a POI endpoint — coordinates are all the route geometry
+    consumes, so an endpoint with no area entity is handled directly.
+
+    A stop that cannot be resolved at all (an implicit anchor like "home" —
+    kebi stores no user addresses) is never recorded here; it triggers a
+    location clarification instead. See `CorridorPath` for the ordered chain.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -120,6 +124,33 @@ class CorridorTarget(BaseModel):
     name: str
     lat: float
     lng: float
+
+
+class CorridorPath(BaseModel):
+    """The turn's route as an ordered chain of destinations (ADR-136).
+
+    `stops` holds the destinations in the order the user said them; the
+    *origin* is the working location itself, so the full polyline is
+    `[(working.lat, working.lng), *stops]`. A single-destination trip is
+    just a one-stop path — there is no separate one-leg shape.
+
+    Stops are resolved all-or-nothing: a named stop that cannot be resolved
+    makes the whole turn a clarification, never a route silently missing one
+    of the places the user asked for.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    stops: list[CorridorTarget]
+
+    @property
+    def destination(self) -> CorridorTarget:
+        """The final destination — what the journey is *toward*."""
+        return self.stops[-1]
+
+    def points(self, origin_lat: float, origin_lng: float) -> list[tuple[float, float]]:
+        """The full polyline, origin first, for the geometry helpers."""
+        return [(origin_lat, origin_lng), *((s.lat, s.lng) for s in self.stops)]
 
 
 class WorkingLocation(BaseModel):
@@ -153,7 +184,23 @@ class WorkingLocation(BaseModel):
     scope_tier: str = "city"
     scope_shape: str = "area"
     search_radius_m: float = 0.0
-    corridor: CorridorTarget | None = None
+    corridor: CorridorPath | None = None
+
+    @field_validator("corridor", mode="before")
+    @classmethod
+    def _accept_legacy_single_target(cls, v: object) -> object:
+        """Coerce a pre-ADR-136 single `CorridorTarget` into a one-stop path.
+
+        `WorkingLocation` is checkpointed and forbids extra keys, so a
+        conversation in flight when this shipped would fail validation on
+        resume against the new shape. The coercion is explicit rather than
+        tolerated: a dict carrying `lat`/`lng` is the old single destination
+        and becomes a one-stop path; anything else passes through to normal
+        validation.
+        """
+        if isinstance(v, dict) and "stops" not in v and "lat" in v and "lng" in v:
+            return {"stops": [v]}
+        return v
 
 
 class LocationResolution(BaseModel):
@@ -170,9 +217,14 @@ class LocationResolution(BaseModel):
     `user_actual` the node supplies the place names.
 
     ADR-084 adds the search-scope classification: `scope_tier`, `scope_shape`,
-    `effective_mode`, and (for a corridor) `corridor_destination`. As with
+    `effective_mode`, and (for a corridor) `corridor_destinations`. As with
     coordinates, the resolver only *classifies* — `search_radius_m` is derived
     deterministically from config by `resolve_radius`, never emitted here.
+
+    `corridor_destinations` is an **ordered** list (ADR-136): a route can be a
+    chain ("Hanoi, then Hue, then Hoi An"), and the order the user said them
+    is the order of the journey. This model is per-turn and never
+    checkpointed, so its shape carries no back-compatibility burden.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -190,7 +242,7 @@ class LocationResolution(BaseModel):
     scope_tier: ScopeTier = "city"
     scope_shape: ScopeShape = "area"
     effective_mode: MovementMode | None = None
-    corridor_destination: str | None = None
+    corridor_destinations: list[str] = []
 
 
 def resolve_radius(

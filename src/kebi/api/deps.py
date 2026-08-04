@@ -312,6 +312,10 @@ async def get_event_dispatcher(
         "content_harvest_requested",
         handlers.on_content_harvest_requested,  # type: ignore[arg-type]
     )
+    dispatcher.register_handler(
+        "area_interest_noted",
+        handlers.on_area_interest_noted,  # type: ignore[arg-type]
+    )
 
     return dispatcher
 

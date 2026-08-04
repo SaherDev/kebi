@@ -23,11 +23,12 @@ import pytest
 from langchain_core.messages import ToolMessage
 from langgraph.types import Command
 
-from kebi.core.agent.location import WorkingLocation
+from kebi.core.agent.location import CorridorPath, CorridorTarget, WorkingLocation
 from kebi.core.agent.tools._hard_constraints import hard_constraints_satisfied
 from kebi.core.agent.tools.candidate_namer import CandidateName, CandidateNames
-from kebi.core.agent.tools.consult_models import ConsultResult
+from kebi.core.agent.tools.consult_models import ConsultCandidate, ConsultResult
 from kebi.core.agent.tools.suggest_places_tool import (
+    _best_name_match,
     _run_suggest_places,
     build_suggest_places_tool,
 )
@@ -38,6 +39,7 @@ from kebi.core.places.models import (
     PlaceTag,
 )
 from kebi.core.places.tags import DietaryTag, TagType
+from kebi.core.utils.geo import haversine_m
 
 
 def _bangkok_working() -> dict[str, Any]:
@@ -668,8 +670,17 @@ async def test_non_utility_category_keeps_broad_radius() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_tool_factory_exposes_same_arg_schema_as_find_saved() -> None:
-    """Byte-identical arg surface keeps the agent prompt small."""
+def test_tool_factory_shares_the_find_saved_arg_surface_plus_place_names() -> None:
+    """The shared arg surface keeps the agent prompt small; `place_names` is
+    the one deliberate divergence (ADR-137).
+
+    `suggest_places` is the propose-and-validate tool, so it is the only one
+    the agent can hand its own known place names to. `find_saved` searches a
+    corpus the user already owns and `discover_places` asks the provider
+    directly — neither has anything to validate on the agent's behalf. The
+    extra arg is also a useful signal to the agent about which tool to reach
+    for when it already knows the area.
+    """
     namer = _make_namer([])
     factory, search = _make_search_factory(by_name={})
 
@@ -679,6 +690,7 @@ def test_tool_factory_exposes_same_arg_schema_as_find_saved() -> None:
     schema_fields = set(tool.tool_call_schema.model_fields.keys())
     assert schema_fields == {
         "query",
+        "place_names",
         "categories",
         "tags",
         "neighborhood",
@@ -806,3 +818,439 @@ async def test_stored_icon_wins_over_namer_icon() -> None:
 
     payload = ConsultResult.model_validate_json(cmd.update["messages"][0].content)
     assert payload.candidates[0].place.icon == "🍽️"
+
+
+# ---------------------------------------------------------------------------
+# Route-shaped turns (ADR-136)
+# ---------------------------------------------------------------------------
+
+_DA_NANG = (16.0544, 108.2022)
+_HUE = (16.4637, 107.5909)
+_HOI_AN = (15.8801, 108.3380)
+_SAIGON = (10.8231, 106.6297)
+_HANOI = (21.0278, 105.8342)
+_LANG_CO = (16.2333, 108.0667)
+
+
+def _route_working(
+    *,
+    stops: list[tuple[str, tuple[float, float]]],
+    origin: tuple[float, float] = _DA_NANG,
+    city: str = "Da Nang",
+) -> dict[str, Any]:
+    return WorkingLocation(
+        country="Vietnam",
+        city=city,
+        lat=origin[0],
+        lng=origin[1],
+        country_code="vn",
+        effective_mode="driving",
+        scope_tier="city",
+        scope_shape="corridor",
+        search_radius_m=9_000.0,
+        corridor=CorridorPath(
+            stops=[
+                CorridorTarget(name=name, lat=p[0], lng=p[1]) for name, p in stops
+            ]
+        ),
+    ).model_dump()
+
+
+def _located(name: str, *, place_id: str, point: tuple[float, float]) -> PlaceObject:
+    return PlaceObject(
+        id=place_id,
+        provider_id=f"google:{place_id}",
+        place_name=name,
+        categories=[PlaceCategory.restaurant],
+        location=LocationContext(lat=point[0], lng=point[1]),
+        cached_at=datetime.now(UTC),
+    )
+
+
+async def _run_route(
+    *, working: dict[str, Any], by_name: dict[str, list[PlaceObject]]
+) -> tuple[ConsultResult, MagicMock, MagicMock]:
+    namer = _make_namer(
+        [CandidateName(name=n, reason="on the way") for n in by_name]
+    )
+    factory, search = _make_search_factory(by_name=by_name)
+    command = await _run_suggest_places(
+        namer=namer,
+        places_search_factory=factory,
+        state=_state(working_location=working),
+        tool_call_id="call-route",
+        query="somewhere to stop",
+        categories=None,
+        tags=None,
+        neighborhood_override=None,
+        city_override=None,
+        country_override=None,
+        limit=5,
+        name_count=8,
+        concurrency=5,
+    )
+    message = command.update["messages"][0]
+    assert isinstance(message, ToolMessage)
+    return ConsultResult.model_validate_json(str(message.content)), namer, search
+
+
+class TestRouteShapedSuggest:
+    async def test_results_are_ordered_along_the_route(self) -> None:
+        """The done-when: real stops, in journey order, not a ranked list."""
+        result, _, _ = await _run_route(
+            working=_route_working(stops=[("Hue", _HUE)]),
+            by_name={
+                "Hue Spot": [_located("Hue Spot", place_id="p-hue", point=_HUE)],
+                "Lang Co Spot": [
+                    _located("Lang Co Spot", place_id="p-lc", point=_LANG_CO)
+                ],
+                "Da Nang Spot": [
+                    _located("Da Nang Spot", place_id="p-dn", point=_DA_NANG)
+                ],
+            },
+        )
+        assert [c.place.place_name for c in result.candidates] == [
+            "Da Nang Spot",
+            "Lang Co Spot",
+            "Hue Spot",
+        ]
+
+    async def test_off_route_candidate_is_dropped(self) -> None:
+        """Hoi An lies the other way from a Hue trip. It validated fine — the
+        route filter is what removes it."""
+        result, _, _ = await _run_route(
+            working=_route_working(stops=[("Hue", _HUE)]),
+            by_name={
+                "Hoi An Spot": [
+                    _located("Hoi An Spot", place_id="p-ha", point=_HOI_AN)
+                ],
+                "Lang Co Spot": [
+                    _located("Lang Co Spot", place_id="p-lc", point=_LANG_CO)
+                ],
+            },
+        )
+        assert [c.place.place_name for c in result.candidates] == ["Lang Co Spot"]
+
+    async def test_validation_still_costs_one_provider_call_per_name(self) -> None:
+        """A route is covered by ONE enclosing disc, so call count is
+        unchanged from an ordinary turn — the budget promise of this step."""
+        _, _, search = await _run_route(
+            working=_route_working(stops=[("Hue", _HUE), ("Hoi An", _HOI_AN)]),
+            by_name={
+                "A": [_located("A", place_id="p-a", point=_LANG_CO)],
+                "B": [_located("B", place_id="p-b", point=_HUE)],
+            },
+        )
+        assert search.find.await_count == 2
+
+    async def test_validation_disc_covers_the_whole_route(self) -> None:
+        _, _, search = await _run_route(
+            working=_route_working(stops=[("Hue", _HUE)]),
+            by_name={"A": [_located("A", place_id="p-a", point=_HUE)]},
+        )
+        location = search.find.await_args_list[0].args[0].location
+        for point in (_DA_NANG, _HUE):
+            assert (
+                haversine_m(location.lat, location.lng, *point) <= location.radius_m
+            )
+
+    async def test_nothing_on_the_route_is_an_honest_empty(self) -> None:
+        result, _, _ = await _run_route(
+            working=_route_working(stops=[("Hue", _HUE)]),
+            by_name={
+                "Hoi An Spot": [
+                    _located("Hoi An Spot", place_id="p-ha", point=_HOI_AN)
+                ]
+            },
+        )
+        assert result.candidates == []
+        assert result.empty_reason == "no_match"
+
+    async def test_city_scale_route_spends_nothing(self) -> None:
+        """Hanoi → Saigon: the honest stops are cities, which consult cannot
+        return yet. No namer call, no provider call, and a distinct reason the
+        agent turns into "which stretch?"."""
+        namer = _make_namer([CandidateName(name="X", reason="r")])
+        factory, search = _make_search_factory(by_name={})
+        command = await _run_suggest_places(
+            namer=namer,
+            places_search_factory=factory,
+            state=_state(
+                working_location=_route_working(
+                    stops=[("Saigon", _SAIGON)], origin=_HANOI, city="Hanoi"
+                )
+            ),
+            tool_call_id="call-long",
+            query="road trip",
+            categories=None,
+            tags=None,
+            neighborhood_override=None,
+            city_override=None,
+            country_override=None,
+            limit=5,
+            name_count=8,
+            concurrency=5,
+        )
+        message = command.update["messages"][0]
+        assert isinstance(message, ToolMessage)
+        result = ConsultResult.model_validate_json(str(message.content))
+        assert result.empty_reason == "route_too_long"
+        namer.generate.assert_not_awaited()
+        search.find.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# Agent-supplied candidate names (ADR-137)
+# ---------------------------------------------------------------------------
+
+
+async def _run_with_names(
+    *,
+    working: dict[str, Any],
+    names: list[str] | None,
+    by_name: dict[str, list[PlaceObject]],
+    namer_candidates: list[CandidateName] | None = None,
+    limit: int = 5,
+) -> tuple[ConsultResult, MagicMock, MagicMock]:
+    namer = _make_namer(namer_candidates or [])
+    factory, search = _make_search_factory(by_name=by_name)
+    command = await _run_suggest_places(
+        namer=namer,
+        places_search_factory=factory,
+        state=_state(working_location=working),
+        tool_call_id="call-names",
+        query="somewhere to stop",
+        place_names=names,
+        categories=None,
+        tags=None,
+        neighborhood_override=None,
+        city_override=None,
+        country_override=None,
+        limit=limit,
+        name_count=8,
+        concurrency=5,
+    )
+    message = command.update["messages"][0]
+    assert isinstance(message, ToolMessage)
+    return ConsultResult.model_validate_json(str(message.content)), namer, search
+
+
+class TestAgentSuppliedNames:
+    async def test_agent_names_skip_the_namer_entirely(self) -> None:
+        """The orchestrator is the strongest model in the turn — when it knows
+        the area, asking a weaker helper to guess is wasted latency and cost."""
+        result, namer, _ = await _run_with_names(
+            working=_bangkok_working(),
+            names=["Wat Pho"],
+            by_name={"Wat Pho": [_place("Wat Pho", place_id="p-wp")]},
+        )
+        namer.generate.assert_not_awaited()
+        assert [c.place.place_name for c in result.candidates] == ["Wat Pho"]
+
+    async def test_agent_names_are_still_validated(self) -> None:
+        """A name the agent invents is dropped exactly like one the namer
+        invents — this is what keeps "a card must be validated" true."""
+        result, _, _ = await _run_with_names(
+            working=_bangkok_working(),
+            names=["Wat Pho", "Entirely Made Up Place"],
+            by_name={"Wat Pho": [_place("Wat Pho", place_id="p-wp")]},
+        )
+        assert [c.place.place_name for c in result.candidates] == ["Wat Pho"]
+
+    async def test_agent_named_candidates_carry_no_tool_reason(self) -> None:
+        """The agent writes the rationale in its own prose; a tool-layer reason
+        would be invented, and an empty string would render as a blank line."""
+        result, _, _ = await _run_with_names(
+            working=_bangkok_working(),
+            names=["Wat Pho"],
+            by_name={"Wat Pho": [_place("Wat Pho", place_id="p-wp")]},
+        )
+        assert result.candidates[0].reason is None
+
+    async def test_blank_names_are_ignored(self) -> None:
+        result, namer, _ = await _run_with_names(
+            working=_bangkok_working(),
+            names=["   ", ""],
+            namer_candidates=[CandidateName(name="Wat Pho", reason="iconic")],
+            by_name={"Wat Pho": [_place("Wat Pho", place_id="p-wp")]},
+        )
+        # All names were blank, so this is the same as supplying none: the
+        # namer runs as the fallback rather than the turn returning empty.
+        namer.generate.assert_awaited()
+        assert [c.place.place_name for c in result.candidates] == ["Wat Pho"]
+
+    async def test_no_names_leaves_the_namer_path_untouched(self) -> None:
+        result, namer, _ = await _run_with_names(
+            working=_bangkok_working(),
+            names=None,
+            namer_candidates=[CandidateName(name="Wat Pho", reason="iconic")],
+            by_name={"Wat Pho": [_place("Wat Pho", place_id="p-wp")]},
+        )
+        namer.generate.assert_awaited()
+        assert result.candidates[0].reason == "iconic"
+
+    async def test_agent_names_on_a_route_are_filtered_and_ordered(self) -> None:
+        """The two features compose: the agent names the stops it knows, and
+        the route geometry still decides which are on the way and in what
+        order."""
+        result, namer, _ = await _run_with_names(
+            working=_route_working(stops=[("Hue", _HUE)]),
+            names=["Hue Spot", "Hoi An Spot", "Da Nang Spot"],
+            by_name={
+                "Hue Spot": [_located("Hue Spot", place_id="p-h", point=_HUE)],
+                "Hoi An Spot": [
+                    _located("Hoi An Spot", place_id="p-ha", point=_HOI_AN)
+                ],
+                "Da Nang Spot": [
+                    _located("Da Nang Spot", place_id="p-dn", point=_DA_NANG)
+                ],
+            },
+        )
+        namer.generate.assert_not_awaited()
+        assert [c.place.place_name for c in result.candidates] == [
+            "Da Nang Spot",
+            "Hue Spot",
+        ]
+
+
+# ---------------------------------------------------------------------------
+# Name round-trip on validation + cross-tool dedupe (ADR-138)
+# ---------------------------------------------------------------------------
+
+
+class TestBestNameMatch:
+    def test_exact_name_beats_a_nearer_wrong_one(self) -> None:
+        """The Tam Coc bug: a guesthouse sat closer to the search centre than
+        the karst boat ride, so nearest-first handed back the guesthouse."""
+        hits = [
+            _place("Tam Coc Homestay Of Ms Loan", place_id="p-home"),
+            _place("Tam Coc", place_id="p-real"),
+        ]
+        assert _best_name_match("Tam Coc", hits).id == "p-real"
+
+    def test_fewest_extra_words_wins_when_nothing_is_exact(self) -> None:
+        """"Marble Mountains" has no exact record — "The Marble Mountains"
+        should still beat "Marble Mountains Ticket Booth (Gate A1)"."""
+        hits = [
+            _place("Marble Mountains Ticket Booth (Gate A1)", place_id="p-booth"),
+            _place("The Marble Mountains", place_id="p-real"),
+        ]
+        assert _best_name_match("Marble Mountains", hits).id == "p-real"
+
+    def test_shorter_name_wins_a_tie_on_extra_words(self) -> None:
+        """Both add one word, but "The Marble Mountains" is the mountains and
+        "Marble Mountains Elevator" is a lift at them."""
+        hits = [
+            _place("Marble Mountains Elevator", place_id="p-lift"),
+            _place("The Marble Mountains", place_id="p-real"),
+        ]
+        assert _best_name_match("Marble Mountains", hits).id == "p-real"
+
+    def test_localized_name_still_returns(self) -> None:
+        """A preference, not a filter: "Bach Ma National Park" comes back as
+        "Vườn Quốc Gia Bạch Mã" and must not be rejected for it."""
+        hits = [_place("Vườn Quốc Gia Bạch Mã", place_id="p-bm")]
+        assert _best_name_match("Bach Ma National Park", hits).id == "p-bm"
+
+    def test_diacritics_do_not_break_an_exact_match(self) -> None:
+        hits = [
+            _place("Somewhere Else", place_id="p-x"),
+            _place("Hội An", place_id="p-ha"),
+        ]
+        assert _best_name_match("Hoi An", hits).id == "p-ha"
+
+    def test_no_hits_is_none(self) -> None:
+        assert _best_name_match("Anything", []) is None
+
+    def test_nearest_first_order_survives_with_no_name_signal(self) -> None:
+        hits = [_place("Alpha", place_id="p-1"), _place("Beta", place_id="p-2")]
+        assert _best_name_match("Gamma", hits).id == "p-1"
+
+
+class TestCrossToolDedupe:
+    async def test_place_already_returned_by_find_saved_is_dropped(self) -> None:
+        """One place, one card. Before this it shipped twice — once as a save,
+        once as a suggestion — under two recommendation_ids."""
+        saved = ConsultResult(
+            candidates=[
+                ConsultCandidate(
+                    place=_place("Lap An Lagoon", place_id="p-lap").to_core(),
+                    source="saved",
+                    rrf_score=0.5,
+                )
+            ]
+        )
+        state = _state(working_location=_bangkok_working())
+        state["messages"] = [
+            ToolMessage(
+                content=saved.model_dump_json(),
+                tool_call_id="tc-prior",
+                name="find_saved",
+            )
+        ]
+        namer = _make_namer(
+            [
+                CandidateName(name="Lap An Lagoon", reason="on the water"),
+                CandidateName(name="Wat Pho", reason="iconic"),
+            ]
+        )
+        factory, _ = _make_search_factory(
+            by_name={
+                "Lap An Lagoon": [_place("Lap An Lagoon", place_id="p-lap")],
+                "Wat Pho": [_place("Wat Pho", place_id="p-wp")],
+            }
+        )
+        command = await _run_suggest_places(
+            namer=namer,
+            places_search_factory=factory,
+            state=state,
+            tool_call_id="tc-2",
+            query="anything good",
+            categories=None,
+            tags=None,
+            neighborhood_override=None,
+            city_override=None,
+            country_override=None,
+            limit=5,
+            name_count=8,
+            concurrency=5,
+        )
+        result = ConsultResult.model_validate_json(
+            str(command.update["messages"][0].content)
+        )
+        assert [c.place.place_name for c in result.candidates] == ["Wat Pho"]
+
+    async def test_unrelated_tool_payloads_are_ignored(self) -> None:
+        """`research` returns a different shape on the same message list —
+        parsing it must not blow up the turn."""
+        state = _state(working_location=_bangkok_working())
+        state["messages"] = [
+            ToolMessage(
+                content='{"entity_name": "Bangkok", "notes": []}',
+                tool_call_id="tc-research",
+                name="research",
+            )
+        ]
+        namer = _make_namer([CandidateName(name="Wat Pho", reason="iconic")])
+        factory, _ = _make_search_factory(
+            by_name={"Wat Pho": [_place("Wat Pho", place_id="p-wp")]}
+        )
+        command = await _run_suggest_places(
+            namer=namer,
+            places_search_factory=factory,
+            state=state,
+            tool_call_id="tc-3",
+            query="anything good",
+            categories=None,
+            tags=None,
+            neighborhood_override=None,
+            city_override=None,
+            country_override=None,
+            limit=5,
+            name_count=8,
+            concurrency=5,
+        )
+        result = ConsultResult.model_validate_json(
+            str(command.update["messages"][0].content)
+        )
+        assert [c.place.place_name for c in result.candidates] == ["Wat Pho"]

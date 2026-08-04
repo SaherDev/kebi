@@ -6,6 +6,8 @@ import pytest
 from pydantic import ValidationError
 
 from kebi.core.agent.location import (
+    CorridorPath,
+    CorridorTarget,
     LocationResolution,
     WorkingLocation,
     density_class,
@@ -57,7 +59,7 @@ def test_location_resolution_defaults_to_area_city_scope() -> None:
     assert r.scope_tier == "city"
     assert r.scope_shape == "area"
     assert r.effective_mode is None
-    assert r.corridor_destination is None
+    assert r.corridor_destinations == []
 
 
 def test_working_location_scope_fields_default_to_neutral() -> None:
@@ -147,3 +149,53 @@ def test_density_class_degrades_to_medium() -> None:
     assert density_class(None) == "medium"
     assert density_class("") == "medium"
     assert density_class("road") == "medium"
+
+
+# --- CorridorPath / legacy checkpoint shape (ADR-136) ----------------------
+
+
+def test_corridor_path_exposes_the_polyline_origin_first() -> None:
+    path = CorridorPath(
+        stops=[
+            CorridorTarget(name="Hue", lat=16.46, lng=107.59),
+            CorridorTarget(name="Hoi An", lat=15.88, lng=108.33),
+        ]
+    )
+    assert path.points(16.05, 108.20) == [
+        (16.05, 108.20),
+        (16.46, 107.59),
+        (15.88, 108.33),
+    ]
+    assert path.destination.name == "Hoi An"
+
+
+def test_checkpointed_single_destination_still_loads() -> None:
+    """A conversation in flight when the multi-stop shape shipped carries the
+    old single `CorridorTarget` dict. `WorkingLocation` forbids extra keys, so
+    without the coercion the turn would fail validation on resume."""
+    wl = WorkingLocation.model_validate(
+        {
+            "country": "Vietnam",
+            "city": "Da Nang",
+            "lat": 16.05,
+            "lng": 108.20,
+            "scope_shape": "corridor",
+            "corridor": {"name": "Hue", "lat": 16.46, "lng": 107.59},
+        }
+    )
+    assert wl.corridor is not None
+    assert [s.name for s in wl.corridor.stops] == ["Hue"]
+
+
+def test_new_path_shape_round_trips() -> None:
+    wl = WorkingLocation(
+        country="Vietnam",
+        city="Da Nang",
+        lat=16.05,
+        lng=108.20,
+        scope_shape="corridor",
+        corridor=CorridorPath(
+            stops=[CorridorTarget(name="Hue", lat=16.46, lng=107.59)]
+        ),
+    )
+    assert WorkingLocation.model_validate(wl.model_dump()) == wl

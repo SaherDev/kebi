@@ -39,7 +39,11 @@ from kebi.api.schemas.extract_place import (
 from kebi.core.agent._trace_context import feature_trace
 from kebi.core.config import get_config
 from kebi.core.events.dispatcher import EventDispatcherProtocol
-from kebi.core.events.events import ContentHarvestRequested, PlaceSaved
+from kebi.core.events.events import (
+    AreaInterestNoted,
+    ContentHarvestRequested,
+    PlaceSaved,
+)
 from kebi.core.extraction.candidate_mapper import candidate_to_core
 from kebi.core.extraction.extraction_pipeline import (
     ExtractionPipeline,
@@ -393,6 +397,9 @@ class ExtractionService:
             # the knowledge harvest (Step 2): the share's durable facts
             # attach to the resolved areas, not to any venue.
             if noted:
+                await self._note_area_interest(
+                    user_id, pipeline_result.noted_non_venues
+                )
                 await self._maybe_harvest(
                     rid,
                     user_id,
@@ -599,10 +606,33 @@ class ExtractionService:
         # cache hit re-derives nothing and was harvested at first extraction),
         # and only when there is content worth mining and an anchor — a
         # persisted place or a noted area (Step 2's harvest-gap fix).
+        await self._note_area_interest(user_id, noted or [])
         await self._maybe_harvest(
             request_id, user_id, content, eligible_cores, noted or []
         )
         return items
+
+    async def _note_area_interest(
+        self, user_id: str, noted: list[NotedAreaRef]
+    ) -> None:
+        """Train taste from the non-venue names this extraction noted.
+
+        Deliberately separate from `_maybe_harvest`, which no-ops when there
+        is no mineable content. A route the user simply typed has none — no
+        caption, no transcript — so routing this through the harvest event
+        meant a typed route trained nothing while a shared one trained
+        properly. Region interest is a fact of what the user named, not of
+        what a harvest yielded (ADR-135).
+
+        Capped by the same config as the harvest so a big share cannot fan
+        out into unbounded geocodes.
+        """
+        refs = noted[: get_config().areas.noted_resolution_limit]
+        if not refs:
+            return
+        await self._event_dispatcher.dispatch(
+            AreaInterestNoted(user_id=user_id, noted_areas=refs)
+        )
 
     async def _maybe_harvest(
         self,

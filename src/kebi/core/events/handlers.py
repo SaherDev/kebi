@@ -9,6 +9,7 @@ from collections.abc import Awaitable
 from typing import TYPE_CHECKING
 
 from kebi.core.events.events import (
+    AreaInterestNoted,
     ContentHarvestRequested,
     DomainEvent,
     LibraryStateChanged,
@@ -26,7 +27,7 @@ if TYPE_CHECKING:
     from kebi.core.knowledge.harvest_bucket import HarvestBucketReader
     from kebi.core.knowledge.harvester import KnowledgeHarvester
     from kebi.core.knowledge.producer import KnowledgeIngestion
-    from kebi.core.knowledge.schemas import NotedAreaRef, StructuredClaim
+    from kebi.core.knowledge.schemas import StructuredClaim
     from kebi.core.memory.service import UserMemoryService
     from kebi.core.taste.service import TasteModelService
     from kebi.core.user.intent_service import UserIntentService
@@ -145,12 +146,12 @@ class EventHandlers:
                 source_ref=event.source_ref,
                 user_id=None,
             )
-            # Location-kinds Step 3: the same noted areas that anchor the
-            # (global) harvest also train the sharer's taste — a region-
-            # interest signal per resolved area, plus one experience signal
-            # from any experience-type tags the harvest surfaced. Distinct
-            # from the global claims: these are user-scoped (the sharer).
-            await self._emit_area_signals(event.user_id, snapshot.noted_areas, claims)
+            # Location-kinds Step 3: experience-type tags the harvest surfaced
+            # train the sharer's taste. Only this half lives here — it is
+            # semantic content and genuinely needs the harvest to have run.
+            # The region-interest half moved to `on_area_interest_noted`,
+            # which fires whether or not there was anything to harvest.
+            await self._emit_experience_signal(event.user_id, claims)
             self._tracer.capture_message(
                 message=f"content_harvest wrote {len(written)} claim(s)",
                 level="info",
@@ -174,25 +175,56 @@ class EventHandlers:
             )
             self._tracer.flush()
 
-    async def _emit_area_signals(
-        self,
-        user_id: str,
-        noted_areas: "list[NotedAreaRef]",
-        claims: "list[StructuredClaim]",
-    ) -> None:
-        """Train taste from a share's noted areas (location-kinds Step 3).
+    async def on_area_interest_noted(self, event: AreaInterestNoted) -> None:
+        """Train taste from the areas an extraction noted (location-kinds Step 3).
 
-        One region-interest signal per resolved area (reusing the harvester's
-        store-first resolution — a store hit after the harvest above), and one
-        experience signal from the experience-type tags the harvest produced.
-        Runs inside the caller's guarded try/except; a signal failure never
-        blocks the global harvest write."""
-        if self._harvester is None:
-            return
-        for entity in await self._harvester.resolve_area_interests(noted_areas):
-            await self.taste_service.handle_area_signal(
-                user_id, entity.entity_key, entity.entity_type, entity.name
+        One region-interest signal per resolved area, using the harvester's
+        store-first resolution. This is the *only* place area signals are
+        written — the harvest handler used to do it too, which meant a route
+        the user simply typed trained nothing at all, because a plain-text
+        extraction has no content to harvest and so never reached that
+        handler. ADR-135 always said region interest is a fact of what the
+        user named rather than of what a harvest yielded; this is where that
+        holds true.
+
+        Best-effort like its siblings (ADR-043): a signal failure is traced
+        and swallowed, never surfaced — the place work already succeeded.
+        """
+        try:
+            if self._harvester is None:
+                return
+            for entity in await self._harvester.resolve_area_interests(
+                event.noted_areas
+            ):
+                await self.taste_service.handle_area_signal(
+                    event.user_id, entity.entity_key, entity.entity_type, entity.name
+                )
+        except Exception as exc:
+            logger.error(
+                "Failed area interest signal: %s",
+                exc,
+                exc_info=True,
+                extra={"user_id": event.user_id},
             )
+            self._tracer.capture_message(
+                message=f"area_interest_noted error: {exc}",
+                level="error",
+                metadata={"event_id": event.event_id},
+                user_id=event.user_id,
+                session_id=event.user_id,
+            )
+            self._tracer.flush()
+
+    async def _emit_experience_signal(
+        self, user_id: str, claims: "list[StructuredClaim]"
+    ) -> None:
+        """The experience-type half of the Step 3 signals.
+
+        Unlike region interest this genuinely depends on the harvest: the
+        experience vocabulary (scenic route, motorbike route, hiking) comes
+        from the tags the harvest surfaced, so with no content there is
+        nothing to say. Runs inside the caller's guarded try/except.
+        """
         normalized = normalize_claim_tags([tag for c in claims for tag in c.tags])
         experiences = [t for t in normalized if t in EXPERIENCE_TAG_VALUES]
         await self.taste_service.handle_experience_signal(user_id, experiences)
