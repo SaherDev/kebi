@@ -26,6 +26,55 @@ re-validating end-to-end against a live agent turn.
 
 from __future__ import annotations
 
+import logging
+from typing import Annotated, Any
+
+from pydantic import BeforeValidator
+
+from kebi.core.places.models import PlaceCategory
+
+logger = logging.getLogger(__name__)
+
+
+def _keep_known_categories(value: Any) -> Any:
+    """Drop category values outside the enum instead of failing the call.
+
+    The enum is a closed vocabulary and the model reaches past it — a surf
+    query asks for `surf`, which is a real user intent with no category to
+    carry it. Strict validation turned that into a `ValidationError` inside
+    LangChain's arg parsing, which kills the whole tool call: the turn loses
+    the retrieval step entirely and the graph backfills placeholder tool
+    messages. One unusable member of an OR-combined filter list is not worth
+    an answerless turn, and the intent is not lost either — `query` still
+    carries the words the model was reaching for.
+
+    Everything all-unknown collapses to `None` (no category filter) rather
+    than an empty list, so downstream `if not categories` guards read it the
+    same way as an omitted arg.
+    """
+    if not isinstance(value, list):
+        return value
+    known: list[PlaceCategory] = []
+    unknown: list[Any] = []
+    for item in value:
+        if isinstance(item, PlaceCategory):
+            known.append(item)
+            continue
+        try:
+            known.append(PlaceCategory(item))
+        except (ValueError, TypeError):
+            unknown.append(item)
+    if unknown:
+        logger.info("tool_args_unknown_categories_dropped %s", unknown)
+    return known or None
+
+
+# The enum stays in the generated schema — the model still reads the real
+# vocabulary — while the validator forgives the calls where it reaches past it.
+CategoryArg = Annotated[
+    list[PlaceCategory] | None, BeforeValidator(_keep_known_categories)
+]
+
 QUERY_DESC = (
     "Free-text intent as a noun-phrase, e.g. 'cozy ramen for dinner'. Drives "
     "pgvector + FTS retrieval on saved places and the provider query on "
