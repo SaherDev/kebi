@@ -686,9 +686,10 @@ async def _validate_candidates(
         seen_ids.add(dedup_key)
         icon = normalize_icon(candidate.icon)
         if core.icon is None and icon is not None:
-            # Warm-path row (pre-dated this turn) — the icon_hint only
-            # persists on the cold-path write-through, so stamp the
-            # response copy for display; the DB row keeps NULL.
+            # The search service adopts the hint onto an icon-less warm row
+            # (ADR-146), so this normally already came back filled. Stamping
+            # the response copy covers the case where that write failed —
+            # the answer still draws, and the row learns it next time.
             core = core.model_copy(update={"icon": icon})
         results.append((core, candidate.reason))
     return results

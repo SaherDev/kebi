@@ -25,7 +25,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
+
+from kebi.core.places.models import normalize_icon
 
 if TYPE_CHECKING:
     from kebi.core.config import MovementConfig
@@ -135,6 +137,20 @@ class WorkingLocation(BaseModel):
     # display name.
     country_code: str | None = None
 
+    # One emoji per area level, for the `kebi://area/...` links a chat answer
+    # carries (ADR-146). A venue's icon rides its catalog row; an area has no
+    # row, and the resolver is the one model that already knows which areas
+    # this turn is about — so it names them here rather than paying for a
+    # second call. Nullable like a venue's: unset means the client falls back
+    # to its own mapping.
+    city_icon: str | None = None
+    neighborhood_icon: str | None = None
+
+    @field_validator("city_icon", "neighborhood_icon")
+    @classmethod
+    def _normalize_icons(cls, v: str | None) -> str | None:
+        return normalize_icon(v)
+
     # Place density of this location, from the geocoder's place type — feeds
     # the radius so "near me" scales with how dense the area is (ADR-084).
     density: str = "medium"
@@ -176,6 +192,19 @@ class LocationResolution(BaseModel):
     country: str | None = None
     city: str | None = None
     neighborhood: str | None = None
+    # One emoji for the character of each area this turn resolves to — 🏄 for
+    # a surf town, 🗼 for a city its landmark defines (ADR-146). Emitted for
+    # every source, not just `explicit_query`: the resolver is handed the
+    # carried and actual locations too, so it can name the icon even on the
+    # turns where the *names* come from the geocoder.
+    city_icon: str | None = None
+    neighborhood_icon: str | None = None
+
+    @field_validator("city_icon", "neighborhood_icon")
+    @classmethod
+    def _normalize_icons(cls, v: str | None) -> str | None:
+        return normalize_icon(v)
+
     source: LocationSource
     is_shift: bool = False
     is_ambiguous: bool = False

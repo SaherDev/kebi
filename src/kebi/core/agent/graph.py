@@ -1080,6 +1080,25 @@ def _coerce_coord(value: Any) -> float | None:
     return None
 
 
+def _with_area_icons(
+    working: WorkingLocation, resolution: LocationResolution
+) -> WorkingLocation:
+    """Fill a carried location's missing area icons from this turn's resolution.
+
+    A carried location arrives with the icons its own turn resolved, and those
+    win — the same area keeps the same emoji for the whole conversation rather
+    than flickering as the model re-picks. This only covers the gap: a location
+    checkpointed before icons existed, or a turn whose resolution came back
+    without one.
+    """
+    filled: dict[str, str] = {}
+    if not working.city_icon and resolution.city_icon:
+        filled["city_icon"] = resolution.city_icon
+    if not working.neighborhood_icon and resolution.neighborhood_icon:
+        filled["neighborhood_icon"] = resolution.neighborhood_icon
+    return working.model_copy(update=filled) if filled else working
+
+
 async def _build_working_location(
     resolution: LocationResolution,
     user_location: dict[str, Any] | None,
@@ -1107,7 +1126,9 @@ async def _build_working_location(
     if source == "carried":
         if prior_working_location:
             try:
-                return WorkingLocation(**prior_working_location)
+                return _with_area_icons(
+                    WorkingLocation(**prior_working_location), resolution
+                )
             except (TypeError, ValueError):
                 return None
         # Resolver said "carry" but there is nothing carried (e.g. first
@@ -1133,6 +1154,8 @@ async def _build_working_location(
             lng=lng,
             density=density_class(rev.place_type),
             bbox=rev.bbox,
+            city_icon=resolution.city_icon,
+            neighborhood_icon=resolution.neighborhood_icon,
         )
 
     # explicit_query — a place the resolver named; geocode it.
@@ -1157,6 +1180,8 @@ async def _build_working_location(
         lng=geo.lng,
         density=density_class(geo.place_type),
         bbox=geo.bbox,
+        city_icon=resolution.city_icon,
+        neighborhood_icon=resolution.neighborhood_icon,
     )
 
 

@@ -24,6 +24,7 @@ _CANGGU = {
     "neighborhood": "Canggu",
     "lat": -8.65,
     "lng": 115.13,
+    "neighborhood_icon": "🏄",
 }
 
 
@@ -36,7 +37,11 @@ def _tool_results() -> list[dict[str, Any]]:
                 "recommendation_id": "rec-99",
                 "candidates": [
                     {
-                        "place": {"id": "p1", "place_name": "Luigis"},
+                        "place": {
+                            "id": "p1",
+                            "place_name": "Luigis",
+                            "icon": "🍕",
+                        },
                         "source": "saved",
                     }
                 ],
@@ -116,12 +121,14 @@ async def test_entities_resolve_each_link() -> None:
             "key": "p1",
             "name": "Luigis",
             "uri": "kebi://venue/p1",
+            "icon": "🍕",
         },
         {
             "kind": "area",
             "key": "id/badung/canggu",
             "name": "Canggu",
             "uri": "kebi://area/id/badung/canggu",
+            "icon": "🏄",
         },
     ]
 

@@ -1131,11 +1131,30 @@ class TestIconHintStamping:
         persisted_cores = upsert.upsert_and_embed.call_args.args[0]
         assert persisted_cores[0].icon == "🍜"
 
-    async def test_warm_path_ignores_icon_hint(self) -> None:
-        # DB hit → no cold path, no write with the hint. The stored icon
-        # (None here) is what comes back; fill-only happens on cold only.
+    async def test_an_icon_less_warm_row_adopts_the_hint(self) -> None:
+        # Without this the row stays NULL forever: the hint was only ever
+        # stamped on the response copy, so every reader without a hint of
+        # its own (find_known, the library) drew it blank (ADR-146).
+        adopted = _core("a").model_copy(update={"icon": "⛲"})
         repo = MagicMock(
             find=AsyncMock(return_value=[_core("a")]),
+            get_by_provider_ids=AsyncMock(return_value={}),
+        )
+        upsert = MagicMock(upsert_and_embed=AsyncMock(return_value=[adopted]))
+        svc = _make_service(repo=repo, upsert_service=upsert)
+
+        results = await svc.find(
+            PlaceQuery(place_names=["Place a"], icon_hint="⛲"), limit=1
+        )
+
+        assert upsert.upsert_and_embed.call_args.args[0][0].icon == "⛲"
+        assert results[0].icon == "⛲"
+
+    async def test_a_warm_row_that_has_an_icon_is_left_alone(self) -> None:
+        # The row's own icon is authoritative — no write, no overwrite.
+        stored = _core("a").model_copy(update={"icon": "🍜"})
+        repo = MagicMock(
+            find=AsyncMock(return_value=[stored]),
             get_by_provider_ids=AsyncMock(return_value={}),
         )
         upsert = MagicMock(upsert_and_embed=AsyncMock(return_value=[]))
@@ -1146,4 +1165,32 @@ class TestIconHintStamping:
         )
 
         upsert.upsert_and_embed.assert_not_awaited()
-        assert results[0].icon is None
+        assert results[0].icon == "🍜"
+
+    async def test_a_warm_read_with_no_hint_never_writes(self) -> None:
+        repo = MagicMock(
+            find=AsyncMock(return_value=[_core("a")]),
+            get_by_provider_ids=AsyncMock(return_value={}),
+        )
+        upsert = MagicMock(upsert_and_embed=AsyncMock(return_value=[]))
+        svc = _make_service(repo=repo, upsert_service=upsert)
+
+        await svc.find(PlaceQuery(place_names=["Place a"]), limit=1)
+
+        upsert.upsert_and_embed.assert_not_awaited()
+
+    async def test_a_failed_adoption_still_returns_the_search_results(self) -> None:
+        # Enrichment on a read path — a write problem must not cost the
+        # caller their results.
+        repo = MagicMock(
+            find=AsyncMock(return_value=[_core("a")]),
+            get_by_provider_ids=AsyncMock(return_value={}),
+        )
+        upsert = MagicMock(upsert_and_embed=AsyncMock(side_effect=RuntimeError("db")))
+        svc = _make_service(repo=repo, upsert_service=upsert)
+
+        results = await svc.find(
+            PlaceQuery(place_names=["Place a"], icon_hint="⛲"), limit=1
+        )
+
+        assert [r.provider_id for r in results] == ["google:a"]

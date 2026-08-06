@@ -579,7 +579,7 @@ class TestLocationIrrelevantTurns:
         assert update["location_clarification"] is None
 
     async def test_it_does_not_narrate_confusion_to_the_user(self) -> None:
-        """"checking your location" on a World Cup question reads as the
+        """ "checking your location" on a World Cup question reads as the
         assistant being lost, not as work."""
         node = make_resolve_location_node(
             _resolver_llm(
@@ -621,3 +621,80 @@ class TestLocationIrrelevantTurns:
         )
         update = await node(_state(message="anywhere good for dinner"))
         assert update["location_clarification"] == "which city?"
+
+
+class TestAreaIcons:
+    """The resolver picks each area level's emoji (ADR-146) — an area has no
+    catalog row to carry one, and this is the model already looking at it."""
+
+    async def test_explicit_query_stamps_both_levels(self) -> None:
+        resolution = LocationResolution(
+            source="explicit_query",
+            country="Japan",
+            city="Tokyo",
+            neighborhood="Shibuya",
+            city_icon="🗼",
+            neighborhood_icon="🎌",
+        )
+        node = make_resolve_location_node(
+            _resolver_llm(resolution), _geocoder(forward=(35.66, 139.70))
+        )
+        wl = (await node(_state()))["working_location"]
+        assert wl["city_icon"] == "🗼"
+        assert wl["neighborhood_icon"] == "🎌"
+
+    async def test_user_actual_gets_icons_though_the_names_come_from_the_geocoder(
+        self,
+    ) -> None:
+        resolution = LocationResolution(source="user_actual", city_icon="🏙️")
+        node = make_resolve_location_node(
+            _resolver_llm(resolution),
+            _geocoder(reverse={"country": "Thailand", "city": "Bangkok"}),
+        )
+        wl = (
+            await node(
+                _state(
+                    message="what's good here",
+                    user_location={"lat": 13.7, "lng": 100.5},
+                )
+            )
+        )["working_location"]
+        assert wl["city"] == "Bangkok"
+        assert wl["city_icon"] == "🏙️"
+
+    async def test_a_carried_locations_own_icon_wins(self) -> None:
+        # Same area, same emoji for the whole conversation — it must not
+        # flicker as the model re-picks each turn.
+        resolution = LocationResolution(source="carried", city_icon="🌋")
+        prior = {
+            "country": "Japan",
+            "city": "Tokyo",
+            "lat": 35.66,
+            "lng": 139.70,
+            "city_icon": "🗼",
+        }
+        node = make_resolve_location_node(_resolver_llm(resolution), _geocoder())
+        wl = (await node(_state(message="and what else", working_location=prior)))[
+            "working_location"
+        ]
+        assert wl["city_icon"] == "🗼"
+
+    async def test_a_carried_location_with_no_icon_takes_this_turns(self) -> None:
+        # Locations checkpointed before icons existed still get drawn.
+        resolution = LocationResolution(source="carried", city_icon="🗼")
+        prior = {"country": "Japan", "city": "Tokyo", "lat": 35.66, "lng": 139.70}
+        node = make_resolve_location_node(_resolver_llm(resolution), _geocoder())
+        wl = (await node(_state(message="and what else", working_location=prior)))[
+            "working_location"
+        ]
+        assert wl["city_icon"] == "🗼"
+
+    async def test_a_junk_icon_from_the_model_is_dropped(self) -> None:
+        resolution = LocationResolution(
+            source="explicit_query", country="Japan", city="Tokyo", city_icon="tower"
+        )
+        node = make_resolve_location_node(
+            _resolver_llm(resolution), _geocoder(forward=(35.66, 139.70))
+        )
+        wl = (await node(_state()))["working_location"]
+        assert wl["city_icon"] is None
