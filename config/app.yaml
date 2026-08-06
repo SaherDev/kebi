@@ -21,6 +21,10 @@ providers:
     base_url: https://api.groq.com
   ollama:
     base_url: http://localhost:11434/v1
+  # Web search backing the `web_search` tool (ADR-145). Selected only when
+  # BRAVE_API_KEY is set; otherwise the null provider is used.
+  brave:
+    base_url: https://api.search.brave.com
 
 models:
   # Speech-to-text for the audio track of submitted videos (e.g. TikTok/Reels).
@@ -62,6 +66,15 @@ models:
     provider: openai
     model: gpt-4o-mini
     max_tokens: 1024
+    temperature: 0
+
+  # Mines durable area facts out of a turn's web-search findings (ADR-145).
+  # Runs after the answer is already sent, so latency does not matter and
+  # cheap does: same tier as the other knowledge writers.
+  web_harvester:
+    provider: openai
+    model: gpt-4o-mini
+    max_tokens: 800
     temperature: 0
 
   # Embedding model for semantic search over saved places (pgvector) and for
@@ -312,6 +325,7 @@ prompts:
   home_suggester: home_suggester.txt
   knowledge_harvester: knowledge_harvester.txt
   knowledge_curator: knowledge_curator.txt
+  web_harvester: web_harvester.txt
 
 # ---------------------------------------------------------------------------
 # Knowledge layer (ADR-120/121) — provenance-weighted confidence floors.
@@ -324,6 +338,13 @@ knowledge:
   # The saved-recommendation reason, written as a user-scoped `kebi_message`
   # claim on save (ADR-127) — floored between harvested and curated.
   kebi_message_confidence_floor: 0.8
+  # Web-mined claims (ADR-145). The lowest floor in the set on purpose: a
+  # search snippet is one unreviewed page, weaker evidence than something a
+  # person cared enough to share. It still surfaces — the ranker weighs
+  # trust, it does not gate on it — but it loses to a harvested or curated
+  # claim that says otherwise.
+  web_search_confidence_floor: 0.25
+  web_search_review_status: approved
   # Review gate (ADR-122). The state a fresh claim from each source lands in.
   # Both `approved` today — the product trusts every writer. When review turns
   # on, set e.g. `harvest_review_status: pending` here (config, not code) and
@@ -407,6 +428,10 @@ agent:
     # area isn't the working location. Same budget as the pure-DB tools.
     research: 8
     find_known: 8
+    # web_search is one outbound HTTP call (its own 6s budget) plus a Redis
+    # cache lookup. Kept tight — a slow search must cost the answer its
+    # freshness, never the turn.
+    web_search: 10
   # find_saved-specific knobs. `default_limit` is what the tool uses when
   # the agent omits the `limit` arg. `max_limit` caps any agent-supplied
   # value so the LLM cannot ask for an unbounded result set.
@@ -443,6 +468,29 @@ agent:
     default_limit: 6
     max_limit: 10
     notes_limit: 10
+  # web_search — the outside world (ADR-145). Backed by Brave when
+  # BRAVE_API_KEY is set, the null provider otherwise (tool stays callable,
+  # returns empty, agent answers from what it knows).
+  #
+  # `snippet_max_chars` caps one finding at roughly a long sentence and a
+  # half: enough to ground a date or a price, not enough to crowd out the
+  # claims, which are the part of an answer that is ours.
+  #
+  # The tool fires whenever the agent judges the question needs the outside
+  # world — no "only when the corpus is thin" gate — so `cache_ttl_seconds`
+  # is what makes that affordable. One day: short enough that a schedule
+  # change washes out by tomorrow, long enough that a question trending
+  # across users is paid for once. Results are not user-scoped, so the cache
+  # key is the question, shared by everyone.
+  #
+  # `harvest_enabled` gates the write-back into the claims store, so a bad
+  # harvest is switched off by config rather than a deploy.
+  web_search:
+    default_limit: 5
+    max_limit: 8
+    snippet_max_chars: 320
+    cache_ttl_seconds: 86400
+    harvest_enabled: true
 
 # ---------------------------------------------------------------------------
 # Movement / search-scope (ADR-084)

@@ -43,7 +43,7 @@ logger = logging.getLogger(__name__)
 # The consult place tools speak ConsultResult (`candidates`); `research`
 # speaks ResearchResult (`notes`). A degraded payload must match the
 # tool's own shape so clients and tests never see a foreign field.
-_DEGRADED_EMPTY_FIELD = {"research": "notes"}
+_DEGRADED_EMPTY_FIELD = {"research": "notes", "web_search": "findings"}
 
 
 def tool_step_base_id(tool_name: str, state: AgentState) -> str:

@@ -181,6 +181,14 @@ class LocationResolution(BaseModel):
     is_ambiguous: bool = False
     needs_clarification: bool = False
     clarification_reason: str = ""
+    # The turn is not about a place at all — a world-knowledge question, a
+    # general how-to, chit-chat (ADR-145). Distinct from `needs_clarification`
+    # even though both leave the location empty: clarification ends the turn
+    # with a question, and asking "which city?" about the World Cup is a
+    # non-sequitur that burns the turn. Explicit rather than inferred from an
+    # empty result, so "no location found" and "no location wanted" can never
+    # be confused.
+    location_irrelevant: bool = False
 
     # Search scope (ADR-084).
     scope_tier: ScopeTier = "city"

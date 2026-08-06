@@ -491,7 +491,13 @@ class KnowledgeConfig(BaseModel):
     # (strong): it is the user's own rationale, trusted for them but not global
     # expertise. `place_notes_limit` caps how many notes surface on one place.
     kebi_message_confidence_floor: float = 0.8
+    # Web-mined claims (ADR-145) floor lowest of all: a search snippet is one
+    # unreviewed page, weaker evidence than something a person cared enough
+    # to share. It still surfaces — trust is a ranking weight, not a gate —
+    # but it loses to a harvested or curated claim that disagrees.
+    web_search_confidence_floor: float = 0.25
     harvest_review_status: Literal["pending", "approved", "rejected"] = "approved"
+    web_search_review_status: Literal["pending", "approved", "rejected"] = "approved"
     curator_review_status: Literal["pending", "approved", "rejected"] = "approved"
     kebi_message_review_status: Literal["pending", "approved", "rejected"] = "approved"
     place_notes_limit: int = 6
@@ -572,6 +578,9 @@ class AppProvidersConfig(BaseModel):
     ollama: ProviderEndpointConfig = ProviderEndpointConfig(
         base_url="http://localhost:11434/v1"
     )
+    brave: ProviderEndpointConfig = ProviderEndpointConfig(
+        base_url="https://api.search.brave.com"
+    )
 
 
 class PromptConfig(BaseModel):
@@ -599,6 +608,9 @@ class ToolTimeoutsConfig(BaseModel):
     # find_known is two indexed reads, no LLM and no provider — the cheapest
     # tool in the set (ADR-138).
     find_known: int = 8
+    # One outbound HTTP call with its own 6s budget, plus cache lookup. Kept
+    # tight: a slow search must lose the nuance, not the turn (ADR-145).
+    web_search: int = 10
 
     @model_validator(mode="after")
     def _positive_integers(self) -> "ToolTimeoutsConfig":
@@ -607,6 +619,7 @@ class ToolTimeoutsConfig(BaseModel):
             "suggest_places": self.suggest_places,
             "research": self.research,
             "find_known": self.find_known,
+            "web_search": self.web_search,
         }
         bad = {k: v for k, v in fields.items() if v < 1}
         if bad:
@@ -726,6 +739,57 @@ class SuggestPlacesConfig(BaseModel):
         return self
 
 
+class WebSearchToolConfig(BaseModel):
+    """Per-tool knobs for `web_search` (ADR-145).
+
+    `snippet_max_chars` is the important one. Findings compete for the
+    orchestrator's attention with the claims, and the claims are the part of
+    an answer that is ours — so a finding is capped at roughly a long sentence
+    and a half: enough to ground a date or a price, not enough to become the
+    answer.
+
+    `cache_ttl_seconds` is one day. The tool fires freely by design, so the
+    cache is what keeps that affordable; a day is short enough that a
+    schedule change washes out by tomorrow and long enough that a question
+    trending across users is paid for once.
+
+    `harvest_enabled` gates the write-back into the claims store. Config, not
+    code, so a bad harvest can be switched off without a deploy.
+    """
+
+    default_limit: int = 5
+    max_limit: int = 8
+    snippet_max_chars: int = 320
+    cache_ttl_seconds: int = 86400
+    harvest_enabled: bool = True
+
+    @model_validator(mode="after")
+    def _positive_integers(self) -> "WebSearchToolConfig":
+        if self.default_limit < 1 or self.max_limit < 1:
+            raise ValueError(
+                "agent.web_search.default_limit / max_limit must be >= 1 "
+                f"(got default_limit={self.default_limit}, "
+                f"max_limit={self.max_limit})"
+            )
+        if self.default_limit > self.max_limit:
+            raise ValueError(
+                "agent.web_search.default_limit must be <= max_limit "
+                f"(got {self.default_limit} > {self.max_limit})"
+            )
+        if self.snippet_max_chars < 80:
+            raise ValueError(
+                "agent.web_search.snippet_max_chars must be >= 80 — below that "
+                "a finding is too short to ground a fact on "
+                f"(got {self.snippet_max_chars})"
+            )
+        if self.cache_ttl_seconds < 1:
+            raise ValueError(
+                "agent.web_search.cache_ttl_seconds must be >= 1 "
+                f"(got {self.cache_ttl_seconds})"
+            )
+        return self
+
+
 class ResearchToolConfig(BaseModel):
     """Per-tool knobs for `research`.
 
@@ -778,6 +842,7 @@ class AgentConfig(BaseModel):
     find_known: FindKnownConfig = FindKnownConfig()
     suggest_places: SuggestPlacesConfig = SuggestPlacesConfig()
     research: ResearchToolConfig = ResearchToolConfig()
+    web_search: WebSearchToolConfig = WebSearchToolConfig()
     prompt_caching_enabled: bool = True
 
     @model_validator(mode="after")
@@ -1115,6 +1180,11 @@ class EnvConfig(BaseSettings):
     GOOGLE_API_KEY: str | None = None
     GROQ_API_KEY: str | None = None
     APIFY_TOKEN: str | None = None
+    # Brave Search — gates the `web_search` tool's backend (ADR-145). Unset
+    # selects the null provider: the tool stays bound and callable, comes back
+    # empty, and the agent answers from what it knows instead of asserting a
+    # fact it could not check.
+    BRAVE_API_KEY: str | None = None
     LANGFUSE_PUBLIC_KEY: str | None = None
     LANGFUSE_SECRET_KEY: str | None = None
     LANGFUSE_HOST: str | None = None

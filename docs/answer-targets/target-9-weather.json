@@ -1,0 +1,40 @@
+{
+  "question": "whats the weather doing in bali this month, is it a bad time to come?",
+  "tool_calls_used": 1,
+  "response": {
+    "type": "agent",
+    "message": "August is actually one of the best times to come to [Bali](kebi://area/id/bali). It's the dry season, so you're looking at clear skies, warm days around 30°C (86°F), and cool evenings at 23°C (73°F). Rainfall is low, which means beach days are solid and the weather won't wreck your plans.\n\nThe only catch is that August is peak season, so it's busy and prices are up. If you want the same good weather without the crowds, September is the move, still dry, still warm, but fewer people and cheaper.\n\nRight now in early August the forecast is clear to partly cloudy with warm days, though there's a warning about high waves in some waters if you're thinking about water sports. But for general beach and bar time, you're set.",
+    "data": {
+      "reasoning_steps": [
+        {
+          "step": "agent.location_resolved",
+          "title": "found your location",
+          "summary": "around Bali, Indonesia",
+          "source": "agent",
+          "visibility": "user",
+          "timestamp": "2026-08-06T14:18:16.414566Z",
+          "duration_ms": 2361.9516670005396
+        },
+        {
+          "step": "web_search.summary",
+          "title": "looked it up",
+          "summary": "read 5 sources — baliholidaysecrets.com, pdiperjuanganbali.id, paradisusbali.",
+          "source": "agent",
+          "visibility": "user",
+          "timestamp": "2026-08-06T14:18:19.573263Z",
+          "duration_ms": 1194.1592090006452
+        }
+      ],
+      "entities": [
+        {
+          "kind": "area",
+          "key": "id/bali",
+          "name": "Bali",
+          "uri": "kebi://area/id/bali"
+        }
+      ],
+      "recommendation_id": null
+    },
+    "tool_calls_used": 1
+  }
+}

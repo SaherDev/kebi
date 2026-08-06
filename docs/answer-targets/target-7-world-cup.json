@@ -1,0 +1,24 @@
+{
+  "question": "where is the world cup being played next and which cities should i look at",
+  "tool_calls_used": 1,
+  "response": {
+    "type": "agent",
+    "message": "The 2026 World Cup is split across three countries for the first time: the United States, Mexico, and Canada. There are 16 host cities total, 11 in the US, 3 in Mexico, and 2 in Canada.\n\nThe final is at MetLife Stadium in New Jersey, just outside New York City.\n\nIf you're planning to follow matches, the main US cities worth looking at are the big metros, New York, Los Angeles, Dallas, Miami, and so on, since those are where the stadiums are. Mexico's hosting three cities, and Canada has two. The tournament runs in 2026, so you've got time to plan.\n\nWhich country are you thinking of basing yourself in, or are you considering a route across multiple cities?",
+    "data": {
+      "reasoning_steps": [
+        {
+          "step": "web_search.summary",
+          "title": "looked it up",
+          "summary": "read 5 sources — roadtrips.com, fifa.com, en.wikipedia.org, ussoccer.com, esi",
+          "source": "agent",
+          "visibility": "user",
+          "timestamp": "2026-08-06T14:17:46.521769Z",
+          "duration_ms": 1422.0351669937372
+        }
+      ],
+      "entities": [],
+      "recommendation_id": null
+    },
+    "tool_calls_used": 1
+  }
+}

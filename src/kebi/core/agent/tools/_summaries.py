@@ -44,6 +44,7 @@ TITLES = {
     "suggest_places": "suggested a few spots",
     "research": "dug into the local intel",
     "find_known": "checked what I know around here",
+    "web_search": "looked it up",
 }
 
 # Shared empty-outcome result lines for the location-anchored tools.

@@ -52,6 +52,23 @@ def test_location_resolution_requires_source() -> None:
         LocationResolution()  # type: ignore[call-arg]
 
 
+def test_a_turn_can_declare_itself_not_about_a_place() -> None:
+    """Explicit, not inferred from an empty result (ADR-145).
+
+    Before this existed, "where is the world cup being played" resolved to
+    nothing and the node turned that into "which city do you mean?" — a
+    non-sequitur that ended the turn before any tool ran.
+    """
+    r = LocationResolution(source="carried", location_irrelevant=True)
+    assert r.location_irrelevant is True
+    # Distinct from a clarification: there is nothing to clarify.
+    assert r.needs_clarification is False
+
+
+def test_a_place_turn_is_not_location_irrelevant_by_default() -> None:
+    assert LocationResolution(source="carried").location_irrelevant is False
+
+
 def test_location_resolution_defaults_to_area_city_scope() -> None:
     r = LocationResolution(source="carried")
     assert r.scope_tier == "city"

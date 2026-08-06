@@ -134,6 +134,11 @@ class KnowledgeSourceType(PyEnum):
     CURATED_EXPERT = "curated_expert"
     KEBI_MESSAGE = "kebi_message"
     USER_MESSAGE = "user_message"
+    # Mined from a web-search finding during a turn (ADR-145). Its own value,
+    # not folded into shared_content, because trust and staleness differ: a
+    # search snippet is one unreviewed page, and dating a claim's origin is
+    # what lets a future sweep expire the ones about schedules and prices.
+    WEB_SEARCH = "web_search"
 
 
 class KnowledgeReviewStatus(PyEnum):

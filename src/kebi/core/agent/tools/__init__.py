@@ -17,6 +17,9 @@ consult-family tools today:
   go*, research answers *what a local knows* about a place or area.
 - `find_known` — the two joined (ADR-138): places whose claims answer the
   question, retrieved *by* the fact rather than annotated with it.
+- `web_search` — the outside world (ADR-145). The only tool that reads
+  something kebi does not own, and the only path to a fact the store never
+  held: event dates, schedules, prices, current conditions.
 
 The place tools share one Pydantic arg schema (see
 `_search_args.py`); `research` has its own (the area args name the
@@ -33,11 +36,13 @@ from kebi.core.agent.tools.find_known_tool import build_find_known_tool
 from kebi.core.agent.tools.find_saved_tool import build_find_saved_tool
 from kebi.core.agent.tools.research_tool import build_research_tool
 from kebi.core.agent.tools.suggest_places_tool import build_suggest_places_tool
+from kebi.core.agent.tools.web_search_tool import build_web_search_tool
 from kebi.core.extraction.extraction_pipeline import SearchServiceFactory
 from kebi.core.knowledge.candidate_notes_service import CandidateNotesService
 from kebi.core.knowledge.known_places_service import KnownPlacesService
 from kebi.core.knowledge.research_service import ResearchService
 from kebi.core.places.hybrid_search_service import HybridSearchService
+from kebi.core.web.service import WebKnowledgeService
 
 
 def build_tools(
@@ -48,6 +53,7 @@ def build_tools(
     *,
     candidate_notes: CandidateNotesService | None = None,
     known_places: KnownPlacesService | None = None,
+    web_knowledge: WebKnowledgeService | None = None,
     discovery_enabled: bool = True,
 ) -> list[BaseTool]:
     """Build the agent's tool list, binding request-scoped services.
@@ -70,6 +76,10 @@ def build_tools(
     `known_places` backs `find_known` (ADR-138), the claims-driven retrieval
     path: it is ungated like `research`, since two indexed reads cost nothing
     external. Optional so a minimal graph can be built without it.
+    `web_knowledge` backs `web_search` (ADR-145) — the only tool that reads
+    something kebi does not own. Optional: omitted, the tool is simply not
+    bound and the agent answers world questions from its own knowledge, which
+    is the pre-ADR-145 behaviour.
 
     `discovery_enabled` is the plan-tier gate: `find_saved` (the user's
     own library, zero external cost) is always available; the two
@@ -90,6 +100,8 @@ def build_tools(
         )
 
     tools.append(build_research_tool(research_service))
+    if web_knowledge is not None:
+        tools.append(build_web_search_tool(web_knowledge))
     return tools
 
 
@@ -99,5 +111,6 @@ __all__ = [
     "build_suggest_places_tool",
     "build_research_tool",
     "build_find_known_tool",
+    "build_web_search_tool",
     "CandidateNamerService",
 ]

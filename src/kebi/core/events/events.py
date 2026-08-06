@@ -40,6 +40,26 @@ class ContentHarvestRequested(DomainEvent):
     source_ref: str | None = None
 
 
+class WebFindingsHarvestRequested(DomainEvent):
+    """Event: a turn's web-search findings should be mined into claims.
+
+    Fired by ChatService when a turn actually ran `web_search` and got
+    something back. Unlike the content harvest this carries the findings
+    inline rather than a bucket pointer: they are a few hundred bytes that
+    already exist in memory, and a durable snapshot would be storing search
+    results permanently to mine them once.
+
+    Runs after the response is sent, so the user never waits on it (ADR-145).
+    `user_id` is for tracing only — claims mined here are global
+    (`user_id=NULL`), because a fact about an area is not personal.
+    """
+
+    event_type: str = "web_findings_harvest_requested"
+    # A `WebSearchResult`, serialised. Kept as a dict so the events module
+    # stays free of core-domain imports, as every other event here does.
+    result: dict[str, Any]
+
+
 class RecommendationAccepted(DomainEvent):
     """Event: User accepted a recommendation"""
 
