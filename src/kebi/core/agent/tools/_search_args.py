@@ -85,7 +85,9 @@ CATEGORIES_DESC = (
     "OR-combined coarse place types the result must match one of. Pass when "
     "the user implies a type; omit when the query alone is specific. Valid "
     "values are enumerated in this schema — read them there rather than "
-    "guessing."
+    "guessing. A category is what a place IS. An activity or a vibe is a "
+    "tag, not a category: 'surf' is the `surfing` tag, and a value with no "
+    "match here belongs in `tags` or in `query`."
 )
 
 TAGS_DESC = (
@@ -104,8 +106,8 @@ TAGS_DESC = (
     "dietary: vegan, vegetarian, halal, vegetarian_options\n"
     "feature: outdoor_seating, indoor, outdoor, rooftop, waterfront, garden, "
     "scenic_view, private_room, fireplace, dog_friendly, family_friendly, "
-    "group_friendly, kids_menu, sports_viewing, live_music, parking, "
-    "open_late, open_24h\n"
+    "group_friendly, kids_menu, sports_viewing, live_music, surfing, "
+    "parking, open_late, open_24h\n"
     "atmosphere: cozy, romantic, trendy, quiet, lively, intimate, spacious, "
     "vibrant, laid_back, luxurious, casual, upscale, hidden_gem, "
     "instagram_worthy, vintage, industrial, minimalist, bohemian, "

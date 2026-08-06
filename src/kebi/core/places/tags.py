@@ -91,6 +91,10 @@ class FeatureTag(str, Enum):
     kids_menu = "kids_menu"
     sports_viewing = "sports_viewing"
     live_music = "live_music"
+    # An activity the place is *for*, not a category of place: a surf break,
+    # the warung facing it, and the board rental all answer "where can I
+    # surf" without sharing a category (ADR-147).
+    surfing = "surfing"
 
     # practical
     parking = "parking"
