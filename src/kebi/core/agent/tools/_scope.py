@@ -16,11 +16,18 @@ classifies a route turn as `scope_shape="corridor"` and geocodes where the
 user is headed, but every downstream search is still a point plus a radius —
 so without this the search circles the origin and an answer about the trip
 only ever knows about places next to where the trip starts.
+
+`itinerary_segments` is the multi-stop generalisation (ADR-148): an
+itinerary turn fans one search out into a disc per stop plus a corridor
+circle per leg, so the user's saves, kebi's claims, and taste picks can
+surface for every part of the trip — including a city on the route the user
+never named.
 """
 
 from __future__ import annotations
 
 import logging
+from typing import NamedTuple
 
 from kebi.core.agent.location import WorkingLocation, resolve_radius
 from kebi.core.config import MovementConfig
@@ -62,6 +69,91 @@ def anchor_to_corridor(working: WorkingLocation) -> WorkingLocation:
             "search_radius_m": leg_m / 2 + working.search_radius_m,
         }
     )
+
+
+class ItinerarySegment(NamedTuple):
+    """One searchable piece of a multi-stop trip.
+
+    `label` is what the candidate carries back to the agent ("Hue", or
+    "on the way between Hue and Hoi An") — user-facing words, since the
+    agent quotes them when pinning a pick to a part of the trip.
+    `on_the_way` marks a leg: a hit here that isn't in any stop's own disc
+    is the "add Da Nang" signal — somewhere the user never named, on their
+    route, with a reason to stop.
+    """
+
+    label: str
+    on_the_way: bool
+    working: WorkingLocation
+
+
+def itinerary_segments(working: WorkingLocation) -> list[ItinerarySegment]:
+    """Fan an itinerary turn out into per-stop discs and per-leg corridors.
+
+    Stops come first (in trip order), then legs between consecutive stops —
+    so a fan-out that dedupes in order attributes a place to its city, and
+    only a hit *outside* every stop's disc stays labelled as on the way.
+
+    Each stop keeps the turn's resolved `search_radius_m` (the resolver
+    classifies an itinerary at city tier, so that radius is the city disc).
+    Each leg reuses the corridor math above: midpoint of the two stops,
+    widened to cover both ends plus the stop radius as the off-route band.
+    Same coarse-circle trade-off as `anchor_to_corridor`, same defence: the
+    agent still ranks by what is actually on the way.
+
+    Returns `[]` for any turn that isn't an itinerary or that resolved
+    fewer than two anchors — callers fall back to the single-search path.
+    """
+    anchors = working.itinerary or []
+    if working.scope_shape != "itinerary" or len(anchors) < 2:
+        return []
+
+    base = working.model_copy(
+        update={
+            "scope_shape": "area",
+            "corridor": None,
+            "itinerary": None,
+            "neighborhood": None,
+            "neighborhood_icon": None,
+        }
+    )
+    # Each stop disc carries the stop's OWN area names + country code from
+    # its geocode — anything name-keyed downstream (area claims via
+    # `build_geo_key`) must resolve to Hue's knowledge for the Hue stop, not
+    # the trip's first city. A leg has no area of its own, so it keeps the
+    # primary names only for display and nothing name-keyed runs against it.
+    segments = [
+        ItinerarySegment(
+            label=anchor.name,
+            on_the_way=False,
+            working=base.model_copy(
+                update={
+                    "lat": anchor.lat,
+                    "lng": anchor.lng,
+                    "city": anchor.city or anchor.name,
+                    "country": anchor.country or base.country,
+                    "country_code": anchor.country_code,
+                }
+            ),
+        )
+        for anchor in anchors
+    ]
+    for a, b in zip(anchors, anchors[1:], strict=False):
+        leg_m = haversine_m(a.lat, a.lng, b.lat, b.lng)
+        segments.append(
+            ItinerarySegment(
+                label=f"on the way between {a.name} and {b.name}",
+                on_the_way=True,
+                working=base.model_copy(
+                    update={
+                        "lat": (a.lat + b.lat) / 2,
+                        "lng": (a.lng + b.lng) / 2,
+                        "search_radius_m": leg_m / 2 + working.search_radius_m,
+                    }
+                ),
+            )
+        )
+    return segments
 
 
 def clamp_to_walkable_for_utility(

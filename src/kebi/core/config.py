@@ -819,6 +819,31 @@ class ResearchToolConfig(BaseModel):
         return self
 
 
+class ItineraryConfig(BaseModel):
+    """Knobs for multi-stop itinerary turns (ADR-148).
+
+    `max_stops` caps how many resolver-named stops the resolve node
+    geocodes — a runaway stop list costs one geocode each. `per_segment_limit`
+    is the per-stop / per-leg candidate cap the fan-out tools use, replacing
+    the single-search limit: an itinerary answer wants a few strong names per
+    segment, not one city's worth from each.
+    """
+
+    max_stops: int = 5
+    per_segment_limit: int = 4
+
+    @model_validator(mode="after")
+    def _positive_integers(self) -> "ItineraryConfig":
+        if self.max_stops < 2 or self.per_segment_limit < 1:
+            raise ValueError(
+                "agent.itinerary.max_stops must be >= 2 and "
+                "per_segment_limit >= 1 "
+                f"(got max_stops={self.max_stops}, "
+                f"per_segment_limit={self.per_segment_limit})"
+            )
+        return self
+
+
 class AgentConfig(BaseModel):
     """Typed configuration for the agent path (feature 027 M2, ADR-062).
 
@@ -843,6 +868,7 @@ class AgentConfig(BaseModel):
     suggest_places: SuggestPlacesConfig = SuggestPlacesConfig()
     research: ResearchToolConfig = ResearchToolConfig()
     web_search: WebSearchToolConfig = WebSearchToolConfig()
+    itinerary: ItineraryConfig = ItineraryConfig()
     prompt_caching_enabled: bool = True
 
     @model_validator(mode="after")

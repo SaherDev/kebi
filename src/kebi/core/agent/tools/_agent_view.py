@@ -113,6 +113,11 @@ def candidate_view(candidate: ConsultCandidate) -> dict[str, Any]:
         view["saved"] = saved
     if candidate.reason:
         view["reason"] = candidate.reason
+    if candidate.segment:
+        # Which part of a multi-stop trip this belongs to (ADR-148). A leg
+        # label on a save is the "add this city" signal, so the model must
+        # see it.
+        view["segment"] = candidate.segment
     if candidate.notes:
         # Claim text only. Ids, confidences, and vote tallies are ranking
         # inputs the service already applied — the order IS the ranking.

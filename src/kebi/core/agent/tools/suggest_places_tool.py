@@ -142,6 +142,41 @@ def _location_label(working: WorkingLocation) -> str:
     return working.city
 
 
+def _anchor_to_itinerary_stop(
+    working: WorkingLocation, city_override: str | None
+) -> WorkingLocation:
+    """Re-anchor an itinerary turn's provider search onto one named stop.
+
+    On a multi-stop trip the agent suggests per stop, naming the stop in
+    `city` ("43 Factory" in Da Nang, not in the trip's first city) — and the
+    provider verification must be biased to THAT stop's disc, or a
+    mid-route name gets checked against the wrong city and dropped
+    (ADR-148). The override only re-anchors when it matches a resolved stop
+    (the agent picking geography freely would undo ADR-083); anything else
+    keeps the primary anchor, same as before. Everywhere outside an
+    itinerary the override stays a no-op.
+    """
+    anchors = working.itinerary or []
+    wanted = (city_override or "").strip().casefold()
+    if working.scope_shape != "itinerary" or not anchors or not wanted:
+        return working
+    for anchor in anchors:
+        if wanted in {anchor.name.casefold(), (anchor.city or "").casefold()}:
+            return working.model_copy(
+                update={
+                    "lat": anchor.lat,
+                    "lng": anchor.lng,
+                    "city": anchor.city or anchor.name,
+                    "country": anchor.country or working.country,
+                    "country_code": anchor.country_code,
+                    "neighborhood": None,
+                    "scope_shape": "area",
+                    "itinerary": None,
+                }
+            )
+    return working
+
+
 def _make_step(step_id: str, summary: str) -> ReasoningStep:
     """Build a debug-only internal narration step from this tool's namespace.
 
@@ -315,7 +350,7 @@ async def _run_suggest_places_impl(
     categories: list[PlaceCategory] | None,
     tags: list[str] | None,
     neighborhood_override: str | None,  # noqa: ARG001 - reserved; see docstring
-    city_override: str | None,  # noqa: ARG001 - reserved; see docstring
+    city_override: str | None,
     country_override: str | None,  # noqa: ARG001 - reserved; see docstring
     limit: int,
     name_count: int,
@@ -324,9 +359,10 @@ async def _run_suggest_places_impl(
     """The agent-supplied area overrides (neighborhood / city / country)
     are accepted to keep the arg schema byte-identical to `find_saved`,
     but `suggest_places` enforces a strict lat/lng + radius anchor —
-    overrides without coordinates don't bypass that gate. They are
-    surfaced in reasoning steps when present and used by the prompt's
-    location block once the gate passes.
+    overrides without coordinates don't bypass that gate. The one active
+    override is `city` on an itinerary turn, where it re-anchors
+    verification to the named stop's own disc (ADR-148) — a resolved
+    stop's coordinates, so the strict-anchor rule still holds.
     """
     steps: list[ReasoningStep] = []
     user_id = state["user_id"]
@@ -384,8 +420,11 @@ async def _run_suggest_places_impl(
     # radius so the namer scope and provider locationBias stay tight and the
     # nearest branch wins, not a prominent one across town.
     # Route turns search the whole way, not a circle around the start
-    # (ADR-137); the utility clamp is a no-op on those.
+    # (ADR-137); the utility clamp is a no-op on those. On an itinerary, an
+    # agent-named stop city re-anchors verification to that stop's disc
+    # (ADR-148).
     working = anchor_to_corridor(working)
+    working = _anchor_to_itinerary_stop(working, city_override)
     working = clamp_to_walkable_for_utility(working, categories, get_config().movement)
     location_label = _location_label(working)
     _trace("locate", f"looking around {location_label}")

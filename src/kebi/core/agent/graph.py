@@ -33,6 +33,7 @@ from langgraph.prebuilt import ToolNode
 from kebi.core.agent._trace_context import feature_span
 from kebi.core.agent.location import (
     CorridorTarget,
+    ItineraryAnchor,
     LocationResolution,
     WorkingLocation,
     density_class,
@@ -364,6 +365,17 @@ def _render_location_context(state: AgentState) -> str:
             working.get("country"),
         ]
         place = ", ".join(p for p in parts if p)
+        itinerary = working.get("itinerary") or []
+        if working.get("scope_shape") == "itinerary" and len(itinerary) >= 2:
+            stops = ", then ".join(a.get("name", "") for a in itinerary)
+            return (
+                f"This turn is a multi-stop trip: {stops}. The working "
+                f"location anchors at the first stop ({place}), but the "
+                "place tools already search every stop AND the legs between "
+                "them — results come back labelled with the part of the trip "
+                "they belong to. Build the answer stop by stop, in trip "
+                "order."
+            )
         return (
             f"Working location for this turn: {place} "
             f"(lat={working.get('lat')}, lng={working.get('lng')}). "
@@ -557,6 +569,13 @@ def _render_movement_context(state: AgentState) -> str:
         parts.append(
             f"The user is looking along the route toward {corridor.get('name')} "
             "— reason about places on the way, not a circle around one point."
+        )
+    itinerary = working.get("itinerary") or []
+    if shape == "itinerary" and len(itinerary) >= 2:
+        parts.append(
+            "The user is travelling a multi-stop route — distances within "
+            "each stop scale to the mode above, but the stops themselves are "
+            "a journey, not a radius."
         )
     if is_fallback:
         parts.append(
@@ -1209,6 +1228,44 @@ async def _resolve_corridor(
     return CorridorTarget(name=name, lat=geo.lat, lng=geo.lng)
 
 
+async def _resolve_itinerary(
+    stops: list[str],
+    geocoding_client: Any,
+) -> list[ItineraryAnchor]:
+    """Geocode the resolver's ordered stop names into itinerary anchors.
+
+    Stops arrive as "City, Country" strings (the resolver prompt requires
+    the country so bare names like "Hue" can't mis-anchor — the same lesson
+    as ADR-126). A stop that fails to geocode is dropped with a log rather
+    than failing the turn: the trip is still answerable from the stops that
+    resolved, and the anchor label keeps only the city half so the agent
+    quotes "Hue", not "Hue, Vietnam". Capped at `agent.itinerary.max_stops`.
+    """
+    anchors: list[ItineraryAnchor] = []
+    for stop in stops[: get_config().agent.itinerary.max_stops]:
+        name = stop.strip()
+        if not name:
+            continue
+        try:
+            geo = await geocoding_client.search(query=name)
+        except GeocodingError:
+            geo = None
+        if geo is None:
+            logger.warning("itinerary stop failed to geocode, dropping: %r", name)
+            continue
+        anchors.append(
+            ItineraryAnchor(
+                name=name.split(",")[0].strip() or name,
+                lat=geo.lat,
+                lng=geo.lng,
+                city=geo.city,
+                country=geo.country,
+                country_code=geo.country_code,
+            )
+        )
+    return anchors
+
+
 async def _resolve_search_scope(
     working: WorkingLocation,
     resolution: LocationResolution,
@@ -1236,6 +1293,24 @@ async def _resolve_search_scope(
         if corridor is None:
             return None
 
+    # An itinerary that loses too many stops to geocoding degrades to a
+    # plain area turn around the primary anchor — a worse answer, never a
+    # failed one (ADR-148). The shape only survives with >= 2 real anchors,
+    # so downstream fan-out can rely on at least one leg existing.
+    scope_shape: str = resolution.scope_shape
+    itinerary: list[ItineraryAnchor] | None = None
+    if resolution.scope_shape == "itinerary":
+        anchors = await _resolve_itinerary(resolution.itinerary_stops, geocoding_client)
+        if len(anchors) >= 2:
+            itinerary = anchors
+        else:
+            logger.warning(
+                "itinerary resolved %d/%d stops; degrading to area scope",
+                len(anchors),
+                len(resolution.itinerary_stops),
+            )
+            scope_shape = "area"
+
     radius = resolve_radius(
         effective_mode,
         resolution.scope_tier,
@@ -1247,9 +1322,10 @@ async def _resolve_search_scope(
         update={
             "effective_mode": effective_mode,
             "scope_tier": resolution.scope_tier,
-            "scope_shape": resolution.scope_shape,
+            "scope_shape": scope_shape,
             "search_radius_m": radius,
             "corridor": corridor,
+            "itinerary": itinerary,
         }
     )
 
@@ -1324,12 +1400,14 @@ def _location_resolved_update(
     # degraded to an area search looks identical to a normal one, and the only
     # symptom is an answer confidently naming places in the wrong direction.
     logger.info(
-        "resolved scope: shape=%s tier=%s mode=%s radius=%.0fm corridor=%s",
+        "resolved scope: shape=%s tier=%s mode=%s radius=%.0fm corridor=%s "
+        "itinerary=%s",
         working.scope_shape,
         working.scope_tier,
         working.effective_mode,
         working.search_radius_m,
         working.corridor.name if working.corridor else None,
+        [a.name for a in working.itinerary] if working.itinerary else None,
     )
     parts = [working.neighborhood, working.city, working.country]
     place = ", ".join(p for p in parts if p)

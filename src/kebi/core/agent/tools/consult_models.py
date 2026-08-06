@@ -51,6 +51,13 @@ class ConsultCandidate(BaseModel):
     vector_rank: int | None = None
     text_rank: int | None = None
     reason: str | None = None
+    # Which part of a multi-stop trip this candidate belongs to (ADR-148):
+    # a stop's name ("Hue") or a leg ("on the way between Hue and Hoi An").
+    # Only set on itinerary turns — `None` everywhere else. A leg label on a
+    # save is the strongest "add this city" signal the agent gets: the user
+    # never named the place's city, but it is on their route and they have a
+    # reason to stop.
+    segment: str | None = None
     # Insider claims kebi holds about this exact place, strongest first
     # (ADR-137). Attached on the retrieval path, not by a `research` call, so
     # a recommendation turn carries them without spending tool budget. Empty

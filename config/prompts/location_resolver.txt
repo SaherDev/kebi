@@ -228,7 +228,7 @@ there — classify the tier for the destination (usually city).
 Example: "what about Chiang Mai" → source explicit_query, is_shift true, the
 point is Chiang Mai, scope_tier city.
 
-## scope_shape — area or corridor
+## scope_shape — area, corridor, or itinerary
 
 - area — a search around the point. This is almost everything.
   Example: "cheap dinner nearby" → area.
@@ -237,6 +237,29 @@ point is Chiang Mai, scope_tier city.
   airport".
   Example: "a coffee place on my way to the airport" → corridor,
   corridor_destination "the airport".
+- itinerary — the user names a TRIP through two or more places, in order:
+  "Hanoi, then Hue, then Hoi An", "doing Rome and Florence next month",
+  "Bangkok then Chiang Mai, what should I stop at". The trip itself is the
+  subject — stops, legs, what to do where — not one city with the others as
+  asides.
+  Fill itinerary_stops with EVERY named stop in trip order, INCLUDING the
+  first, each as "City, Country" ("Hanoi, Vietnam") — supply the country
+  yourself the same way you do for the location fields; a bare name like
+  "Hue" can anchor to the wrong country entirely. The location fields
+  (country / city) get the FIRST stop, source explicit_query, scope_tier
+  city.
+  Example: "I am doing Hanoi, then Hue, then Hoi An — what should I stop
+  at along the way?" → source explicit_query, country Vietnam, city Hanoi,
+  scope_shape itinerary, scope_tier city, itinerary_stops ["Hanoi,
+  Vietnam", "Hue, Vietnam", "Hoi An, Vietnam"].
+
+  Itinerary vs corridor: a corridor is one hop with a destination ("on my
+  way to the airport"); an itinerary is a multi-stop trip where the stops
+  themselves are subjects. Two cities with the journey as the subject
+  ("driving from Hue to Hoi An, where should I stop") is also an itinerary
+  — both ends are stops. A message that merely compares two cities ("is
+  Hue or Hoi An better for food") is neither — it is an area turn about
+  whichever place you resolve, not a trip.
 
 For a corridor, set corridor_destination to the place the user named. If the
 destination is an implicit personal anchor with no real place name — "home",

@@ -35,7 +35,7 @@ from kebi.core.agent.state import AgentState
 from kebi.core.agent.stream_emit import emit_step_active, emit_step_done
 from kebi.core.agent.tools._notes import attach_notes
 from kebi.core.agent.tools._packing import pack_consult_result
-from kebi.core.agent.tools._scope import anchor_to_corridor
+from kebi.core.agent.tools._scope import anchor_to_corridor, itinerary_segments
 from kebi.core.agent.tools._summaries import NEED_LOCATION, TITLES, found_summary
 from kebi.core.agent.tools._with_timeout import tool_step_base_id, with_timeout
 from kebi.core.agent.tools._working_location import maybe_working_location
@@ -154,51 +154,110 @@ async def _run_find_known_impl(
         result = ConsultResult(candidates=[], empty_reason="no_location")
     else:
         working = anchor_to_corridor(working)
-        known = await known_places.find(
-            working=working,
-            query=query,
-            tags=tags,
-            user_id=user_id,
-            limit=limit,
-            # The turn's real weekday, so a schedule claim is retrievable
-            # without the user having to say what day it is (ADR-138). A day
-            # named in `query` still wins — see `KnownPlacesService.find`.
-            day=local_weekday(state),
-            # The rest of the turn's context (ADR-142). Without these a claim
-            # is chosen for sharing words with the question; with them it is
-            # chosen for fitting this user, here, now.
-            daypart=local_daypart(state),
-            # Calendar season only for now. Actual conditions (wet vs dry)
-            # would be the stronger signal in the tropics, where the calendar
-            # says nothing — deferred until there is a real weather source.
-            season=local_season(state),
-            taste_values=state.get("taste_values") or [],
-        )
-        result = ConsultResult(
-            candidates=[
-                ConsultCandidate(
-                    place=k.place,
-                    user_data=None,
-                    source="known",
-                    rrf_score=0.0,
-                    # The notes ARE the reason this place is here, so they
-                    # ride the candidate directly rather than waiting for
-                    # `attach_notes` to re-read the same claims.
-                    notes=k.notes,
+        # Shared retrieval context for every find below. The turn's real
+        # weekday, so a schedule claim is retrievable without the user having
+        # to say what day it is (ADR-138); daypart + season + taste values so
+        # a claim is chosen for fitting this user, here, now, not for sharing
+        # words with the question (ADR-142). Season stays calendar-only —
+        # wet-vs-dry would be the stronger signal in the tropics but needs a
+        # real weather source.
+        find_context: dict[str, Any] = {
+            "query": query,
+            "tags": tags,
+            "user_id": user_id,
+            "day": local_weekday(state),
+            "daypart": local_daypart(state),
+            "season": local_season(state),
+            "taste_values": state.get("taste_values") or [],
+        }
+
+        # A multi-stop trip runs one claims read per stop and per leg
+        # (ADR-148), labelled and deduped in segment order — this is what
+        # lets kebi know something about EVERY part of the trip, including a
+        # claims-backed place in a city the user never named.
+        segments = itinerary_segments(working)
+        if segments:
+            per_segment = get_config().agent.itinerary.per_segment_limit
+            seen: set[str] = set()
+            candidates: list[ConsultCandidate] = []
+            for segment in segments:
+                known = await known_places.find(
+                    working=segment.working,
+                    limit=min(per_segment, limit),
+                    **find_context,
                 )
-                for k in known
-            ],
-            empty_reason=None if known else "no_match",
-        )
-        # Re-run only for `area_notes` — the per-place notes are already set
-        # above and `attach_notes` overwrites them with an equivalent read.
-        area_only = await attach_notes(
-            ConsultResult(),
-            notes_service=notes_service,
-            user_id=user_id,
-            working=working,
-        )
-        result = result.model_copy(update={"area_notes": area_only.area_notes})
+                for k in known:
+                    key = k.place.id or k.place.place_name
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    candidates.append(
+                        ConsultCandidate(
+                            place=k.place,
+                            user_data=None,
+                            source="known",
+                            rrf_score=0.0,
+                            notes=k.notes,
+                            segment=segment.label,
+                        )
+                    )
+            result = ConsultResult(
+                candidates=candidates,
+                empty_reason=None if candidates else "no_match",
+            )
+            # Area notes per STOP (legs have no area of their own): what
+            # kebi knows about each city on the route, pooled in trip order
+            # and deduped by claim id.
+            area_notes = []
+            seen_notes: set[str] = set()
+            for segment in segments:
+                if segment.on_the_way:
+                    continue
+                area_only = await attach_notes(
+                    ConsultResult(),
+                    notes_service=notes_service,
+                    user_id=user_id,
+                    working=segment.working,
+                )
+                for note in area_only.area_notes:
+                    if note.id in seen_notes:
+                        continue
+                    seen_notes.add(note.id)
+                    area_notes.append(note)
+            result = result.model_copy(update={"area_notes": area_notes})
+        else:
+            known = await known_places.find(
+                working=working,
+                limit=limit,
+                **find_context,
+            )
+            result = ConsultResult(
+                candidates=[
+                    ConsultCandidate(
+                        place=k.place,
+                        user_data=None,
+                        source="known",
+                        rrf_score=0.0,
+                        # The notes ARE the reason this place is here, so
+                        # they ride the candidate directly rather than
+                        # waiting for `attach_notes` to re-read the same
+                        # claims.
+                        notes=k.notes,
+                    )
+                    for k in known
+                ],
+                empty_reason=None if known else "no_match",
+            )
+            # Re-run only for `area_notes` — the per-place notes are already
+            # set above and `attach_notes` overwrites them with an
+            # equivalent read.
+            area_only = await attach_notes(
+                ConsultResult(),
+                notes_service=notes_service,
+                user_id=user_id,
+                working=working,
+            )
+            result = result.model_copy(update={"area_notes": area_only.area_notes})
 
     step = ReasoningStep(
         step=f"{_TOOL_NAME}.summary",
