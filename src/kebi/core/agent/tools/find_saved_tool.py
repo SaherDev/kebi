@@ -35,7 +35,7 @@ from kebi.core.agent.stream_emit import emit_step_active, emit_step_done
 from kebi.core.agent.tools._hard_constraints import split_constraints
 from kebi.core.agent.tools._notes import attach_notes
 from kebi.core.agent.tools._packing import pack_consult_result
-from kebi.core.agent.tools._scope import anchor_to_corridor
+from kebi.core.agent.tools._scope import anchor_to_corridor, itinerary_segments
 from kebi.core.agent.tools._search_args import (
     CATEGORIES_DESC,
     CITY_DESC,
@@ -297,36 +297,84 @@ async def _run_find_saved_impl(
         working = anchor_to_corridor(working)
     has_named_area = bool(neighborhood or city or country)
 
-    filters = _assemble_filters(
-        categories=categories,
-        tags=tags,
-        neighborhood=neighborhood,
-        city=city,
-        country=country,
-        working=working,
+    # A multi-stop trip fans one call out across every stop and leg
+    # (ADR-148) — one search each, results labelled with the segment they
+    # came from, deduped in segment order so a place in a stop's own disc
+    # is that stop's, and only a hit outside every stop stays "on the way".
+    # An agent-named area wins over the fan-out, same as it wins over the
+    # geofence: "what did I save in Hue" is one city, not the whole trip.
+    segments = (
+        itinerary_segments(working)
+        if (working is not None and not has_named_area)
+        else []
     )
-
-    hits = await hybrid_search.search(
-        user_id=user_id,
-        # Soft tags no longer filter (see `_assemble_filters`), so they ride
-        # the query text — still steering the vector + FTS legs, never
-        # excluding a save that simply hasn't been tagged that way yet.
-        query=_query_with_soft_tags(query, tags),
-        filters=filters,
-        limit=limit,
-    )
-
-    candidates = [
-        ConsultCandidate(
-            place=hit.place,
-            user_data=hit.user_data,
-            source="saved",
-            rrf_score=hit.rrf_score,
-            vector_rank=hit.vector_rank,
-            text_rank=hit.text_rank,
+    if segments:
+        per_segment = get_config().agent.itinerary.per_segment_limit
+        effective_query = _query_with_soft_tags(query, tags)
+        seen: set[str] = set()
+        candidates: list[ConsultCandidate] = []
+        for segment in segments:
+            seg_hits = await hybrid_search.search(
+                user_id=user_id,
+                query=effective_query,
+                filters=_assemble_filters(
+                    categories=categories,
+                    tags=tags,
+                    neighborhood=None,
+                    city=None,
+                    country=None,
+                    working=segment.working,
+                ),
+                limit=per_segment,
+            )
+            for hit in seg_hits:
+                key = hit.place.id or hit.place.place_name
+                if key in seen:
+                    continue
+                seen.add(key)
+                candidates.append(
+                    ConsultCandidate(
+                        place=hit.place,
+                        user_data=hit.user_data,
+                        source="saved",
+                        rrf_score=hit.rrf_score,
+                        vector_rank=hit.vector_rank,
+                        text_rank=hit.text_rank,
+                        segment=segment.label,
+                    )
+                )
+    else:
+        filters = _assemble_filters(
+            categories=categories,
+            tags=tags,
+            neighborhood=neighborhood,
+            city=city,
+            country=country,
+            working=working,
         )
-        for hit in hits
-    ]
+
+        hits = await hybrid_search.search(
+            user_id=user_id,
+            # Soft tags no longer filter (see `_assemble_filters`), so they
+            # ride the query text — still steering the vector + FTS legs,
+            # never excluding a save that simply hasn't been tagged that way
+            # yet.
+            query=_query_with_soft_tags(query, tags),
+            filters=filters,
+            limit=limit,
+        )
+
+        candidates = [
+            ConsultCandidate(
+                place=hit.place,
+                user_data=hit.user_data,
+                source="saved",
+                rrf_score=hit.rrf_score,
+                vector_rank=hit.vector_rank,
+                text_rank=hit.text_rank,
+            )
+            for hit in hits
+        ]
 
     empty_reason: str | None = None
     if not candidates:

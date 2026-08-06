@@ -59,8 +59,10 @@ ScopeTier = Literal["walkable", "neighborhood", "city", "metro"]
 
 # The geometry of the search. `area` = a disc around the working point.
 # `corridor` = a route between the working point and a destination ("on my
-# way home").
-ScopeShape = Literal["area", "corridor"]
+# way home"). `itinerary` = an ordered multi-stop trip ("Hanoi, then Hue,
+# then Hoi An") — the working point anchors at the first stop and the full
+# stop list rides `WorkingLocation.itinerary` (ADR-148).
+ScopeShape = Literal["area", "corridor", "itinerary"]
 
 # How dense the working location is. "Near me" reaches further in a sparse
 # town than in a dense city — same tier, different metres (ADR-084). Derived
@@ -102,6 +104,29 @@ def density_class(place_type: str | None) -> DensityClass:
     if pt in _SPARSE_PLACE_TYPES:
         return "sparse"
     return "medium"
+
+
+class ItineraryAnchor(BaseModel):
+    """One geocoded stop of a multi-stop trip (ADR-148).
+
+    `name` is the stop as the user said it ("Hue") — it is the label the
+    tools put on a segment and the agent quotes in prose, so it stays the
+    user's word, not the geocoder's canonical string. Coordinates are
+    derived by the resolve node, never transcribed by the resolver LLM —
+    the same rule as `CorridorTarget`. The area names + country code ride
+    along from the same geocode so per-stop area knowledge resolves to the
+    stop's own city, not the trip's first one (`build_geo_key` needs the
+    code; no code means that stop simply contributes no area notes).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    lat: float
+    lng: float
+    city: str | None = None
+    country: str | None = None
+    country_code: str | None = None
 
 
 class CorridorTarget(BaseModel):
@@ -166,6 +191,11 @@ class WorkingLocation(BaseModel):
     scope_shape: str = "area"
     search_radius_m: float = 0.0
     corridor: CorridorTarget | None = None
+    # Ordered stops of a multi-stop trip, set only when `scope_shape` is
+    # "itinerary" (ADR-148). The working point above anchors at the first
+    # stop; segment derivation (stop discs + leg corridors) lives in
+    # `tools/_scope.itinerary_segments`, not here.
+    itinerary: list[ItineraryAnchor] | None = None
 
 
 class LocationResolution(BaseModel):
@@ -224,6 +254,11 @@ class LocationResolution(BaseModel):
     scope_shape: ScopeShape = "area"
     effective_mode: MovementMode | None = None
     corridor_destination: str | None = None
+    # Ordered stops for `scope_shape == "itinerary"` (ADR-148), each as a
+    # geocodable "City, Country" string in trip order, first stop included.
+    # As with coordinates, the resolver only names them — the resolve node
+    # geocodes each into an `ItineraryAnchor` and drops the ones that fail.
+    itinerary_stops: list[str] = []
 
 
 def resolve_radius(

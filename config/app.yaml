@@ -491,6 +491,14 @@ agent:
     snippet_max_chars: 320
     cache_ttl_seconds: 86400
     harvest_enabled: true
+  # Multi-stop itinerary turns (ADR-148). `max_stops` caps how many
+  # resolver-named stops get geocoded (one forward geocode each);
+  # `per_segment_limit` is the per-stop / per-leg candidate cap the fan-out
+  # tools use in place of their single-search limit — an itinerary answer
+  # wants a few strong names per segment, not one city's worth from each.
+  itinerary:
+    max_stops: 5
+    per_segment_limit: 4
 
 # ---------------------------------------------------------------------------
 # Movement / search-scope (ADR-084)
