@@ -71,9 +71,7 @@ class TestVisionFramesEnricher:
         png_header = b"\x89PNG\r\n\x1a\n"
         iend = b"\x00\x00\x00\x00IEND\x00\x00\x00\x00"
         fake_pngs = png_header + iend + png_header + iend
-        ctx = ExtractionContext(
-            url="https://tiktok.com/v/abc", user_id="u1"
-        )
+        ctx = ExtractionContext(url="https://tiktok.com/v/abc", user_id="u1")
         with patch.object(enricher, "_capture_frames", return_value=fake_pngs):
             await enricher.enrich(ctx)
         names = [k.name for k in ctx.known_places]
@@ -114,9 +112,7 @@ class TestVisionFramesEnricher:
         enricher: VisionFramesEnricher,
         vision_extractor: AsyncMock,
     ) -> None:
-        ctx = ExtractionContext(
-            url="https://tiktok.com/v/abc", user_id="u1"
-        )
+        ctx = ExtractionContext(url="https://tiktok.com/v/abc", user_id="u1")
         with patch.object(enricher, "_capture_frames", return_value=b""):
             await enricher.enrich(ctx)
         vision_extractor.extract_place_names.assert_not_called()

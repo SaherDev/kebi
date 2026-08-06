@@ -24,9 +24,13 @@ def _tool_names(discovery_enabled: bool) -> set[str]:
     return {t.name for t in tools}
 
 
-def test_discovery_enabled_binds_all_four() -> None:
+def test_discovery_enabled_binds_the_paid_tool() -> None:
+    # `discover_places` is no longer bound: its catalog-floor search runs
+    # inside `suggest_places` automatically (ADR-140), so it is not a routing
+    # choice the model can make or forget.
     names = _tool_names(discovery_enabled=True)
-    assert names == {"find_saved", "suggest_places", "discover_places", "research"}
+    assert names == {"find_saved", "suggest_places", "research"}
+    assert "discover_places" not in names
 
 
 def test_discovery_disabled_binds_find_saved_and_research() -> None:
@@ -39,6 +43,5 @@ def test_defaults_to_enabled() -> None:
     assert {t.name for t in tools} == {
         "find_saved",
         "suggest_places",
-        "discover_places",
         "research",
     }

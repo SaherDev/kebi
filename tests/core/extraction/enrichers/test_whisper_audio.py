@@ -28,9 +28,7 @@ class TestWhisperAudioEnricher:
         self,
         enricher: WhisperAudioEnricher,
     ) -> None:
-        ctx = ExtractionContext(
-            url="https://tiktok.com/v/abc", user_id="u1"
-        )
+        ctx = ExtractionContext(url="https://tiktok.com/v/abc", user_id="u1")
         with patch.object(
             enricher, "_transcribe", AsyncMock(return_value="Loved Fuji Ramen tonight")
         ):
@@ -75,12 +73,8 @@ class TestWhisperAudioEnricher:
         self,
         enricher: WhisperAudioEnricher,
     ) -> None:
-        ctx = ExtractionContext(
-            url="https://tiktok.com/v/abc", user_id="u1"
-        )
-        with patch.object(
-            enricher, "_transcribe", AsyncMock(return_value=None)
-        ):
+        ctx = ExtractionContext(url="https://tiktok.com/v/abc", user_id="u1")
+        with patch.object(enricher, "_transcribe", AsyncMock(return_value=None)):
             await enricher.enrich(ctx)
         assert ctx.transcript is None
         assert ctx.text_evidence == []
@@ -96,9 +90,7 @@ class TestWhisperAudioEnricher:
             side_effect=RuntimeError("tier 1 failed")
         )
         transcription_client.transcribe_bytes = AsyncMock()
-        ctx = ExtractionContext(
-            url="https://tiktok.com/v/abc", user_id="u1"
-        )
+        ctx = ExtractionContext(url="https://tiktok.com/v/abc", user_id="u1")
         with (
             patch.object(enricher, "_get_cdn_url", return_value="cdn"),
             patch.object(enricher, "_download_audio_bytes", return_value=b""),

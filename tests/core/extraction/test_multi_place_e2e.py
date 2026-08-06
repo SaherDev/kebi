@@ -31,8 +31,7 @@ from kebi.db.session import _get_session_factory
 # Verified 2026-05-19 against the live endpoint (cache cleared) — the
 # five venues the carousel actually references, by Google place_id.
 TEST_URL = (
-    "https://www.tiktok.com/@withme808/photo/"
-    "7620175392019664161?is_from_webapp=1"
+    "https://www.tiktok.com/@withme808/photo/7620175392019664161?is_from_webapp=1"
 )
 EXPECTED_PLACE_IDS = {
     "ChIJd7grWxeZ4jAR8KwClMpGmHo",  # Restaurant POTONG
@@ -74,9 +73,7 @@ async def test_tiktok_carousel_resolves_all_five_bangkok_venues() -> None:
             upsert_service=upsert,
         )
         pipeline = deps.get_extraction_pipeline(
-            extraction_config=deps.get_extraction_config(
-                config=deps.get_config()
-            ),
+            extraction_config=deps.get_extraction_config(config=deps.get_config()),
             search_service=search_service,
             search_service_factory=deps.get_search_service_factory(
                 cache=cache, client=gclient

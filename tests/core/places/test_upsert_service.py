@@ -33,9 +33,7 @@ def mock_embedding_service() -> MagicMock:
 def service(
     mock_repo: MagicMock, mock_embedding_service: MagicMock
 ) -> PlaceUpsertService:
-    return PlaceUpsertService(
-        repo=mock_repo, embedding_service=mock_embedding_service
-    )
+    return PlaceUpsertService(repo=mock_repo, embedding_service=mock_embedding_service)
 
 
 class TestUpsertAndEmbed:
@@ -70,9 +68,7 @@ class TestUpsertAndEmbed:
         mock_repo.upsert_places.assert_awaited_once()
         passed = mock_repo.upsert_places.call_args.args[0]
         assert passed[0].place_name == "Ramen Spot"
-        mock_embedding_service.embed_and_store.assert_awaited_once_with(
-            [persisted]
-        )
+        mock_embedding_service.embed_and_store.assert_awaited_once_with([persisted])
         assert result == [persisted]
 
     async def test_skips_embed_when_repo_returns_empty(
@@ -119,7 +115,5 @@ class TestUpsertAndEmbed:
         assert merged.id == "uuid-A"
         assert merged.place_name == "Cafe Centro"
         assert {t.value for t in merged.tags} == {"chill", "italian"}
-        assert {a.value for a in merged.place_name_aliases} == {
-            "Cafe Centro Mission"
-        }
+        assert {a.value for a in merged.place_name_aliases} == {"Cafe Centro Mission"}
         mock_embedding_service.embed_and_store.assert_awaited_once()

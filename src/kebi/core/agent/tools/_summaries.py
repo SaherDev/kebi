@@ -5,8 +5,8 @@ Each user-visible step is two lines: a bold `title` action carries the verb
 are terse fragments that never repeat the verb — lowercase, no trailing period,
 a short capped name preview (the full list lives in the place cards), no
 questions or first-person monologue (the orchestrator's `message` frame carries
-the conversational answer). `find_saved`, `suggest_places`, and `discover_places`
-share this register so the thinking panel reads uniformly.
+the conversational answer). Every place tool shares this register so the
+thinking panel reads uniformly.
 """
 
 from collections.abc import Sequence
@@ -41,9 +41,9 @@ def _short_name(name: str) -> str:
 # Tool → bold action line (ADR-103). The summary never repeats this verb.
 TITLES = {
     "find_saved": "searched your saved spots",
-    "discover_places": "searched nearby",
     "suggest_places": "suggested a few spots",
     "research": "dug into the local intel",
+    "find_known": "checked what I know around here",
 }
 
 # Shared empty-outcome result lines for the location-anchored tools.

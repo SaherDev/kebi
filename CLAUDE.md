@@ -47,5 +47,8 @@ See `.claude/workflows.md` for the 5-step workflow, constitution check, model as
 - Git comment char is `;` not `#` (repo git config) — branch/commit/merge conventions in @.claude/rules/git.md.
 - LLM responses are cached in Redis — changing prompt templates or model config needs cache invalidation.
 - Every LLM/embedding call gets the Langfuse callback handler — missing traces usually means it wasn't attached.
+- Chat's render contract is text + `kebi://{venue|area}/{key}` links only (ADR-136) — links are attached server-side after the agent writes, so the agent must name places in plain prose, never markdown.
+- `/v1/chat` needs `local_time` from the client for schedule-aware answers (ADR-138) — without it kebi won't assert what day it is, so "tonight is X's night" never fires.
+- Place-tool filter vocabulary lives in the tool arg descriptions (`_search_args.py`), not the agent prompt (ADR-137) — don't move it back.
 - API testing: Bruno collection at `kebi-config/bruno/` — new endpoints get a corresponding `.bru` file there.
 - DB write ownership is split with the product repo — table map in @.claude/rules/architecture.md; never cross it.

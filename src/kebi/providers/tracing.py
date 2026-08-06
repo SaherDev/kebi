@@ -124,6 +124,7 @@ class TracingClient(Protocol):
         metadata: dict[str, Any] | None = None,
         tags: list[str] | None = None,
     ) -> Any: ...
+
     # `trace` returns an async context manager. Typing it as
     # `AbstractAsyncContextManager[None]` would be more precise, but
     # Protocol implementations diverge on return-type narrowing, so `Any`
@@ -291,9 +292,7 @@ class _LangfuseTracingClient:
         if meta:
             kwargs["metadata"] = meta
         del tags  # observation-level tags don't exist in v3; see docstring
-        cm = self._client.start_as_current_observation(
-            as_type="generation", **kwargs
-        )
+        cm = self._client.start_as_current_observation(as_type="generation", **kwargs)
         observation = cm.__enter__()
         return _LangfuseSpan(observation, cm)
 
@@ -369,9 +368,7 @@ class _LangfuseTracingClient:
                 try:
                     self._client.update_current_trace(**update_kwargs)
                 except Exception as exc:  # noqa: BLE001
-                    logger.debug(
-                        "update_current_trace failed on event: %s", exc
-                    )
+                    logger.debug("update_current_trace failed on event: %s", exc)
 
     def flush(self) -> None:
         self._client.flush()

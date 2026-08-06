@@ -212,7 +212,11 @@ halal_korean_bbq = PlaceQuery(
 # "Trendy rooftop cocktail bar"
 trendy_cocktails = PlaceQuery(
     categories=[PlaceCategory.bar],
-    tags=[AtmosphereTag.trendy, ServiceTag.serves_cocktails, FeatureTag.outdoor_seating],  # noqa: E501
+    tags=[
+        AtmosphereTag.trendy,
+        ServiceTag.serves_cocktails,
+        FeatureTag.outdoor_seating,
+    ],  # noqa: E501
 )
 
 # "Family lunch on a budget"
@@ -592,7 +596,11 @@ birthday_group = PlaceQuery(
 
 celebration_rooftop = PlaceQuery(
     categories=[PlaceCategory.bar],
-    tags=[FeatureTag.outdoor_seating, ServiceTag.serves_cocktails, AtmosphereTag.trendy],  # noqa: E501
+    tags=[
+        FeatureTag.outdoor_seating,
+        ServiceTag.serves_cocktails,
+        AtmosphereTag.trendy,
+    ],  # noqa: E501
 )
 
 farewell_drinks = PlaceQuery(
@@ -784,7 +792,12 @@ rainy_afternoon_work = PlaceQuery(
 # "Summer evening rooftop drinks with a view"
 summer_rooftop_evening = PlaceQuery(
     categories=[PlaceCategory.bar],
-    tags=[SeasonTag.summer, TimeTag.evening, FeatureTag.rooftop, FeatureTag.scenic_view],  # noqa: E501
+    tags=[
+        SeasonTag.summer,
+        TimeTag.evening,
+        FeatureTag.rooftop,
+        FeatureTag.scenic_view,
+    ],  # noqa: E501
 )
 
 # "Accessible brunch spot on a budget"
@@ -816,5 +829,10 @@ winter_romantic_splurge = PlaceQuery(
 # "Summer morning dog walk + coffee"
 summer_morning_dog_cafe = PlaceQuery(
     categories=[PlaceCategory.cafe],
-    tags=[SeasonTag.summer, TimeTag.morning, FeatureTag.dog_friendly, FeatureTag.outdoor_seating],  # noqa: E501
+    tags=[
+        SeasonTag.summer,
+        TimeTag.morning,
+        FeatureTag.dog_friendly,
+        FeatureTag.outdoor_seating,
+    ],  # noqa: E501
 )

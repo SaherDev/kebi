@@ -28,6 +28,12 @@ from kebi.api.deps import (
 from kebi.api.rate_limit import limiter
 from kebi.api.schemas.chat import ChatRequest, ChatResponse
 from kebi.core.agent._trace_context import feature_trace
+from kebi.core.agent.entity_links import (
+    build_entity_index,
+    linkify,
+    normalize_voice,
+    turn_recommendation_id,
+)
 from kebi.core.agent.invocation import build_turn_payload
 from kebi.core.agent.messages import extract_text_content
 from kebi.core.chat.consult_quota import ConsultQuotaService
@@ -136,8 +142,16 @@ async def chat_stream(
              "status":"done","source":"agent","visibility":"user",
              "duration_ms":420.0}
 
+    The terminal `message` frame carries the answer text with entity names
+    already wrapped as markdown links to `kebi://{kind}/{key}` URIs, plus the
+    flat `entities` list resolving each one (ADR-136). There are no
+    `tool_result` frames: chat renders text and links, and every richer view
+    lives on a detail screen the link opens.
+
       event: message
-      data: {"content": "<final assistant text>"}
+      data: {"content": "tonight is [Luigi's](kebi://venue/9f3…) night",
+             "entities": [{"kind":"venue","key":"9f3…","name":"Luigi's",
+                           "uri":"kebi://venue/9f3…"}]}
 
     Args:
         body: Chat request containing user_id, message, and optional location.
@@ -171,8 +185,8 @@ async def chat_stream(
         return StreamingResponse(_limited(), media_type="text/event-stream")
 
     # Taste compose is plan-gated (free tier gets no taste personalization).
-    taste_summary = (
-        await service._compose_taste_summary(user_id) if identity.taste_enabled else ""
+    taste_summary, taste_values = (
+        await service.compose_taste(user_id) if identity.taste_enabled else ("", [])
     )
     memory_summary = await service._compose_memory_summary(user_id)
 
@@ -185,6 +199,8 @@ async def chat_stream(
         movement_profile=(
             body.movement_profile.model_dump() if body.movement_profile else None
         ),
+        local_time=body.local_time,
+        taste_values=taste_values,
     )
     graph_config = {
         "configurable": {"thread_id": user_id},
@@ -206,6 +222,10 @@ async def chat_stream(
             # Capture the populated snapshot here; the final `final_state`
             # we read after the loop has `tool_results=[]` by design.
             tool_results: list[dict[str, Any]] = []
+            # Same capture-the-last-populated-snapshot rule: the resolver
+            # writes `working_location` early in the turn, and the entity
+            # index needs it to link the area the answer is about.
+            working_location: Any = None
             try:
                 try:
                     # Hard wall-clock bound: a slow-reading or unresponsive
@@ -231,6 +251,9 @@ async def chat_stream(
                                 snap_tool_results = chunk.get("tool_results") or []
                                 if snap_tool_results:
                                     tool_results = snap_tool_results
+                                snap_working = chunk.get("working_location")
+                                if isinstance(snap_working, dict) and snap_working:
+                                    working_location = snap_working
                 except TimeoutError:
                     logger.warning(
                         "chat_stream wall-clock timeout (%.0fs) for user %s",
@@ -255,10 +278,22 @@ async def chat_stream(
                             final_message = text
                             break
 
-                for tool_result in tool_results:
-                    yield _frame("tool_result", tool_result)
                 if final_message:
-                    yield _frame("message", {"content": final_message})
+                    # Text plus entity links is the entire render contract
+                    # (ADR-136) — the tool payloads that used to ride their own
+                    # `tool_result` frames stay server-side.
+                    final_message, entities = linkify(
+                        normalize_voice(final_message),
+                        build_entity_index(tool_results, working_location),
+                    )
+                    yield _frame(
+                        "message",
+                        {
+                            "content": final_message,
+                            "entities": [e.model_dump(mode="json") for e in entities],
+                            "recommendation_id": turn_recommendation_id(tool_results),
+                        },
+                    )
                 yield _frame("done", {"tool_calls_used": tool_calls_used})
             finally:
                 # A turn that surfaced place results is intent-bearing — the

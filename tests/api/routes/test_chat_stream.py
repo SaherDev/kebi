@@ -21,6 +21,8 @@ def _make_mock_service() -> MagicMock:
     svc = MagicMock(spec=ChatService)
     svc._config = MagicMock(spec=AppConfig)
     svc._compose_taste_summary = AsyncMock(return_value="")
+    # One read yields both the prose summary and the matchable values (ADR-142).
+    svc.compose_taste = AsyncMock(return_value=("", []))
     svc._compose_memory_summary = AsyncMock(return_value="")
     svc._dispatcher = MagicMock(dispatch=AsyncMock())
     return svc
@@ -358,9 +360,7 @@ class TestChatStreamDispatchesIntentSignal:
         assert event.surfaced_places is True
         assert event.user_message == "dinner nearby"
 
-    def test_surfaced_false_when_no_tool_results(
-        self, mock_service: MagicMock
-    ) -> None:
+    def test_surfaced_false_when_no_tool_results(self, mock_service: MagicMock) -> None:
         graph = self._graph(None)
         event = self._dispatched_event(mock_service, graph)
         assert event.surfaced_places is False
@@ -404,3 +404,97 @@ class TestChatStreamDisabledAgent:
         finally:
             app.dependency_overrides.pop(get_chat_service, None)
             app.dependency_overrides.pop(get_agent_graph, None)
+
+
+class TestChatStreamEntityLinks:
+    """The stream's render contract: one `message` frame carrying linkified
+    text plus `entities`, and no `tool_result` frames at all (ADR-136)."""
+
+    @staticmethod
+    def _graph() -> MagicMock:
+        from langchain_core.messages import AIMessage
+
+        graph = MagicMock()
+
+        async def _astream(
+            payload: Any, config: Any, stream_mode: Any = None
+        ) -> AsyncGenerator[tuple[str, Any], None]:
+            yield (
+                "values",
+                {
+                    "messages": [],
+                    "working_location": {
+                        "country": "Indonesia",
+                        "country_code": "id",
+                        "city": "Badung",
+                        "neighborhood": "Canggu",
+                        "lat": -8.65,
+                        "lng": 115.13,
+                    },
+                    "tool_results": [
+                        {
+                            "tool": "find_saved",
+                            "tool_call_id": "call-1",
+                            "payload": {
+                                "recommendation_id": "rec-99",
+                                "candidates": [
+                                    {
+                                        "place": {"id": "p1", "place_name": "Luigis"},
+                                        "source": "saved",
+                                    }
+                                ],
+                            },
+                        }
+                    ],
+                },
+            )
+            yield (
+                "values",
+                {
+                    "messages": [
+                        AIMessage(content="tonight is Luigis night in Canggu")
+                    ],
+                    "tool_calls_used": 1,
+                    "tool_results": [],
+                },
+            )
+
+        graph.astream = _astream
+        return graph
+
+    def _message_frame(self, mock_service: MagicMock) -> dict[str, Any]:
+        app.dependency_overrides[get_chat_service] = lambda: mock_service
+        app.dependency_overrides[get_agent_graph] = lambda: self._graph()
+        try:
+            response = TestClient(app).post(
+                "/v1/chat/stream", json={"message": "where tonight"}
+            )
+        finally:
+            app.dependency_overrides.pop(get_chat_service, None)
+            app.dependency_overrides.pop(get_agent_graph, None)
+        import json
+
+        self._raw = response.text
+        lines = response.text.splitlines()
+        for i, line in enumerate(lines):
+            if line.startswith("event: message"):
+                return json.loads(lines[i + 1][len("data: ") :])
+        raise AssertionError("no message frame in stream")
+
+    def test_message_content_is_linkified(self, mock_service: MagicMock) -> None:
+        frame = self._message_frame(mock_service)
+        assert frame["content"] == (
+            "tonight is [Luigis](kebi://venue/p1) night in "
+            "[Canggu](kebi://area/id/badung/canggu)"
+        )
+
+    def test_message_frame_carries_entities(self, mock_service: MagicMock) -> None:
+        frame = self._message_frame(mock_service)
+        assert [(e["kind"], e["key"]) for e in frame["entities"]] == [
+            ("venue", "p1"),
+            ("area", "id/badung/canggu"),
+        ]
+
+    def test_no_tool_result_frames_are_emitted(self, mock_service: MagicMock) -> None:
+        self._message_frame(mock_service)
+        assert "event: tool_result" not in self._raw

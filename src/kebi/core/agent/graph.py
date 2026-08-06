@@ -16,6 +16,7 @@ import json
 import logging
 import re
 from collections.abc import Callable
+from datetime import datetime
 from typing import Any
 
 from langchain_core.messages import (
@@ -250,9 +251,12 @@ def _extract_place_names(results: list[Any]) -> list[str]:
             if isinstance(value, str):
                 nm = value
         if nm is None:
-            value = r.get("place_name")
-            if isinstance(value, str):
-                nm = value
+            # Lean agent view (ADR-139) names the field `name`.
+            for key in ("place_name", "name"):
+                value = r.get(key)
+                if isinstance(value, str):
+                    nm = value
+                    break
         if nm:
             names.append(nm)
     return names
@@ -284,6 +288,8 @@ def _summarize_tool_payload(msg: ToolMessage) -> str:
         return f"[{name}] earlier result elided ({len(raw)} chars)"
     if isinstance(data, dict):
         results = data.get("results")
+        if results is None and isinstance(data.get("candidates"), list):
+            results = data["candidates"]
         if isinstance(results, list):
             names = _extract_place_names(results)
             count = len(results)
@@ -379,6 +385,142 @@ def _render_location_context(state: AgentState) -> str:
     )
 
 
+_WEEKDAYS = (
+    "Monday",
+    "Tuesday",
+    "Wednesday",
+    "Thursday",
+    "Friday",
+    "Saturday",
+    "Sunday",
+)
+
+
+def parse_local_time(raw: str | None) -> datetime | None:
+    """Parse the client-supplied ISO-8601 local time, or None.
+
+    Never raises: a malformed clock from a client must degrade to "no time
+    known" (the agent then avoids schedule claims) rather than fail the turn.
+    """
+    if not raw:
+        return None
+    try:
+        return datetime.fromisoformat(raw.strip().replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        logger.warning("unparseable local_time from client: %r", raw)
+        return None
+
+
+def local_weekday(state: AgentState) -> str | None:
+    """The turn's day of week ("Monday"), or None when the clock is unknown."""
+    parsed = parse_local_time(state.get("local_time"))
+    return None if parsed is None else _WEEKDAYS[parsed.weekday()]
+
+
+# Hour bands from the places vocabulary (`TimeTag`), so a claim tagged
+# `evening` and a turn at 19:30 speak the same language. Ordered, and read as
+# half-open ranges; `all_day` is deliberately absent — it is a neutral value a
+# claim carries, never a time a turn is at.
+_DAYPARTS: tuple[tuple[int, int, str], ...] = (
+    (6, 11, "morning"),
+    (11, 12, "brunch"),
+    (12, 15, "lunch"),
+    (15, 18, "afternoon"),
+    (18, 21, "evening"),
+    (21, 24, "night"),
+    (0, 6, "late_night"),
+)
+
+
+def local_daypart(state: AgentState) -> str | None:
+    """Which part of the day it is for the user, in vocabulary terms.
+
+    This is what lets a "best at sunset" claim outrank a breakfast one at 17:00
+    without the orchestrator having to encode the hour into its query text.
+    None when the client sent no clock — the same absent-means-absent rule as
+    the weekday.
+    """
+    parsed = parse_local_time(state.get("local_time"))
+    if parsed is None:
+        return None
+    hour = parsed.hour
+    for start, end, name in _DAYPARTS:
+        if start <= hour < end:
+            return name
+    return None
+
+
+def local_season(state: AgentState) -> str | None:
+    """The calendar season where the user is, or None.
+
+    Northern/southern hemisphere is decided by the working location's latitude,
+    because a July claim about "summer terraces" is wrong advice in Bali. In
+    the tropics there is no meaningful calendar season — the useful axis is wet
+    versus dry, which varies by region and is not derivable from a date — so
+    this returns None there rather than asserting something false.
+    """
+    parsed = parse_local_time(state.get("local_time"))
+    working = state.get("working_location")
+    if parsed is None or not isinstance(working, dict):
+        return None
+    lat = working.get("lat")
+    if not isinstance(lat, int | float):
+        return None
+    if abs(lat) < 23.5:
+        return None
+    northern = [
+        "winter",
+        "winter",
+        "spring",
+        "spring",
+        "spring",
+        "summer",
+        "summer",
+        "summer",
+        "autumn",
+        "autumn",
+        "autumn",
+        "winter",
+    ]
+    season = northern[parsed.month - 1]
+    if lat >= 0:
+        return season
+    return {
+        "winter": "summer",
+        "spring": "autumn",
+        "summer": "winter",
+        "autumn": "spring",
+    }[season]
+
+
+def _render_time_context(state: AgentState) -> str:
+    """Render the `{time_context}` slot — what day and hour it is for the user.
+
+    Day of week is load-bearing for a scheduled answer (ADR-138): a claim
+    saying Monday is a venue's big night is only usable if the agent knows
+    today is Monday. The clock comes from the client, so it can be absent —
+    and when it is, the slot says so plainly, because an agent that assumes a
+    day will confidently answer for the wrong one.
+    """
+    parsed = parse_local_time(state.get("local_time"))
+    if parsed is None:
+        return (
+            "The user's local date and time are unknown this turn. Do not "
+            "assume what day or hour it is: if the answer turns on a schedule "
+            "(which night a place is good, whether something is open), ask "
+            "what day they mean or answer for the week rather than picking a "
+            "day yourself."
+        )
+    return (
+        f"For the user it is {_WEEKDAYS[parsed.weekday()]}, "
+        f"{parsed.strftime('%d %B %Y')}, {parsed.strftime('%H:%M')} local time. "
+        "Use this without being told: a place whose big night is today leads "
+        "the answer, one whose night is later in the week is a plan for that "
+        "day, and one that is closed or wrong for right now is a skip you say "
+        "out loud rather than a name you omit."
+    )
+
+
 def _render_movement_context(state: AgentState) -> str:
     """Render the `{movement_context}` slot — the turn's resolved search scope.
 
@@ -458,6 +600,7 @@ def _render_system_prompt(state: AgentState) -> tuple[str, str]:
     static_head, marker, dynamic_tail = template.partition(_DYNAMIC_CONTEXT_MARKER)
     slots = dict(
         location_context=_render_location_context(state),
+        time_context=_render_time_context(state),
         movement_context=_render_movement_context(state),
         taste_profile_summary=wrap_untrusted(
             state.get("taste_profile_summary"), "taste_profile"
@@ -1117,6 +1260,17 @@ def _location_resolved_update(
     state: AgentState, working: WorkingLocation, *, started: float | None = None
 ) -> dict[str, Any]:
     """State update that records a fully resolved working location."""
+    # Scope is invisible in the trace otherwise: a corridor turn that silently
+    # degraded to an area search looks identical to a normal one, and the only
+    # symptom is an answer confidently naming places in the wrong direction.
+    logger.info(
+        "resolved scope: shape=%s tier=%s mode=%s radius=%.0fm corridor=%s",
+        working.scope_shape,
+        working.scope_tier,
+        working.effective_mode,
+        working.search_radius_m,
+        working.corridor.name if working.corridor else None,
+    )
     parts = [working.neighborhood, working.city, working.country]
     place = ", ".join(p for p in parts if p)
     step = ReasoningStep(
@@ -1410,17 +1564,23 @@ def finalize_node(state: AgentState) -> dict[str, Any]:
     human/agent pairs and no tool noise.
     """
     to_remove: list[str] = []
-    tool_results: list[dict[str, Any]] = []
+    # Tools write the untrimmed result to `tool_payloads` (ADR-139); the
+    # ToolMessage the model read is a lean projection and no longer carries
+    # the ids the linker and the signal path need. Parsing the messages is
+    # kept only as a fallback for a tool that has not been migrated.
+    tool_results: list[dict[str, Any]] = list(state.get("tool_payloads") or [])
+    seen_call_ids = {r.get("tool_call_id") for r in tool_results}
     for msg in state.get("messages") or []:
         msg_id = getattr(msg, "id", None)
         if isinstance(msg, ToolMessage):
-            tool_results.append(
-                {
-                    "tool": getattr(msg, "name", None),
-                    "tool_call_id": getattr(msg, "tool_call_id", None),
-                    "payload": _parse_tool_message_payload(msg),
-                }
-            )
+            if getattr(msg, "tool_call_id", None) not in seen_call_ids:
+                tool_results.append(
+                    {
+                        "tool": getattr(msg, "name", None),
+                        "tool_call_id": getattr(msg, "tool_call_id", None),
+                        "payload": _parse_tool_message_payload(msg),
+                    }
+                )
             if msg_id is not None:
                 to_remove.append(msg_id)
             continue
@@ -1445,7 +1605,9 @@ def scrub_tool_results_node(state: AgentState) -> dict[str, Any]:  # noqa: ARG00
     `finalize_node` populates `tool_results` so the response layer can
     surface the structured payloads, but those payloads must not bloat
     the per-thread checkpointer DB — only the human-readable
-    `reasoning_steps` summaries should persist as agent history.
+    `reasoning_steps` summaries should persist as agent history. The
+    server-side `tool_payloads` channel the tools wrote (ADR-139) is
+    cleared here for the same reason.
 
     This node runs as a separate superstep AFTER `finalize`. Callers
     that need the populated `tool_results` consume `astream(
@@ -1453,7 +1615,7 @@ def scrub_tool_results_node(state: AgentState) -> dict[str, Any]:  # noqa: ARG00
     `finalize` and this node; the final checkpointed state has
     `tool_results=[]`.
     """
-    return {"tool_results": []}
+    return {"tool_results": [], "tool_payloads": []}
 
 
 def build_graph(

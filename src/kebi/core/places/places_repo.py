@@ -58,6 +58,10 @@ _PlacesTable = Table(
 )
 _t = _PlacesTable.c
 
+# Public alias — the knowledge layer joins claims to places on the same table
+# definition so the two never drift (ADR-138).
+PLACES_TABLE = _PlacesTable
+
 # Allowlist of legal sort keys. Decouples the public sort literal from the
 # underlying column/expression — values can become computed expressions
 # (e.g. func.coalesce(...)) without breaking the API contract.
@@ -137,9 +141,7 @@ class PlacesRepo:
             # AND semantics: every requested tag value must be present
             for tag_val in query.tags:
                 conditions.append(
-                    _t.tags.op("@>")(
-                        cast(json.dumps([{"value": tag_val}]), JSONB)
-                    )
+                    _t.tags.op("@>")(cast(json.dumps([{"value": tag_val}]), JSONB))
                 )
 
         loc = query.location
@@ -200,12 +202,8 @@ class PlacesRepo:
             )
             stmt = stmt.order_by(distance.asc())
         else:
-            sort_col = (
-                _SORT_COLUMNS[query.sort_by] if query.sort_by else _t.created_at
-            )
-            stmt = stmt.order_by(
-                sort_col.desc() if query.sort_desc else sort_col.asc()
-            )
+            sort_col = _SORT_COLUMNS[query.sort_by] if query.sort_by else _t.created_at
+            stmt = stmt.order_by(sort_col.desc() if query.sort_desc else sort_col.asc())
 
         result = await self._session.execute(stmt.limit(limit))
         return [_row_to_core(row._mapping) for row in result]
@@ -298,8 +296,7 @@ def _core_to_dict(core: PlaceCore, now: datetime) -> dict[str, object]:
         "id": core.id or str(uuid4()),
         "provider_id": core.provider_id,
         "place_name": core.place_name,
-        "place_name_aliases": [a.model_dump() for a in core.place_name_aliases]
-        or None,
+        "place_name_aliases": [a.model_dump() for a in core.place_name_aliases] or None,
         "categories": [c.value for c in core.categories],
         "tags": [t.model_dump() for t in core.tags] or None,
         "icon": core.icon,
@@ -316,8 +313,7 @@ def _row_to_core(row: object) -> PlaceCore:
     m = dict(row) if isinstance(row, Mapping) else vars(row)
     tags = [PlaceTag.model_validate(t) for t in (m.get("tags") or [])]
     aliases = [
-        PlaceNameAlias.model_validate(a)
-        for a in (m.get("place_name_aliases") or [])
+        PlaceNameAlias.model_validate(a) for a in (m.get("place_name_aliases") or [])
     ]
     loc_raw = m.get("location")
     location = LocationContext.model_validate(loc_raw) if loc_raw else None

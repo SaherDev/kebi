@@ -454,8 +454,7 @@ class KnowledgeResearchConfig(BaseModel):
         ):
             if not (0.0 <= value <= 1.0):
                 raise ValueError(
-                    f"knowledge.research.{name} must be in [0.0, 1.0] "
-                    f"(got {value})"
+                    f"knowledge.research.{name} must be in [0.0, 1.0] (got {value})"
                 )
         for name, value in (
             ("w_tag", self.w_tag),
@@ -496,6 +495,13 @@ class KnowledgeConfig(BaseModel):
     curator_review_status: Literal["pending", "approved", "rejected"] = "approved"
     kebi_message_review_status: Literal["pending", "approved", "rejected"] = "approved"
     place_notes_limit: int = 6
+    # Insider notes attached to a place tool's result on the retrieval path
+    # (ADR-137). `candidate_notes_limit` is per candidate and stays small — a
+    # recommendation list of 10 places carries 10x this, and the notes are
+    # material for one line of prose each, not a dossier. `area_notes_limit`
+    # is per turn: neighborhood, city, and country claims pooled together.
+    candidate_notes_limit: int = 2
+    area_notes_limit: int = 3
     research: KnowledgeResearchConfig = KnowledgeResearchConfig()
 
     @model_validator(mode="after")
@@ -509,6 +515,12 @@ class KnowledgeConfig(BaseModel):
                 raise ValueError(
                     f"knowledge.{name} must be in [0.0, 1.0] (got {value})"
                 )
+        for name, limit in (
+            ("candidate_notes_limit", self.candidate_notes_limit),
+            ("area_notes_limit", self.area_notes_limit),
+        ):
+            if limit < 0:
+                raise ValueError(f"knowledge.{name} must be >= 0 (got {limit})")
         if self.place_notes_limit < 1:
             raise ValueError(
                 "knowledge.place_notes_limit must be >= 1 "
@@ -583,23 +595,57 @@ class ToolTimeoutsConfig(BaseModel):
 
     find_saved: int = 8
     suggest_places: int = 18
-    discover_places: int = 8
     research: int = 8
+    # find_known is two indexed reads, no LLM and no provider — the cheapest
+    # tool in the set (ADR-138).
+    find_known: int = 8
 
     @model_validator(mode="after")
     def _positive_integers(self) -> "ToolTimeoutsConfig":
-        if (
-            self.find_saved < 1
-            or self.suggest_places < 1
-            or self.discover_places < 1
-            or self.research < 1
-        ):
+        fields = {
+            "find_saved": self.find_saved,
+            "suggest_places": self.suggest_places,
+            "research": self.research,
+            "find_known": self.find_known,
+        }
+        bad = {k: v for k, v in fields.items() if v < 1}
+        if bad:
             raise ValueError(
-                "agent.tool_timeouts_seconds fields must be >= 1 "
-                f"(got find_saved={self.find_saved}, "
-                f"suggest_places={self.suggest_places}, "
-                f"discover_places={self.discover_places}, "
-                f"research={self.research})"
+                f"agent.tool_timeouts_seconds fields must be >= 1 (got {bad})"
+            )
+        return self
+
+
+class FindKnownConfig(BaseModel):
+    """Per-tool knobs for `find_known` (ADR-138).
+
+    `scan_limit` bounds the geofenced claims join — the ceiling on how many
+    claim rows one call ranks in memory, not how many places come back.
+    `notes_per_place` caps the facts carried per surfaced place: they are the
+    reason it surfaced, so this runs a little richer than the passive
+    `knowledge.candidate_notes_limit`.
+    """
+
+    default_limit: int = 5
+    max_limit: int = 15
+    notes_per_place: int = 3
+    scan_limit: int = 300
+
+    @model_validator(mode="after")
+    def _positive_integers(self) -> "FindKnownConfig":
+        fields = {
+            "default_limit": self.default_limit,
+            "max_limit": self.max_limit,
+            "notes_per_place": self.notes_per_place,
+            "scan_limit": self.scan_limit,
+        }
+        bad = {k: v for k, v in fields.items() if v < 1}
+        if bad:
+            raise ValueError(f"agent.find_known fields must be >= 1 (got {bad})")
+        if self.default_limit > self.max_limit:
+            raise ValueError(
+                "agent.find_known.default_limit must be <= max_limit "
+                f"(got {self.default_limit} > {self.max_limit})"
             )
         return self
 
@@ -680,34 +726,6 @@ class SuggestPlacesConfig(BaseModel):
         return self
 
 
-class DiscoverPlacesConfig(BaseModel):
-    """Per-tool knobs for `discover_places`.
-
-    `default_limit` / `max_limit` mirror the other consult-family tools.
-    No `name_count` / `provider_concurrency` — the tool issues exactly
-    one `PlacesSearchService.find()` call (no fan-out, no namer).
-    """
-
-    default_limit: int = 10
-    max_limit: int = 25
-
-    @model_validator(mode="after")
-    def _positive_integers(self) -> "DiscoverPlacesConfig":
-        if self.default_limit < 1 or self.max_limit < 1:
-            raise ValueError(
-                "agent.discover_places.default_limit / max_limit must be >= 1 "
-                f"(got default_limit={self.default_limit}, "
-                f"max_limit={self.max_limit})"
-            )
-        if self.default_limit > self.max_limit:
-            raise ValueError(
-                "agent.discover_places.default_limit must be <= max_limit "
-                f"(got default_limit={self.default_limit}, "
-                f"max_limit={self.max_limit})"
-            )
-        return self
-
-
 class ResearchToolConfig(BaseModel):
     """Per-tool knobs for `research`.
 
@@ -757,8 +775,8 @@ class AgentConfig(BaseModel):
     checkpointer_ttl_seconds: int = 86400
     tool_timeouts_seconds: ToolTimeoutsConfig = ToolTimeoutsConfig()
     find_saved: FindSavedConfig = FindSavedConfig()
+    find_known: FindKnownConfig = FindKnownConfig()
     suggest_places: SuggestPlacesConfig = SuggestPlacesConfig()
-    discover_places: DiscoverPlacesConfig = DiscoverPlacesConfig()
     research: ResearchToolConfig = ResearchToolConfig()
     prompt_caching_enabled: bool = True
 
@@ -861,6 +879,10 @@ class MovementConfig(BaseModel):
         "sparse": 1.6,
     }
     fallback: MovementFallback = MovementFallback()
+    # Ceiling on the resolved radius (ADR-143). Tier, mode, and density
+    # multiply, so the wide end compounded into radii that covered an entire
+    # island; beyond this a search is no longer "near" anything.
+    max_radius_m: int = 60000
 
 
 class VoyagePricing(BaseModel):
@@ -973,6 +995,7 @@ class AppConfig(BaseModel):
 _REQUIRED_PROMPT_SLOTS: dict[str, list[str]] = {
     "agent": [
         "{location_context}",
+        "{time_context}",
         "{movement_context}",
         "{taste_profile_summary}",
         "{memory_summary}",

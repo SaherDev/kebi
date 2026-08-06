@@ -20,9 +20,9 @@ superseding ADR-101's uniform enforcement):
   absence there is ignorance, not "no"; the LLM knowledge layer
   densifies tags as content flows through extraction.
 
-`suggest_places` and `discover_places` both share these helpers so the
-filter behaviour stays uniform — the agent picks between the tools on
-routing semantics, not on whether constraints are honoured.
+Every place tool shares these helpers so the filter behaviour stays
+uniform — the agent picks between the tools on routing semantics, not on
+whether constraints are honoured.
 """
 
 from __future__ import annotations

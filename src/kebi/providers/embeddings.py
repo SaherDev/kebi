@@ -136,9 +136,7 @@ class VoyageEmbedder:
                 # 2. Hard timeout so the SDK's tenacity retry chain can't eat
                 #    15s of latency on rate-limit responses.
                 result = await asyncio.wait_for(
-                    self._client.embed(
-                        texts, model=self._model, input_type=input_type
-                    ),
+                    self._client.embed(texts, model=self._model, input_type=input_type),
                     timeout=hard_timeout,
                 )
                 total = int(getattr(result, "total_tokens", 0) or 0)

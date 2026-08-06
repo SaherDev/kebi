@@ -90,8 +90,7 @@ class MessageBuffer:
         if not result:
             return []
         return [
-            item.decode() if isinstance(item, bytes) else str(item)
-            for item in result
+            item.decode() if isinstance(item, bytes) else str(item) for item in result
         ]
 
     async def cancel(self, user_id: str) -> None:

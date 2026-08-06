@@ -89,7 +89,8 @@ def test_over_cap_does_not_split_tool_call_group() -> None:
         # If a ToolMessage is present in the trimmed list, its triggering
         # AIMessage must precede it — otherwise we split a group.
         assert any(
-            isinstance(m, AIMessage) and any(
+            isinstance(m, AIMessage)
+            and any(
                 tc.get("id") == out[1].tool_call_id
                 for tc in (getattr(m, "tool_calls", None) or [])
             )

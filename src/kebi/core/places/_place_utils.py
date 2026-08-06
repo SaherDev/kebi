@@ -86,3 +86,39 @@ def overlay_with_cache(
         )
         result.append(PlaceObject(**core_data, cached_at=cached_obj.cached_at))
     return result
+
+
+# Provider names arrive as database rows: shouty branch names ("BNI CANGGU"),
+# franchise suffixes joined with a separator ("Motel Mexicola | Canggu"). Read
+# out loud in a sentence they announce the plumbing, which is exactly what the
+# agent is told never to do — so the cleaning happens here, deterministically,
+# rather than being asked of the model.
+# ", Bali" and " | Canggu" are the same leak wearing different punctuation.
+_NAME_SEPARATORS = ("|", "•", " - ", " – ", " — ", ", ")
+
+# Short all-caps runs are acronyms and brands (BNI, HSBC, KFC, ATM); longer
+# ones are a provider shouting a place name. The cut-off is empirical: real
+# brand acronyms are rarely longer than four letters.
+_ACRONYM_MAX = 4
+
+
+def display_place_name(name: str) -> str:
+    """A provider place name as a person would write it in a sentence.
+
+    Only ever cosmetic — the catalog keeps the canonical `place_name`, and
+    link matching is case-insensitive and indexes both forms, so cleaning the
+    display name can never break a tap.
+    """
+    cleaned = name.strip()
+    for sep in _NAME_SEPARATORS:
+        head = cleaned.split(sep)[0].strip()
+        if head:
+            cleaned = head
+    words = []
+    for word in cleaned.split():
+        core = word.strip("().,")
+        if core.isupper() and core.isalpha() and len(core) > _ACRONYM_MAX:
+            words.append(word.capitalize())
+        else:
+            words.append(word)
+    return " ".join(words) or name.strip()

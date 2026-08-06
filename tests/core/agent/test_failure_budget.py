@@ -75,9 +75,7 @@ async def test_error_count_increments_on_agent_node_failure(
     assert "connection issue" in error_message.content.lower()
     # The orchestrator step is debug on both frames (ADR-103) — no user row.
     assert not [s for s in result["reasoning_steps"] if s.visibility == "user"]
-    decision = [
-        s for s in result["reasoning_steps"] if s.step == "agent.tool_decision"
-    ]
+    decision = [s for s in result["reasoning_steps"] if s.step == "agent.tool_decision"]
     assert len(decision) == 1
     assert decision[0].visibility == "debug"
     # Plain copy — no exception class name leaked into the summary.

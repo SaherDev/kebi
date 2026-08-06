@@ -208,6 +208,16 @@ def resolve_radius(
     `compute_confidence`). The resolver LLM never emits this number; it
     classifies `tier`/`mode` and the metres come from config, mirroring
     ADR-083's rule that the resolver never transcribes coordinates.
+
+    The product is capped at `max_radius_m` (ADR-143). The three factors
+    compound, and at the wide end that produced radii no search should ever
+    have: metro (45 km) on a motorbike (×2.4) in a sparse area (×1.6) resolved
+    to 172.8 km — wider than Bali is long, so every "nearby" search covered the
+    whole island and a place an hour in the wrong direction ranked as if it
+    were on the way. The cap bounds every combination at once, including ones
+    a future tier or mode would introduce, rather than hand-tuning one cell of
+    the table. It applies only here: `anchor_to_corridor` widens a route search
+    beyond this deliberately, and that width is geometry rather than a guess.
     """
     try:
         idx = SCOPE_TIER_ORDER.index(tier)
@@ -217,4 +227,5 @@ def resolve_radius(
     base = getattr(cfg.radius_tiers, SCOPE_TIER_ORDER[idx])
     multiplier = cfg.mode_multiplier.get(mode, 1.0)
     density_factor = cfg.density_factor.get(density, 1.0)
-    return float(base) * float(multiplier) * float(density_factor)
+    radius = float(base) * float(multiplier) * float(density_factor)
+    return min(radius, float(cfg.max_radius_m))

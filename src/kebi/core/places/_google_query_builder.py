@@ -148,6 +148,7 @@ _CATEGORY_TO_GOOGLE_TYPE: dict[str, str] = {
 # Public builders
 # ---------------------------------------------------------------------------
 
+
 def query_to_google_types(query: PlaceQuery) -> list[str]:
     """Map PlaceQuery categories + cuisine/dietary tags to Google place type IDs.
 
@@ -177,9 +178,7 @@ def query_to_google_types(query: PlaceQuery) -> list[str]:
     return types
 
 
-def _collect_text_params(
-    query: PlaceQuery, names: list[str]
-) -> tuple[str, str | None]:
+def _collect_text_params(query: PlaceQuery, names: list[str]) -> tuple[str, str | None]:
     """Build one (textQuery, includedType) from `names` + the query's
     category/tag terms. Factored out of build_text_search_params so the
     same logic serves both the single-set and per-name fan-out callers.
