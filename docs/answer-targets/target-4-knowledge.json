@@ -1,0 +1,29 @@
+{
+    "type": "agent",
+    "message": "no hard rule here, but the general vibe is: tipping is appreciated but never expected.\n\nat restaurants, a lot of the nicer spots already add a service charge (usually 5 to 10%) plus tax, so check your bill before you add anything on top. if there's no service charge and you had good service, rounding up or leaving 10% is plenty and genuinely goes a long way.\n\nfor drivers, a small tip is a nice touch, especially after a long day out. same for spa and massage therapists, they're often the ones who benefit most from it. 20k to 50k rupiah is the usual range depending on the length of the session.\n\nstreet food and warungs, no expectation at all. if you want to leave a few coins, fine, but no one will notice if you don't.\n\nthe short version: you won't offend anyone by not tipping, but a little goes a long way here given the exchange rate.",
+    "data": {
+        "reasoning_steps": [
+            {
+                "step": "agent.location_resolved",
+                "title": "found your location",
+                "summary": "around Bali, Indonesia",
+                "source": "agent",
+                "visibility": "user",
+                "timestamp": "2026-08-06T13:29:04.843036Z",
+                "duration_ms": 2335.6940830126405
+            },
+            {
+                "step": "research.summary",
+                "title": "dug into the local intel",
+                "summary": "found 2 insider notes on Bali",
+                "source": "agent",
+                "visibility": "user",
+                "timestamp": "2026-08-06T13:29:11.088685Z",
+                "duration_ms": 9.865542000625283
+            }
+        ],
+        "entities": [],
+        "recommendation_id": null
+    },
+    "tool_calls_used": 1
+}
