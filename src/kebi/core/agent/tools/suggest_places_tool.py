@@ -70,6 +70,7 @@ from kebi.core.agent.tools._search_args import (
     NEIGHBORHOOD_DESC,
     QUERY_DESC,
     TAGS_DESC,
+    CategoryArg,
 )
 from kebi.core.agent.tools._summaries import (
     NEED_LOCATION,
@@ -218,9 +219,7 @@ def build_suggest_places_tool(
         tool_call_id: Annotated[str, InjectedToolCallId],
         state: Annotated[AgentState, InjectedState],
         names: Annotated[list[str] | None, Field(description=_NAMES_DESC)] = None,
-        categories: Annotated[
-            list[PlaceCategory] | None, Field(description=CATEGORIES_DESC)
-        ] = None,
+        categories: Annotated[CategoryArg, Field(description=CATEGORIES_DESC)] = None,
         tags: Annotated[list[str] | None, Field(description=TAGS_DESC)] = None,
         neighborhood: Annotated[
             str | None, Field(description=NEIGHBORHOOD_DESC)

@@ -44,6 +44,7 @@ from kebi.core.agent.tools._search_args import (
     NEIGHBORHOOD_DESC,
     QUERY_DESC,
     TAGS_DESC,
+    CategoryArg,
 )
 from kebi.core.agent.tools._summaries import NEED_LOCATION, TITLES, found_summary
 from kebi.core.agent.tools._with_timeout import tool_step_base_id, with_timeout
@@ -198,9 +199,7 @@ def build_find_saved_tool(
         query: Annotated[str, Field(description=QUERY_DESC)],
         tool_call_id: Annotated[str, InjectedToolCallId],
         state: Annotated[AgentState, InjectedState],
-        categories: Annotated[
-            list[PlaceCategory] | None, Field(description=CATEGORIES_DESC)
-        ] = None,
+        categories: Annotated[CategoryArg, Field(description=CATEGORIES_DESC)] = None,
         tags: Annotated[list[str] | None, Field(description=TAGS_DESC)] = None,
         neighborhood: Annotated[
             str | None, Field(description=NEIGHBORHOOD_DESC)
