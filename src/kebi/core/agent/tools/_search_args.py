@@ -27,83 +27,72 @@ re-validating end-to-end against a live agent turn.
 from __future__ import annotations
 
 QUERY_DESC = (
-    "Free-text intent in noun-phrase form, e.g. 'cozy ramen for dinner'. "
-    "Drives the pgvector + FTS retrieval (RRF-fused) on saved places, and "
-    "the namer LLM prompt on suggested places. Keep it semantically "
-    "rich but tight; do not embed constraint values that already live in `tags`."
+    "Free-text intent as a noun-phrase, e.g. 'cozy ramen for dinner'. Drives "
+    "pgvector + FTS retrieval on saved places and the provider query on "
+    "suggested ones. Do not repeat values that already live in `tags`."
 )
 
 CATEGORIES_DESC = (
-    "OR-combined coarse categories the result must match one of (e.g. "
-    "['restaurant', 'cafe']). Pass when the user implies a place type; omit "
-    "when the query alone is specific enough. Common values: restaurant, "
-    "cafe, bar, pub, bakery, dessert_shop, street_food, night_market, "
-    "tea_house, juice_bar, park, beach, garden, museum, art_gallery, "
-    "temple, landmark, viewpoint, live_music_venue, concert_hall, theater, "
-    "nightclub, karaoke, cinema, bowling_alley, aquarium, spa, massage, "
-    "yoga_studio, hot_spring, gym, hotel, hostel, resort, shopping_mall, "
-    "bookstore, coworking_space, library, study_cafe — plus the errand "
-    "types: pharmacy, atm, bank, supermarket, grocery_store, "
-    "convenience_store, gas_station, parking, laundry, post_office."
+    "OR-combined coarse place types the result must match one of. Pass when "
+    "the user implies a type; omit when the query alone is specific. Valid "
+    "values are enumerated in this schema — read them there rather than "
+    "guessing."
 )
 
 TAGS_DESC = (
-    "AND-combined tag values the result must carry — flat strings (values "
-    "only, never 'type:value'). Pass every value that applies.\n"
+    "AND-combined tag VALUES the result must carry — flat strings, never "
+    "'type:value'. Pass every value that applies.\n"
     "\n"
-    "Enforcement differs by class. **dietary** and **accessibility** values "
-    "are HARD filters: a place without the tag is excluded, and you must "
-    "pass them on every call in a turn where the result could be food "
-    "(dietary) or where the user has stated an access need. Every other "
-    "class steers search and ranking but does not exclude a freshly "
-    "discovered place that simply hasn't been tagged yet. On saved-places "
-    "searches all values filter strictly.\n"
+    "**dietary** and **accessibility** values are HARD filters: a place "
+    "without the tag is excluded, and you must pass them on every call in a "
+    "turn where the result could be food, or where the user stated an access "
+    "need. Every other class steers ranking without excluding an untagged "
+    "place, because a fresh discovery has no experiential tags yet.\n"
     "\n"
-    "Vocabulary (core/places/tags.py):\n"
-    "- cuisine: Thai, Japanese, Korean, Chinese, Italian, French, Mexican, "
+    "cuisine: Thai, Japanese, Korean, Chinese, Italian, French, Mexican, "
     "Indian, Vietnamese, Mediterranean, American, Greek, Spanish, Turkish, "
     "Indonesian, 'Middle Eastern', Brazilian, Seafood, Steakhouse\n"
-    "- dietary: vegan, vegetarian, halal, vegetarian_options\n"
-    "- feature: outdoor_seating, indoor, outdoor, rooftop, waterfront, "
-    "garden, scenic_view, private_room, fireplace, dog_friendly, "
-    "family_friendly, group_friendly, kids_menu, sports_viewing, "
-    "live_music, parking, open_late, open_24h\n"
-    "- atmosphere: cozy, romantic, trendy, quiet, lively, intimate, "
-    "spacious, vibrant, laid_back, luxurious, casual, upscale, hidden_gem, "
+    "dietary: vegan, vegetarian, halal, vegetarian_options\n"
+    "feature: outdoor_seating, indoor, outdoor, rooftop, waterfront, garden, "
+    "scenic_view, private_room, fireplace, dog_friendly, family_friendly, "
+    "group_friendly, kids_menu, sports_viewing, live_music, parking, "
+    "open_late, open_24h\n"
+    "atmosphere: cozy, romantic, trendy, quiet, lively, intimate, spacious, "
+    "vibrant, laid_back, luxurious, casual, upscale, hidden_gem, "
     "instagram_worthy, vintage, industrial, minimalist, bohemian, "
     "traditional, modern\n"
-    "- service: dine_in, takeout, delivery, reservable, serves_breakfast, "
+    "service: dine_in, takeout, delivery, reservable, serves_breakfast, "
     "serves_brunch, serves_lunch, serves_dinner, serves_beer, serves_wine, "
     "serves_cocktails\n"
-    "- price: free, budget, moderate, expensive, very_expensive\n"
-    "- accessibility: wheelchair_parking, wheelchair_entrance, "
+    "price: free, budget, moderate, expensive, very_expensive\n"
+    "accessibility: wheelchair_parking, wheelchair_entrance, "
     "wheelchair_restroom, wheelchair_seating\n"
-    "- time: morning, brunch, lunch, afternoon, evening, night, late_night, "
+    "time: morning, brunch, lunch, afternoon, evening, night, late_night, "
     "all_day\n"
-    "- season: summer, winter, rainy, spring, autumn, all_season"
+    "season: summer, winter, rainy, spring, autumn, all_season"
 )
 
-# The three area args share one rule, stated once and appended to each, so the
-# "don't echo the working location" trap is impossible to read past.
-_AREA_RULE = (
-    " Pass ONLY when the user named an area DIFFERENT from this turn's "
-    "working location. Never echo the working location's own value back: "
-    "the geofence already covers it, and echoing suppresses the geofence "
-    "AND matches against a frequently-NULL address column, yielding zero "
-    "results despite real matches."
+# The "don't echo the working location" trap is stated once, on `city`, and
+# the sibling args point at it. Repeating it verbatim on all three cost ~800
+# characters per tool for a rule the model reads once anyway.
+CITY_DESC = (
+    "Named city to scope to (e.g. 'Chiang Mai'). Pass this and the sibling "
+    "area args ONLY for an area DIFFERENT from this turn's working location. "
+    "Never echo the working location's own value back: the geofence already "
+    "covers it, and echoing suppresses that geofence AND matches a "
+    "frequently-NULL address column, returning nothing despite real matches."
 )
 
-NEIGHBORHOOD_DESC = "Named neighborhood to scope to (e.g. 'Sukhumvit')." + _AREA_RULE
-
-CITY_DESC = "Named city to scope to (e.g. 'Chiang Mai')." + _AREA_RULE
+NEIGHBORHOOD_DESC = (
+    "Named neighborhood to scope to (e.g. 'Sukhumvit'). Same rule as `city`."
+)
 
 COUNTRY_DESC = (
-    "Named country to scope to (e.g. 'Thailand'). Rarely needed — most turns "
-    "are city-scoped or finer." + _AREA_RULE
+    "Named country to scope to. Rarely needed — most turns are city-scoped or "
+    "finer. Same rule as `city`."
 )
 
 LIMIT_DESC = (
-    "How many candidates to return — pick based on context: one confident "
-    "pick (1), a short comparison (3-5), a browse (10+). Capped by config; "
-    "defaults if omitted."
+    "How many candidates: 1 for a confident single pick, 3-5 to compare, 10+ "
+    "to browse. Capped by config; defaults if omitted."
 )

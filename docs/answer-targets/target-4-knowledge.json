@@ -1,6 +1,6 @@
 {
     "type": "agent",
-    "message": "no hard rule here, but the general vibe is: tipping is appreciated but never expected.\n\nat restaurants, a lot of the nicer spots already add a service charge (usually 5 to 10%) plus tax, so check your bill before you add anything on top. if there's no service charge and you had good service, rounding up or leaving 10% is plenty and genuinely goes a long way.\n\nfor drivers, a small tip is a nice touch, especially after a long day out. same for spa and massage therapists, they're often the ones who benefit most from it. 20k to 50k rupiah is the usual range depending on the length of the session.\n\nstreet food and warungs, no expectation at all. if you want to leave a few coins, fine, but no one will notice if you don't.\n\nthe short version: you won't offend anyone by not tipping, but a little goes a long way here given the exchange rate.",
+    "message": "nothing specific in my notes on tipping, but here's what's actually the case on the ground:\n\ntipping isn't mandatory in [bali](kebi://area/id/bali), but it's genuinely appreciated. most restaurants already add a 10% service charge to the bill, so check before you add more. if there's no service charge, rounding up or leaving 10-15% is normal and welcome.\n\nfor drivers, a 10,000-20,000 IDR tip after a longer trip is plenty. for spa and massage, tipping is pretty common since the staff are often on low base wages, 20,000-50,000 IDR is a good range depending on how long the session was. for your villa or hotel staff, leaving something at the end of your stay is a nice touch.\n\nstreet food and warungs, no expectation at all. the fancier the place, the more a tip lands well.",
     "data": {
         "reasoning_steps": [
             {
@@ -9,8 +9,8 @@
                 "summary": "around Bali, Indonesia",
                 "source": "agent",
                 "visibility": "user",
-                "timestamp": "2026-08-06T13:29:04.843036Z",
-                "duration_ms": 2335.6940830126405
+                "timestamp": "2026-08-06T13:43:30.787158Z",
+                "duration_ms": 1633.7185419979505
             },
             {
                 "step": "research.summary",
@@ -18,11 +18,18 @@
                 "summary": "found 2 insider notes on Bali",
                 "source": "agent",
                 "visibility": "user",
-                "timestamp": "2026-08-06T13:29:11.088685Z",
-                "duration_ms": 9.865542000625283
+                "timestamp": "2026-08-06T13:43:33.214559Z",
+                "duration_ms": 17.324041997198947
             }
         ],
-        "entities": [],
+        "entities": [
+            {
+                "kind": "area",
+                "key": "id/bali",
+                "name": "Bali",
+                "uri": "kebi://area/id/bali"
+            }
+        ],
         "recommendation_id": null
     },
     "tool_calls_used": 1

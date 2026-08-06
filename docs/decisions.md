@@ -17,6 +17,16 @@ Format:
 
 ---
 
+## ADR-144: One city keys one way, weather gets a seam, and duplicated arg docs are cut
+
+**Date:** 2026-08-06\
+**Status:** accepted\
+**Context:** Four loose ends left by the previous batch. Geo claim keys were built by slugifying whatever city name the geocoder returned, and it does not return the same one twice — the store already held `th/bangkok` alongside `th/krung-thep-maha-nakhon/khet-khlong-toei`, one city split across two keys that no prefix scan will ever join, silently leaking the ingestion flywheel and handing the client two different links for the same place. Slugging cannot merge those: the names are different words, not transliterations. Separately, the tool schemas carried real duplication — the categories argument enumerated its values in prose *and* had them inlined as an enum by the schema generator, and the "don't echo the working location" rule was repeated verbatim on three area arguments per tool. Weather remained unavailable with no source planned, so season stayed calendar-only, which is precisely useless in the tropics where wet versus dry decides the afternoon. And the answer-then-ask-one rule kept drifting into two questions.\
+**Decision:** City slugs are canonicalised at the single point keys are built, folding known exonym/endonym pairs together, with a data-only migration moving the rows written before it. Duplicated argument prose is removed where the schema already carries the information or the rule is stated once nearby. Weather gets a Protocol and a null adapter now, so a source becomes one class and one dependency line rather than a change threaded through the agent — the abstraction lands before the dependency, as it does for every other external service here. The question rule keeps prompt enforcement, but with the actual failing sentence quoted as a worked example.\
+**Consequences:** A city's claims accumulate under one key regardless of which name a geocode returned, and the split rows are repaired. Tool definitions drop from about 4,000 to 3,300 tokens per request, roughly 17%, entirely by deleting duplication rather than trimming anything load-bearing — the tag vocabulary itself stays stated per tool, because those values drive retrieval quality and this project trades bytes for answers, not the reverse. Two honest limits. The alias table is maintained by hand, so a city pair nobody has added still splits silently; keying by a stable geocoder id would remove the maintenance and is the direction to take when volume justifies the migration. And the question rule is **not** code-enforced, unlike the em dashes it resembles: the real failure carried no question mark and occupied one sentence, so counting punctuation would not have caught it. Removing a clause changes meaning, where removing an em dash does not — the enforcement that worked for typography does not transfer to semantics, and pretending otherwise would trade a visible drift for a mangled answer.
+
+---
+
 ## ADR-143: The search radius is capped, and INFO logs are actually emitted
 
 **Date:** 2026-08-06\

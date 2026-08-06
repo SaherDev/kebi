@@ -1,6 +1,6 @@
 {
     "type": "agent",
-    "message": "haven't got your saves from [tokyo](kebi://area/jp/tokyo) yet so i'm going off what i know, but here are some solid picks depending on what kind of night you want.\n\nif you're after something iconic and you can get a seat, [Sukiyabashi Jiro](kebi://venue/d0d9936d-5eb7-4fea-8b9a-e9c517779e62) in Ginza is the one. that's the [sushi](kebi://venue/4a998fba-adc2-471a-a2fd-cd86cc33a333) counter most people only dream about. realistically though, it books out months ahead, so tonight is a long shot unless you already have a reservation.\n\nsame story with Sushi Saito Azabudai, another serious omakase counter, and [Narisawa](kebi://venue/e7b44b05-ab76-4a71-bb81-3cc243575088) in Minamiaoyama, which is the place for innovative Japanese cuisine with a nature-forward tasting menu. both are worth planning ahead for.\n\nfor tonight without a reservation, [Floril\u00e8ge](kebi://venue/56ae026a-1f8c-49ea-b71b-d4704b1b3779) in Toranomon is a strong pick. it's French-Japanese, one michelin star, and they sometimes have counter seats available on the day. worth calling ahead.\n\nwhat would help me narrow this down: what are you feeling, sushi, something more casual, a particular part of the city? and are you solo or with people? tokyo is huge and the right answer really depends on which direction you want to go.",
+    "message": "no saves from you in [tokyo](kebi://area/jp/tokyo) yet, so i'm going off what i know. it's 6pm on a tuesday which is actually a solid night to eat out here, less chaotic than the weekend.\n\na few directions depending on what you're after:\n\nif you want [sushi](kebi://venue/4a998fba-adc2-471a-a2fd-cd86cc33a333), Sushi Saito in Azabudai is one of the most respected counters in the city. that said, it's nearly impossible to book without a local connection or hotel concierge. if your hotel has a good concierge, call them right now and see what they can do. same story for [Sukiyabashi Jiro](kebi://venue/d0d9936d-5eb7-4fea-8b9a-e9c517779e62) in Ginza, the original counter, legendary but you need a reservation.\n\nfor something you can actually walk into tonight, Afuri is a great ramen call. their yuzu shio is the one to get, light and clean, and tuesday night means shorter waits than the weekend. good if you want something quick and satisfying.\n\nif you want to push the boat out with a reservation you might still land, [Narisawa](kebi://venue/e7b44b05-ab76-4a71-bb81-3cc243575088) in Minamiaoyama is one of the best restaurants in asia, innovative Japanese-French, but call ahead right now. [Floril\u00e8ge](kebi://venue/56ae026a-1f8c-49ea-b71b-d4704b1b3779) in Toranomon is a similar tier, French-Japanese, smaller room, also worth a call.\n\nwhat kind of food are you in the mood for? that'll help me narrow it down properly.",
     "data": {
         "reasoning_steps": [
             {
@@ -9,8 +9,8 @@
                 "summary": "around Tokyo, Japan",
                 "source": "agent",
                 "visibility": "user",
-                "timestamp": "2026-08-06T13:28:27.330037Z",
-                "duration_ms": 4325.263749997248
+                "timestamp": "2026-08-06T13:43:09.016052Z",
+                "duration_ms": 2054.483917003381
             },
             {
                 "step": "find_known.summary",
@@ -18,8 +18,8 @@
                 "summary": "nothing I know of fits that here",
                 "source": "agent",
                 "visibility": "user",
-                "timestamp": "2026-08-06T13:28:35.682764Z",
-                "duration_ms": 7.107833007466979
+                "timestamp": "2026-08-06T13:43:11.708567Z",
+                "duration_ms": 16.937416992732324
             },
             {
                 "step": "find_saved.summary",
@@ -27,8 +27,8 @@
                 "summary": "nothing saved matched that",
                 "source": "agent",
                 "visibility": "user",
-                "timestamp": "2026-08-06T13:28:49.168021Z",
-                "duration_ms": 20.004375008284114
+                "timestamp": "2026-08-06T13:43:14.263401Z",
+                "duration_ms": 14.586749995942228
             },
             {
                 "step": "suggest_places.summary",
@@ -36,8 +36,8 @@
                 "summary": "5 spots \u2014 Sukiyabashi Jiro, Narisawa, +3 more",
                 "source": "agent",
                 "visibility": "user",
-                "timestamp": "2026-08-06T13:28:54.427283Z",
-                "duration_ms": 1284.7122500097612
+                "timestamp": "2026-08-06T13:43:20.181716Z",
+                "duration_ms": 1583.335208997596
             }
         ],
         "entities": [
@@ -49,15 +49,15 @@
             },
             {
                 "kind": "venue",
-                "key": "d0d9936d-5eb7-4fea-8b9a-e9c517779e62",
-                "name": "Sukiyabashi Jiro",
-                "uri": "kebi://venue/d0d9936d-5eb7-4fea-8b9a-e9c517779e62"
-            },
-            {
-                "kind": "venue",
                 "key": "4a998fba-adc2-471a-a2fd-cd86cc33a333",
                 "name": "Sushi Saito Azabudai",
                 "uri": "kebi://venue/4a998fba-adc2-471a-a2fd-cd86cc33a333"
+            },
+            {
+                "kind": "venue",
+                "key": "d0d9936d-5eb7-4fea-8b9a-e9c517779e62",
+                "name": "Sukiyabashi Jiro",
+                "uri": "kebi://venue/d0d9936d-5eb7-4fea-8b9a-e9c517779e62"
             },
             {
                 "kind": "venue",
@@ -72,7 +72,7 @@
                 "uri": "kebi://venue/56ae026a-1f8c-49ea-b71b-d4704b1b3779"
             }
         ],
-        "recommendation_id": "e5b79e67-2fba-4715-bdd3-2d9f3dee9b66"
+        "recommendation_id": "6522fc0d-a2ca-48e8-9376-e7385dc5590d"
     },
     "tool_calls_used": 3
 }

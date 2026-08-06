@@ -1,6 +1,6 @@
 {
     "type": "agent",
-    "message": "monday is actually a good night to be in [canggu](kebi://area/id/bali/canggu), here's how i'd play it from your saves\n\nstart at [Luigi's](kebi://venue/c59914af-38a0-499e-8d5a-b3416eb2ed3e), that's the one to anchor your monday around. they do house and techno nights specifically on mondays, pizza plus a proper dj, and it's 7:30 now so the energy is just starting to build. that's your first move.\n\nthen walk over to [Old Man's](kebi://venue/45a09352-bfd6-403a-b5c5-7b23699a1ce2), it's right there on batu bolong and runs every night of the week. classic beach bar energy, good for a drink between spots, easy backpacker vibe.\n\nif you want to keep going after that, [Sand Bar](kebi://venue/f01f4435-631c-41e9-a3a9-f05356eb82c2) does afterparties every day, beachfront, cocktails, easy end to the night.\n\n[Bella.](kebi://venue/3685d4ef-00be-4d91-9933-d82cf94b5315) is also worth knowing about, it's on berawa and turns into a house and techno spot at night too, so if luigi's gets too packed you've got a backup with the same vibe.\n\nskip for tonight:\n- [Vault](kebi://venue/7861b346-2a73-4a7a-a66c-b58840527758) is wed to sat only, not tonight\n- [The Mesa](kebi://venue/968ba4ad-fc09-4365-8d69-dac6358c1722) is a friday spot\n- [Motel Mexicola](kebi://venue/8099938c-7730-4890-93e1-bd333d3a8ffa) is tuesday's big night, you're one day early\n- [La Favela](kebi://venue/c00a6f5c-20d4-4955-924b-41a38a3fc9d8) is over in seminyak, not worth the ride when your monday is this sorted in canggu\n\nluigi's then old man's then sand bar, your monday is set.",
+    "message": "monday is actually a great night to be in [canggu](kebi://area/id/bali/canggu), and your saves line up perfectly with it. here's how i'd play it:\n\nstart at [Luigi's](kebi://venue/c59914af-38a0-499e-8d5a-b3416eb2ed3e). monday is literally their night, that's when they do their house and techno DJ set, pizza plus a proper dancefloor energy, and it's 7:30 now so the room is just starting to build. that's the anchor for tonight.\n\nfrom there, walk over to [Old Man's](kebi://venue/45a09352-bfd6-403a-b5c5-7b23699a1ce2) on batu bolong. it runs every single day, classic beach bar backpacker energy, good spot for a drink between moves and to let the night breathe a bit.\n\nthen end at [Sand Bar](kebi://venue/f01f4435-631c-41e9-a3a9-f05356eb82c2), also right there on batu bolong. they do afterparties every night, so it's the natural late move when Luigi's winds down.\n\nskip for tonight:\n- [Vault](kebi://venue/7861b346-2a73-4a7a-a66c-b58840527758) is wednesday to saturday only, not tonight\n- [The Mesa](kebi://venue/968ba4ad-fc09-4365-8d69-dac6358c1722) is a friday spot\n- [Motel Mexicola](kebi://venue/8099938c-7730-4890-93e1-bd333d3a8ffa) is in your saves but tuesday is their big night, you're one day early\n- [La Favela](kebi://venue/c00a6f5c-20d4-4955-924b-41a38a3fc9d8) is over in seminyak, not worth the ride when your monday is this sorted in canggu\n- [Da Maria](kebi://venue/4444bc95-be3c-4b2e-9eb8-2c2f226adae8) is their wednesday R&B night, two days out\n\nluigi's then old man's then sand bar, your monday is set.",
     "data": {
         "reasoning_steps": [
             {
@@ -9,8 +9,8 @@
                 "summary": "around Canggu, Bali, Indonesia",
                 "source": "agent",
                 "visibility": "user",
-                "timestamp": "2026-08-06T13:27:45.992685Z",
-                "duration_ms": 2049.8391250002896
+                "timestamp": "2026-08-06T13:42:36.500194Z",
+                "duration_ms": 6824.917958991136
             },
             {
                 "step": "find_known.summary",
@@ -18,17 +18,17 @@
                 "summary": "5 spots \u2014 Luigi's Hot Pizza Canggu, BELLA. Canggu, +3 more",
                 "source": "agent",
                 "visibility": "user",
-                "timestamp": "2026-08-06T13:27:48.362209Z",
-                "duration_ms": 13.185083997086622
+                "timestamp": "2026-08-06T13:42:39.568974Z",
+                "duration_ms": 27.188124993699603
             },
             {
                 "step": "find_saved.summary",
                 "title": "searched your saved spots",
-                "summary": "10 spots \u2014 Motel Mexicola | Canggu, Old Man's, +8 more",
+                "summary": "10 spots \u2014 Old Man's, Motel Mexicola | Canggu, +8 more",
                 "source": "agent",
                 "visibility": "user",
-                "timestamp": "2026-08-06T13:27:55.508095Z",
-                "duration_ms": 430.3705830097897
+                "timestamp": "2026-08-06T13:42:42.526766Z",
+                "duration_ms": 623.890750008286
             }
         ],
         "entities": [
@@ -58,12 +58,6 @@
             },
             {
                 "kind": "venue",
-                "key": "3685d4ef-00be-4d91-9933-d82cf94b5315",
-                "name": "Bella. Canggu",
-                "uri": "kebi://venue/3685d4ef-00be-4d91-9933-d82cf94b5315"
-            },
-            {
-                "kind": "venue",
                 "key": "7861b346-2a73-4a7a-a66c-b58840527758",
                 "name": "Vault Nightclub Bali",
                 "uri": "kebi://venue/7861b346-2a73-4a7a-a66c-b58840527758"
@@ -85,9 +79,15 @@
                 "key": "c00a6f5c-20d4-4955-924b-41a38a3fc9d8",
                 "name": "La Favela",
                 "uri": "kebi://venue/c00a6f5c-20d4-4955-924b-41a38a3fc9d8"
+            },
+            {
+                "kind": "venue",
+                "key": "4444bc95-be3c-4b2e-9eb8-2c2f226adae8",
+                "name": "Da Maria",
+                "uri": "kebi://venue/4444bc95-be3c-4b2e-9eb8-2c2f226adae8"
             }
         ],
-        "recommendation_id": "1949d296-90e8-44e6-b638-29b12e489ab2"
+        "recommendation_id": "7ed20f58-3932-469e-95fa-6a2d27c62302"
     },
     "tool_calls_used": 2
 }

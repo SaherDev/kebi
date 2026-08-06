@@ -215,6 +215,44 @@ def build_place_key(place_id: str) -> str:
     return f"place:{place_id}"
 
 
+# Cities the geocoder names inconsistently between calls — an English exonym
+# on one lookup, the local endonym on the next. `_slugify` cannot merge these:
+# "Bangkok" and "Krung Thep Maha Nakhon" are different words, not
+# transliterations of one another, so the slug is correctly different and the
+# claims split across two keys that no prefix scan will ever join (ADR-144).
+#
+# Keyed by (country_code, slug of the variant) → canonical slug. This is a
+# maintained list, which is a real cost: a pair nobody has added still splits
+# silently. It is the pragmatic half of the fix — keying cities by a stable
+# geocoder id would remove the maintenance entirely, and is the direction to
+# take when a claim volume justifies the migration.
+_CITY_ALIASES: dict[tuple[str, str], str] = {
+    ("th", "krung-thep-maha-nakhon"): "bangkok",
+    ("th", "krung-thep"): "bangkok",
+    ("id", "jakarta-raya"): "jakarta",
+    ("id", "daerah-khusus-ibukota-jakarta"): "jakarta",
+    ("vn", "thanh-pho-ho-chi-minh"): "ho-chi-minh-city",
+    ("vn", "sai-gon"): "ho-chi-minh-city",
+    ("vn", "ha-noi"): "hanoi",
+    ("vn", "da-nang"): "da-nang",
+    ("jp", "tokyo-to"): "tokyo",
+    ("kr", "seoul-teukbyeolsi"): "seoul",
+    ("cn", "beijing-shi"): "beijing",
+    ("ae", "dubayy"): "dubai",
+}
+
+
+def canonical_city_slug(country_code: str, city: str) -> str:
+    """The slug a city keys under, folding known name variants together.
+
+    Applied at the one place keys are built, so a claim written from a
+    geocode that said "Krung Thep Maha Nakhon" lands under the same key as
+    one that said "Bangkok". Unknown cities pass through unchanged.
+    """
+    slug = _slugify(city)
+    return _CITY_ALIASES.get((country_code.strip().lower(), slug), slug)
+
+
 def build_geo_key(
     country: str, city: str | None = None, neighborhood: str | None = None
 ) -> str:
@@ -223,6 +261,9 @@ def build_geo_key(
     `country` must be an ISO-3166 alpha-2 code (e.g. "ae"). A neighborhood
     key requires a city; "all claims under Dubai" is a prefix scan on the
     city-level key this returns for a city alone.
+
+    The city component is canonicalised (ADR-144) so name variants for one
+    city cannot split its claims across keys a prefix scan will never join.
     """
     country_code = country.strip().lower()
     if not _COUNTRY_CODE_RE.match(country_code):
@@ -232,7 +273,7 @@ def build_geo_key(
 
     parts = [country_code]
     if city is not None:
-        parts.append(_slugify(city))
+        parts.append(canonical_city_slug(country_code, city))
     if neighborhood is not None:
         parts.append(_slugify(neighborhood))
     return "/".join(parts)

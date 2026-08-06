@@ -88,6 +88,7 @@ from kebi.providers.object_storage import (
     S3ObjectStorage,
 )
 from kebi.providers.redis_cache import RedisCacheBackend, get_redis_client
+from kebi.providers.weather import NullWeatherProvider, WeatherProvider
 
 # ---------------------------------------------------------------------------
 # Gateway service-to-service auth.
@@ -953,6 +954,15 @@ def get_candidate_notes_service(
         per_place_limit=cfg.candidate_notes_limit,
         area_limit=cfg.area_notes_limit,
     )
+
+
+def get_weather_provider() -> WeatherProvider:
+    """FastAPI dependency providing the weather source (ADR-144).
+
+    Null until a real source is configured. Kept as an injected dependency
+    rather than an import so swapping it in is a change here and nowhere else.
+    """
+    return NullWeatherProvider()
 
 
 def get_known_places_service(
