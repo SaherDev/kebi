@@ -29,6 +29,7 @@ from pydantic import BaseModel
 
 from kebi.core.knowledge.schemas import build_geo_key
 from kebi.core.places._place_utils import display_place_name
+from kebi.core.places.models import normalize_icon
 
 EntityKind = Literal["venue", "area"]
 
@@ -125,12 +126,20 @@ class ChatEntity(BaseModel):
     are the same thing pre-split so the client does not have to parse. `name`
     is the canonical display name, which may differ from the text the answer
     actually used ("Luigi's" in prose, "Luigi's Hot Pizza" here).
+
+    `icon` is the single emoji the client draws beside the name. A venue's
+    comes off its catalog row, where an LLM already picked it (ADR-117); an
+    area has no row, so its icon comes from the turn's location resolver,
+    which is already looking at that area (ADR-146). Nullable on both kinds by
+    design — a path with no model behind it leaves it unset and the client
+    falls back to its own mapping, exactly as it already does for venues.
     """
 
     kind: EntityKind
     key: str
     name: str
     uri: str
+    icon: str | None = None
 
 
 def venue_uri(place_id: str) -> str:
@@ -143,13 +152,21 @@ def area_uri(geo_key: str) -> str:
     return f"{URI_SCHEME}://area/{geo_key.strip('/')}"
 
 
-def _venue(place_id: str, name: str) -> ChatEntity:
-    return ChatEntity(kind="venue", key=place_id, name=name, uri=venue_uri(place_id))
+def _venue(place_id: str, name: str, icon: str | None = None) -> ChatEntity:
+    return ChatEntity(
+        kind="venue",
+        key=place_id,
+        name=name,
+        uri=venue_uri(place_id),
+        icon=normalize_icon(icon),
+    )
 
 
-def _area(geo_key: str, name: str) -> ChatEntity:
+def _area(geo_key: str, name: str, icon: str | None = None) -> ChatEntity:
     key = geo_key.strip("/")
-    return ChatEntity(kind="area", key=key, name=name, uri=area_uri(key))
+    return ChatEntity(
+        kind="area", key=key, name=name, uri=area_uri(key), icon=normalize_icon(icon)
+    )
 
 
 def turn_recommendation_id(tool_results: list[dict[str, Any]]) -> str | None:
@@ -193,7 +210,12 @@ def _candidate_entities(payload: dict[str, Any]) -> list[tuple[str, ChatEntity]]
         # The entity carries the cleaned display name (it is what a client
         # renders), but BOTH spellings are indexed so the answer links whether
         # the agent wrote the tidy form or echoed the provider's.
-        entity = _venue(place_id, display_place_name(name))
+        icon = place.get("icon")
+        entity = _venue(
+            place_id,
+            display_place_name(name),
+            icon if isinstance(icon, str) else None,
+        )
         pairs.append((name, entity))
         if entity.name != name:
             pairs.append((entity.name, entity))
@@ -228,6 +250,10 @@ def _working_location_entities(
     from the resolver — so it is seeded here. Without a country code there is
     no canonical key, and an unkeyed area is not linkable.
 
+    The resolver also picks each level's icon (ADR-146), so the entities it
+    seeds arrive drawable; areas from anywhere else borrow those icons by key
+    in `build_entity_index`.
+
     Defensive `isinstance`: the state slot can still hold the carry-forward
     sentinel string on a first turn (see `_carried_working_location`).
     """
@@ -245,11 +271,30 @@ def _working_location_entities(
         pairs.append(
             (
                 neighborhood,
-                _area(build_geo_key(country_code, city, neighborhood), neighborhood),
+                _area(
+                    build_geo_key(country_code, city, neighborhood),
+                    neighborhood,
+                    _icon_of(working_location, "neighborhood_icon"),
+                ),
             )
         )
-    pairs.append((city, _area(build_geo_key(country_code, city), city)))
+    pairs.append(
+        (
+            city,
+            _area(
+                build_geo_key(country_code, city),
+                city,
+                _icon_of(working_location, "city_icon"),
+            ),
+        )
+    )
     return pairs
+
+
+def _icon_of(working_location: dict[str, Any], field: str) -> str | None:
+    """One icon field off the working-location state slot, if it is a string."""
+    value = working_location.get(field)
+    return value if isinstance(value, str) else None
 
 
 def build_entity_index(
@@ -275,6 +320,23 @@ def build_entity_index(
         elif tool == "research":
             pairs.extend(_research_entity(payload))
     pairs.extend(_working_location_entities(working_location))
+
+    # An area the research tool resolved is usually the very area the turn is
+    # working in, keyed identically — so it borrows the icon the resolver
+    # already picked instead of arriving as the one undrawable entity in the
+    # answer.
+    area_icons = {
+        entity.key: entity.icon
+        for _, entity in pairs
+        if entity.kind == "area" and entity.icon
+    }
+    if area_icons:
+        pairs = [
+            (alias, entity)
+            if entity.icon or entity.kind != "area" or entity.key not in area_icons
+            else (alias, entity.model_copy(update={"icon": area_icons[entity.key]}))
+            for alias, entity in pairs
+        ]
 
     # Spoken short forms, added only where exactly one place answers to them.
     # An ambiguous prefix ("Bank Mandiri…" vs "Bank BNI…") would send a tap to

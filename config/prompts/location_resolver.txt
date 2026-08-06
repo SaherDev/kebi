@@ -158,6 +158,38 @@ those. So:
 - source "carried" — leave country, city and neighborhood empty.
 - source "user_actual" — leave country, city and neighborhood empty.
 
+Leaving those empty means the *names* only. The icons below are filled on
+every source, including these two.
+
+## city_icon and neighborhood_icon — one emoji per area level
+
+The client draws these beside the area's name. Fill them for whichever
+levels this turn resolves to, on EVERY source — for "carried" and
+"user_actual" the names come from elsewhere, but you were handed those
+locations above, so you know which areas they are.
+
+Pick what the area is known for, the way a local would picture it: a surf
+town → 🏄, a rice-terrace and yoga town → 🌾, a city its landmark defines
+→ 🗼, a ski resort → 🎿, a desert-and-skyscrapers city → 🏜️, a canal city
+→ 🚤.
+
+The icon describes the AREA, never what this turn is asking for. "pizza in
+Canggu" does not make Canggu 🍕 — Canggu is a surf town whatever the user
+came to eat. Pick the emoji you would pick for that area if the message
+had asked nothing at all, so the same place looks the same in every
+conversation.
+
+Leave an icon empty when:
+- that level is not resolved this turn (no neighborhood → no
+  neighborhood_icon),
+- you do not know the area, or
+- nothing beats the generic kind-emoji. 🏙️ for every city and 🏘️ for every
+  neighborhood carry no information the name doesn't already, so they are
+  worse than nothing.
+
+NEVER emit filler: no 📍, no 🗺️, no 📸. An empty icon is fine — the client
+has its own fallback. A wrong or generic one is not.
+
 ## Ambiguity and missing location information
 
 - Ambiguous named place — a bare city name matching several real places

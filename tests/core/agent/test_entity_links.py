@@ -34,7 +34,10 @@ def _place_result(
 
 
 def _candidate(
-    place_id: str, name: str, aliases: list[str] | None = None
+    place_id: str,
+    name: str,
+    aliases: list[str] | None = None,
+    icon: str | None = None,
 ) -> dict[str, Any]:
     return {
         "place": {
@@ -43,6 +46,7 @@ def _candidate(
             "place_name_aliases": [
                 {"value": a, "source": "tiktok"} for a in (aliases or [])
             ],
+            "icon": icon,
         },
         "source": "saved",
     }
@@ -144,6 +148,54 @@ class TestBuildEntityIndex:
             build_entity_index([_place_result(candidates=[_candidate("p1", "Om")])])
             == []
         )
+
+    def test_a_venue_carries_the_icon_off_its_catalog_row(self) -> None:
+        index = build_entity_index(
+            [_place_result(candidates=[_candidate("p1", "Luigis", icon="🍕")])]
+        )
+        assert dict(index)["Luigis"].icon == "🍕"
+
+    def test_a_venue_without_an_icon_leaves_it_unset(self) -> None:
+        index = build_entity_index(
+            [_place_result(candidates=[_candidate("p1", "Luigis")])]
+        )
+        assert dict(index)["Luigis"].icon is None
+
+    def test_a_junk_icon_on_the_row_is_dropped(self) -> None:
+        # Icons are model output; an ASCII word is not an emoji.
+        index = build_entity_index(
+            [_place_result(candidates=[_candidate("p1", "Luigis", icon="pizza")])]
+        )
+        assert dict(index)["Luigis"].icon is None
+
+    def test_areas_carry_the_icons_the_resolver_picked(self) -> None:
+        index = build_entity_index(
+            [], {**_CANGGU, "city_icon": "🏝️", "neighborhood_icon": "🏄"}
+        )
+        by_alias = dict(index)
+        assert by_alias["Canggu"].icon == "🏄"
+        assert by_alias["Badung"].icon == "🏝️"
+
+    def test_an_area_the_resolver_gave_no_icon_stays_unset(self) -> None:
+        by_alias = dict(build_entity_index([], _CANGGU))
+        assert by_alias["Canggu"].icon is None
+
+    def test_a_researched_area_borrows_the_resolved_icon_for_its_key(self) -> None:
+        # Research resolves the very area the turn works in — same key, so the
+        # icon the resolver picked applies rather than leaving one bare entity.
+        index = build_entity_index(
+            [
+                {
+                    "tool": "research",
+                    "payload": {
+                        "entity_name": "Canggu",
+                        "entity_key": "id/badung/canggu",
+                    },
+                }
+            ],
+            {**_CANGGU, "neighborhood_icon": "🏄"},
+        )
+        assert dict(index)["Canggu"].icon == "🏄"
 
     def test_a_venue_wins_a_same_named_area(self) -> None:
         index = build_entity_index(

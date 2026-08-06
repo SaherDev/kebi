@@ -222,13 +222,15 @@ to `POST /v1/extract` — the chat path never writes to `user_places`.
         "kind": "venue",
         "key": "c0ffee00-…",
         "name": "Luigis",
-        "uri": "kebi://venue/c0ffee00-…"
+        "uri": "kebi://venue/c0ffee00-…",
+        "icon": "🍕"
       },
       {
         "kind": "area",
         "key": "id/badung/canggu",
         "name": "Canggu",
-        "uri": "kebi://area/id/badung/canggu"
+        "uri": "kebi://area/id/badung/canggu",
+        "icon": "🏄"
       }
     ],
     "recommendation_id": "9c1e…"
@@ -252,6 +254,7 @@ to `POST /v1/extract` — the chat path never writes to `user_places`.
 | `key`  | `string`              | `places.id` for a venue; the slugged geo key for an area                                  |
 | `name` | `string`              | Canonical display name — may differ from the text the answer used ("Luigis" vs "Luigi's") |
 | `uri`  | `string`              | `kebi://{kind}/{key}`, pre-composed so the link handler never parses                      |
+| `icon` | `string \| null`      | Single emoji for the entity's identity (🍕, 🏄), drawn beside the name. A venue's comes off its catalog row (ADR-117); an area's is picked by the turn's location resolver (ADR-146). **Nullable by design** on both kinds — the client falls back to its own kind/category mapping |
 
 `recommendation_id` is the turn's consult id, needed by `POST /v1/signal`
 to attribute an accept/reject. It moved here when the tool payloads left
@@ -319,7 +322,7 @@ event: reasoning_step
 data: {"id":"find_saved#0","step":"find_saved.summary","title":"searched your saved spots","summary":"2 spots — Wagyu, Beef Tei","status":"done","source":"agent","visibility":"user","duration_ms":420.0}
 
 event: message
-data: {"content": "tonight is [Luigis](kebi://venue/c0ffee00-…) night", "entities": [{"kind":"venue","key":"c0ffee00-…","name":"Luigis","uri":"kebi://venue/c0ffee00-…"}]}
+data: {"content": "tonight is [Luigis](kebi://venue/c0ffee00-…) night", "entities": [{"kind":"venue","key":"c0ffee00-…","name":"Luigis","uri":"kebi://venue/c0ffee00-…","icon":"🍕"}]}
 
 event: done
 data: {"tool_calls_used": 1}
