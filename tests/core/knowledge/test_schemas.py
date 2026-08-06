@@ -4,7 +4,12 @@ from __future__ import annotations
 
 import pytest
 
-from kebi.core.knowledge.schemas import build_geo_key, build_place_key
+from kebi.core.knowledge.schemas import (
+    _CITY_ALIASES,
+    build_geo_key,
+    build_place_key,
+    canonical_city_slug,
+)
 
 
 def test_build_place_key_namespaces_the_catalog_id() -> None:
@@ -61,3 +66,46 @@ def test_non_latin_script_transliterates_to_stable_ascii() -> None:
 
 def test_slug_collapses_punctuation_and_spacing() -> None:
     assert build_geo_key("ae", "Dubai", "Jumeirah  Beach!") == "ae/dubai/jumeirah-beach"
+
+
+class TestCanonicalCitySlug:
+    """One city, one key (ADR-144).
+
+    The geocoder returns an English exonym on one lookup and the local
+    endonym on the next, and `_slugify` cannot merge those — they are
+    different words, not transliterations. Left alone, a city's claims split
+    across two keys that no prefix scan will ever join.
+    """
+
+    def test_the_local_name_folds_to_the_canonical_slug(self) -> None:
+        assert build_geo_key("th", "Krung Thep Maha Nakhon") == "th/bangkok"
+        assert build_geo_key("th", "Bangkok") == "th/bangkok"
+
+    def test_a_neighborhood_inherits_the_canonical_parent(self) -> None:
+        # This is the case that actually broke: the neighborhood claim sat
+        # under a different city key than the city's own claims.
+        assert (
+            build_geo_key("th", "Krung Thep Maha Nakhon", "Khet Khlong Toei")
+            == "th/bangkok/khet-khlong-toei"
+        )
+
+    def test_an_unknown_city_passes_through_unchanged(self) -> None:
+        assert build_geo_key("vn", "Hoi An") == "vn/hoi-an"
+
+    def test_transliteration_still_collapses_without_an_alias(self) -> None:
+        # anyascii already handles script variants; aliases are only for
+        # genuinely different names.
+        assert build_geo_key("vn", "Đà Nẵng") == build_geo_key("vn", "Da Nang")
+
+    def test_aliases_are_scoped_by_country(self) -> None:
+        # A slug that is an alias in one country must not rewrite another's.
+        assert canonical_city_slug("th", "krung thep maha nakhon") == "bangkok"
+        assert canonical_city_slug("xx", "krung thep maha nakhon") == (
+            "krung-thep-maha-nakhon"
+        )
+
+    def test_every_alias_target_is_itself_canonical(self) -> None:
+        """No alias may point at another alias, or the fold is order-dependent
+        and one hop lands on a key that folds again."""
+        for (country_code, _variant), canonical in _CITY_ALIASES.items():
+            assert canonical_city_slug(country_code, canonical) == canonical

@@ -131,7 +131,14 @@ diagnose ingestion first.
 
 ---
 
-## Known issue — area keys are not stable
+## Fixed — area keys are canonicalised (ADR-144)
+
+City slugs now fold known name variants together at `build_geo_key`, and a
+migration repaired the rows written before that. The section below is kept as
+the record of what the failure looked like and what remains partial: the alias
+table is maintained by hand, so an unlisted city pair still splits silently.
+
+## Known issue (now partially addressed) — area keys were not stable
 
 `kebi://area/{key}` is well-formed and byte-identical to the knowledge layer's
 `entity_key`, so a tap resolves and prefix scans work. But the key is built by
