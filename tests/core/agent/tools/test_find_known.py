@@ -98,7 +98,11 @@ async def test_the_model_sees_the_notes_not_the_retrieval_plumbing() -> None:
     cmd = await _run(_service([_known("Luigi's", "Monday is the big night")]))
     view = _agent_view(cmd)
     candidate = view["candidates"][0]
-    assert candidate["kebi_knows"] == ["Monday is the big night"]
+    # Fact plus coarse origin: the answer must say how kebi knows, so the
+    # origin label survives the trim alongside the text.
+    assert candidate["kebi_knows"] == [
+        {"fact": "Monday is the big night", "from": "community"}
+    ]
     assert candidate["name"] == "Luigi's"
     flat = json.dumps(view)
     for leaked in ("rrf_score", "vector_rank", "place_id", "provider_id"):

@@ -149,6 +149,34 @@ async def test_an_agent_named_area_wins_over_the_fan_out() -> None:
     assert filters.lat is None
 
 
+async def test_stop_duplicates_cannot_crowd_a_leg_save_off_the_end() -> None:
+    """Regression (live): a leg's circle contains its end stops, so saves
+    already attributed to the stops re-rank at the top of the leg search.
+    At the bare per-segment limit they consumed every slot and the one save
+    the leg exists to find — the Da Nang beach club on the Hue-Hoi An
+    drive — ranked off the end and vanished. The leg search must ask for
+    headroom equal to what has already been seen."""
+    per_segment = get_config().agent.itinerary.per_segment_limit
+    hanoi = _make_hit("Railway Tuan", "p-hanoi")
+    hue = _make_hit("Quan Hanh", "p-hue")
+    hoian_1 = _make_hit("Nu Eatery", "p-hoian-1")
+    hoian_2 = _make_hit("Roving Chillhouse", "p-hoian-2")
+    # The leg re-finds all four already-seen saves ahead of the two Da Nang
+    # ones — exactly per_segment slots of duplicates at the old limit.
+    leg_hits = [hue, hoian_1, hoian_2, hanoi][:per_segment] + [
+        _make_hit("Bep Hen", "p-danang-1"),
+        _make_hit("Kala Kala", "p-danang-2"),
+    ]
+    service = _search([[hanoi], [hue], [hoian_1, hoian_2], [], leg_hits])
+    cmd = await _run(service)
+    result = _full_result(cmd)
+    by_name = {c.place.place_name: c.segment for c in result.candidates}
+    assert by_name["Bep Hen"] == "on the way between Hue and Hoi An"
+    assert by_name["Kala Kala"] == "on the way between Hue and Hoi An"
+    # The leg call carried the headroom for its four inevitable repeats.
+    assert service.search.await_args_list[4].kwargs["limit"] == per_segment + 4
+
+
 async def test_empty_fan_out_reads_as_no_match() -> None:
     service = _search([[] for _ in range(_SEGMENT_COUNT)])
     cmd = await _run(service)
