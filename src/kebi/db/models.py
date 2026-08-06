@@ -280,17 +280,32 @@ class UserMemory(Base):
 
 
 class AreaEntityType(PyEnum):
-    """Kinds of geographic area entity (location-kinds Step 2).
+    """Kinds of geographic area entity (location-kinds Step 2, widened Step 6).
 
     Mirrors the geo half of `KnowledgeEntityType` (never `place` — venues
-    live in the places catalog). `neighborhood` is supported by the schema
-    but has no creation path yet: no verified structured resolution exists
-    for sub-city areas, so they keep riding their city's key.
+    live in the places catalog).
+
+    Step 6 adds the kinds that make an area answerable at the granularity a
+    question actually asks: `region` for provinces and states, `neighborhood`
+    for the sub-city choices ("where should I stay?"), and — the pair that
+    closes the venue-typed-non-venue hole — `natural_feature` and `street`.
+    A pass, a beach, a lagoon and a named street are geography with an
+    extent, so they are areas; modelling them that way is what stops them
+    being saved as venue rows, which no type-based save guard could do
+    (the geocoder types Hai Van Pass and Lang Co Beach identically).
+
+    What is deliberately absent is a `route` kind. A named journey with no
+    verifiable footprint stays untrusted and collapses to its containing
+    area — the line is whether the provider returns a footprint that
+    round-trips, not whether the name sounds route-shaped.
     """
 
     COUNTRY = "country"
+    REGION = "region"
     CITY = "city"
     NEIGHBORHOOD = "neighborhood"
+    NATURAL_FEATURE = "natural_feature"
+    STREET = "street"
 
 
 class AreaEntity(Base):

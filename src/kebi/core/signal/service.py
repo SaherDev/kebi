@@ -10,7 +10,9 @@ from kebi.core.events.events import (
 )
 
 if TYPE_CHECKING:
+    from kebi.core.areas.service import AreaService
     from kebi.core.events.dispatcher import EventDispatcher
+    from kebi.core.taste.service import TasteModelService
 
 
 # Signal types that carry a recommendation_id and dispatch a recommendation
@@ -35,8 +37,12 @@ class SignalService:
     def __init__(
         self,
         event_dispatcher: EventDispatcher,
+        areas: AreaService,
+        taste_service: TasteModelService,
     ) -> None:
         self._event_dispatcher = event_dispatcher
+        self._areas = areas
+        self._taste_service = taste_service
 
     async def handle_signal(
         self,
@@ -44,12 +50,16 @@ class SignalService:
         user_id: str,
         recommendation_id: str | None = None,
         place_core_id: str | None = None,
+        entity_key: str | None = None,
     ) -> None:
         """Dispatch the signal event.
 
         Recommendation-scoped signals carry a trusted ``recommendation_id``
         (presence enforced by the request schema); no DB lookup is performed.
         """
+        if signal_type == "area_saved":
+            await self._handle_area_saved(user_id, entity_key)
+            return
         if signal_type in _RECOMMENDATION_SIGNALS:
             event: RecommendationAccepted | RecommendationRejected
             if signal_type == "recommendation_accepted":
@@ -65,3 +75,24 @@ class SignalService:
                     place_core_id=place_core_id or "",
                 )
             await self._event_dispatcher.dispatch(event)
+
+    async def _handle_area_saved(self, user_id: str, entity_key: str | None) -> None:
+        """Keeping an area trains taste and writes nothing else.
+
+        Reuses the region-interest signal ADR-135 already defined, so an area
+        the user keeps and an area they shared train the same way — the
+        difference is only how kebi learned they cared.
+
+        The area is read from the entity store rather than trusted from the
+        request: the signal supplies a key, and the store supplies what that
+        key *is*. An unknown key is a no-op — kebi never resolved that area,
+        so there is nothing truthful to record about it.
+        """
+        if not entity_key:
+            return
+        entity = await self._areas.get(entity_key)
+        if entity is None:
+            return
+        await self._taste_service.handle_area_signal(
+            user_id, entity.entity_key, entity.entity_type, entity.name
+        )

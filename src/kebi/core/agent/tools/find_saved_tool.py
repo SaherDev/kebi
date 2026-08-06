@@ -21,7 +21,7 @@ that complete the consult-family trio.
 from __future__ import annotations
 
 import logging
-from typing import Annotated, Any
+from typing import TYPE_CHECKING, Annotated, Any
 
 from langchain_core.messages import ToolMessage
 from langchain_core.tools import BaseTool, InjectedToolCallId, tool
@@ -34,6 +34,11 @@ from kebi.core.agent.location import WorkingLocation
 from kebi.core.agent.reasoning import ReasoningStep
 from kebi.core.agent.state import AgentState
 from kebi.core.agent.stream_emit import emit_step_active, emit_step_done
+from kebi.core.agent.tools._area_anchor import (
+    anchors_from_state,
+    capped,
+    gather_per_area,
+)
 from kebi.core.agent.tools._corridor import (
     enclosing_context,
     filter_and_order,
@@ -41,6 +46,7 @@ from kebi.core.agent.tools._corridor import (
     place_coords,
 )
 from kebi.core.agent.tools._search_args import (
+    AREA_KEYS_DESC,
     CATEGORIES_DESC,
     CITY_DESC,
     COUNTRY_DESC,
@@ -53,9 +59,18 @@ from kebi.core.agent.tools._summaries import NEED_LOCATION, TITLES, found_summar
 from kebi.core.agent.tools._with_timeout import tool_step_base_id, with_timeout
 from kebi.core.agent.tools._working_location import maybe_working_location
 from kebi.core.agent.tools.consult_models import ConsultCandidate, ConsultResult
+from kebi.core.areas.models import AreaEntity
 from kebi.core.config import get_config
 from kebi.core.places.hybrid_search_service import HybridSearchService
-from kebi.core.places.models import HybridSearchFilters, PlaceCategory
+from kebi.core.places.models import (
+    HybridSearchFilters,
+    HybridSearchHit,
+    LocationContext,
+    PlaceCategory,
+)
+
+if TYPE_CHECKING:
+    from kebi.core.config import MovementConfig
 
 logger = logging.getLogger(__name__)
 
@@ -173,7 +188,7 @@ def _summarise(result: ConsultResult) -> str:
     if result.empty_reason == "no_location":
         return NEED_LOCATION
 
-    names = [c.place.place_name for c in result.candidates]
+    names = [c.display_name for c in result.candidates]
     return found_summary(names)
 
 
@@ -198,6 +213,9 @@ def build_find_saved_tool(hybrid_search: HybridSearchService) -> BaseTool:
         ] = None,
         city: Annotated[str | None, Field(description=CITY_DESC)] = None,
         country: Annotated[str | None, Field(description=COUNTRY_DESC)] = None,
+        area_keys: Annotated[
+            list[str] | None, Field(description=AREA_KEYS_DESC)
+        ] = None,
         limit: Annotated[int | None, Field(description=LIMIT_DESC)] = None,
     ) -> Command[Any]:
         """Search the user's saved places by intent, filters, and turn location."""
@@ -222,6 +240,7 @@ def build_find_saved_tool(hybrid_search: HybridSearchService) -> BaseTool:
                 neighborhood=neighborhood,
                 city=city,
                 country=country,
+                area_keys=area_keys,
                 limit=effective_limit,
             ),
         )
@@ -241,6 +260,7 @@ async def _run_find_saved(
     city: str | None,
     country: str | None,
     limit: int,
+    area_keys: list[str] | None = None,
 ) -> Command[Any]:
     """Inner body — runs the search, packs the result. Wrapped by with_timeout."""
     with set_tool(_TOOL_NAME):
@@ -254,8 +274,98 @@ async def _run_find_saved(
             neighborhood=neighborhood,
             city=city,
             country=country,
+            area_keys=area_keys,
             limit=limit,
         )
+
+
+async def _find_saved_at_areas(
+    *,
+    hybrid_search: HybridSearchService,
+    state: AgentState,
+    tool_call_id: str,
+    anchors: list[AreaEntity],
+    query: str,
+    categories: list[PlaceCategory] | None,
+    tags: list[str] | None,
+    limit: int,
+    movement_cfg: MovementConfig,
+    base_id: str,
+    started: float | None,
+) -> Command[Any]:
+    """The user's saves inside each area the agent named, tagged by area.
+
+    Runs **one search per area, serially** — `hybrid_search` closes over a
+    single request-scoped `AsyncSession`, and SQLAlchemy sessions are not
+    concurrency-safe. That is affordable here precisely because these are DB
+    reads over the user's own small pool, with no provider call and nothing
+    billed. Each area gets its own share of the limit so a city where the user
+    has forty saves cannot crowd out the three other areas they asked about.
+    """
+    per_area = max(1, -(-limit // len(anchors)))
+
+    async def _run(
+        _entity: AreaEntity, location: LocationContext
+    ) -> list[HybridSearchHit]:
+        return await hybrid_search.search(
+            user_id=state["user_id"],
+            query=query,
+            filters=HybridSearchFilters(
+                categories=categories or None,
+                tags=tags or None,
+                lat=location.lat,
+                lng=location.lng,
+                radius_m=location.radius_m,
+            ),
+            limit=per_area,
+        )
+
+    tagged = await gather_per_area(
+        anchors,
+        movement_cfg,
+        max_areas=len(anchors),
+        concurrency=1,
+        runner=_run,
+        dedup_key=lambda hit: hit.place.id or hit.place.place_name,
+    )
+
+    result = ConsultResult(
+        candidates=[
+            ConsultCandidate(
+                place=hit.place,
+                user_data=hit.user_data,
+                source="saved",
+                rrf_score=hit.rrf_score,
+                vector_rank=hit.vector_rank,
+                text_rank=hit.text_rank,
+                anchor_area_key=area.entity_key,
+            )
+            for area, hit in tagged[:limit]
+        ],
+        empty_reason=None if tagged else "no_match",
+    )
+    step = ReasoningStep(
+        step=f"{_TOOL_NAME}.summary",
+        title=TITLES[_TOOL_NAME],
+        summary=_summarise(result),
+        source="agent",
+        visibility="user",
+        duration_ms=0.0,
+    )
+    emit_step_done(base_id, step, started=started)
+    return Command(
+        update={
+            "messages": [
+                ToolMessage(
+                    content=result.model_dump_json(),
+                    tool_call_id=tool_call_id,
+                    name=_TOOL_NAME,
+                )
+            ],
+            "reasoning_steps": (state.get("reasoning_steps") or []) + [step],
+            "tool_calls_used": state.get("tool_calls_used", 0) + 1,
+        }
+    )
 
 
 async def _run_find_saved_impl(
@@ -270,6 +380,7 @@ async def _run_find_saved_impl(
     city: str | None,
     country: str | None,
     limit: int,
+    area_keys: list[str] | None = None,
 ) -> Command[Any]:
     user_id = state["user_id"]
     # SSE lifecycle: announce the step before the search latency.
@@ -281,6 +392,27 @@ async def _run_find_saved_impl(
     working = maybe_working_location(state)
     has_named_area = bool(neighborhood or city or country)
     on_route = working is not None and is_corridor(working)
+    movement_cfg = get_config().movement
+
+    # Area-anchored turn (ADR-140): the user's own saves inside each area the
+    # agent named. This is the cheapest of the anchored layers — DB only — and
+    # the most differentiating: "you saved this coffee place in Hoi An" is
+    # something no general assistant can say.
+    anchors = anchors_from_state(state, area_keys)
+    if anchors:
+        return await _find_saved_at_areas(
+            hybrid_search=hybrid_search,
+            state=state,
+            tool_call_id=tool_call_id,
+            anchors=capped(anchors, get_config().agent.area_anchor.max_areas),
+            query=query,
+            categories=categories,
+            tags=tags,
+            limit=limit,
+            movement_cfg=movement_cfg,
+            base_id=base_id,
+            started=started,
+        )
 
     filters = _assemble_filters(
         categories=categories,
@@ -296,7 +428,6 @@ async def _run_find_saved_impl(
     # small, local, already-paid-for pool — over-fetching costs one wider DB
     # read, and under-fetching would let a handful of off-route saves crowd
     # out the ones actually on the way.
-    movement_cfg = get_config().movement
     fetch_limit = limit * movement_cfg.corridor.saved_overfetch if on_route else limit
 
     hits = await hybrid_search.search(

@@ -17,7 +17,12 @@ from collections import defaultdict
 from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
-from kebi.core.knowledge.schemas import KnowledgeClaim, PlaceNote, build_place_key
+from kebi.core.knowledge.schemas import (
+    KnowledgeClaim,
+    PlaceNote,
+    build_place_key,
+    note_rank_key,
+)
 from kebi.db.repositories.knowledge_claim_repository import KnowledgeClaimRepository
 
 if TYPE_CHECKING:
@@ -79,7 +84,5 @@ class PlaceNotesService:
         """Strongest first (confidence, then most recent), capped at the limit.
         A flat order — the client, not the server, decides how to group or
         badge `from_shared`."""
-        ordered = sorted(
-            claims, key=lambda c: (c.confidence, c.created_at), reverse=True
-        )
+        ordered = sorted(claims, key=note_rank_key, reverse=True)
         return ordered[: self._limit]

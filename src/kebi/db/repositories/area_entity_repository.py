@@ -11,7 +11,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Protocol
 
-from sqlalchemy import select, text, update
+from sqlalchemy import or_, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -44,6 +44,10 @@ class AreaEntityRepository(Protocol):
     async def find_by_alias(
         self, country_code: str, alias_slug: str
     ) -> AreaEntity | None: ...
+
+    async def find_by_name_slugs(
+        self, name_slugs: list[str]
+    ) -> dict[str, AreaEntity]: ...
 
     async def upsert(self, entity: AreaEntity) -> AreaEntity: ...
 
@@ -97,6 +101,42 @@ class SQLAlchemyAreaEntityRepository:
             )
             row = (await session.execute(stmt)).scalars().first()
         return _to_record(row) if row else None
+
+    async def find_by_name_slugs(self, name_slugs: list[str]) -> dict[str, AreaEntity]:
+        """Known areas matching any of these name slugs, keyed by slug.
+
+        Store-only and country-agnostic, unlike `find_by_alias`. It answers
+        one question the venue path needs: *is this name already known to be
+        geography?* Hai Van Pass has two provider records — one typed as
+        natural geography and one indistinguishable from any other landmark —
+        so type cannot settle it, but the entity store can: if kebi already
+        resolved that name as an area, it is an area, whatever the place
+        provider hands back for it.
+
+        Matching is on `aliases`, which the service always seeds with the
+        canonical name's own slug — so the GIN index serves this without a
+        second column. Rows written before that rule existed carry only their
+        variant slugs and are matched by those; they pick up the canonical
+        slug the next time the area is resolved.
+
+        Cross-country collisions are possible in principle and tolerated:
+        both candidates are areas, which is the only fact the caller acts on.
+        """
+        slugs = [s for s in name_slugs if s]
+        if not slugs:
+            return {}
+        async with self._session_factory() as session:
+            stmt = select(AreaEntityRow).where(
+                or_(*(AreaEntityRow.aliases.contains([slug]) for slug in slugs))
+            )
+            rows = (await session.execute(stmt)).scalars().all()
+        found: dict[str, AreaEntity] = {}
+        for row in rows:
+            record = _to_record(row)
+            for slug in slugs:
+                if slug in (row.aliases or []):
+                    found.setdefault(slug, record)
+        return found
 
     async def upsert(self, entity: AreaEntity) -> AreaEntity:
         """INSERT ON CONFLICT (entity_key): union aliases, refresh geometry.

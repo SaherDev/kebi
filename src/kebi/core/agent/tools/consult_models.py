@@ -15,13 +15,37 @@ from __future__ import annotations
 from typing import Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
+from kebi.core.areas.models import AreaSummary
 from kebi.core.places.models import PlaceCore, UserPlace
+
+# Why a result came back with no candidates. Named rather than inline so every
+# tool declares the same closed set — a tool inventing its own reason string is
+# a prose branch the agent has no instruction for.
+EmptyReason = Literal["no_saves", "no_match", "no_location", "route_too_long", "error"]
 
 
 class ConsultCandidate(BaseModel):
     """One candidate returned by a consult tool.
+
+    **Kind (location-kinds Step 6).** A candidate is a `venue` or an `area`.
+    `place` carries the venue, `area` carries the area, and exactly one of
+    them is set. `extent` mirrors the area's believable bounding box (None for
+    a venue, and None for an area whose provider geometry could not be
+    trusted) — a venue renders as a pin, an area as a shaded extent.
+
+    `id` is this item's handle within the answer. It exists so the user can
+    say "take that one out" or "swap the second one" and the agent has
+    something stable to map the phrase onto; the client echoes the id back
+    rather than the place. Minted per candidate, per answer — it is not an
+    identity that survives the conversation, because the working set it
+    belongs to does not either.
+
+    `anchor_area_key` records which area this candidate was *found at* when
+    the search was anchored on areas the agent named (ADR-140). It is what
+    turns a flat list into a per-area answer — "in Hoi An: …, in Hue: …" —
+    and it is None on an ordinary near-me turn.
 
     `user_data` is populated for `find_saved` (the user's own row exists)
     and `None` for `suggest_places` / `discover_places` (no save row
@@ -39,13 +63,65 @@ class ConsultCandidate(BaseModel):
     short-circuit that agent decision with a generic template.
     """
 
-    place: PlaceCore
+    id: str = Field(default_factory=lambda: str(uuid4()))
+    kind: Literal["venue", "area"] = "venue"
+    place: PlaceCore | None = None
+    area: AreaSummary | None = None
+    extent: list[float] | None = None
+    anchor_area_key: str | None = None
     user_data: UserPlace | None = None
     source: Literal["saved", "suggested", "discovered"]
     rrf_score: float
     vector_rank: int | None = None
     text_rank: int | None = None
     reason: str | None = None
+
+    @model_validator(mode="after")
+    def _one_payload_per_kind(self) -> ConsultCandidate:
+        """A candidate carries the payload its kind promises, and only that.
+
+        Enforced rather than trusted: `place` became optional in Step 6, and a
+        venue candidate that silently lost its place would reach the client as
+        a card with nothing in it.
+        """
+        if self.kind == "venue" and self.place is None:
+            raise ValueError("a venue candidate requires `place`")
+        if self.kind == "area" and self.area is None:
+            raise ValueError("an area candidate requires `area`")
+        if self.kind == "venue" and self.area is not None:
+            raise ValueError("a venue candidate must not carry `area`")
+        if self.kind == "area" and self.place is not None:
+            raise ValueError("an area candidate must not carry `place`")
+        return self
+
+    @property
+    def display_name(self) -> str:
+        """The candidate's name, whichever kind it is — for summaries and logs."""
+        if self.area is not None:
+            return self.area.name
+        return self.place.place_name if self.place is not None else ""
+
+    @classmethod
+    def for_area(
+        cls,
+        area: AreaSummary,
+        *,
+        source: Literal["saved", "suggested", "discovered"] = "suggested",
+        reason: str | None = None,
+    ) -> ConsultCandidate:
+        """Build an area candidate, with `extent` taken from the summary.
+
+        The one construction path for areas, so `extent` can never disagree
+        with `area.extent` — the client reads whichever it likes.
+        """
+        return cls(
+            kind="area",
+            area=area,
+            extent=area.extent,
+            source=source,
+            rrf_score=0.0,
+            reason=reason,
+        )
 
 
 class ConsultResult(BaseModel):
@@ -75,7 +151,5 @@ class ConsultResult(BaseModel):
     """
 
     candidates: list[ConsultCandidate] = Field(default_factory=list)
-    empty_reason: (
-        Literal["no_saves", "no_match", "no_location", "route_too_long", "error"] | None
-    ) = None
+    empty_reason: EmptyReason | None = None
     recommendation_id: str = Field(default_factory=lambda: str(uuid4()))

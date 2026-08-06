@@ -1,6 +1,6 @@
 # Location Kinds — Roadmap
 
-**Status:** direction decided 2026-07-21 · Step 1 done 2026-07-22 (ADR-133) · Step 2 done 2026-08-02 (ADR-134) · Step 3 done 2026-08-02 (ADR-135) · Steps 4–6 re-scoped 2026-08-02 · Step 4 done 2026-08-04 (ADR-136) · Step 5 is next up; Steps 7 and 8 runnable in parallel
+**Status:** direction decided 2026-07-21 · Step 1 done 2026-07-22 (ADR-133) · Step 2 done 2026-08-02 (ADR-134) · Step 3 done 2026-08-02 (ADR-135) · Steps 4–6 re-scoped 2026-08-02 · Step 4 done 2026-08-04 (ADR-136) · **Step 6 done 2026-08-06 (ADR-142), ahead of Step 5** · Step 5 is next up; Steps 7 and 8 runnable in parallel · **goal run defined 2026-08-06** (see The goal run — re-run at the end of every step)
 **Scope:** this is a roadmap, not an implementation plan. Each step below is a
 self-contained brief — plan and build each one as its own feature, in order.
 One plan doc + ADR per step when it starts.
@@ -84,8 +84,10 @@ One plan doc + ADR per step when it starts.
    lagoons and springs, which are among the best saves on that very route. The
    answer is the model, not a guard: a pass is geography with extent, so it
    should be an **area**, and then saving it is an area save rather than a
-   venue row. Until Step 6 runs, a user can save a pass into their library as a
-   venue — accepted knowingly while usage is still internal.
+   venue row. **Closed 2026-08-06 (ADR-142)** — with one honest bound: the
+   correction reads the entity store, so a non-venue kebi has never resolved
+   is still offered as a venue. The guarantee strengthens as the store fills
+   rather than holding on day one.
 
 12. **A refused non-venue is a dead end — kebi never offers what's actually
    there** *(added 2026-08-04)*. Saving "Hanoi Train Street" is refused
@@ -178,6 +180,45 @@ hands you the same judgement already grounded in places you can act on.
   one venue, an area, a multi-stop journey — the user can revise in
   conversation: drop it, swap it, ask for an alternative. The revision lives
   for the conversation and is never persisted.
+
+## The goal run *(added 2026-08-06)*
+
+One question, run at the end of every remaining step, against the real app:
+
+> **"I'm doing Hanoi, then Hue, then Hoi An — what should I stop at?"**
+
+The answer we are building toward, leg by leg:
+
+- **Hanoi** — *Train Street*: the street itself isn't a pin, but the cafés on
+  the track are ordinary venues and come back as cards, with the line about
+  sitting there with a beer waiting for the train. Plus whatever the user has
+  saved in the city.
+- **Hue** — the user's own saved places surface first; suggestions fill in
+  around them.
+- **Hue → Hoi An** — the *Hai Van Pass* is offered as the stretch it is (an
+  area, not a pin), carrying insider knowledge kebi has accreted about it —
+  go early before the haze, stop at the bunkers — not recalled prose. Real
+  places along the way come back validated: Lang Co, Lap An Lagoon, Elephant
+  Springs.
+- **Da Nang** — proposed although the user never named it, because it sits on
+  the way and their saves and taste point at it. Kebi adds a stop the question
+  didn't ask for and is right to.
+- **Hoi An** — saved places plus suggested sites, closing the chain.
+
+**Why this question:** it is the whole roadmap in one turn — a multi-stop chain
+(Step 4), an area winning a slot in the answer (Step 6), venues *at* a named
+geography that isn't itself savable (problem 12), knowledge deep enough to say
+something a local would say (Step 7), and the conditions layer around the
+places (Step 8). It is also the exact comparison a general assistant loses:
+every one of those stops is pinned, saved, or savable.
+
+**It makes problem 12 load-bearing.** Train Street is the Hanoi leg of this
+answer and no step owns it today. Whichever step picks it up, the goal run
+doesn't pass without it.
+
+**How to use it:** at the end of each step, run it live and record what the
+step moved — not pass/fail on the whole thing (early steps will fall short of
+most of it), but which legs improved and which are still prose.
 
 ## Decisions locked (2026-07-21, revised 2026-08-02)
 
@@ -413,9 +454,9 @@ country-length trip that declines to invent stops)*
 - **Answer items get a stable shape** so "this one" can be resolved: each
   item carries an `id` the agent maps natural language onto ("the ramen
   place", "the second one"), so the product repo only echoes an id back.
-  Ship the *full* item shape here — `id`, `kind`, `extent` — with `kind`
-  always `venue` and `extent` always null for now, so Step 6 needs no second
-  contract change and the app integrates once.
+  **The item shape already shipped** — Step 6 ran first and landed `id`,
+  `kind`, `extent`, `area` and `anchor_area_key` on every candidate
+  (ADR-142). Step 5 consumes `id`; no further contract change is needed.
 - Alternatives exclude everything already shown for that slot: asking twice
   never returns the same place.
 
@@ -432,9 +473,31 @@ without anything being written to the database.
 
 ---
 
-## Step 6 — Areas as recommendations
+## Step 6 — Areas as recommendations  *(done 2026-08-06 — ADR-142, `feature/area-answers`)*
 
-**Problem it closes:** problem 4 — legitimate area answers are impossible.
+**Problem it closes:** problems 4 and 11 — legitimate area answers were
+impossible, and a validated non-venue could still be saved as a venue.
+
+**Deviations from the brief, each grounded:**
+- **Shipped before Step 5, and shipped Step 5's item shape.** The brief said
+  "no contract change — Step 5 already shipped `kind` and `extent`". Step 5
+  had not run, so this step ships `id` / `kind` / `extent` itself. The app
+  integrates once and Step 5's revision work needs no second change, which
+  was the brief's actual intent.
+- **Extent decided as degrade-to-point.** No OSM dependency: an implausible
+  bbox is disbelieved rather than corrected, and the area anchors on its
+  centroid with a kind-derived radius. Kebi has no better geometry for a
+  linear feature and will not invent one.
+- **The save question resolved as signal-only.** Keeping an area emits
+  region interest (`POST /v1/signal`, `signal_type: "area_saved"`) and writes
+  no row, so library kind rendering stays demand-gated as decided.
+- **One resolver engine, one spec per kind.** `resolve_country` /
+  `resolve_city` / `resolve_area` are now three acceptance sets over a single
+  resolution path, so the next kind is a spec entry rather than a fourth
+  near-duplicate method.
+- **The kind correction is store-dependent** (see Consequences in ADR-142) —
+  a non-venue kebi has never resolved still comes back as a venue, so the
+  guarantee strengthens as the store fills.
 
 **Decided direction:**
 - Consult can put an **area forward as the answer**, at any granularity:
@@ -522,6 +585,11 @@ before Step 6 needs it — a knowledge base is not something you build in a
 sprint, it is something you have been collecting.
 
 **Decided direction:**
+- **Started in Step 6:** every turn that resolves areas now logs which of
+  them kebi knows little or nothing about. That is the measurement below,
+  taken from real questions rather than a speculative sweep — read those logs
+  before scoping this step. Nothing else of Step 7 shipped: writing new
+  claims needs a producer that does not exist yet, and that is this step.
 - **Measure before building.** Count claims per area entity by hierarchy
   depth. Coverage is not symmetric: venue claims have accreted since ADR-120,
   area claims only since Step 2 and only for areas that happened to appear in

@@ -1105,9 +1105,7 @@ async def _build_working_location(
     country_entity = await area_service.resolve_country(country)
     if country_entity is None:
         return None
-    city_entity = await area_service.resolve_city(
-        city, country_entity.country_code
-    )
+    city_entity = await area_service.resolve_city(city, country_entity.country_code)
     if city_entity is None:
         return None
     lat, lng = city_entity.lat, city_entity.lng

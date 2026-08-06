@@ -494,6 +494,7 @@ def test_tool_factory_constructs_with_expected_schema() -> None:
         "neighborhood",
         "city",
         "country",
+        "area_keys",
         "limit",
     }
 
@@ -642,9 +643,7 @@ class TestSavedPlacesAlongTheRoute:
     def test_route_turn_fences_by_the_whole_journey(self) -> None:
         """The SQL predicate is one circle, so the corridor's enclosing circle
         goes in — a disc around the origin would miss everything past it."""
-        working = WorkingLocation.model_validate(
-            _route_working(stops=[("Hue", _HUE)])
-        )
+        working = WorkingLocation.model_validate(_route_working(stops=[("Hue", _HUE)]))
         filters = _assemble_filters(
             categories=None,
             tags=None,
@@ -656,16 +655,13 @@ class TestSavedPlacesAlongTheRoute:
         assert filters.lat is not None and filters.radius_m is not None
         for point in (_DA_NANG, _HUE):
             assert (
-                haversine_m(filters.lat, filters.lng or 0.0, *point)
-                <= filters.radius_m
+                haversine_m(filters.lat, filters.lng or 0.0, *point) <= filters.radius_m
             )
 
     def test_named_area_does_not_suppress_the_route(self) -> None:
-        """"My saves in Hue" and "my saves on the way to Hue" are different
+        """ "My saves in Hue" and "my saves on the way to Hue" are different
         questions; on a route the resolver owns geography."""
-        working = WorkingLocation.model_validate(
-            _route_working(stops=[("Hue", _HUE)])
-        )
+        working = WorkingLocation.model_validate(_route_working(stops=[("Hue", _HUE)]))
         filters = _assemble_filters(
             categories=None,
             tags=None,

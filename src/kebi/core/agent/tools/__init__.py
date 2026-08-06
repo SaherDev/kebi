@@ -1,7 +1,7 @@
 """Agent tool wrappers.
 
 The agent runs with a small, fixed tool surface bound per request so
-each tool can close over request-scoped services (ADR-072). Four
+each tool can close over request-scoped services (ADR-072). Five
 consult-family tools today:
 
 - `find_saved` — searches the user's saved places via
@@ -16,14 +16,18 @@ consult-family tools today:
   brand/chain and the provider resolves the nearest branch — so
   `discover_places` only handles the generic nearest match when no
   brand validated nearby.
+- `suggest_areas` — verifies the areas the AGENT named, returns them as
+  area candidates, and publishes them as search anchors so the three
+  place tools search *at each area* rather than around the turn's origin
+  (ADR-140). No model inside it, and no provider place call.
 - `research` — insider answers from the knowledge layer's claims store
-  via `ResearchService`. Where the three place tools surface *where to
+  via `ResearchService`. Where the place tools surface *where to
   go*, research answers *what a local knows* about a place or area.
 
 The three place tools share one Pydantic arg schema (see
-`_search_args.py`); `research` has its own (the area args name the
-asked-about entity and are used, and `tags` speaks the claim
-vocabulary). The agent picks between them on routing semantics.
+`_search_args.py`); `research` and `suggest_areas` have their own (their
+area args name entities and are used, rather than being schema-parity
+decoration). The agent picks between them on routing semantics.
 """
 
 from __future__ import annotations
@@ -36,7 +40,9 @@ from kebi.core.agent.tools.discover_places_tool import (
 )
 from kebi.core.agent.tools.find_saved_tool import build_find_saved_tool
 from kebi.core.agent.tools.research_tool import build_research_tool
+from kebi.core.agent.tools.suggest_areas_tool import build_suggest_areas_tool
 from kebi.core.agent.tools.suggest_places_tool import build_suggest_places_tool
+from kebi.core.areas.suggestion_service import AreaSuggestionService
 from kebi.core.extraction.extraction_pipeline import SearchServiceFactory
 from kebi.core.knowledge.research_service import ResearchService
 from kebi.core.places.hybrid_search_service import HybridSearchService
@@ -47,6 +53,7 @@ def build_tools(
     candidate_namer: CandidateNamerService,
     places_search_factory: SearchServiceFactory,
     research_service: ResearchService,
+    area_suggestion_service: AreaSuggestionService,
     *,
     discovery_enabled: bool = True,
 ) -> list[BaseTool]:
@@ -72,11 +79,22 @@ def build_tools(
     do not pay for new-place discovery. `research` is ungated — a
     knowledge-layer read costs nothing external (at most one free
     geocode), so every tier can ask what kebi knows.
+
+    `suggest_areas` is ungated for the same reason as `research`: it makes
+    no provider place call and reads the store first, so an area answer
+    costs at most a geocode. Withholding it would leave a lower tier
+    unable to be told *where* to go at all, which is a worse product than
+    one that names the neighborhood without pinning venues inside it.
     """
     tools: list[BaseTool] = [build_find_saved_tool(hybrid_search)]
     if discovery_enabled:
-        tools.append(build_suggest_places_tool(candidate_namer, places_search_factory))
+        tools.append(
+            build_suggest_places_tool(
+                candidate_namer, places_search_factory, area_suggestion_service
+            )
+        )
         tools.append(build_discover_places_tool(places_search_factory))
+    tools.append(build_suggest_areas_tool(area_suggestion_service))
     tools.append(build_research_tool(research_service))
     return tools
 
@@ -86,6 +104,7 @@ __all__ = [
     "build_find_saved_tool",
     "build_suggest_places_tool",
     "build_discover_places_tool",
+    "build_suggest_areas_tool",
     "build_research_tool",
     "CandidateNamerService",
 ]

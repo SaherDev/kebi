@@ -156,6 +156,18 @@ class AgentState(TypedDict):
     # candidates without re-parsing the prose. Reset to [] each turn via
     # `build_turn_payload` (plain overwrite, no reducer).
     tool_results: list[dict[str, Any]]
+    # Areas the agent named and `suggest_areas` verified this turn, as
+    # `AreaEntity.model_dump()`s in the order the agent named them. The place
+    # tools read this to anchor their searches on each area instead of on a
+    # disc around the turn's origin (ADR-140) — which is what makes an area an
+    # input to retrieval and not only an output of it.
+    #
+    # An explicit field rather than re-parsing the `suggest_areas` ToolMessage:
+    # anchoring is a contract between tools, and a contract that lives in a
+    # message another node is free to strip is one that breaks silently. Reset
+    # to [] each turn by `build_turn_payload` (plain overwrite, no reducer) —
+    # the areas one question was about are not the areas of the next.
+    area_anchors: list[dict[str, Any]]
     steps_taken: int
     error_count: int
     tool_calls_used: int

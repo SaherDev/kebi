@@ -43,6 +43,7 @@ TITLES = {
     "find_saved": "searched your saved spots",
     "discover_places": "searched nearby",
     "suggest_places": "suggested a few spots",
+    "suggest_areas": "picked out some areas",
     "research": "dug into the local intel",
 }
 
@@ -69,3 +70,19 @@ def found_summary(names: Sequence[str], *, dropped: int = 0) -> str:
     extra = "" if count <= _NAMES_PREVIEW else f", +{count - _NAMES_PREVIEW} more"
     tail = f" ({dropped} didn't fit)" if dropped else ""
     return f"{count} spot{plural} — {preview}{extra}{tail}"
+
+
+def areas_summary(names: Sequence[str], *, refused: int = 0) -> str:
+    """Success result line for `suggest_areas` — same register, area noun.
+
+    e.g. ``"3 areas — An Thuong, Son Tra, +1 more"``. `refused` (> 0) appends
+    the count that could not be verified, because a silent drop is exactly
+    what the roadmap forbids: the agent needs to know a name did not check out
+    so it can say so rather than quietly answer about fewer places.
+    """
+    count = len(names)
+    plural = "" if count == 1 else "s"
+    preview = ", ".join(_short_name(n) for n in names[:_NAMES_PREVIEW])
+    extra = "" if count <= _NAMES_PREVIEW else f", +{count - _NAMES_PREVIEW} more"
+    tail = f" ({refused} didn't check out)" if refused else ""
+    return f"{count} area{plural} — {preview}{extra}{tail}"

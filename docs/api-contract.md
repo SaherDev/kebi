@@ -164,6 +164,7 @@ LangGraph turn driven by the `orchestrator` LLM role with a small
 places), `suggest_places` (LLM-named candidates validated against the
 place provider), `discover_places` (direct provider lookup for
 utility intents and as a fall-through) — see ADR-089, ADR-090, ADR-091 —
+`suggest_areas` (areas the agent named, verified and placed; ADR-142),
 and `research` (insider answers from the knowledge layer's claims
 store, ADR-129: what to order, local tricks, fees, safety, timing).
 Each tool returns a structured payload that is surfaced to the
@@ -239,9 +240,26 @@ to `POST /v1/extract` — the chat path never writes to `user_places`.
 > The SSE step-lifecycle fields `id` and `status` (ADR-102) are **not** part of
 > this non-stream shape — they appear only on `/v1/chat/stream` frames (below).
 
-`ToolResult` shape: `{ tool: "find_saved" | "suggest_places" | "discover_places" | "research", tool_call_id: string, payload: ConsultResult | ResearchResult }`. The `payload` is a union **discriminated by `tool`**: the three place tools carry a `ConsultResult`, `research` carries a `ResearchResult` (additive — a client that doesn't render research payloads still gets the agent's prose answer).
+`ToolResult` shape: `{ tool: "find_saved" | "suggest_places" | "discover_places" | "suggest_areas" | "research", tool_call_id: string, payload: ConsultResult | ResearchResult }`. The `payload` is a union **discriminated by `tool`**: the place tools and `suggest_areas` carry a `ConsultResult`, `research` carries a `ResearchResult` (additive — a client that doesn't render research payloads still gets the agent's prose answer).
 
-`ConsultResult` carries `candidates` (each with `place`, `source ∈ {saved, suggested, discovered}`, optional namer `reason`), an `empty_reason` literal when no candidates were produced (e.g. `no_location`, `no_match`), and a `recommendation_id` (a per-recommendation id minted by kebi). The client echoes `recommendation_id` back when the user accepts/rejects (`POST /v1/signal`) or saves (`POST /v1/user/places`) a candidate, so the signal attributes to that recommendation.
+`ConsultResult` carries `candidates`, an `empty_reason` literal when no candidates were produced (e.g. `no_location`, `no_match`), and a `recommendation_id` (a per-recommendation id minted by kebi). The client echoes `recommendation_id` back when the user accepts/rejects (`POST /v1/signal`) or saves (`POST /v1/user/places`) a candidate, so the signal attributes to that recommendation.
+
+**A candidate is a venue or an area (ADR-142).** Every candidate carries:
+
+| Field             | Type                          | Notes                                                                                                                                                       |
+| ----------------- | ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `id`              | `string`                      | This item's handle **within this answer**. Not a durable identity — it exists so a follow-up can say "take that one out" and echo an id back                  |
+| `kind`            | `"venue" \| "area"`           | Decides the rendering. `venue` → a pin; `area` → a shaded extent, **never a pin**                                                                            |
+| `place`           | `PlaceCore \| null`           | Set when `kind == "venue"`, `null` otherwise                                                                                                                |
+| `area`            | `AreaSummary \| null`         | Set when `kind == "area"`, `null` otherwise. `{ entity_key, name, kind, lat, lng, extent, parent_key, notes[] }`                                             |
+| `extent`          | `[number,number,number,number] \| null` | `[min_lat, max_lat, min_lng, max_lng]`. `null` for a venue, and **also null for an area whose provider geometry could not be trusted** — render a point then |
+| `anchor_area_key` | `string \| null`              | Which named area this candidate was found *at*, when the search was anchored on areas. Lets the client group "in Hoi An: …, in Hue: …". `null` on a near-me turn |
+| `source`          | `"saved" \| "suggested" \| "discovered"` | Which corpus it came from                                                                                                            |
+| `reason`          | `string \| null`              | The namer's one-line rationale, when there is one                                                                                                           |
+
+An **area is not savable as a venue**: it has no `place`, so no `place_core_id`, so `POST /v1/user/places` does not apply to it. Keeping an area is `POST /v1/signal` with `signal_type: "area_saved"` (below), which trains taste and writes no row. This is what makes a mountain pass keepable without becoming a library venue.
+
+`AreaSummary.notes` are the knowledge layer's claims about that area, same shape as the Library's `claims` (`{ id, text, tags, source, agree_count, disagree_count }`).
 
 `ResearchResult` (ADR-129) carries `entity_name` + `entity_key` (the resolved area the notes are about), `notes` — each `{ id, text, tags, source, confidence, agree_count, disagree_count }`, where `id` is the underlying claim's stable id (ADR-128), `tags` are claim-vocabulary values, and `source` is the coarse origin label `community | expert | kebi` (raw provenance never crosses the wire) — plus, when empty, an `empty_reason ∈ { unresolved, ambiguous, no_claims, no_topic_match }` and a `clarification` string. Research results are knowledge, not place candidates: they carry no `recommendation_id` and nothing in them is save/signal-able. Note for the home surface: a turn whose only tool result is `research` does **not** count as a place-surfacing turn for the `GET /v1/user/intents` recall list (ADR-110 semantics preserved).
 
@@ -853,9 +871,11 @@ other SQL tables (saves, memories, taste model) are left untouched.
 
 ## POST /v1/signal
 
-Behavioral signal endpoint (ADR-060, narrowed by ADR-076 to recommendation accept/reject only; ADR-078 made it trusted/un-validated).
+Behavioral signal endpoint (ADR-060, narrowed by ADR-076 to recommendation accept/reject; ADR-078 made it trusted/un-validated; ADR-142 added the area save).
 
-**Request:**
+The body is a **union discriminated by `signal_type`** — each signal declares only the fields it needs.
+
+**Request — recommendation accept/reject:**
 
 ```json
 {
@@ -873,11 +893,35 @@ Behavioral signal endpoint (ADR-060, narrowed by ADR-076 to recommendation accep
 | `recommendation_id` | `string` | Yes      | **Trusted, not validated.** ADR-078 dropped the `recommendations` table; the id is recorded on the event, never looked up                |
 | `place_core_id`     | `string` | Yes      | `places.id` of the place (ADR-077; renamed from `place_id` to disambiguate from `user_place_id` / `provider_id`). Trusted, not validated |
 
+**Request — keeping an area (ADR-142):**
+
+```json
+{
+  "signal_type": "area_saved",
+  "entity_key": "vn/da-nang/an-thuong",
+  "recommendation_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+}
+```
+
+| Field               | Type            | Required | Notes                                                                                                                                                    |
+| ------------------- | --------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `signal_type`       | `string`        | Yes      | `"area_saved"`                                                                                                                                            |
+| `entity_key`        | `string`        | Yes      | The area's `entity_key` from the answer card (`candidates[].area.entity_key`). A key kebi never resolved is a **no-op**, not an error                     |
+| `recommendation_id` | `string`/`null` | No       | The answer the area was surfaced in, when the client has it                                                                                                |
+
+> **An area save writes no row.** It records region interest against the
+> taste model (the same signal a shared area produces, ADR-135) and stops
+> there — no library entry, no venue row, nothing to list or delete. This is
+> why an area card's save action is `POST /v1/signal` and not
+> `POST /v1/user/places`: it is what lets a user keep "Hai Van Pass" without
+> a mountain pass appearing in their library as if it were a restaurant.
+> The library stays venue-only.
+
 > `user_id` is sourced from `X-Gateway-User-Id`, not the body. A caller
 > can only register signals for themselves — never poison another
 > user's taste profile.
 
-**Responses:** `202 { "status": "accepted" }`; `422` on schema errors (including an unknown `signal_type`). **No `404`** — ADR-078 removed the recommendation existence check.
+**Responses:** `202 { "status": "accepted" }`; `422` on schema errors (including an unknown `signal_type`, or a body missing the fields its `signal_type` requires). **No `404`** — ADR-078 removed the recommendation existence check, and an unresolvable `entity_key` is a silent no-op.
 
 ---
 
@@ -980,7 +1024,7 @@ All protected calls additionally send the `X-Gateway-Token` + `X-Gateway-User-Id
 | PATCH /v1/user/places/{id}  | Update a save's user-state (pills/menu)    | partial body: `visited`/`liked`/`approved`/`note`            | LibraryUserData (updated user-state; `200`/`404`)                                                                                            |
 | DELETE /v1/user/places/{id} | Remove one saved place from the library    | — (path param only)                                          | 204 No Content (`404` if absent/not owned)                                                                                                   |
 | DELETE /v1/user/data        | Account-deletion sweep of AI data          | — (optional `scope` query param)                             | 204 No Content                                                                                                                               |
-| POST /v1/signal             | Recommendation accept/reject               | signal_type, recommendation_id, place_core_id                | status (202)                                                                                                                                 |
+| POST /v1/signal             | Recommendation accept/reject, or area save | signal_type + (recommendation_id, place_core_id) \| entity_key | status (202)                                                                                                                                 |
 | GET /v1/health              | Service health check (unauthenticated)     | —                                                            | status, db connectivity                                                                                                                      |
 
 ---

@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from kebi.core.agent.tools.candidate_namer import CandidateNamerService
 from kebi.core.areas import AreaService
+from kebi.core.areas.suggestion_service import AreaSuggestionService
 from kebi.core.chat.consult_quota import ConsultQuotaService
 from kebi.core.chat.service import ChatService
 from kebi.core.config import AppConfig, ExtractionConfig, get_config, get_env
@@ -454,8 +455,18 @@ def get_signal_service(
     Recommendation accept/reject signals are no longer DB-validated — the
     recommendations table was dropped (ADR-078); the signal is trusted from
     the product repo and dispatched as an event.
+
+    An **area** save takes a different path and so needs two more
+    collaborators: the shared `AreaService` reads what the supplied key
+    actually is, and `TasteModelService` records the region interest
+    directly. There is no event because there is no row to write — an area
+    save trains taste and stops there.
     """
-    return SignalService(event_dispatcher=event_dispatcher)
+    return SignalService(
+        event_dispatcher=event_dispatcher,
+        areas=get_area_service(),
+        taste_service=get_taste_service(),
+    )
 
 
 def get_agent_checkpointer(request: Request) -> Any:
@@ -1010,6 +1021,27 @@ def get_research_service(
     )
 
 
+def get_area_suggestion_service(
+    repo: KnowledgeClaimRepository = Depends(  # noqa: B008
+        get_knowledge_claim_repository
+    ),
+) -> AreaSuggestionService:
+    """FastAPI dependency providing the AreaSuggestionService.
+
+    Behind the `suggest_areas` tool (location-kinds Step 6): resolves the
+    areas the agent named through the shared `AreaService` — the one area
+    authority, store first with a round-trip-verified geocode on miss — and
+    attaches their claims from the same repository `research` reads.
+    """
+    cfg = get_config().agent.suggest_areas
+    return AreaSuggestionService(
+        get_area_service(),
+        repo,
+        max_names=cfg.max_names,
+        notes_limit=cfg.notes_limit,
+    )
+
+
 def get_extraction_result_cache(
     config: AppConfig = Depends(get_config),  # noqa: B008
 ) -> ExtractionResultCache:
@@ -1118,6 +1150,9 @@ def get_agent_graph(
         get_candidate_namer_service
     ),
     research_service: ResearchService = Depends(get_research_service),  # noqa: B008
+    area_suggestion_service: AreaSuggestionService = Depends(  # noqa: B008
+        get_area_suggestion_service
+    ),
 ) -> Any:
     """Build the agent StateGraph per-request.
 
@@ -1161,6 +1196,7 @@ def get_agent_graph(
             candidate_namer,
             places_search_factory,
             research_service,
+            area_suggestion_service,
             discovery_enabled=identity.discovery_enabled,
         ),
         checkpointer,

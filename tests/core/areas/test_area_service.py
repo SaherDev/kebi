@@ -119,12 +119,14 @@ async def test_asked_spelling_learned_as_alias_when_it_differs() -> None:
     # "Saigon" round-trips only if it matches — here it doesn't, so refuse.
     assert entity is None
 
-    # A diacritic variant of the canonical name resolves and records the
-    # asked slug only when it differs from the canonical slug.
+    # The canonical name's own slug is always an alias — that is what makes
+    # "is this name already known to be an area?" answerable from the index
+    # alone (the check that stops a pass being offered as a savable venue).
+    # A diacritic variant folding to the same slug adds nothing beyond it.
     svc2 = AreaService(_repo(), _geocoder(_city_result(name="Hội An")))
     entity2 = await svc2.resolve_city("Hội An", "vn")
     assert entity2 is not None
-    assert entity2.aliases == []  # same slug — no alias recorded
+    assert entity2.aliases == ["hoi-an"]
 
 
 async def test_round_trip_failure_refuses_and_persists_nothing() -> None:
@@ -215,9 +217,7 @@ async def test_country_matching_non_country_feature_refused() -> None:
 
 async def test_noted_area_resolves_to_itself() -> None:
     svc = AreaService(_repo(), _geocoder(_city_result()))
-    entity = await svc.resolve_noted_name(
-        "Hoi An", AreaContext(country_code="vn")
-    )
+    entity = await svc.resolve_noted_name("Hoi An", AreaContext(country_code="vn"))
     assert entity is not None and entity.entity_key == "vn/hoi-an"
 
 
@@ -258,9 +258,7 @@ async def test_noted_without_city_falls_back_to_country() -> None:
     svc._repo.get = AsyncMock(  # type: ignore[attr-defined]
         side_effect=lambda k: stored_country if k == "vn" else None
     )
-    entity = await svc.resolve_noted_name(
-        "Ha Long Bay", AreaContext(country_code="vn")
-    )
+    entity = await svc.resolve_noted_name("Ha Long Bay", AreaContext(country_code="vn"))
     assert entity is not None and entity.entity_key == "vn"
 
 
@@ -304,3 +302,303 @@ async def test_failed_refresh_serves_stored_geometry() -> None:
     svc = AreaService(repo, geocoder)
     entity = await svc.get("vn/hoi-an")
     assert entity is not None and entity.lat == stale.lat
+
+
+# ---- resolve_area — the Step 6 widening ------------------------------------
+#
+# The locked roadmap rule these tests guard: bounded geography that the
+# provider can verify is an area; a named journey is not. The separator is the
+# round-trip check that already existed, NOT a list of route-sounding words.
+
+
+def _area_result(
+    *,
+    name: str,
+    place_type: str,
+    city: str | None = None,
+    neighborhood: str | None = None,
+    cc: str = "vn",
+) -> GeocodeResult:
+    return GeocodeResult(
+        lat=16.2,
+        lng=108.13,
+        name=name,
+        city=city,
+        neighborhood=neighborhood,
+        country="Vietnam",
+        country_code=cc,
+        place_type=place_type,
+        bbox=[16.19, 16.21, 108.12, 108.14],
+        provider_id="google:ChIJpass",
+    )
+
+
+async def test_natural_feature_resolves_as_an_area_not_a_venue() -> None:
+    """A pass is geography with extent — the model that dissolves the
+    save-a-pass-as-a-restaurant hole."""
+    svc = AreaService(
+        _repo(),
+        _geocoder(
+            _area_result(
+                name="Hai Van Pass", place_type="natural_feature", city="Da Nang"
+            )
+        ),
+    )
+    entity = await svc.resolve_area("Hai Van Pass", "vn")
+    assert entity is not None
+    assert entity.entity_type == "natural_feature"
+    assert entity.entity_key == "vn/da-nang/hai-van-pass"
+    assert entity.parent_key == "vn/da-nang"
+
+
+async def test_named_street_resolves_as_an_area() -> None:
+    """A street the provider names the way people ask for it is an area — the
+    narrowing of 'external routes are untrusted' this step records.
+
+    Note the bar this sets in practice: verification still applies, and
+    Google names the real Hanoi Train Street *Ngõ 224 Lê Duẩn*, which does not
+    round-trip against what anyone would type. So streets resolve only where
+    the provider agrees on the name. That is verified-or-refuse working, not a
+    gap to paper over — the alternative is kebi asserting that an alley it
+    cannot confirm is the famous one.
+    """
+    svc = AreaService(
+        _repo(),
+        _geocoder(
+            _area_result(name="Hanoi Train Street", place_type="route", city="Hanoi")
+        ),
+    )
+    entity = await svc.resolve_area("Hanoi Train Street", "vn")
+    assert entity is not None
+    assert entity.entity_type == "street"
+    assert entity.entity_key == "vn/hanoi/hanoi-train-street"
+
+
+async def test_neighborhood_resolves_under_its_city() -> None:
+    svc = AreaService(
+        _repo(),
+        _geocoder(
+            _area_result(
+                name="An Thuong",
+                place_type="sublocality_level_1",
+                city="Da Nang",
+                neighborhood="An Thuong",
+            )
+        ),
+    )
+    entity = await svc.resolve_area("An Thuong", "vn", city_hint="Da Nang")
+    assert entity is not None
+    assert entity.entity_type == "neighborhood"
+    assert entity.entity_key == "vn/da-nang/an-thuong"
+
+
+async def test_province_resolves_as_a_region_at_city_depth() -> None:
+    svc = AreaService(
+        _repo(),
+        _geocoder(
+            _area_result(
+                name="Quang Nam",
+                place_type="administrative_area_level_1",
+                city="Quang Nam",
+            )
+        ),
+    )
+    entity = await svc.resolve_area("Quang Nam", "vn")
+    assert entity is not None
+    assert entity.entity_type == "region"
+    assert entity.entity_key == "vn/quang-nam"
+    assert entity.parent_key == "vn"
+
+
+async def test_named_journey_is_refused_and_persists_nothing() -> None:
+    """THE locked decision: "Ha Giang Loop" has no footprint that round-trips,
+    so it is refused and collapses to its containing area elsewhere. Widening
+    the accepted types must never widen this."""
+    repo = _repo()
+    # The provider answers with the province the loop runs through — a real
+    # feature, but not the thing that was asked for.
+    svc = AreaService(
+        repo,
+        _geocoder(
+            _area_result(
+                name="Ha Giang",
+                place_type="administrative_area_level_1",
+                city="Ha Giang",
+            )
+        ),
+    )
+    assert await svc.resolve_area("Ha Giang Loop", "vn") is None
+    repo.upsert.assert_not_awaited()
+
+
+async def test_unmapped_feature_type_is_refused() -> None:
+    """A type with no spec is not an area — acceptance is a closed set, so a
+    new provider type can never silently become a kind."""
+    svc = AreaService(
+        _repo(),
+        _geocoder(_area_result(name="Some Cafe", place_type="establishment")),
+    )
+    assert await svc.resolve_area("Some Cafe", "vn") is None
+
+
+async def test_resolve_city_still_refuses_a_street() -> None:
+    """`resolve_city` stays settlement-only — the corridor endpoint resolver
+    depends on that narrowness (ADR-136)."""
+    svc = AreaService(
+        _repo(),
+        _geocoder(
+            _area_result(name="Hanoi Train Street", place_type="route", city="Hanoi")
+        ),
+    )
+    assert await svc.resolve_city("Hanoi Train Street", "vn") is None
+
+
+# ---- round-trip: what real provider responses actually look like ------------
+#
+# Every case below is a response the live Google Geocoding API returned during
+# Step 6 verification. They are here because the first cut of `resolve_area`
+# refused most of them.
+
+
+async def test_a_fuller_provider_name_still_round_trips() -> None:
+    """Asked "My Khe", provider says "My Khe Beach" — the same feature under
+    its fuller name. Strict equality refused exactly the areas this step
+    exists to resolve."""
+    svc = AreaService(
+        _repo(),
+        _geocoder(
+            _area_result(
+                name="My Khe Beach", place_type="natural_feature", city="Da Nang"
+            )
+        ),
+    )
+    entity = await svc.resolve_area("My Khe", "vn", city_hint="Da Nang")
+    assert entity is not None
+    assert entity.name == "My Khe Beach"
+
+
+async def test_containment_the_other_way_round_is_not_a_match() -> None:
+    """ "Ha Giang Loop" contains "Ha Giang", not the reverse. The direction of
+    containment is the whole difference between naming a place and naming a
+    trip through it — and it is what keeps the locked rule locked."""
+    repo = _repo()
+    svc = AreaService(
+        repo,
+        _geocoder(
+            _area_result(
+                name="Ha Giang",
+                place_type="administrative_area_level_1",
+                city="Ha Giang",
+            )
+        ),
+    )
+    assert await svc.resolve_area("Ha Giang Loop", "vn") is None
+    repo.upsert.assert_not_awaited()
+
+
+async def test_a_partial_word_never_wraps() -> None:
+    """ "An" must not match "An Thuong", or every short name resolves to
+    something larger that happens to contain its letters."""
+    svc = AreaService(
+        _repo(),
+        _geocoder(
+            _area_result(
+                name="An Thuong", place_type="sublocality_level_1", city="Da Nang"
+            )
+        ),
+    )
+    assert await svc.resolve_area("Anh", "vn", city_hint="Da Nang") is None
+
+
+async def test_a_country_result_never_satisfies_an_area_ask() -> None:
+    """The provider answers almost any unresolvable query inside a country
+    with that country. Accepting it here turned "Ha Giang Loop" into `vn`."""
+    svc = AreaService(
+        _repo(),
+        _geocoder(
+            GeocodeResult(
+                lat=14.0,
+                lng=108.0,
+                name="Vietnam",
+                country="Vietnam",
+                country_code="vn",
+                place_type="country",
+                provider_id="google:ChIJvn",
+            )
+        ),
+    )
+    assert await svc.resolve_area("Ha Giang Loop", "vn") is None
+
+
+async def test_a_neighborhood_outside_the_named_city_is_refused() -> None:
+    """Asked for "An Thuong" near Da Nang, the bare-name fallback found a
+    same-named neighborhood in Nho Quan, 500 km away."""
+    svc = AreaService(
+        _repo(),
+        _geocoder(
+            _area_result(
+                name="An Thuong",
+                place_type="sublocality_level_1",
+                city="Nho Quan",
+                neighborhood="An Thuong",
+            )
+        ),
+    )
+    assert await svc.resolve_area("An Thuong", "vn", city_hint="Da Nang") is None
+
+
+async def test_geography_may_sit_outside_the_named_city() -> None:
+    """Hai Van Pass runs over the Da Nang / Hue boundary and the provider files
+    it under Hue. Binding it to the asked city refused the very feature asked
+    for — so only neighborhoods are bound to the hint."""
+    svc = AreaService(
+        _repo(),
+        _geocoder(
+            _area_result(name="Hai Van Pass", place_type="natural_feature", city="Hue")
+        ),
+    )
+    entity = await svc.resolve_area("Hai Van Pass", "vn", city_hint="Da Nang")
+    assert entity is not None
+    assert entity.entity_key == "vn/hue/hai-van-pass"
+
+
+async def test_a_stored_neighborhood_elsewhere_is_not_reused_by_alias() -> None:
+    """Alias lookup is country-scoped, so once the wrong An Thuong was stored
+    it matched by alias and skipped the geocode — the store turning one bad
+    resolution into a permanent one."""
+    stored = _stored(
+        key="vn/nho-quan/an-thuong", name="An Thuong", entity_type="neighborhood"
+    )
+    stored = stored.model_copy(update={"parent_key": "vn/nho-quan"})
+    geocoder = _geocoder(None)
+    svc = AreaService(_repo(alias_result=stored), geocoder)
+    assert await svc.resolve_area("An Thuong", "vn", city_hint="Da Nang") is None
+
+
+async def test_the_bare_name_is_tried_when_the_hint_makes_it_worse() -> None:
+    """ "Hai Van Pass, Da Nang" returns the road under its Vietnamese name
+    (Đèo Hải Vân), which does not round-trip; the bare name returns the
+    feature itself. So the fallback buys an answer where there was a refusal."""
+    hinted = _area_result(name="Đèo Hải Vân", place_type="route", city="Da Nang")
+    bare = _area_result(name="Hải Vân Pass", place_type="natural_feature", city="Hue")
+    geocoder = _geocoder()
+    geocoder.search_area = AsyncMock(side_effect=[hinted, bare])
+    svc = AreaService(_repo(), geocoder)
+    entity = await svc.resolve_area("Hai Van Pass", "vn", city_hint="Da Nang")
+    assert entity is not None
+    assert entity.entity_type == "natural_feature"
+    assert geocoder.search_area.await_count == 2
+
+
+async def test_one_geocode_when_the_hinted_query_already_verifies() -> None:
+    geocoder = _geocoder(
+        _area_result(
+            name="Ngu Hanh Son",
+            place_type="sublocality_level_1",
+            city="Da Nang",
+            neighborhood="Ngu Hanh Son",
+        )
+    )
+    svc = AreaService(_repo(), geocoder)
+    assert await svc.resolve_area("Ngu Hanh Son", "vn", city_hint="Da Nang")
+    geocoder.search_area.assert_awaited_once()

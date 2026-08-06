@@ -129,6 +129,15 @@ def _veg_tag() -> PlaceTag:
     )
 
 
+def _no_known_areas() -> MagicMock:
+    """An AreaSuggestionService that knows of no areas — every validated name
+    stays a venue. The default for tests about venue behaviour; the kind
+    correction has its own tests."""
+    areas = MagicMock()
+    areas.known_areas = AsyncMock(return_value={})
+    return areas
+
+
 def _make_namer(candidates: list[CandidateName]) -> MagicMock:
     """Stub CandidateNamerService — bypasses prompt rendering entirely."""
     namer = MagicMock()
@@ -205,6 +214,7 @@ async def test_no_working_location_returns_no_location_no_calls() -> None:
     cmd = await _run_suggest_places(
         namer=namer,
         places_search_factory=factory,
+        areas=_no_known_areas(),
         state=_state(working_location=None),
         tool_call_id="tc-1",
         query="famous spots",
@@ -238,6 +248,7 @@ async def test_zero_radius_treated_as_no_location() -> None:
     cmd = await _run_suggest_places(
         namer=namer,
         places_search_factory=factory,
+        areas=_no_known_areas(),
         state=_state(working_location=_bangkok_no_radius()),
         tool_call_id="tc-1",
         query="famous spots",
@@ -270,6 +281,7 @@ async def test_namer_empty_returns_no_match() -> None:
     cmd = await _run_suggest_places(
         namer=namer,
         places_search_factory=factory,
+        areas=_no_known_areas(),
         state=_state(working_location=_bangkok_working()),
         tool_call_id="tc-1",
         query="something niche",
@@ -305,6 +317,7 @@ async def test_provider_all_misses_returns_no_match() -> None:
     cmd = await _run_suggest_places(
         namer=namer,
         places_search_factory=factory,
+        areas=_no_known_areas(),
         state=_state(working_location=_bangkok_working()),
         tool_call_id="tc-1",
         query="anything",
@@ -347,6 +360,7 @@ async def test_constraint_filter_drops_everything_returns_no_match() -> None:
     cmd = await _run_suggest_places(
         namer=namer,
         places_search_factory=factory,
+        areas=_no_known_areas(),
         state=_state(working_location=_bangkok_working()),
         tool_call_id="tc-1",
         query="dinner",
@@ -387,6 +401,7 @@ async def test_duplicate_named_candidates_issue_one_provider_call() -> None:
     cmd = await _run_suggest_places(
         namer=namer,
         places_search_factory=factory,
+        areas=_no_known_areas(),
         state=_state(working_location=_bangkok_working()),
         tool_call_id="tc-1",
         query="temple",
@@ -432,6 +447,7 @@ async def test_happy_path_returns_suggested_candidates_with_reasons() -> None:
     cmd = await _run_suggest_places(
         namer=namer,
         places_search_factory=factory,
+        areas=_no_known_areas(),
         state=_state(working_location=_bangkok_working()),
         tool_call_id="tc-1",
         query="vegetarian dinner",
@@ -494,6 +510,7 @@ async def test_validation_requests_distance_ordering() -> None:
     await _run_suggest_places(
         namer=namer,
         places_search_factory=factory,
+        areas=_no_known_areas(),
         state=_state(working_location=_bangkok_working()),
         tool_call_id="tc-1",
         query="ATM",
@@ -525,6 +542,7 @@ async def test_takes_nearest_branch_from_ordered_results() -> None:
     cmd = await _run_suggest_places(
         namer=namer,
         places_search_factory=factory,
+        areas=_no_known_areas(),
         state=_state(working_location=_bangkok_working()),
         tool_call_id="tc-1",
         query="bank",
@@ -554,6 +572,7 @@ async def test_limit_caps_returned_candidates() -> None:
     cmd = await _run_suggest_places(
         namer=namer,
         places_search_factory=factory,
+        areas=_no_known_areas(),
         state=_state(working_location=_bangkok_working()),
         tool_call_id="tc-1",
         query="anything",
@@ -585,6 +604,7 @@ async def test_provider_calls_carry_location_context() -> None:
     await _run_suggest_places(
         namer=namer,
         places_search_factory=factory,
+        areas=_no_known_areas(),
         state=_state(working_location=_bangkok_working()),
         tool_call_id="tc-1",
         query="anything",
@@ -618,6 +638,7 @@ async def test_utility_category_clamps_provider_radius() -> None:
     await _run_suggest_places(
         namer=namer,
         places_search_factory=factory,
+        areas=_no_known_areas(),
         state=_state(working_location=_bangkok_city_working()),
         tool_call_id="tc-1",
         query="ATM",
@@ -647,6 +668,7 @@ async def test_non_utility_category_keeps_broad_radius() -> None:
     await _run_suggest_places(
         namer=namer,
         places_search_factory=factory,
+        areas=_no_known_areas(),
         state=_state(working_location=_bangkok_city_working()),
         tool_call_id="tc-1",
         query="dinner",
@@ -684,7 +706,7 @@ def test_tool_factory_shares_the_find_saved_arg_surface_plus_place_names() -> No
     namer = _make_namer([])
     factory, search = _make_search_factory(by_name={})
 
-    tool = build_suggest_places_tool(namer, factory)
+    tool = build_suggest_places_tool(namer, factory, _no_known_areas())
     assert tool.name == "suggest_places"
 
     schema_fields = set(tool.tool_call_schema.model_fields.keys())
@@ -696,6 +718,7 @@ def test_tool_factory_shares_the_find_saved_arg_surface_plus_place_names() -> No
         "neighborhood",
         "city",
         "country",
+        "area_keys",
         "limit",
     }
 
@@ -743,6 +766,7 @@ async def test_namer_icon_rides_query_as_icon_hint() -> None:
     await _run_suggest_places(
         namer=namer,
         places_search_factory=factory,
+        areas=_no_known_areas(),
         state=_state(working_location=_bangkok_working()),
         tool_call_id="tc-1",
         query="fountain show",
@@ -765,9 +789,7 @@ async def test_warm_row_without_icon_stamped_for_display_only() -> None:
     # The hit already exists in the catalog with icon=None (warm path —
     # icon_hint never fires). The response candidate still shows the
     # namer's pick; no write happens through the tool.
-    namer = _make_namer(
-        [CandidateName(name="Gaa", reason="tasting menu", icon="🌿")]
-    )
+    namer = _make_namer([CandidateName(name="Gaa", reason="tasting menu", icon="🌿")])
     factory, _search = _make_search_factory(
         by_name={"Gaa": [_place("Gaa", place_id="p1")]}
     )
@@ -775,6 +797,7 @@ async def test_warm_row_without_icon_stamped_for_display_only() -> None:
     cmd = await _run_suggest_places(
         namer=namer,
         places_search_factory=factory,
+        areas=_no_known_areas(),
         state=_state(working_location=_bangkok_working()),
         tool_call_id="tc-1",
         query="dinner",
@@ -794,15 +817,14 @@ async def test_warm_row_without_icon_stamped_for_display_only() -> None:
 
 @pytest.mark.asyncio
 async def test_stored_icon_wins_over_namer_icon() -> None:
-    namer = _make_namer(
-        [CandidateName(name="Gaa", reason="tasting menu", icon="🌿")]
-    )
+    namer = _make_namer([CandidateName(name="Gaa", reason="tasting menu", icon="🌿")])
     stored = _place("Gaa", place_id="p1").model_copy(update={"icon": "🍽️"})
     factory, _search = _make_search_factory(by_name={"Gaa": [stored]})
 
     cmd = await _run_suggest_places(
         namer=namer,
         places_search_factory=factory,
+        areas=_no_known_areas(),
         state=_state(working_location=_bangkok_working()),
         tool_call_id="tc-1",
         query="dinner",
@@ -849,9 +871,7 @@ def _route_working(
         scope_shape="corridor",
         search_radius_m=9_000.0,
         corridor=CorridorPath(
-            stops=[
-                CorridorTarget(name=name, lat=p[0], lng=p[1]) for name, p in stops
-            ]
+            stops=[CorridorTarget(name=name, lat=p[0], lng=p[1]) for name, p in stops]
         ),
     ).model_dump()
 
@@ -870,13 +890,12 @@ def _located(name: str, *, place_id: str, point: tuple[float, float]) -> PlaceOb
 async def _run_route(
     *, working: dict[str, Any], by_name: dict[str, list[PlaceObject]]
 ) -> tuple[ConsultResult, MagicMock, MagicMock]:
-    namer = _make_namer(
-        [CandidateName(name=n, reason="on the way") for n in by_name]
-    )
+    namer = _make_namer([CandidateName(name=n, reason="on the way") for n in by_name])
     factory, search = _make_search_factory(by_name=by_name)
     command = await _run_suggest_places(
         namer=namer,
         places_search_factory=factory,
+        areas=_no_known_areas(),
         state=_state(working_location=working),
         tool_call_id="call-route",
         query="somewhere to stop",
@@ -950,17 +969,13 @@ class TestRouteShapedSuggest:
         )
         location = search.find.await_args_list[0].args[0].location
         for point in (_DA_NANG, _HUE):
-            assert (
-                haversine_m(location.lat, location.lng, *point) <= location.radius_m
-            )
+            assert haversine_m(location.lat, location.lng, *point) <= location.radius_m
 
     async def test_nothing_on_the_route_is_an_honest_empty(self) -> None:
         result, _, _ = await _run_route(
             working=_route_working(stops=[("Hue", _HUE)]),
             by_name={
-                "Hoi An Spot": [
-                    _located("Hoi An Spot", place_id="p-ha", point=_HOI_AN)
-                ]
+                "Hoi An Spot": [_located("Hoi An Spot", place_id="p-ha", point=_HOI_AN)]
             },
         )
         assert result.candidates == []
@@ -975,6 +990,7 @@ class TestRouteShapedSuggest:
         command = await _run_suggest_places(
             namer=namer,
             places_search_factory=factory,
+            areas=_no_known_areas(),
             state=_state(
                 working_location=_route_working(
                     stops=[("Saigon", _SAIGON)], origin=_HANOI, city="Hanoi"
@@ -1017,6 +1033,7 @@ async def _run_with_names(
     command = await _run_suggest_places(
         namer=namer,
         places_search_factory=factory,
+        areas=_no_known_areas(),
         state=_state(working_location=working),
         tool_call_id="call-names",
         query="somewhere to stop",
@@ -1129,7 +1146,7 @@ class TestBestNameMatch:
         assert _best_name_match("Tam Coc", hits).id == "p-real"
 
     def test_fewest_extra_words_wins_when_nothing_is_exact(self) -> None:
-        """"Marble Mountains" has no exact record — "The Marble Mountains"
+        """ "Marble Mountains" has no exact record — "The Marble Mountains"
         should still beat "Marble Mountains Ticket Booth (Gate A1)"."""
         hits = [
             _place("Marble Mountains Ticket Booth (Gate A1)", place_id="p-booth"),
@@ -1203,6 +1220,7 @@ class TestCrossToolDedupe:
         command = await _run_suggest_places(
             namer=namer,
             places_search_factory=factory,
+            areas=_no_known_areas(),
             state=state,
             tool_call_id="tc-2",
             query="anything good",
@@ -1238,6 +1256,7 @@ class TestCrossToolDedupe:
         command = await _run_suggest_places(
             namer=namer,
             places_search_factory=factory,
+            areas=_no_known_areas(),
             state=state,
             tool_call_id="tc-3",
             query="anything good",
@@ -1254,3 +1273,286 @@ class TestCrossToolDedupe:
             str(command.update["messages"][0].content)
         )
         assert [c.place.place_name for c in result.candidates] == ["Wat Pho"]
+
+
+class TestAreaKindCorrection:
+    """Problem 11: a validated non-venue must not come back savable as a venue.
+
+    Google holds two records for Hai Van Pass — one typed as natural geography
+    and one indistinguishable from any landmark — so no type-based guard can
+    separate it from Lang Co Beach, which is one of the best stops on the same
+    road. The entity store settles it, and settles it as a correction of KIND
+    rather than a block: the pass still appears, as an area.
+    """
+
+    @staticmethod
+    def _known(name: str, key: str) -> MagicMock:
+        from kebi.core.areas.models import AreaEntity, AreaSummary
+
+        entity = AreaEntity(
+            entity_key=key,
+            entity_type="natural_feature",
+            name=name,
+            country_code="vn",
+            lat=16.2,
+            lng=108.13,
+        )
+        areas = MagicMock()
+        areas.known_areas = AsyncMock(
+            return_value={name: AreaSummary.from_entity(entity)}
+        )
+        return areas
+
+    @pytest.mark.asyncio
+    async def test_a_known_area_comes_back_as_an_area_card(self) -> None:
+        namer = _make_namer([])
+        factory, _search = _make_search_factory(
+            by_name={"Hai Van Pass": [_place("Hai Van Pass", place_id="p-pass")]}
+        )
+
+        cmd = await _run_suggest_places(
+            namer=namer,
+            places_search_factory=factory,
+            areas=self._known("Hai Van Pass", "vn/da-nang/hai-van-pass"),
+            state=_state(working_location=_bangkok_working()),
+            tool_call_id="tc-1",
+            query="stops",
+            place_names=["Hai Van Pass"],
+            categories=None,
+            tags=None,
+            neighborhood_override=None,
+            city_override=None,
+            country_override=None,
+            limit=5,
+            name_count=8,
+            concurrency=5,
+        )
+
+        payload = ConsultResult.model_validate_json(cmd.update["messages"][0].content)
+        candidate = payload.candidates[0]
+        assert candidate.kind == "area"
+        # No venue payload means no venue save action means no venue row.
+        assert candidate.place is None
+        assert candidate.area is not None
+        assert candidate.area.entity_key == "vn/da-nang/hai-van-pass"
+
+    @pytest.mark.asyncio
+    async def test_a_beach_the_store_does_not_know_stays_a_venue(self) -> None:
+        """The guard that was rejected would have blocked this too — the
+        geocoder types Lang Co Beach exactly like the pass."""
+        namer = _make_namer([])
+        factory, _search = _make_search_factory(
+            by_name={"Lang Co Beach": [_place("Lang Co Beach", place_id="p-beach")]}
+        )
+
+        cmd = await _run_suggest_places(
+            namer=namer,
+            places_search_factory=factory,
+            areas=_no_known_areas(),
+            state=_state(working_location=_bangkok_working()),
+            tool_call_id="tc-1",
+            query="stops",
+            place_names=["Lang Co Beach"],
+            categories=None,
+            tags=None,
+            neighborhood_override=None,
+            city_override=None,
+            country_override=None,
+            limit=5,
+            name_count=8,
+            concurrency=5,
+        )
+
+        payload = ConsultResult.model_validate_json(cmd.update["messages"][0].content)
+        assert payload.candidates[0].kind == "venue"
+        assert payload.candidates[0].place is not None
+
+    @pytest.mark.asyncio
+    async def test_a_store_failure_leaves_every_candidate_a_venue(self) -> None:
+        """Degrade the kind, never the answer."""
+        namer = _make_namer([])
+        factory, _search = _make_search_factory(
+            by_name={"Somewhere": [_place("Somewhere", place_id="p1")]}
+        )
+        areas = MagicMock()
+        areas.known_areas = AsyncMock(side_effect=RuntimeError("db down"))
+
+        cmd = await _run_suggest_places(
+            namer=namer,
+            places_search_factory=factory,
+            areas=areas,
+            state=_state(working_location=_bangkok_working()),
+            tool_call_id="tc-1",
+            query="stops",
+            place_names=["Somewhere"],
+            categories=None,
+            tags=None,
+            neighborhood_override=None,
+            city_override=None,
+            country_override=None,
+            limit=5,
+            name_count=8,
+            concurrency=5,
+        )
+
+        payload = ConsultResult.model_validate_json(cmd.update["messages"][0].content)
+        assert payload.candidates[0].kind == "venue"
+
+
+class TestAreaAnchoredSuggest:
+    """Anchoring must not be opt-out by omission.
+
+    Live-testing found the failure this guards: a turn verified Hoi An and Hue
+    with `suggest_areas`, then called `suggest_places` without `place_names`,
+    and the anchored path was skipped — so the answer came back from a disc
+    around Da Nang, where the user happened to be standing. That is exactly
+    the failure Step 6 exists to fix, reached by forgetting one argument.
+    """
+
+    @staticmethod
+    def _anchored_state() -> dict[str, Any]:
+        from kebi.core.areas.models import AreaEntity
+
+        hoi_an = AreaEntity(
+            entity_key="vn/hoi-an",
+            entity_type="city",
+            name="Hoi An",
+            country_code="vn",
+            lat=15.88,
+            lng=108.33,
+        )
+        state = _state(working_location=_bangkok_working())
+        state["area_anchors"] = [hoi_an.model_dump(mode="json")]
+        return state
+
+    @pytest.mark.asyncio
+    async def test_agent_names_are_validated_at_the_named_area(self) -> None:
+        namer = _make_namer([])
+        factory, search = _make_search_factory(
+            by_name={
+                "Japanese Covered Bridge": [
+                    _place("Japanese Covered Bridge", place_id="p-bridge")
+                ]
+            }
+        )
+        # Place it inside Hoi An so attribution keeps it.
+        search.find = AsyncMock(
+            return_value=[
+                PlaceObject(
+                    id="p-bridge",
+                    provider_id="google:p-bridge",
+                    place_name="Japanese Covered Bridge",
+                    categories=[PlaceCategory.restaurant],
+                    location=LocationContext(lat=15.877, lng=108.326),
+                    cached_at=datetime.now(UTC),
+                )
+            ]
+        )
+
+        cmd = await _run_suggest_places(
+            namer=namer,
+            places_search_factory=factory,
+            areas=_no_known_areas(),
+            state=self._anchored_state(),
+            tool_call_id="tc-1",
+            query="things to do",
+            place_names=["Japanese Covered Bridge"],
+            categories=None,
+            tags=None,
+            neighborhood_override=None,
+            city_override=None,
+            country_override=None,
+            limit=5,
+            name_count=8,
+            concurrency=5,
+        )
+
+        payload = ConsultResult.model_validate_json(cmd.update["messages"][0].content)
+        assert [c.anchor_area_key for c in payload.candidates] == ["vn/hoi-an"]
+        namer.generate.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_no_names_still_anchors_and_asks_the_namer_about_the_area(
+        self,
+    ) -> None:
+        """THE regression: anchors present, no names — must still anchor."""
+        namer = _make_namer([CandidateName(name="Some Spot", reason="nice", icon=None)])
+        factory, search = _make_search_factory(by_name={})
+        search.find = AsyncMock(
+            return_value=[
+                PlaceObject(
+                    id="p1",
+                    provider_id="google:p1",
+                    place_name="Some Spot",
+                    categories=[PlaceCategory.restaurant],
+                    location=LocationContext(lat=15.881, lng=108.331),
+                    cached_at=datetime.now(UTC),
+                )
+            ]
+        )
+
+        cmd = await _run_suggest_places(
+            namer=namer,
+            places_search_factory=factory,
+            areas=_no_known_areas(),
+            state=self._anchored_state(),
+            tool_call_id="tc-1",
+            query="things to do",
+            place_names=None,
+            categories=None,
+            tags=None,
+            neighborhood_override=None,
+            city_override=None,
+            country_override=None,
+            limit=5,
+            name_count=8,
+            concurrency=5,
+        )
+
+        payload = ConsultResult.model_validate_json(cmd.update["messages"][0].content)
+        assert [c.anchor_area_key for c in payload.candidates] == ["vn/hoi-an"]
+        # The namer was asked about the named area, not the turn's origin.
+        kwargs = namer.generate.await_args.kwargs
+        assert "Hoi An" in kwargs["intent"]
+        assert kwargs["working"].city == "Hoi An"
+
+    @pytest.mark.asyncio
+    async def test_a_place_in_none_of_the_named_areas_is_dropped(self) -> None:
+        """The drop is the point — a hit back at the origin is not an answer
+        about the areas that were named."""
+        namer = _make_namer([])
+        factory, search = _make_search_factory(by_name={})
+        search.find = AsyncMock(
+            return_value=[
+                PlaceObject(
+                    id="p1",
+                    provider_id="google:p1",
+                    place_name="Somewhere In Bangkok",
+                    categories=[PlaceCategory.restaurant],
+                    location=LocationContext(lat=13.7563, lng=100.5018),
+                    cached_at=datetime.now(UTC),
+                )
+            ]
+        )
+
+        cmd = await _run_suggest_places(
+            namer=namer,
+            places_search_factory=factory,
+            areas=_no_known_areas(),
+            state=self._anchored_state(),
+            tool_call_id="tc-1",
+            query="things to do",
+            place_names=["Somewhere In Bangkok"],
+            categories=None,
+            tags=None,
+            neighborhood_override=None,
+            city_override=None,
+            country_override=None,
+            limit=5,
+            name_count=8,
+            concurrency=5,
+        )
+
+        payload = ConsultResult.model_validate_json(cmd.update["messages"][0].content)
+        assert payload.candidates == []
+        assert payload.empty_reason == "no_match"

@@ -433,6 +433,7 @@ def test_tool_factory_exposes_same_arg_schema_as_the_others() -> None:
         "neighborhood",
         "city",
         "country",
+        "area_keys",
         "limit",
     }
 
@@ -655,9 +656,7 @@ class TestRouteShapedDiscover:
 
     async def test_fan_out_respects_the_billed_cap(self) -> None:
         factory, search = _make_geo_search_factory([])
-        await _run_route(
-            working=_route_working(stops=[("Hue", _HUE)]), factory=factory
-        )
+        await _run_route(working=_route_working(stops=[("Hue", _HUE)]), factory=factory)
         assert search.find.await_count <= get_config().movement.corridor.max_waypoints
 
     async def test_overlapping_waypoints_do_not_duplicate_a_place(self) -> None:

@@ -35,6 +35,7 @@ def note_source_label(source_type: SourceType) -> str:
     """The coarse origin label for a claim's source_type."""
     return NOTE_SOURCE_LABELS.get(source_type, "community")
 
+
 _COUNTRY_CODE_RE = re.compile(r"^[a-z]{2}$")
 
 
@@ -94,6 +95,16 @@ class PlaceNote(BaseModel):
     from_shared: bool = False
     agree_count: int = 0
     disagree_count: int = 0
+
+
+def note_rank_key(claim: KnowledgeClaim) -> tuple[float, datetime]:
+    """Sort key for surfacing claims as notes: strongest, then most recent.
+
+    Shared by every reader that turns claims into notes (saved places, areas)
+    so "the best notes" means one thing across the product rather than
+    whatever each reader happened to sort by. Use with `reverse=True`.
+    """
+    return (claim.confidence, claim.created_at)
 
 
 class ResolvedGeo(BaseModel):

@@ -618,6 +618,9 @@ class ToolTimeoutsConfig(BaseModel):
     find_saved: int = 8
     suggest_places: int = 18
     discover_places: int = 8
+    # No model call and no provider place call — a geocode per unknown area is
+    # the whole cost, so this is closer to `find_saved` than `suggest_places`.
+    suggest_areas: int = 10
     research: int = 8
 
     @model_validator(mode="after")
@@ -626,6 +629,7 @@ class ToolTimeoutsConfig(BaseModel):
             self.find_saved < 1
             or self.suggest_places < 1
             or self.discover_places < 1
+            or self.suggest_areas < 1
             or self.research < 1
         ):
             raise ValueError(
@@ -633,6 +637,7 @@ class ToolTimeoutsConfig(BaseModel):
                 f"(got find_saved={self.find_saved}, "
                 f"suggest_places={self.suggest_places}, "
                 f"discover_places={self.discover_places}, "
+                f"suggest_areas={self.suggest_areas}, "
                 f"research={self.research})"
             )
         return self
@@ -771,6 +776,64 @@ class ResearchToolConfig(BaseModel):
         return self
 
 
+class SuggestAreasConfig(BaseModel):
+    """Per-tool knobs for `suggest_areas` (location-kinds Step 6).
+
+    `notes_limit` caps the knowledge claims attached per area — the "why this
+    area" evidence. `max_names` bounds how many names one call will try to
+    resolve; each miss costs a geocode, so an over-eager agent shouldn't be
+    able to spend a dozen of them in one turn.
+    """
+
+    default_limit: int = 5
+    max_limit: int = 8
+    max_names: int = 8
+    notes_limit: int = 4
+
+    @model_validator(mode="after")
+    def _positive_integers(self) -> "SuggestAreasConfig":
+        if (
+            self.default_limit < 1
+            or self.max_limit < 1
+            or self.max_names < 1
+            or self.notes_limit < 1
+        ):
+            raise ValueError(
+                "agent.suggest_areas.default_limit / max_limit / max_names / "
+                f"notes_limit must be >= 1 (got default_limit={self.default_limit}, "
+                f"max_limit={self.max_limit}, max_names={self.max_names}, "
+                f"notes_limit={self.notes_limit})"
+            )
+        if self.default_limit > self.max_limit:
+            raise ValueError(
+                "agent.suggest_areas.default_limit must be <= max_limit "
+                f"(got default_limit={self.default_limit}, "
+                f"max_limit={self.max_limit})"
+            )
+        return self
+
+
+class AreaAnchorConfig(BaseModel):
+    """Area-anchored search fan-out (location-kinds Step 6, ADR-140).
+
+    When the agent names areas, kebi searches around each one. `max_areas`
+    caps how many of those anchors are actually searched in a turn — the agent
+    may name more in prose, and what is dropped is logged rather than silently
+    truncated. This is the area-shaped sibling of `corridor.max_waypoints`, and
+    it exists for the same reason: the fan-out is billed.
+    """
+
+    max_areas: int = 4
+
+    @model_validator(mode="after")
+    def _positive_integers(self) -> "AreaAnchorConfig":
+        if self.max_areas < 1:
+            raise ValueError(
+                f"agent.area_anchor.max_areas must be >= 1 (got {self.max_areas})"
+            )
+        return self
+
+
 class AgentConfig(BaseModel):
     """Typed configuration for the agent path (feature 027 M2, ADR-062).
 
@@ -793,6 +856,8 @@ class AgentConfig(BaseModel):
     find_saved: FindSavedConfig = FindSavedConfig()
     suggest_places: SuggestPlacesConfig = SuggestPlacesConfig()
     discover_places: DiscoverPlacesConfig = DiscoverPlacesConfig()
+    suggest_areas: SuggestAreasConfig = SuggestAreasConfig()
+    area_anchor: AreaAnchorConfig = AreaAnchorConfig()
     research: ResearchToolConfig = ResearchToolConfig()
     prompt_caching_enabled: bool = True
 

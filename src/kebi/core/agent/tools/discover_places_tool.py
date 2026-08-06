@@ -47,7 +47,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Annotated, Any
+from typing import TYPE_CHECKING, Annotated, Any
 
 from langchain_core.messages import ToolMessage
 from langchain_core.tools import BaseTool, InjectedToolCallId, tool
@@ -60,6 +60,11 @@ from kebi.core.agent.location import WorkingLocation
 from kebi.core.agent.reasoning import ReasoningStep
 from kebi.core.agent.state import AgentState
 from kebi.core.agent.stream_emit import emit_step_active, emit_step_done
+from kebi.core.agent.tools._area_anchor import (
+    anchors_from_state,
+    capped,
+    gather_per_area,
+)
 from kebi.core.agent.tools._corridor import (
     filter_and_order,
     is_corridor,
@@ -74,6 +79,7 @@ from kebi.core.agent.tools._hard_constraints import (
 )
 from kebi.core.agent.tools._scope import clamp_to_walkable_for_utility
 from kebi.core.agent.tools._search_args import (
+    AREA_KEYS_DESC,
     CATEGORIES_DESC,
     CITY_DESC,
     COUNTRY_DESC,
@@ -96,6 +102,7 @@ from kebi.core.agent.tools._working_location import (
     maybe_working_location,
 )
 from kebi.core.agent.tools.consult_models import ConsultCandidate, ConsultResult
+from kebi.core.areas.models import AreaEntity
 from kebi.core.config import get_config
 from kebi.core.extraction.extraction_pipeline import SearchServiceFactory
 from kebi.core.places.models import (
@@ -104,6 +111,11 @@ from kebi.core.places.models import (
     PlaceObject,
     PlaceQuery,
 )
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from kebi.core.config import MovementConfig
 
 logger = logging.getLogger(__name__)
 
@@ -162,6 +174,104 @@ async def _search_contexts(
             len(outcomes),
         )
     return results
+
+
+async def _discover_at_areas(
+    *,
+    places_search_factory: SearchServiceFactory,
+    state: AgentState,
+    tool_call_id: str,
+    anchors: list[AreaEntity],
+    query: str,
+    categories: list[PlaceCategory] | None,
+    tags: list[str] | None,
+    limit: int,
+    movement_cfg: MovementConfig,
+    concurrency: int,
+    steps: list[ReasoningStep],
+    finish: Callable[..., None],
+    trace: Callable[[str, str], None],
+) -> Command[Any]:
+    """Discovery anchored on each area the agent named (ADR-140).
+
+    One provider search per area, results tagged with the area they came from
+    and capped per area so a single dense city cannot crowd out the others —
+    an answer about four neighborhoods that returns twelve places in one of
+    them has not answered the question.
+
+    The free-text query is dropped for the same reason it is dropped at a route
+    waypoint: the provider treats text search's location as a soft bias, so a
+    text query returns whatever is prominent in the wider region rather than
+    what is actually inside the area. Categories and tags still steer it.
+    """
+    anchors = capped(anchors, get_config().agent.area_anchor.max_areas)
+    trace("start", f"checking {len(anchors)} areas")
+    per_area = max(1, -(-limit // len(anchors)))
+
+    async def _run(_entity: AreaEntity, location: LocationContext) -> list[PlaceObject]:
+        async with places_search_factory() as svc:
+            return await svc.find(
+                PlaceQuery(categories=categories, tags=tags, location=location),
+                limit=per_area,
+            )
+
+    try:
+        tagged = await gather_per_area(
+            anchors,
+            movement_cfg,
+            max_areas=len(anchors),
+            concurrency=concurrency,
+            runner=_run,
+            dedup_key=lambda p: p.provider_id or p.id or p.place_name,
+        )
+    except Exception as exc:
+        logger.warning("discover_places area lookup failed: %s", exc, exc_info=True)
+        finish("place search hit an error", kind="provider_error")
+        return _build_command(
+            state=state,
+            tool_call_id=tool_call_id,
+            result=ConsultResult(candidates=[], empty_reason="error"),
+            steps=steps,
+        )
+
+    hard, _soft = split_constraints(tags or [])
+    kept = [(area, p) for area, p in tagged if hard_constraints_satisfied(p, hard)]
+    dropped = len(tagged) - len(kept)
+
+    if not kept:
+        finish(
+            NONE_FIT if dropped else "nothing turned up in those areas",
+            kind="constraints_drop" if dropped else "no_match",
+        )
+        return _build_command(
+            state=state,
+            tool_call_id=tool_call_id,
+            result=ConsultResult(candidates=[], empty_reason="no_match"),
+            steps=steps,
+        )
+
+    final = kept[:limit]
+    finish(
+        found_summary([p.place_name for _, p in final], dropped=dropped if hard else 0)
+    )
+    return _build_command(
+        state=state,
+        tool_call_id=tool_call_id,
+        result=ConsultResult(
+            candidates=[
+                ConsultCandidate(
+                    place=place.to_core(),
+                    user_data=None,
+                    source="discovered",
+                    rrf_score=0.0,
+                    anchor_area_key=area.entity_key,
+                )
+                for area, place in final
+            ],
+            empty_reason=None,
+        ),
+        steps=steps,
+    )
 
 
 def _build_location_context(working: WorkingLocation) -> LocationContext:
@@ -256,9 +366,12 @@ def build_discover_places_tool(
         country: Annotated[  # noqa: ARG001
             str | None, Field(description=COUNTRY_DESC)
         ] = None,
+        area_keys: Annotated[
+            list[str] | None, Field(description=AREA_KEYS_DESC)
+        ] = None,
         limit: Annotated[int | None, Field(description=LIMIT_DESC)] = None,
     ) -> Command[Any]:
-        """Provider-driven place search anchored at the working location."""
+        """Provider-driven place search, at named areas or the working location."""
         cfg = get_config().agent
         timeout_s = cfg.tool_timeouts_seconds.discover_places
         default_limit = cfg.discover_places.default_limit
@@ -277,6 +390,7 @@ def build_discover_places_tool(
                 query=query,
                 categories=categories,
                 tags=tags,
+                area_keys=area_keys,
                 limit=effective_limit,
             ),
         )
@@ -293,6 +407,7 @@ async def _run_discover_places(
     categories: list[PlaceCategory] | None,
     tags: list[str] | None,
     limit: int,
+    area_keys: list[str] | None = None,
 ) -> Command[Any]:
     """Inner body — issues the single provider call. Wrapped by with_timeout."""
     # ContextVar set here so Google Places spans inherit tool=discover_places
@@ -306,6 +421,7 @@ async def _run_discover_places(
             query=query,
             categories=categories,
             tags=tags,
+            area_keys=area_keys,
             limit=limit,
         )
 
@@ -319,6 +435,7 @@ async def _run_discover_places_impl(
     categories: list[PlaceCategory] | None,
     tags: list[str] | None,
     limit: int,
+    area_keys: list[str] | None = None,
 ) -> Command[Any]:
     """The agent-supplied area overrides (neighborhood / city / country)
     are accepted on the outer `@tool` signature for arg-schema parity
@@ -366,6 +483,32 @@ async def _run_discover_places_impl(
         emit_step_done(base_id, step, started=outcome_started)
         steps.append(step)
 
+    movement_cfg = get_config().movement
+    concurrency = get_config().agent.suggest_places.provider_concurrency
+
+    # Area-anchored turn (ADR-140) takes precedence over the working location:
+    # the agent named these areas, so "around here" means "at each of them".
+    # It needs no working location at all — the anchors carry their own
+    # coordinates, which is what lets "which neighborhood in Hoi An?" answer
+    # from Da Nang.
+    anchors = anchors_from_state(state, area_keys)
+    if anchors:
+        return await _discover_at_areas(
+            places_search_factory=places_search_factory,
+            state=state,
+            tool_call_id=tool_call_id,
+            anchors=anchors,
+            query=query,
+            categories=categories,
+            tags=tags,
+            limit=limit,
+            movement_cfg=movement_cfg,
+            concurrency=concurrency,
+            steps=steps,
+            finish=_finish,
+            trace=_trace,
+        )
+
     working = maybe_working_location(state)
     if not is_anchored(working):
         _finish(NEED_LOCATION, kind="no_location")
@@ -381,7 +524,6 @@ async def _run_discover_places_impl(
     # suggest_places) so this fallback can't reintroduce a far result. On a
     # route the clamp narrows the corridor's half-width, which is the right
     # meaning for "an ATM on the way".
-    movement_cfg = get_config().movement
     working = clamp_to_walkable_for_utility(working, categories, movement_cfg)
 
     # Route-shaped turn (ADR-136) — the length gate first, so an all-oversized

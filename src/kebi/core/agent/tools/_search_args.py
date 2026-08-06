@@ -64,6 +64,16 @@ COUNTRY_DESC = (
     "are city-scoped or finer."
 )
 
+AREA_KEYS_DESC = (
+    "Search INSIDE specific areas you already put forward with "
+    "`suggest_areas` this turn, by their `entity_key` (e.g. "
+    "['vn/da-nang/an-thuong', 'vn/hoi-an']). Use this to fill each area you "
+    "named with real places — the user's saves there, then venues — instead "
+    "of getting one list clustered around where they happen to be. Omit to "
+    "search every area you put forward; omit entirely on an ordinary near-me "
+    "turn. A key you did not verify this turn is ignored."
+)
+
 LIMIT_DESC = (
     "How many candidates to return — pick based on context: one confident "
     "pick (1), a short comparison (3-5), a browse (10+). Capped by config; "
