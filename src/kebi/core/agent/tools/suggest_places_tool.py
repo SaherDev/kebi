@@ -55,6 +55,7 @@ from kebi.core.agent.stream_emit import emit_step_active, emit_step_done
 from kebi.core.agent.tools._area_anchor import (
     anchor_radius_m,
     anchors_from_state,
+    attribute_to_area,
     capped,
     enclosing_anchor_context,
     journey_from_state,
@@ -698,9 +699,18 @@ async def _suggest_at_areas(
         point = place_coords(place)
         if point is None:
             continue
-        spot = place_on_journey(anchors, movement_cfg, point[0], point[1])
-        if spot.on_journey and spot.group_key is not None:
-            placed.append((place, reason, spot.group_key, spot.progress))
+        if journey:
+            spot = place_on_journey(anchors, movement_cfg, point[0], point[1])
+            if spot.on_journey and spot.group_key is not None:
+                placed.append((place, reason, spot.group_key, spot.progress))
+            continue
+        # Not a journey: there is no road, so there are no between-stretches
+        # to belong to. Computing one anyway stamped a stretch key the answer
+        # had no group for, and the place landed in "nearby" instead of the
+        # area it was found in.
+        area = attribute_to_area(anchors, movement_cfg, point[0], point[1])
+        if area is not None:
+            placed.append((place, reason, area.entity_key, 0.0))
     if journey:
         # Travel order, so the list reads as the drive rather than as the
         # order names happened to be proposed in.
@@ -728,7 +738,18 @@ async def _suggest_at_areas(
             steps=steps,
         )
 
-    final = kept[:limit]
+    # Cap PER SECTION, not per answer. A global cap let Hanoi's four places
+    # plus a pass consume all five slots of a Hanoi/Hue/Hoi An trip, and the
+    # two cities the user also asked about came back empty — an answer that
+    # covers a third of the question.
+    per_group: dict[str, int] = {}
+    final: list[tuple[PlaceCore, str, str, float]] = []
+    for item in kept:
+        key = item[2]
+        if per_group.get(key, 0) >= limit:
+            continue
+        per_group[key] = per_group.get(key, 0) + 1
+        final.append(item)
     finish(
         found_summary(
             [place.place_name for place, _, _, _ in final],

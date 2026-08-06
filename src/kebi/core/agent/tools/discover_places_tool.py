@@ -270,7 +270,16 @@ async def _discover_at_areas(
             steps=steps,
         )
 
-    final = kept[:limit]
+    # Cap per section, not per answer — a global cap lets the first dense
+    # area consume every slot and the other areas the user asked about come
+    # back empty.
+    per_group: dict[str, int] = {}
+    final: list[tuple[SearchTarget, PlaceObject]] = []
+    for target, place in kept:
+        if per_group.get(target.group_key, 0) >= per_target:
+            continue
+        per_group[target.group_key] = per_group.get(target.group_key, 0) + 1
+        final.append((target, place))
     finish(
         found_summary([p.place_name for _, p in final], dropped=dropped if hard else 0)
     )

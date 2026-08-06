@@ -1556,3 +1556,131 @@ class TestAreaAnchoredSuggest:
         payload = ConsultResult.model_validate_json(cmd.update["messages"][0].content)
         assert payload.candidates == []
         assert payload.empty_reason == "no_match"
+
+
+class TestAnchoredLimits:
+    """The cap is per section, not per answer.
+
+    Live-found: a Hanoi / Hue / Hoi An trip returned four Hanoi places and a
+    pass, which consumed all five slots — so two of the three cities the user
+    asked about came back empty. An answer covering a third of the question.
+    """
+
+    @staticmethod
+    def _three_cities() -> dict[str, Any]:
+        from kebi.core.areas.models import AreaEntity
+
+        cities = [
+            AreaEntity(
+                entity_key=key,
+                entity_type="city",
+                name=name,
+                country_code="vn",
+                lat=lat,
+                lng=lng,
+            )
+            for key, name, lat, lng in (
+                ("vn/hanoi", "Hanoi", 21.03, 105.85),
+                ("vn/hue", "Hue", 16.46, 107.59),
+            )
+        ]
+        state = _state(working_location=_bangkok_working())
+        state["area_anchors"] = [c.model_dump(mode="json") for c in cities]
+        return state
+
+    @pytest.mark.asyncio
+    async def test_one_dense_area_cannot_starve_the_others(self) -> None:
+        namer = _make_namer([])
+        factory, search = _make_search_factory(by_name={})
+
+        # Three hits in Hanoi, one in Hue — with a global cap of 2, Hue would
+        # be starved entirely.
+        by_name = {
+            "H1": (21.031, 105.851),
+            "H2": (21.032, 105.852),
+            "H3": (21.033, 105.853),
+            "U1": (16.461, 107.591),
+        }
+
+        async def _find(query: Any, limit: int = 1) -> list[PlaceObject]:
+            name = (query.place_names or [None])[0]
+            if name not in by_name:
+                return []
+            lat, lng = by_name[name]
+            return [
+                PlaceObject(
+                    id=name,
+                    provider_id=f"google:{name}",
+                    place_name=name,
+                    categories=[PlaceCategory.restaurant],
+                    location=LocationContext(lat=lat, lng=lng),
+                    cached_at=datetime.now(UTC),
+                )
+            ]
+
+        search.find = AsyncMock(side_effect=_find)
+
+        cmd = await _run_suggest_places(
+            namer=namer,
+            places_search_factory=factory,
+            areas=_no_known_areas(),
+            state=self._three_cities(),
+            tool_call_id="tc-1",
+            query="things to do",
+            place_names=["H1", "H2", "H3", "U1"],
+            categories=None,
+            tags=None,
+            neighborhood_override=None,
+            city_override=None,
+            country_override=None,
+            limit=2,
+            name_count=8,
+            concurrency=5,
+        )
+
+        payload = ConsultResult.model_validate_json(cmd.update["messages"][0].content)
+        keys = [c.anchor_area_key for c in payload.candidates]
+        assert keys.count("vn/hanoi") == 2  # capped, not starved out
+        assert "vn/hue" in keys  # and Hue still gets its share
+
+    @pytest.mark.asyncio
+    async def test_without_travel_between_nothing_gets_a_stretch_key(self) -> None:
+        """A stretch key with no journey produced a group the answer had no
+        section for, and the place fell into "nearby" instead of its area."""
+        namer = _make_namer([])
+        factory, search = _make_search_factory(by_name={})
+        # Midway between the two anchors — on the "road", if there were one.
+        search.find = AsyncMock(
+            return_value=[
+                PlaceObject(
+                    id="p1",
+                    provider_id="google:p1",
+                    place_name="Midway",
+                    categories=[PlaceCategory.restaurant],
+                    location=LocationContext(lat=18.7, lng=106.7),
+                    cached_at=datetime.now(UTC),
+                )
+            ]
+        )
+
+        cmd = await _run_suggest_places(
+            namer=namer,
+            places_search_factory=factory,
+            areas=_no_known_areas(),
+            state=self._three_cities(),  # area_journey absent -> False
+            tool_call_id="tc-1",
+            query="things to do",
+            place_names=["Midway"],
+            categories=None,
+            tags=None,
+            neighborhood_override=None,
+            city_override=None,
+            country_override=None,
+            limit=5,
+            name_count=8,
+            concurrency=5,
+        )
+
+        payload = ConsultResult.model_validate_json(cmd.update["messages"][0].content)
+        for candidate in payload.candidates:
+            assert ">" not in (candidate.anchor_area_key or "")
