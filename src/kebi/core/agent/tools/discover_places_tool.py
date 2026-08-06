@@ -61,9 +61,11 @@ from kebi.core.agent.reasoning import ReasoningStep
 from kebi.core.agent.state import AgentState
 from kebi.core.agent.stream_emit import emit_step_active, emit_step_done
 from kebi.core.agent.tools._area_anchor import (
+    SearchTarget,
     anchors_from_state,
-    capped,
-    gather_per_area,
+    gather_targets,
+    journey_from_state,
+    search_targets,
 )
 from kebi.core.agent.tools._corridor import (
     filter_and_order,
@@ -182,6 +184,7 @@ async def _discover_at_areas(
     state: AgentState,
     tool_call_id: str,
     anchors: list[AreaEntity],
+    journey: bool,
     query: str,
     categories: list[PlaceCategory] | None,
     tags: list[str] | None,
@@ -194,32 +197,49 @@ async def _discover_at_areas(
 ) -> Command[Any]:
     """Discovery anchored on each area the agent named (ADR-140).
 
-    One provider search per area, results tagged with the area they came from
-    and capped per area so a single dense city cannot crowd out the others —
-    an answer about four neighborhoods that returns twelve places in one of
-    them has not answered the question.
+    One provider search per target — each named area, plus the stretches
+    between them when the agent said people drive it. Results are tagged with
+    where they came from and capped per target so a single dense city cannot
+    crowd out the others: an answer about four neighborhoods that returns
+    twelve places in one of them has not answered the question.
 
     The free-text query is dropped for the same reason it is dropped at a route
     waypoint: the provider treats text search's location as a soft bias, so a
     text query returns whatever is prominent in the wider region rather than
     what is actually inside the area. Categories and tags still steer it.
     """
-    anchors = capped(anchors, get_config().agent.area_anchor.max_areas)
-    trace("start", f"checking {len(anchors)} areas")
-    per_area = max(1, -(-limit // len(anchors)))
+    targets = search_targets(
+        anchors,
+        movement_cfg,
+        journey=journey,
+        max_areas=get_config().agent.area_anchor.max_areas,
+    )
+    if not targets:
+        finish("nothing to check", kind="no_match")
+        return _build_command(
+            state=state,
+            tool_call_id=tool_call_id,
+            result=ConsultResult(candidates=[], empty_reason="no_match"),
+            steps=steps,
+        )
+    stretches = sum(1 for t in targets if t.area is None)
+    trace(
+        "start",
+        f"checking {len(targets) - stretches} areas"
+        + (f" and {stretches} points on the way" if stretches else ""),
+    )
+    per_target = max(1, -(-limit // len(targets)))
 
-    async def _run(_entity: AreaEntity, location: LocationContext) -> list[PlaceObject]:
+    async def _run(target: SearchTarget) -> list[PlaceObject]:
         async with places_search_factory() as svc:
             return await svc.find(
-                PlaceQuery(categories=categories, tags=tags, location=location),
-                limit=per_area,
+                PlaceQuery(categories=categories, tags=tags, location=target.context),
+                limit=per_target,
             )
 
     try:
-        tagged = await gather_per_area(
-            anchors,
-            movement_cfg,
-            max_areas=len(anchors),
+        tagged = await gather_targets(
+            targets,
             concurrency=concurrency,
             runner=_run,
             dedup_key=lambda p: p.provider_id or p.id or p.place_name,
@@ -235,7 +255,7 @@ async def _discover_at_areas(
         )
 
     hard, _soft = split_constraints(tags or [])
-    kept = [(area, p) for area, p in tagged if hard_constraints_satisfied(p, hard)]
+    kept = [(t, p) for t, p in tagged if hard_constraints_satisfied(p, hard)]
     dropped = len(tagged) - len(kept)
 
     if not kept:
@@ -264,9 +284,9 @@ async def _discover_at_areas(
                     user_data=None,
                     source="discovered",
                     rrf_score=0.0,
-                    anchor_area_key=area.entity_key,
+                    anchor_area_key=target.group_key,
                 )
-                for area, place in final
+                for target, place in final
             ],
             empty_reason=None,
         ),
@@ -498,6 +518,7 @@ async def _run_discover_places_impl(
             state=state,
             tool_call_id=tool_call_id,
             anchors=anchors,
+            journey=journey_from_state(state),
             query=query,
             categories=categories,
             tags=tags,

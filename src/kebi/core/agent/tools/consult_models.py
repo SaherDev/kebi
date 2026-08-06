@@ -45,7 +45,9 @@ class ConsultCandidate(BaseModel):
     `anchor_area_key` records which area this candidate was *found at* when
     the search was anchored on areas the agent named (ADR-140). It is what
     turns a flat list into a per-area answer — "in Hoi An: …, in Hue: …" —
-    and it is None on an ordinary near-me turn.
+    and it is None on an ordinary near-me turn. On a journey it may instead
+    be a stretch key (`"vn/hoi-an>vn/hue"`), because a stop on the road
+    belongs to neither end of it.
 
     `user_data` is populated for `find_saved` (the user's own row exists)
     and `None` for `suggest_places` / `discover_places` (no save row
@@ -69,6 +71,10 @@ class ConsultCandidate(BaseModel):
     area: AreaSummary | None = None
     extent: list[float] | None = None
     anchor_area_key: str | None = None
+    # How far along a journey this sits, 0..1. Only meaningful when the agent
+    # said people travel between the named areas; the answer assembler uses it
+    # to order a drive as a drive rather than as a ranked list.
+    route_progress: float | None = None
     user_data: UserPlace | None = None
     source: Literal["saved", "suggested", "discovered"]
     rrf_score: float
@@ -108,11 +114,17 @@ class ConsultCandidate(BaseModel):
         *,
         source: Literal["saved", "suggested", "discovered"] = "suggested",
         reason: str | None = None,
+        anchor_area_key: str | None = None,
+        route_progress: float | None = None,
     ) -> ConsultCandidate:
         """Build an area candidate, with `extent` taken from the summary.
 
         The one construction path for areas, so `extent` can never disagree
         with `area.extent` — the client reads whichever it likes.
+
+        An area can itself be *found somewhere*: Hai Van Pass is geography and
+        it sits on the road between Da Nang and Hue, so it carries a placement
+        like any other result.
         """
         return cls(
             kind="area",
@@ -121,6 +133,8 @@ class ConsultCandidate(BaseModel):
             source=source,
             rrf_score=0.0,
             reason=reason,
+            anchor_area_key=anchor_area_key,
+            route_progress=route_progress,
         )
 
 

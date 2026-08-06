@@ -50,11 +50,21 @@ _SSE_WALL_CLOCK_SECONDS = 90.0
 # limit is high (16 KiB) so normal frames pass through untouched.
 _SSE_FRAME_MAX_BYTES = 16 * 1024
 
+# The `answer` frame carries every place the turn surfaced in one body
+# (ADR-144) — measured at roughly 1 KiB per item, and the per-tool limits
+# allow ~25 across a wide multi-area turn. That is legitimately larger than
+# any other frame and truncating it would silently drop the grouped view, so
+# it gets its own headroom rather than the shared cap.
+_SSE_ANSWER_MAX_BYTES = 64 * 1024
 
-def _frame(event: str, payload: dict[str, Any] | str) -> str:
+
+def _frame(
+    event: str, payload: dict[str, Any] | str, *, max_bytes: int | None = None
+) -> str:
     """Format an SSE frame, truncating the JSON body if it overflows."""
     body = payload if isinstance(payload, str) else json.dumps(payload, default=str)
-    if len(body.encode("utf-8")) > _SSE_FRAME_MAX_BYTES:
+    limit = max_bytes or _SSE_FRAME_MAX_BYTES
+    if len(body.encode("utf-8")) > limit:
         body = json.dumps(
             {"truncated": True, "original_bytes": len(body.encode("utf-8"))}
         )
@@ -206,6 +216,7 @@ async def chat_stream(
             # Capture the populated snapshot here; the final `final_state`
             # we read after the loop has `tool_results=[]` by design.
             tool_results: list[dict[str, Any]] = []
+            answer: dict[str, Any] | None = None
             try:
                 try:
                     # Hard wall-clock bound: a slow-reading or unresponsive
@@ -231,6 +242,7 @@ async def chat_stream(
                                 snap_tool_results = chunk.get("tool_results") or []
                                 if snap_tool_results:
                                     tool_results = snap_tool_results
+                                    answer = chunk.get("answer")
                 except TimeoutError:
                     logger.warning(
                         "chat_stream wall-clock timeout (%.0fs) for user %s",
@@ -257,6 +269,8 @@ async def chat_stream(
 
                 for tool_result in tool_results:
                     yield _frame("tool_result", tool_result)
+                if answer is not None:
+                    yield _frame("answer", answer, max_bytes=_SSE_ANSWER_MAX_BYTES)
                 if final_message:
                     yield _frame("message", {"content": final_message})
                 yield _frame("done", {"tool_calls_used": tool_calls_used})

@@ -30,6 +30,7 @@ from langgraph.graph import END, StateGraph
 from langgraph.prebuilt import ToolNode
 
 from kebi.core.agent._trace_context import feature_span
+from kebi.core.agent.answer import build_answer
 from kebi.core.agent.location import (
     CorridorPath,
     CorridorTarget,
@@ -42,6 +43,7 @@ from kebi.core.agent.messages import extract_text_content
 from kebi.core.agent.reasoning import ReasoningStep
 from kebi.core.agent.state import AgentState
 from kebi.core.agent.stream_emit import emit_step_active, emit_step_done
+from kebi.core.areas.models import AreaEntity
 from kebi.core.areas.service import CITY_LEVEL_TYPES
 from kebi.core.config import get_config
 from kebi.core.utils.geo import haversine_m
@@ -1627,18 +1629,45 @@ def finalize_node(state: AgentState) -> dict[str, Any]:
     update: dict[str, Any] = {}
     if tool_results:
         update["tool_results"] = tool_results
+        # Assemble the turn's answer here, the one point where every tool's
+        # payload is in hand — grouping a saved place together with a
+        # suggestion in the same area is impossible earlier, because they
+        # arrive from different tools (ADR-144). Best-effort: a failure costs
+        # the grouped view, never the answer, since `tool_results` still
+        # carries everything.
+        try:
+            answer = build_answer(
+                tool_results,
+                _anchors_on_state(state),
+                journey=bool(state.get("area_journey")),
+            )
+            if answer is not None:
+                update["answer"] = answer.model_dump(mode="json")
+        except Exception:
+            logger.exception("answer assembly failed; falling back to tool_results")
     if to_remove:
         logger.debug("finalize_node stripping %d tool-related messages", len(to_remove))
         update["messages"] = [RemoveMessage(id=mid) for mid in to_remove]
     return update
 
 
+def _anchors_on_state(state: AgentState) -> list[AreaEntity]:
+    """The turn's verified area anchors, for grouping the answer."""
+    anchors: list[AreaEntity] = []
+    for raw in state.get("area_anchors") or []:
+        try:
+            anchors.append(AreaEntity.model_validate(raw))
+        except Exception:  # noqa: BLE001 - a malformed anchor is skipped
+            continue
+    return anchors
+
+
 def scrub_tool_results_node(state: AgentState) -> dict[str, Any]:  # noqa: ARG001
     """Clear `tool_results` from state so it never lands in the checkpoint.
 
-    `finalize_node` populates `tool_results` so the response layer can
-    surface the structured payloads, but those payloads must not bloat
-    the per-thread checkpointer DB — only the human-readable
+    `finalize_node` populates `tool_results` and `answer` so the response
+    layer can surface the structured payloads, but those payloads must not
+    bloat the per-thread checkpointer DB — only the human-readable
     `reasoning_steps` summaries should persist as agent history.
 
     This node runs as a separate superstep AFTER `finalize`. Callers
@@ -1647,7 +1676,7 @@ def scrub_tool_results_node(state: AgentState) -> dict[str, Any]:  # noqa: ARG00
     `finalize` and this node; the final checkpointed state has
     `tool_results=[]`.
     """
-    return {"tool_results": []}
+    return {"tool_results": [], "answer": None}
 
 
 def build_graph(

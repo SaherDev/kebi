@@ -109,6 +109,7 @@ class ChatService:
         # Initialized before the try so the `finally` can always read it,
         # even if the agent stream raises before any tool ran (ADR-110).
         tool_results: list[dict[str, Any]] = []
+        answer: dict[str, Any] | None = None
         async with feature_trace(
             "chat",
             user_id,
@@ -163,6 +164,10 @@ class ChatService:
                         snap_tool_results = snapshot.get("tool_results") or []
                         if snap_tool_results:
                             tool_results = snap_tool_results
+                            # Rides the same one-superstep window as
+                            # `tool_results` — both are cleared by
+                            # `scrub_tool_results` before the checkpoint.
+                            answer = snapshot.get("answer")
 
                 messages = final_state.get("messages", [])
                 ai_message = _last_ai_message(messages)
@@ -189,6 +194,10 @@ class ChatService:
                             for s in user_steps
                         ],
                         "tool_results": tool_results,
+                        # The grouped view (ADR-144). Additive — everything
+                        # in it is also in `tool_results`, so a client that
+                        # ignores it loses nothing.
+                        "answer": answer,
                     },
                     tool_calls_used=final_state.get("tool_calls_used", 0),
                 )

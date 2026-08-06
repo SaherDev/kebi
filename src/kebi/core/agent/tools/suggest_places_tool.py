@@ -55,9 +55,10 @@ from kebi.core.agent.stream_emit import emit_step_active, emit_step_done
 from kebi.core.agent.tools._area_anchor import (
     anchor_radius_m,
     anchors_from_state,
-    attribute_to_area,
     capped,
     enclosing_anchor_context,
+    journey_from_state,
+    place_on_journey,
 )
 from kebi.core.agent.tools._corridor import (
     enclosing_context,
@@ -402,6 +403,7 @@ async def _run_suggest_places_impl(
             state=state,
             tool_call_id=tool_call_id,
             anchors=capped(anchors, get_config().agent.area_anchor.max_areas),
+            journey=journey_from_state(state),
             place_names=named,
             namer=namer,
             query=query,
@@ -562,7 +564,7 @@ async def _run_suggest_places_impl(
     _finish(found_summary(final_names, dropped=dropped if hard else 0))
 
     candidates = await _to_candidates(
-        [(place, reason, None) for place, reason in final], areas
+        [(place, reason, None, None) for place, reason in final], areas
     )
 
     return _build_command(
@@ -625,6 +627,7 @@ async def _suggest_at_areas(
     state: AgentState,
     tool_call_id: str,
     anchors: list[AreaEntity],
+    journey: bool,
     place_names: list[str],
     namer: CandidateNamerService,
     query: str,
@@ -686,14 +689,22 @@ async def _suggest_at_areas(
         concurrency=concurrency,
     )
 
-    placed: list[tuple[PlaceCore, str, AreaEntity]] = []
+    # Placement decides both what survives and where it belongs. On a journey
+    # a place can also sit BETWEEN two areas — without that case the answer
+    # can only ever say "at Hoi An" or "at Hue" and never "stop here on the
+    # road", which is most of what makes a drive worth describing.
+    placed: list[tuple[PlaceCore, str, str, float]] = []
     for place, reason in validated:
         point = place_coords(place)
         if point is None:
             continue
-        area = attribute_to_area(anchors, movement_cfg, point[0], point[1])
-        if area is not None:
-            placed.append((place, reason, area))
+        spot = place_on_journey(anchors, movement_cfg, point[0], point[1])
+        if spot.on_journey and spot.group_key is not None:
+            placed.append((place, reason, spot.group_key, spot.progress))
+    if journey:
+        # Travel order, so the list reads as the drive rather than as the
+        # order names happened to be proposed in.
+        placed.sort(key=lambda item: item[3])
 
     surfaced = _already_surfaced_ids(state)
     if surfaced:
@@ -720,7 +731,7 @@ async def _suggest_at_areas(
     final = kept[:limit]
     finish(
         found_summary(
-            [place.place_name for place, _, _ in final],
+            [place.place_name for place, _, _, _ in final],
             dropped=dropped if hard else 0,
         )
     )
@@ -729,7 +740,10 @@ async def _suggest_at_areas(
         tool_call_id=tool_call_id,
         result=ConsultResult(
             candidates=await _to_candidates(
-                [(place, reason, area.entity_key) for place, reason, area in final],
+                [
+                    (place, reason, key, progress)
+                    for place, reason, key, progress in final
+                ],
                 areas,
             ),
             empty_reason=None,
@@ -739,7 +753,7 @@ async def _suggest_at_areas(
 
 
 async def _to_candidates(
-    placed: list[tuple[PlaceCore, str, str | None]],
+    placed: list[tuple[PlaceCore, str, str | None, float | None]],
     areas: AreaSuggestionService,
 ) -> list[ConsultCandidate]:
     """Turn validated places into candidates, correcting kind where needed.
@@ -759,16 +773,27 @@ async def _to_candidates(
     kind rather than the answer.
     """
     try:
-        known = await areas.known_areas([place.place_name for place, _, _ in placed])
+        known = await areas.known_areas([p.place_name for p, _, _, _ in placed])
     except Exception as exc:  # noqa: BLE001 - kind correction never fails a turn
         logger.warning("area kind check failed: %s", exc)
         known = {}
 
     candidates: list[ConsultCandidate] = []
-    for place, reason, anchor_key in placed:
+    for place, reason, anchor_key, progress in placed:
         area = known.get(place.place_name)
         if area is not None:
-            candidates.append(ConsultCandidate.for_area(area, reason=reason or None))
+            # Carry the placement across the kind correction. Hai Van Pass is
+            # an area AND it is on the road between two named places; dropping
+            # the anchor here filed it under "nearby" instead of the stretch
+            # it was actually found on.
+            candidates.append(
+                ConsultCandidate.for_area(
+                    area,
+                    reason=reason or None,
+                    anchor_area_key=anchor_key,
+                    route_progress=progress,
+                )
+            )
             continue
         candidates.append(
             ConsultCandidate(
@@ -781,6 +806,7 @@ async def _to_candidates(
                 # as a blank reason line rather than no reason at all.
                 reason=reason or None,
                 anchor_area_key=anchor_key,
+                route_progress=progress,
             )
         )
     return candidates

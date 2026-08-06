@@ -55,6 +55,8 @@ def build_turn_payload(
         "reasoning_steps": [],
         "tool_results": [],
         "area_anchors": [],
+        "area_journey": False,
+        "answer": None,
         "taste_profile_summary": taste_profile_summary,
         "memory_summary": memory_summary,
         "user_id": user_id,

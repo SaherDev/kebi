@@ -308,7 +308,9 @@ def test_finalize_handles_tool_message_error_status() -> None:
 
 
 def test_scrub_tool_results_node_clears_field() -> None:
-    """The scrub node returns an empty list to keep the checkpoint clean."""
+    """The scrub node clears both structured payloads to keep the checkpoint
+    clean — `answer` is derived from `tool_results` and just as bulky."""
     state = _state([])
     state["tool_results"] = [{"tool": "x", "tool_call_id": "y", "payload": {}}]
-    assert scrub_tool_results_node(state) == {"tool_results": []}
+    state["answer"] = {"shape": "list", "groups": [], "items": []}
+    assert scrub_tool_results_node(state) == {"tool_results": [], "answer": None}

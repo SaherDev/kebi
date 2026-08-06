@@ -83,6 +83,17 @@ _COUNTRY_DESC = (
     "working location and refuses everything if there isn't one."
 )
 
+_TRAVEL_BETWEEN_DESC = (
+    "True when people TRAVEL BETWEEN these areas by road and stopping along "
+    "the way makes sense — a drive, a ride, a scenic stretch. List the areas "
+    "in travel order when you set it. This is your judgement, not a distance "
+    "rule: Hoi An -> Hue is a coastal ride worth stopping along, two "
+    "neighborhoods in one city have nothing between them worth pinning, and "
+    "Hanoi -> Saigon is a flight. Setting it searches the stretches between "
+    "the areas as well as the areas themselves; leaving it false treats them "
+    "as separate places that happen to be in one answer."
+)
+
 _LIMIT_DESC = (
     "How many areas to return as cards. Capped by config; defaults if omitted."
 )
@@ -95,6 +106,7 @@ def _build_command(
     result: ConsultResult,
     steps: list[ReasoningStep],
     anchors: list[dict[str, Any]],
+    journey: bool,
 ) -> Command[Any]:
     """Pack the result, the reasoning steps, and the anchors into one Command.
 
@@ -113,6 +125,7 @@ def _build_command(
             "reasoning_steps": (state.get("reasoning_steps") or []) + steps,
             "tool_calls_used": state.get("tool_calls_used", 0) + 1,
             "area_anchors": anchors,
+            "area_journey": journey and len(anchors) > 1,
         }
     )
 
@@ -127,6 +140,9 @@ def build_suggest_areas_tool(service: AreaSuggestionService) -> BaseTool:
         state: Annotated[AgentState, InjectedState],
         city: Annotated[str | None, Field(description=_CITY_DESC)] = None,
         country: Annotated[str | None, Field(description=_COUNTRY_DESC)] = None,
+        travel_between: Annotated[
+            bool, Field(description=_TRAVEL_BETWEEN_DESC)
+        ] = False,
         limit: Annotated[int | None, Field(description=_LIMIT_DESC)] = None,
     ) -> Command[Any]:
         """Verify areas you're putting forward, and anchor the search on them."""
@@ -147,6 +163,7 @@ def build_suggest_areas_tool(service: AreaSuggestionService) -> BaseTool:
                 names=names,
                 city=city,
                 country=country,
+                travel_between=travel_between,
                 limit=effective_limit,
             ),
         )
@@ -163,6 +180,7 @@ async def _run_suggest_areas(
     city: str | None,
     country: str | None,
     limit: int,
+    travel_between: bool = False,
 ) -> Command[Any]:
     """Inner body — resolve, attach claims, publish anchors."""
     with set_tool(_TOOL_NAME):
@@ -174,6 +192,7 @@ async def _run_suggest_areas(
             city=city,
             country=country,
             limit=limit,
+            travel_between=travel_between,
         )
 
 
@@ -186,6 +205,7 @@ async def _run_suggest_areas_impl(
     city: str | None,
     country: str | None,
     limit: int,
+    travel_between: bool = False,
 ) -> Command[Any]:
     steps: list[ReasoningStep] = []
     base_id = tool_step_base_id(_TOOL_NAME, state)
@@ -214,6 +234,7 @@ async def _run_suggest_areas_impl(
             result=ConsultResult(candidates=[], empty_reason=reason),
             steps=steps,
             anchors=[],
+            journey=False,
         )
 
     if not [n for n in names if n.strip()]:
@@ -246,4 +267,5 @@ async def _run_suggest_areas_impl(
         result=ConsultResult(candidates=candidates, empty_reason=None),
         steps=steps,
         anchors=[suggestion.entity.model_dump(mode="json") for suggestion in kept],
+        journey=travel_between,
     )

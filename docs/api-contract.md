@@ -222,7 +222,7 @@ to `POST /v1/extract` — the chat path never writes to `user_places`.
 | ----------------- | ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `type`            | `string`         | One of `agent`, `error`. No other values are emitted.                                                                                                                                           |
 | `message`         | `string`         | Human-readable response text                                                                                                                                                                    |
-| `data`            | `object \| null` | `agent`: `{ "reasoning_steps": ReasoningStep[], "tool_results": ToolResult[] }` (user-visible steps only). `error`: `{ "detail": string }`                                                      |
+| `data`            | `object \| null` | `agent`: `{ "reasoning_steps": ReasoningStep[], "tool_results": ToolResult[], "answer": Answer \| null }` (user-visible steps only). `error`: `{ "detail": string }`                          |
 | `tool_calls_used` | `integer`        | Number of tool calls the agent made this turn (0 if the agent answered without retrieval). Surfaced for rate-limit accounting on the NestJS side and capped at `agent.max_tool_calls` (ADR-091) |
 
 `ReasoningStep` shape:
@@ -262,6 +262,64 @@ An **area is not savable as a venue**: it has no `place`, so no `place_core_id`,
 `AreaSummary.notes` are the knowledge layer's claims about that area, same shape as the Library's `claims` (`{ id, text, tags, source, agree_count, disagree_count }`).
 
 `ResearchResult` (ADR-129) carries `entity_name` + `entity_key` (the resolved area the notes are about), `notes` — each `{ id, text, tags, source, confidence, agree_count, disagree_count }`, where `id` is the underlying claim's stable id (ADR-128), `tags` are claim-vocabulary values, and `source` is the coarse origin label `community | expert | kebi` (raw provenance never crosses the wire) — plus, when empty, an `empty_reason ∈ { unresolved, ambiguous, no_claims, no_topic_match }` and a `clarification` string. Research results are knowledge, not place candidates: they carry no `recommendation_id` and nothing in them is save/signal-able. Note for the home surface: a turn whose only tool result is `research` does **not** count as a place-surfacing turn for the `GET /v1/user/intents` recall list (ADR-110 semantics preserved).
+
+### `Answer` — the grouped view (ADR-144)
+
+`data.answer` is the turn's places assembled **once, across every tool**, so a
+saved place and a suggestion in the same area can be rendered together — they
+arrive in different `tool_results` entries and cannot be grouped by the client
+without this. `null` when the turn surfaced no places (a research answer, a
+clarifying question).
+
+It is **additive**: everything in it also appears in `tool_results`, so a
+client that ignores it loses nothing.
+
+```json
+{
+  "shape": "journey",
+  "groups": [
+    { "key": "vn/hoi-an", "kind": "area", "position": 0, "area": { "...AreaSummary" } },
+    { "key": "vn/hoi-an>vn/hue", "kind": "on_the_way", "position": 1,
+      "from_key": "vn/hoi-an", "to_key": "vn/hue" },
+    { "key": "vn/hue", "kind": "area", "position": 2, "area": { "...AreaSummary" } }
+  ],
+  "items": [
+    { "id": "…", "group_key": "vn/hoi-an", "route_progress": 0.02,
+      "kind": "venue", "source": "saved", "place": { "...PlaceCore" }, "user_data": { "…" } },
+    { "id": "…", "group_key": "vn/hoi-an>vn/hue", "route_progress": 0.5,
+      "kind": "area", "area": { "...AreaSummary" }, "extent": null }
+  ]
+}
+```
+
+**Flat items, ordered index.** Every item appears exactly **once** and points
+at its section by `key`; `groups` carries order and metadata only, never
+nested items. That is deliberate — kebi returns the relations it alone can
+compute and no layout policy, so each client renders its own way from one
+shape:
+
+| To render | Do |
+| --- | --- |
+| Sectioned list | `groupBy(items, "group_key")`, walk `groups` by `position` |
+| Map | ignore `groups`; draw `items` — `kind: "venue"` as pins, `kind: "area"` as shaded `extent` |
+| Flat itinerary | sort `items` by `route_progress` |
+| A different order | re-sort on `source` / `route_progress` / the place's own fields |
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `shape` | `"journey" \| "areas" \| "list"` | `journey` when the agent said people travel between the named areas; `areas` when they're independent; `list` for an ordinary near-me turn (one `nearby` group, so there is never a special case) |
+| `groups[].key` | `string` | An area's `entity_key`, `"<from>><to>"` for a stretch, or `"nearby"` |
+| `groups[].kind` | `"area" \| "on_the_way" \| "nearby"` | An `area` group survives with no items (the area *is* the recommendation); an `on_the_way` group with nothing on it is dropped |
+| `groups[].area` | `AreaSummary \| null` | Set on `area` groups — the heading, its extent, and its claims |
+| `items[].group_key` | `string` | Which group it belongs to. Always matches a `groups[].key` |
+| `items[].route_progress` | `number` | 0–1 along the journey; `0` when the turn isn't one |
+| `items[].kind` / `place` / `area` / `extent` / `source` / `reason` | — | Same objects and meanings as a `ConsultResult` candidate (above) |
+
+**Default order:** groups in travel order (or the agent's naming order), and
+within a group **the user's own saved places lead**, then route order.
+
+**Streaming:** `answer` is emitted as one `answer` frame in the same terminal
+batch as `tool_result`, before `message`. It does not stream progressively.
 
 ### `error`
 
@@ -305,6 +363,9 @@ data: {"id":"find_saved#0","step":"find_saved.summary","title":"searched your sa
 
 event: tool_result
 data: <ToolResult JSON>
+
+event: answer
+data: <Answer JSON>
 
 event: message
 data: {"content": "<final assistant text>"}

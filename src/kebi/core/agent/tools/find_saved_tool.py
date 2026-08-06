@@ -35,9 +35,11 @@ from kebi.core.agent.reasoning import ReasoningStep
 from kebi.core.agent.state import AgentState
 from kebi.core.agent.stream_emit import emit_step_active, emit_step_done
 from kebi.core.agent.tools._area_anchor import (
+    SearchTarget,
     anchors_from_state,
-    capped,
-    gather_per_area,
+    gather_targets,
+    journey_from_state,
+    search_targets,
 )
 from kebi.core.agent.tools._corridor import (
     enclosing_context,
@@ -65,7 +67,6 @@ from kebi.core.places.hybrid_search_service import HybridSearchService
 from kebi.core.places.models import (
     HybridSearchFilters,
     HybridSearchHit,
-    LocationContext,
     PlaceCategory,
 )
 
@@ -285,6 +286,7 @@ async def _find_saved_at_areas(
     state: AgentState,
     tool_call_id: str,
     anchors: list[AreaEntity],
+    journey: bool,
     query: str,
     categories: list[PlaceCategory] | None,
     tags: list[str] | None,
@@ -293,37 +295,43 @@ async def _find_saved_at_areas(
     base_id: str,
     started: float | None,
 ) -> Command[Any]:
-    """The user's saves inside each area the agent named, tagged by area.
+    """The user's saves at each area the agent named, tagged by where they are.
 
-    Runs **one search per area, serially** — `hybrid_search` closes over a
+    Runs **one search per target, serially** — `hybrid_search` closes over a
     single request-scoped `AsyncSession`, and SQLAlchemy sessions are not
     concurrency-safe. That is affordable here precisely because these are DB
     reads over the user's own small pool, with no provider call and nothing
-    billed. Each area gets its own share of the limit so a city where the user
-    has forty saves cannot crowd out the three other areas they asked about.
-    """
-    per_area = max(1, -(-limit // len(anchors)))
+    billed. Each target gets its own share of the limit so a city where the
+    user has forty saves cannot crowd out the other areas they asked about.
 
-    async def _run(
-        _entity: AreaEntity, location: LocationContext
-    ) -> list[HybridSearchHit]:
+    On a journey the stretches between areas are searched too — a place they
+    saved months ago that happens to sit on today's road is the single best
+    thing kebi can put in front of them, and it lives in neither endpoint.
+    """
+    targets = search_targets(
+        anchors,
+        movement_cfg,
+        journey=journey,
+        max_areas=get_config().agent.area_anchor.max_areas,
+    )
+    per_target = max(1, -(-limit // max(1, len(targets))))
+
+    async def _run(target: SearchTarget) -> list[HybridSearchHit]:
         return await hybrid_search.search(
             user_id=state["user_id"],
             query=query,
             filters=HybridSearchFilters(
                 categories=categories or None,
                 tags=tags or None,
-                lat=location.lat,
-                lng=location.lng,
-                radius_m=location.radius_m,
+                lat=target.context.lat,
+                lng=target.context.lng,
+                radius_m=target.context.radius_m,
             ),
-            limit=per_area,
+            limit=per_target,
         )
 
-    tagged = await gather_per_area(
-        anchors,
-        movement_cfg,
-        max_areas=len(anchors),
+    tagged = await gather_targets(
+        targets,
         concurrency=1,
         runner=_run,
         dedup_key=lambda hit: hit.place.id or hit.place.place_name,
@@ -338,9 +346,9 @@ async def _find_saved_at_areas(
                 rrf_score=hit.rrf_score,
                 vector_rank=hit.vector_rank,
                 text_rank=hit.text_rank,
-                anchor_area_key=area.entity_key,
+                anchor_area_key=target.group_key,
             )
-            for area, hit in tagged[:limit]
+            for target, hit in tagged[:limit]
         ],
         empty_reason=None if tagged else "no_match",
     )
@@ -404,7 +412,8 @@ async def _run_find_saved_impl(
             hybrid_search=hybrid_search,
             state=state,
             tool_call_id=tool_call_id,
-            anchors=capped(anchors, get_config().agent.area_anchor.max_areas),
+            anchors=anchors,
+            journey=journey_from_state(state),
             query=query,
             categories=categories,
             tags=tags,

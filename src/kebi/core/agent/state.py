@@ -168,6 +168,22 @@ class AgentState(TypedDict):
     # to [] each turn by `build_turn_payload` (plain overwrite, no reducer) —
     # the areas one question was about are not the areas of the next.
     area_anchors: list[dict[str, Any]]
+    # Whether the agent said people travel between those areas — set by
+    # `suggest_areas(travel_between=...)`. When true the anchors are a path
+    # and the stretches between them are searched too; when false they are
+    # independent places that happen to be in one answer.
+    #
+    # The agent's call, never inferred from distance: it knows Hoi An → Hue is
+    # a ride people stop along, that two neighborhoods in one city have
+    # nothing between them worth pinning, and that Hanoi → Saigon is a flight.
+    # Geometry cannot separate those three.
+    area_journey: bool
+    # The turn's assembled answer (`core/agent/answer.py`) — every tool's
+    # candidates as flat items plus the ordered group index, so a client can
+    # render Hoi An / the road / Hue without merging tool payloads itself.
+    # Populated by `finalize_node`, cleared by `scrub_tool_results_node` for
+    # the same reason `tool_results` is: it must never reach the checkpointer.
+    answer: dict[str, Any] | None
     steps_taken: int
     error_count: int
     tool_calls_used: int

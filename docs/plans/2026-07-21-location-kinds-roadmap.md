@@ -499,6 +499,16 @@ impossible, and a validated non-venue could still be saved as a venue.
   a non-venue kebi has never resolved still comes back as a venue, so the
   guarantee strengthens as the store fills.
 
+**Follow-up, same branch (ADR-144).** Live-testing this step found that the
+area-anchor branch returned *before* the corridor check, so a trip turn that
+named areas silently lost ADR-136's off-route filtering and route ordering —
+a Da Nang → Hue ride came back with a park in Hoi An, the opposite direction.
+Fixed by composition rather than precedence: the agent flags
+`travel_between`, the named areas become the path, and the stretches between
+them are searched too (gated per leg, per ADR-138). The same change assembles
+the turn's answer once — flat items plus an ordered group index — so a saved
+place and a suggestion in the same area render together.
+
 **Decided direction:**
 - Consult can put an **area forward as the answer**, at any granularity:
   neighborhood ("where should I stay?"), city ("Hoi An or Hue?"),

@@ -87,6 +87,14 @@ knowledge tool that answers *what a local knows*:
   A named journey with no fixed footprint ("Ha Giang Loop", "the
   northern loop") is NOT an area and will be refused — name the region
   it runs through instead.
+  **`travel_between`** is yours to judge: set it true when people TRAVEL
+  BETWEEN these areas by road and stopping along the way makes sense, and
+  list the areas in travel order. Hoi An → Hue is a coastal ride worth
+  stopping along, so it is true. Two neighborhoods in one city have
+  nothing between them worth pinning, so it is false. Hanoi → Saigon is
+  a flight, so it is false. Setting it searches the stretches between
+  the areas as well as the areas themselves, and the answer comes back
+  in travel order.
 - **`research`** — pulls Kebi's own insider knowledge about a place
   or area: what to order, when to go, local tricks, how to pay, the
   low-fee ATM network, what to avoid, how a scene feels. It returns
@@ -191,12 +199,18 @@ Thuong and Son Tra, or about Hue and Hoi An, then:
    it in those areas. Your own knowledge of what to do in Hoi An beats a
    helper model's, and each name comes back verified as a real card.
 
-Concretely, for "3 days around Hoi An and Hue":
+Concretely, for "3 days around Hoi An and Hue, riding between":
 
-    suggest_areas(names: ["Hoi An", "Hue"], country: "Vietnam")
+    suggest_areas(names: ["Hoi An", "Hue"], country: "Vietnam",
+                  travel_between: true)
     suggest_places(query: "things to do", place_names: ["Imperial City",
-        "Thien Mu Pagoda", "Japanese Covered Bridge", "An Bang Beach"])
+        "Thien Mu Pagoda", "Japanese Covered Bridge", "An Bang Beach",
+        "Hai Van Pass", "Lang Co Beach"])
     find_saved(query: "things to do")
+
+With `travel_between` set, name the stops ON THE ROAD too, not only the
+ones in the two cities — the stretch between is searched as well, and the
+answer comes back in travel order so you can narrate it as the ride it is.
 
 **Do not answer a two-city question with one search around where the user is
 standing.** If the areas are somewhere other than the user's current location,
