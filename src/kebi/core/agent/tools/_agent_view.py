@@ -119,9 +119,20 @@ def candidate_view(candidate: ConsultCandidate) -> dict[str, Any]:
         # see it.
         view["segment"] = candidate.segment
     if candidate.notes:
-        # Claim text only. Ids, confidences, and vote tallies are ranking
-        # inputs the service already applied — the order IS the ranking.
-        view["kebi_knows"] = [n.text for n in candidate.notes]
+        # Fact + coarse origin. Ids, confidences, and vote tallies are
+        # ranking inputs the service already applied — the order IS the
+        # ranking. The origin stays because the answer is required to say
+        # how kebi knows ("someone shared a video about this place"), and
+        # an unattributed fact reads as the model's own guess.
+        view["kebi_knows"] = [_note_view(n) for n in candidate.notes]
+    return view
+
+
+def _note_view(note: Any) -> dict[str, Any]:
+    """One insider fact plus where it came from (community / expert / web)."""
+    view: dict[str, Any] = {"fact": note.text}
+    if note.source:
+        view["from"] = note.source
     return view
 
 
@@ -133,7 +144,9 @@ def consult_view(result: ConsultResult) -> dict[str, Any]:
     if result.empty_reason:
         view["empty_reason"] = result.empty_reason
     if result.area_notes:
-        view["kebi_knows_about_the_area"] = [n.text for n in result.area_notes]
+        view["kebi_knows_about_the_area"] = [
+            _note_view(n) for n in result.area_notes
+        ]
     return view
 
 

@@ -183,14 +183,20 @@ async def _run_find_known_impl(
             for segment in segments:
                 known = await known_places.find(
                     working=segment.working,
-                    limit=min(per_segment, limit),
+                    # Same headroom rule as find_saved's fan-out: a leg's
+                    # circle contains its end stops, so already-attributed
+                    # places would otherwise crowd the leg's slots and the
+                    # genuinely-on-the-way place ranks off the end.
+                    limit=min(per_segment, limit) + len(seen),
                     **find_context,
                 )
+                added = 0
                 for k in known:
                     key = k.place.id or k.place.place_name
-                    if key in seen:
+                    if key in seen or added >= per_segment:
                         continue
                     seen.add(key)
+                    added += 1
                     candidates.append(
                         ConsultCandidate(
                             place=k.place,

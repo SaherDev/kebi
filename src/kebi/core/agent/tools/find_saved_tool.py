@@ -325,13 +325,21 @@ async def _run_find_saved_impl(
                     country=None,
                     working=segment.working,
                 ),
-                limit=per_segment,
+                # Headroom for duplicates: a leg's circle contains the stops
+                # at both ends, so already-attributed saves re-rank at the
+                # top of a leg search and, at the bare per-segment limit,
+                # crowd out the genuinely-on-the-way save the leg exists to
+                # find. Asking for `len(seen)` extra guarantees the dedup
+                # below can discard every repeat and still fill the segment.
+                limit=per_segment + len(seen),
             )
+            added = 0
             for hit in seg_hits:
                 key = hit.place.id or hit.place.place_name
-                if key in seen:
+                if key in seen or added >= per_segment:
                     continue
                 seen.add(key)
+                added += 1
                 candidates.append(
                     ConsultCandidate(
                         place=hit.place,

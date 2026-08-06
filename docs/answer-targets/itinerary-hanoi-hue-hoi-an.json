@@ -1,6 +1,6 @@
 {
   "name": "itinerary-hanoi-hue-hoi-an",
-  "captured_at": "2026-08-07",
+  "captured_at": "2026-08-07 (run 4, after leg-crowding fix)",
   "adr": "ADR-148",
   "description": "Live /v1/chat answer for a multi-stop trip turn, captured as the quality target for itinerary answers. Seeded user: six saves along the route, a taste profile, and curated claims per place and city. What must hold: stop-by-stop structure in trip order, saves pinned to their city with insider notes spent, an on-the-way call-out for a city the user never named, the leg treated as part of the trip, and exactly one closing question (trip nights).",
   "request": {
@@ -43,7 +43,7 @@
   },
   "response": {
     "type": "agent",
-    "message": "you've got a solid line already saved across the route. here's how i'd play it:\n\n[hanoi](kebi://area/vn/hanoi)\n\nstart with [Railway Tuan](kebi://venue/939ba8f5-e83b-4e64-9d3b-b1eeb00b096b) Cafe in the old quarter. it's cozy and morning light is the move there, you've got a long drive south after, so hit it early before the heat. the 7pm train is the one worth waiting for if you're sticking around longer, but for a pass-through, coffee and the vibe is enough.\n\nhue\n\n[Quán Hạnh](kebi://venue/a3c3ca18-4041-4188-ad8d-9cf52df669bb) is your stop here, traditional banh loc and it's cash only. go before 6, the banh loc runs out early evening and that's the whole reason to be there. it's a dinner move, not lunch.\n\nthe leg between hue and hoi an\n\nnot on your list but it's on your way, [Bếp](kebi://venue/a853b835-5e9a-4169-a9ad-c4aa1c4175f4) Hiền sits on the drive and you've got places saved there already. closes between services around 2 to 5pm, so plan lunch or dinner around that gap. if you're riding the motorbike route, [Motorvina Da Nang](kebi://venue/4892f6da-ab37-4df0-b4a7-a2b7e244ca98) is on the way between the cities and does one-way scooter rentals if you want to tackle the Hai Van Pass properly.\n\nhoi an\n\n[Roving Chill house](kebi://venue/743de441-cdee-4166-80a5-576215e31bcc) is the one from your saves, and it's the right move here, go before 10 in the morning when the rice paddy light is good and the tour groups haven't landed yet. then [Nữ Eatery](kebi://venue/1965297d-4ab1-49a9-9084-723c9909d2ce) for a casual lunch or brunch vibe on the same street.\n\nhow many nights are you spending in each city? that changes what else is worth your time once you've eaten.",
+    "message": "you've got a solid route already saved. here's how to run it:\n\n[hanoi](kebi://area/vn/hanoi)\n\n[Railway Tuan](kebi://venue/939ba8f5-e83b-4e64-9d3b-b1eeb00b096b) Cafe in the old quarter is the move. cozy spot with morning light, go early before the heat hits and you head south. if you're sticking around longer, the 7pm train is worth waiting for, but for a pass-through, coffee and the vibe is enough.\n\nhue\n\n[Quán Hạnh](kebi://venue/a3c3ca18-4041-4188-ad8d-9cf52df669bb) for traditional banh loc. cash only, and the banh loc runs out by early evening so hit it before 6. that's the whole reason to be there.\n\nthe leg between hue and hoi an\n\nthis is where your route gets interesting. [Bếp](kebi://venue/a853b835-5e9a-4169-a9ad-c4aa1c4175f4) Hiền sits on the drive between the cities, it closes between services around 2 to 5pm, so plan lunch or dinner around that gap. if you want to stop for sunset and a drink, [Kalà Kalà Beach Club](kebi://venue/a5a27bb2-d0ec-4b33-81a9-cb3baa1b9dc4) is on the way and daybeds book out on weekends, so a weekday at 4pm is yours to grab.\n\n[Motorvina Da Nang](kebi://venue/4892f6da-ab37-4df0-b4a7-a2b7e244ca98) is also on this leg if you want to tackle the Hai Van Pass properly on a one-way rental.\n\nhoi an\n\n[Roving Chill house](kebi://venue/743de441-cdee-4166-80a5-576215e31bcc) first, before 10 in the morning when the rice paddy light is good and tour groups haven't landed yet. then [Nữ Eatery](kebi://venue/1965297d-4ab1-49a9-9084-723c9909d2ce) for a casual lunch or brunch vibe, same street over.\n\nhow many nights are you spending in each city? that changes what else is worth your time once you've eaten.",
     "data": {
       "reasoning_steps": [
         {
@@ -52,26 +52,26 @@
           "summary": "around Hanoi, Vietnam",
           "source": "agent",
           "visibility": "user",
-          "timestamp": "2026-08-06T23:32:32.188804Z",
-          "duration_ms": 2047.339999990072
+          "timestamp": "2026-08-06T23:40:22.656560Z",
+          "duration_ms": 2348.715333006112
         },
         {
           "step": "find_known.summary",
           "title": "checked what I know around here",
-          "summary": "2 spots — Roving Chill house, Motorvina Da Nang -…",
+          "summary": "1 spot — Motorvina Da Nang -…",
           "source": "agent",
           "visibility": "user",
-          "timestamp": "2026-08-06T23:32:34.034662Z",
-          "duration_ms": 73.0131670134142
+          "timestamp": "2026-08-06T23:40:23.910618Z",
+          "duration_ms": 78.27854101196863
         },
         {
           "step": "find_saved.summary",
           "title": "searched your saved spots",
-          "summary": "5 spots — RAILWAY TUAN CAFE, Quán Hạnh, +3 more",
+          "summary": "6 spots — RAILWAY TUAN CAFE, Quán Hạnh, +4 more",
           "source": "agent",
           "visibility": "user",
-          "timestamp": "2026-08-06T23:32:36.416625Z",
-          "duration_ms": 444.85929200891405
+          "timestamp": "2026-08-06T23:40:25.751816Z",
+          "duration_ms": 629.1357090231031
         }
       ],
       "entities": [
@@ -105,6 +105,13 @@
         },
         {
           "kind": "venue",
+          "key": "a5a27bb2-d0ec-4b33-81a9-cb3baa1b9dc4",
+          "name": "Kalà Kalà Beach Club",
+          "uri": "kebi://venue/a5a27bb2-d0ec-4b33-81a9-cb3baa1b9dc4",
+          "icon": null
+        },
+        {
+          "kind": "venue",
           "key": "4892f6da-ab37-4df0-b4a7-a2b7e244ca98",
           "name": "Motorvina Da Nang",
           "uri": "kebi://venue/4892f6da-ab37-4df0-b4a7-a2b7e244ca98",
@@ -115,7 +122,7 @@
           "key": "743de441-cdee-4166-80a5-576215e31bcc",
           "name": "Roving Chill house",
           "uri": "kebi://venue/743de441-cdee-4166-80a5-576215e31bcc",
-          "icon": "🍹"
+          "icon": null
         },
         {
           "kind": "venue",
@@ -125,12 +132,11 @@
           "icon": null
         }
       ],
-      "recommendation_id": "655a7ef3-d8d9-40d5-8dd7-03bdf68a285b"
+      "recommendation_id": "f87a6d45-847f-489a-8e2a-0ab9163bb063"
     },
     "tool_calls_used": 2
   },
   "known_gaps": [
-    "Kalà Kalà (saved, taste-matched beach club in Da Nang) was retrieved but not named in the answer",
-    "no explicit taste attribution line ('you keep saving beach clubs, so...')"
+    "provenance attribution ('you saved this', 'your taste', 'from a shared video') fires inconsistently across runs — prompt rule added, but the guarantee should come from server-derived entity badges, not the model"
   ]
 }
