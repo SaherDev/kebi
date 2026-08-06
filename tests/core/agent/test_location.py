@@ -75,6 +75,7 @@ def test_working_location_scope_fields_default_to_neutral() -> None:
 _CFG = MovementConfig()  # walkable=1000 nbhd=2500 city=7000 metro=45000
 #         walking×1.0 cycling×1.5 transit×2.0 ride×2.2 drive×2.6
 #         density: dense×0.7 medium×1.0 sparse×1.6
+#         capped at max_radius_m (ADR-143)
 
 
 def test_resolve_radius_tier_times_mode_multiplier() -> None:
@@ -82,12 +83,16 @@ def test_resolve_radius_tier_times_mode_multiplier() -> None:
     assert resolve_radius("walking", "walkable", "normal", "medium", _CFG) == 1000.0
     # city base 7000 × driving 2.6 × medium 1.0
     assert resolve_radius("driving", "city", "normal", "medium", _CFG) == 7000.0 * 2.6
-    # metro base 45000 × transit 2.0 × medium 1.0
-    assert resolve_radius("transit", "metro", "normal", "medium", _CFG) == 45000.0 * 2.0
+    # metro base 45000 × transit 2.0 = 90 km, capped (ADR-143). Uncapped, the
+    # wide end of this table covered a whole island on every "nearby" search.
+    assert (
+        resolve_radius("transit", "metro", "normal", "medium", _CFG)
+        == _CFG.max_radius_m
+    )
 
 
 def test_resolve_radius_reach_shifts_the_tier() -> None:
-    # `far` shifts city → metro before the lookup.
+    # `far` shifts city → metro before the lookup (45 km, under the cap).
     assert resolve_radius("walking", "city", "far", "medium", _CFG) == 45000.0 * 1.0
     # `compact` shifts neighborhood → walkable.
     assert (

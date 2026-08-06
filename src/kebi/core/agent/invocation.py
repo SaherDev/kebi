@@ -22,6 +22,8 @@ def build_turn_payload(
     memory_summary: str,
     user_location: dict[str, Any] | None = None,
     movement_profile: dict[str, Any] | None = None,
+    local_time: str | None = None,
+    taste_values: list[str] | None = None,
 ) -> dict[str, Any]:
     """Build the per-turn state update for `graph.ainvoke(...)`.
 
@@ -43,6 +45,9 @@ def build_turn_payload(
       taste_profile_summary: behavior-derived preference bullets.
       memory_summary: user-stated facts with confidence scores.
       user_location: the user's actual location, optional {lat, lng}.
+      local_time: the caller's local wall-clock time (ISO-8601), optional.
+        Supplies day-of-week and hour to the turn; without it the agent
+        cannot reason about a schedule and must not pretend to.
       movement_profile: the user's mobility profile, optional. Plain overwrite
         — re-supplied every turn from the request, never carried (contrast
         `working_location`); a turn that omits it resets state to None.
@@ -54,6 +59,7 @@ def build_turn_payload(
         "messages": [HumanMessage(content=message)],
         "reasoning_steps": [],
         "tool_results": [],
+        "tool_payloads": [],
         "taste_profile_summary": taste_profile_summary,
         "memory_summary": memory_summary,
         "user_id": user_id,
@@ -61,6 +67,8 @@ def build_turn_payload(
         "working_location": LOCATION_INHERIT,
         "location_clarification": None,
         "movement_profile": movement_profile,
+        "local_time": local_time,
+        "taste_values": taste_values or [],
         "steps_taken": 0,
         "error_count": 0,
         "tool_calls_used": 0,

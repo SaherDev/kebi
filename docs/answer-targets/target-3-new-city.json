@@ -1,0 +1,78 @@
+{
+    "type": "agent",
+    "message": "haven't got your saves from [tokyo](kebi://area/jp/tokyo) yet so i'm going off what i know, but here are some solid picks depending on what kind of night you want.\n\nif you're after something iconic and you can get a seat, [Sukiyabashi Jiro](kebi://venue/d0d9936d-5eb7-4fea-8b9a-e9c517779e62) in Ginza is the one. that's the [sushi](kebi://venue/4a998fba-adc2-471a-a2fd-cd86cc33a333) counter most people only dream about. realistically though, it books out months ahead, so tonight is a long shot unless you already have a reservation.\n\nsame story with Sushi Saito Azabudai, another serious omakase counter, and [Narisawa](kebi://venue/e7b44b05-ab76-4a71-bb81-3cc243575088) in Minamiaoyama, which is the place for innovative Japanese cuisine with a nature-forward tasting menu. both are worth planning ahead for.\n\nfor tonight without a reservation, [Floril\u00e8ge](kebi://venue/56ae026a-1f8c-49ea-b71b-d4704b1b3779) in Toranomon is a strong pick. it's French-Japanese, one michelin star, and they sometimes have counter seats available on the day. worth calling ahead.\n\nwhat would help me narrow this down: what are you feeling, sushi, something more casual, a particular part of the city? and are you solo or with people? tokyo is huge and the right answer really depends on which direction you want to go.",
+    "data": {
+        "reasoning_steps": [
+            {
+                "step": "agent.location_resolved",
+                "title": "found your location",
+                "summary": "around Tokyo, Japan",
+                "source": "agent",
+                "visibility": "user",
+                "timestamp": "2026-08-06T13:28:27.330037Z",
+                "duration_ms": 4325.263749997248
+            },
+            {
+                "step": "find_known.summary",
+                "title": "checked what I know around here",
+                "summary": "nothing I know of fits that here",
+                "source": "agent",
+                "visibility": "user",
+                "timestamp": "2026-08-06T13:28:35.682764Z",
+                "duration_ms": 7.107833007466979
+            },
+            {
+                "step": "find_saved.summary",
+                "title": "searched your saved spots",
+                "summary": "nothing saved matched that",
+                "source": "agent",
+                "visibility": "user",
+                "timestamp": "2026-08-06T13:28:49.168021Z",
+                "duration_ms": 20.004375008284114
+            },
+            {
+                "step": "suggest_places.summary",
+                "title": "suggested a few spots",
+                "summary": "5 spots \u2014 Sukiyabashi Jiro, Narisawa, +3 more",
+                "source": "agent",
+                "visibility": "user",
+                "timestamp": "2026-08-06T13:28:54.427283Z",
+                "duration_ms": 1284.7122500097612
+            }
+        ],
+        "entities": [
+            {
+                "kind": "area",
+                "key": "jp/tokyo",
+                "name": "Tokyo",
+                "uri": "kebi://area/jp/tokyo"
+            },
+            {
+                "kind": "venue",
+                "key": "d0d9936d-5eb7-4fea-8b9a-e9c517779e62",
+                "name": "Sukiyabashi Jiro",
+                "uri": "kebi://venue/d0d9936d-5eb7-4fea-8b9a-e9c517779e62"
+            },
+            {
+                "kind": "venue",
+                "key": "4a998fba-adc2-471a-a2fd-cd86cc33a333",
+                "name": "Sushi Saito Azabudai",
+                "uri": "kebi://venue/4a998fba-adc2-471a-a2fd-cd86cc33a333"
+            },
+            {
+                "kind": "venue",
+                "key": "e7b44b05-ab76-4a71-bb81-3cc243575088",
+                "name": "Narisawa",
+                "uri": "kebi://venue/e7b44b05-ab76-4a71-bb81-3cc243575088"
+            },
+            {
+                "kind": "venue",
+                "key": "56ae026a-1f8c-49ea-b71b-d4704b1b3779",
+                "name": "Floril\u00e8ge",
+                "uri": "kebi://venue/56ae026a-1f8c-49ea-b71b-d4704b1b3779"
+            }
+        ],
+        "recommendation_id": "e5b79e67-2fba-4715-bdd3-2d9f3dee9b66"
+    },
+    "tool_calls_used": 3
+}

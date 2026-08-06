@@ -35,6 +35,7 @@ def note_source_label(source_type: SourceType) -> str:
     """The coarse origin label for a claim's source_type."""
     return NOTE_SOURCE_LABELS.get(source_type, "community")
 
+
 _COUNTRY_CODE_RE = re.compile(r"^[a-z]{2}$")
 
 

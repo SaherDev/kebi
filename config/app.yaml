@@ -334,6 +334,11 @@ knowledge:
   kebi_message_review_status: approved
   # Max insider notes surfaced on one place in the Library read (ADR-127).
   place_notes_limit: 6
+  # Insider notes attached to place-tool results on the retrieval path so a
+  # recommendation turn carries what kebi knows without spending a `research`
+  # call (ADR-137). Per candidate, and per turn for the area pool.
+  candidate_notes_limit: 2
+  area_notes_limit: 3
   # Research read path — the knowledge layer's agent-facing reader.
   # `entity_confidence_min` is the resolve-vs-clarify threshold (exact
   # working-location match resolves at 1.0, verified geocode at 0.8; below
@@ -397,20 +402,27 @@ agent:
     # provider lookups (bounded by a semaphore inside the tool). The budget
     # covers both phases — pad over find_saved's pure-DB timeout.
     suggest_places: 18
-    # discover_places makes exactly one PlacesSearchService.find() call (DB
-    # first, then Google fallback when empty). Same pure-DB / single-provider
-    # budget as find_saved.
-    discover_places: 8
     # research reads the claims store by indexed entity key (no LLM, no
     # provider); at most one free Nominatim geocode when the asked-about
     # area isn't the working location. Same budget as the pure-DB tools.
     research: 8
+    find_known: 8
   # find_saved-specific knobs. `default_limit` is what the tool uses when
   # the agent omits the `limit` arg. `max_limit` caps any agent-supplied
   # value so the LLM cannot ask for an unbounded result set.
   find_saved:
     default_limit: 10
     max_limit: 25
+  # find_known — claims-driven retrieval (ADR-138). Two indexed reads, no
+  # LLM and no provider, so it leads a recommendation turn. `scan_limit`
+  # bounds the geofenced claims join; `notes_per_place` runs richer than the
+  # passive attach limit because here the facts ARE the reason the place
+  # surfaced.
+  find_known:
+    default_limit: 5
+    max_limit: 15
+    notes_per_place: 3
+    scan_limit: 300
   # suggest_places — knobs for the candidate-naming + provider-validation
   # flow. `default_limit` / `max_limit` cap what the agent can ask back
   # (same role as in `find_saved`). `name_count` is how many candidate
@@ -423,12 +435,6 @@ agent:
     max_limit: 15
     name_count: 8
     provider_concurrency: 5
-  # discover_places — provider-driven nearby search (no LLM, no saved-collection
-  # lookup). Wider defaults than suggest_places since results come straight from
-  # the provider's ranked list, not a small LLM-named shortlist.
-  discover_places:
-    default_limit: 10
-    max_limit: 25
   # research — insider notes from the knowledge layer. `default_limit` /
   # `max_limit` cap the agent-supplied `limit`; `notes_limit` is the
   # service's own hard cap per call. Kept tight: the notes feed one prose
@@ -466,6 +472,12 @@ movement:
     dense: 0.7
     medium: 1.0
     sparse: 1.6
+  # Ceiling on the resolved radius (ADR-143). The three factors above
+  # multiply, and at the wide end that compounded past any useful search:
+  # metro x motorbike x sparse resolved to 172.8 km, wider than Bali is long.
+  # A corridor search may exceed this — that width is route geometry, not a
+  # guess (see anchor_to_corridor).
+  max_radius_m: 60000
   fallback:            # used when the request carries no movement_profile
     reach: normal
     available_modes: [walking, transit]

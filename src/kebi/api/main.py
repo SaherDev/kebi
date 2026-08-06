@@ -65,7 +65,18 @@ if not get_env().GATEWAY_SHARED_SECRET:
     )
 
 _log_level = os.environ.get("LOG_LEVEL", "WARNING").upper()
-logging.root.setLevel(getattr(logging, _log_level, logging.WARNING))
+# `basicConfig`, not a bare `setLevel`: setting a level on a root logger that
+# has no handler does nothing useful, because records then fall through to
+# logging's `lastResort` handler, which emits WARNING and above regardless.
+# The effect was that every `logger.info` in the service was invisible even
+# with LOG_LEVEL=INFO — diagnostics that exist but cannot be read are worse
+# than none, since they look like the code did not run. `force=True` claims
+# the root handler back from uvicorn's own logging setup.
+logging.basicConfig(
+    level=getattr(logging, _log_level, logging.WARNING),
+    format="%(levelname)s:%(name)s:%(message)s",
+    force=True,
+)
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------

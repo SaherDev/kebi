@@ -94,7 +94,7 @@ async def test_happy_path_command_shape() -> None:
     assert isinstance(msg, ToolMessage)
     assert msg.name == "research"
     assert msg.tool_call_id == "tc-1"
-    payload = ResearchResult.model_validate_json(msg.content)
+    payload = ResearchResult.model_validate(cmd.update["tool_payloads"][-1]["payload"])
     assert payload.notes[0].text == "BIDV charges no fee"
     assert cmd.update["tool_calls_used"] == 1
 
@@ -150,7 +150,9 @@ async def test_empty_reasons_map_to_outcome_step_kinds() -> None:
     }
     for kind, result in cases.items():
         cmd = await _run(_service(result))
-        payload = ResearchResult.model_validate_json(cmd.update["messages"][0].content)
+        payload = ResearchResult.model_validate(
+            cmd.update["tool_payloads"][-1]["payload"]
+        )
         assert payload.empty_reason == kind
         user_steps = [
             s for s in cmd.update["reasoning_steps"] if s.visibility == "user"

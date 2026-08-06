@@ -140,8 +140,7 @@ def test_format_summary_for_agent_joins_lines() -> None:
     result = format_summary_for_agent(lines)
 
     assert result == (
-        "- Loves Japanese food [8 signals]\n"
-        "- Favors restaurant category [6 signals]"
+        "- Loves Japanese food [8 signals]\n- Favors restaurant category [6 signals]"
     )
 
 

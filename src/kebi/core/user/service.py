@@ -125,9 +125,7 @@ class UserDataDeletionService:
                 await session.execute(
                     delete(UserIntent).where(UserIntent.user_id == user_id)
                 )
-                await self._user_places_repo_factory(session).delete_by_user(
-                    user_id
-                )
+                await self._user_places_repo_factory(session).delete_by_user(user_id)
         elif DataScope.chat_history in active:
             # The recall list is surfaced conversation history (ADR-110), so
             # "clear chat history" must erase it too — not only a full wipe.

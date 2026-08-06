@@ -28,6 +28,7 @@ from kebi.core.extraction.extraction_pipeline import (
 from kebi.core.extraction.result_cache import ExtractionResultCache
 from kebi.core.extraction.service import ExtractionService
 from kebi.core.home import HomeService
+from kebi.core.knowledge.candidate_notes_service import CandidateNotesService
 from kebi.core.knowledge.curation_service import KnowledgeCurationService
 from kebi.core.knowledge.curator import KnowledgeCurator
 from kebi.core.knowledge.geo_resolve import EntityGeoResolver
@@ -35,6 +36,7 @@ from kebi.core.knowledge.harvest_bucket import HarvestBucketReader, HarvestBucke
 from kebi.core.knowledge.harvester import KnowledgeHarvester
 from kebi.core.knowledge.kebi_note import KebiNoteProducer
 from kebi.core.knowledge.kebi_note_service import KebiNoteService
+from kebi.core.knowledge.known_places_service import KnownPlacesService
 from kebi.core.knowledge.place_notes_service import PlaceNotesService
 from kebi.core.knowledge.producer import KnowledgeIngestion
 from kebi.core.knowledge.research_resolver import ResearchEntityResolver
@@ -933,6 +935,47 @@ def get_place_notes_service(
     return PlaceNotesService(repo, limit=get_config().knowledge.place_notes_limit)
 
 
+def get_candidate_notes_service(
+    repo: KnowledgeClaimRepository = Depends(  # noqa: B008
+        get_knowledge_claim_repository
+    ),
+) -> CandidateNotesService:
+    """FastAPI dependency providing the CandidateNotesService (ADR-137).
+
+    The claims store read from the retrieval side: the place tools attach the
+    notes for their own candidates and for the turn's area, so insider
+    knowledge rides every recommendation answer rather than only the turns
+    that spend a `research` call.
+    """
+    cfg = get_config().knowledge
+    return CandidateNotesService(
+        repo,
+        per_place_limit=cfg.candidate_notes_limit,
+        area_limit=cfg.area_notes_limit,
+    )
+
+
+def get_known_places_service(
+    repo: KnowledgeClaimRepository = Depends(  # noqa: B008
+        get_knowledge_claim_repository
+    ),
+    places_repo: PlacesRepo = Depends(get_places_repo),  # noqa: B008
+) -> KnownPlacesService:
+    """FastAPI dependency providing the KnownPlacesService (ADR-138).
+
+    Claims-driven retrieval: the geofenced claims join names the places, then
+    the catalog read resolves them by id. Both are indexed reads — no LLM and
+    no place provider — which is what lets `find_known` lead a turn.
+    """
+    cfg = get_config().agent.find_known
+    return KnownPlacesService(
+        repo,
+        places_repo,
+        notes_per_place=cfg.notes_per_place,
+        scan_limit=cfg.scan_limit,
+    )
+
+
 def get_research_service(
     repo: KnowledgeClaimRepository = Depends(  # noqa: B008
         get_knowledge_claim_repository
@@ -1074,6 +1117,12 @@ def get_agent_graph(
         get_candidate_namer_service
     ),
     research_service: ResearchService = Depends(get_research_service),  # noqa: B008
+    candidate_notes: CandidateNotesService = Depends(  # noqa: B008
+        get_candidate_notes_service
+    ),
+    known_places: KnownPlacesService = Depends(  # noqa: B008
+        get_known_places_service
+    ),
 ) -> Any:
     """Build the agent StateGraph per-request.
 
@@ -1117,6 +1166,8 @@ def get_agent_graph(
             candidate_namer,
             places_search_factory,
             research_service,
+            candidate_notes=candidate_notes,
+            known_places=known_places,
             discovery_enabled=identity.discovery_enabled,
         ),
         checkpointer,

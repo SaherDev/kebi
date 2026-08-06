@@ -40,6 +40,15 @@ from kebi.core.places.models import (
 from kebi.core.places.tags import DietaryTag, TagType
 
 
+def _full_result(cmd: Any) -> ConsultResult:
+    """The untrimmed result from the server-side channel (ADR-139).
+
+    The ToolMessage the model reads is a lean projection now, so assertions
+    about ids, scores, and reasons read the payload channel.
+    """
+    return ConsultResult.model_validate(cmd.update["tool_payloads"][-1]["payload"])
+
+
 def _bangkok_working() -> dict[str, Any]:
     return WorkingLocation(
         country="Thailand",
@@ -217,7 +226,7 @@ async def test_no_working_location_returns_no_location_no_calls() -> None:
     )
 
     assert isinstance(cmd, Command)
-    payload = ConsultResult.model_validate_json(cmd.update["messages"][0].content)
+    payload = _full_result(cmd)
     assert payload.empty_reason == "no_location"
     assert payload.candidates == []
     namer.generate.assert_not_called()
@@ -249,7 +258,7 @@ async def test_zero_radius_treated_as_no_location() -> None:
         concurrency=5,
     )
 
-    payload = ConsultResult.model_validate_json(cmd.update["messages"][0].content)
+    payload = _full_result(cmd)
     assert payload.empty_reason == "no_location"
     namer.generate.assert_not_called()
     search.find.assert_not_called()
@@ -281,9 +290,12 @@ async def test_namer_empty_returns_no_match() -> None:
         concurrency=5,
     )
 
-    payload = ConsultResult.model_validate_json(cmd.update["messages"][0].content)
+    # Nothing named, so the catalog floor runs automatically (ADR-140) —
+    # a real nearby place beats a fabricated "head to <area>" tip, and it no
+    # longer depends on the model remembering to ask for it.
+    payload = _full_result(cmd)
     assert payload.empty_reason == "no_match"
-    search.find.assert_not_called()
+    search.find.assert_called_once()
     steps = cmd.update["reasoning_steps"]
     step_ids = [s.step for s in steps]
     assert step_ids == ["suggest_places.locate", "suggest_places.namer_empty"]
@@ -291,7 +303,8 @@ async def test_namer_empty_returns_no_match() -> None:
 
 @pytest.mark.asyncio
 async def test_provider_all_misses_returns_no_match() -> None:
-    """Namer suggests names but provider returns nothing for any of them."""
+    """Namer suggests names, provider has none of them, catalog has nothing
+    either — only then is the turn honestly empty (ADR-140)."""
     namer = _make_namer(
         [
             CandidateName(name="Made-up Spot", reason="r1"),
@@ -316,7 +329,7 @@ async def test_provider_all_misses_returns_no_match() -> None:
         concurrency=5,
     )
 
-    payload = ConsultResult.model_validate_json(cmd.update["messages"][0].content)
+    payload = _full_result(cmd)
     assert payload.empty_reason == "no_match"
     step_ids = [s.step for s in cmd.update["reasoning_steps"]]
     assert step_ids == [
@@ -324,7 +337,8 @@ async def test_provider_all_misses_returns_no_match() -> None:
         "suggest_places.brainstorm",
         "suggest_places.no_provider_hits",
     ]
-    assert search.find.await_count == 2
+    # Two name validations, then one catalog-floor sweep (ADR-140).
+    assert search.find.await_count == 3
 
 
 @pytest.mark.asyncio
@@ -358,7 +372,7 @@ async def test_constraint_filter_drops_everything_returns_no_match() -> None:
         concurrency=5,
     )
 
-    payload = ConsultResult.model_validate_json(cmd.update["messages"][0].content)
+    payload = _full_result(cmd)
     assert payload.empty_reason == "no_match"
     step_ids = [s.step for s in cmd.update["reasoning_steps"]]
     assert step_ids[-1] == "suggest_places.constraints_drop"
@@ -403,7 +417,7 @@ async def test_duplicate_named_candidates_issue_one_provider_call() -> None:
     assert search.find.await_count == 1
     assert search.find.await_args_list[0].args[0].place_names == ["Wat Pho"]
 
-    payload = ConsultResult.model_validate_json(cmd.update["messages"][0].content)
+    payload = _full_result(cmd)
     assert len(payload.candidates) == 1
     assert payload.candidates[0].reason == "first phrasing"
 
@@ -443,7 +457,7 @@ async def test_happy_path_returns_suggested_candidates_with_reasons() -> None:
         concurrency=5,
     )
 
-    payload = ConsultResult.model_validate_json(cmd.update["messages"][0].content)
+    payload = _full_result(cmd)
     assert payload.empty_reason is None
     assert len(payload.candidates) == 2
     for c in payload.candidates:
@@ -536,7 +550,7 @@ async def test_takes_nearest_branch_from_ordered_results() -> None:
         concurrency=5,
     )
 
-    payload = ConsultResult.model_validate_json(cmd.update["messages"][0].content)
+    payload = _full_result(cmd)
     assert len(payload.candidates) == 1
     assert payload.candidates[0].place.place_name == "Chain Bank — Shinjuku"
 
@@ -564,7 +578,7 @@ async def test_limit_caps_returned_candidates() -> None:
         name_count=8,
         concurrency=5,
     )
-    payload = ConsultResult.model_validate_json(cmd.update["messages"][0].content)
+    payload = _full_result(cmd)
     assert len(payload.candidates) == 3
     assert [c.place.place_name for c in payload.candidates] == [
         "Place 0",
@@ -669,7 +683,9 @@ async def test_non_utility_category_keeps_broad_radius() -> None:
 
 
 def test_tool_factory_exposes_same_arg_schema_as_find_saved() -> None:
-    """Byte-identical arg surface keeps the agent prompt small."""
+    """Shares find_saved's arg surface, plus the one arg that makes it the
+    world-knowledge tool: `names`, which the orchestrator fills from its own
+    knowledge so a second namer model is not paid to reproduce it (ADR-141)."""
     namer = _make_namer([])
     factory, search = _make_search_factory(by_name={})
 
@@ -677,7 +693,8 @@ def test_tool_factory_exposes_same_arg_schema_as_find_saved() -> None:
     assert tool.name == "suggest_places"
 
     schema_fields = set(tool.tool_call_schema.model_fields.keys())
-    assert schema_fields == {
+    assert "names" in schema_fields
+    assert schema_fields - {"names"} == {
         "query",
         "categories",
         "tags",
@@ -753,9 +770,7 @@ async def test_warm_row_without_icon_stamped_for_display_only() -> None:
     # The hit already exists in the catalog with icon=None (warm path —
     # icon_hint never fires). The response candidate still shows the
     # namer's pick; no write happens through the tool.
-    namer = _make_namer(
-        [CandidateName(name="Gaa", reason="tasting menu", icon="🌿")]
-    )
+    namer = _make_namer([CandidateName(name="Gaa", reason="tasting menu", icon="🌿")])
     factory, _search = _make_search_factory(
         by_name={"Gaa": [_place("Gaa", place_id="p1")]}
     )
@@ -776,15 +791,13 @@ async def test_warm_row_without_icon_stamped_for_display_only() -> None:
         concurrency=5,
     )
 
-    payload = ConsultResult.model_validate_json(cmd.update["messages"][0].content)
+    payload = _full_result(cmd)
     assert payload.candidates[0].place.icon == "🌿"
 
 
 @pytest.mark.asyncio
 async def test_stored_icon_wins_over_namer_icon() -> None:
-    namer = _make_namer(
-        [CandidateName(name="Gaa", reason="tasting menu", icon="🌿")]
-    )
+    namer = _make_namer([CandidateName(name="Gaa", reason="tasting menu", icon="🌿")])
     stored = _place("Gaa", place_id="p1").model_copy(update={"icon": "🍽️"})
     factory, _search = _make_search_factory(by_name={"Gaa": [stored]})
 
@@ -804,5 +817,84 @@ async def test_stored_icon_wins_over_namer_icon() -> None:
         concurrency=5,
     )
 
-    payload = ConsultResult.model_validate_json(cmd.update["messages"][0].content)
+    payload = _full_result(cmd)
     assert payload.candidates[0].place.icon == "🍽️"
+
+
+class TestOrchestratorSuppliedNames:
+    """The orchestrator names the candidates from its own knowledge; the tool
+    only verifies them (ADR-141).
+
+    These exist because the whole suite passed while this path raised on every
+    live call — every other test leaves `names` unset, so the new branch had no
+    coverage at all.
+    """
+
+    @staticmethod
+    async def _run(names: list[str] | None, namer: MagicMock, factory: Any) -> Any:
+        return await _run_suggest_places(
+            namer=namer,
+            names=names,
+            places_search_factory=factory,
+            state=_state(working_location=_bangkok_working()),
+            tool_call_id="tc-1",
+            query="dinner",
+            categories=None,
+            tags=None,
+            neighborhood_override=None,
+            city_override=None,
+            country_override=None,
+            limit=5,
+            name_count=8,
+            concurrency=5,
+        )
+
+    async def test_supplied_names_are_validated_and_returned(self) -> None:
+        namer = _make_namer([])
+        factory, _search = _make_search_factory(
+            by_name={"Gaggan": [_place("Gaggan", place_id="p1")]}
+        )
+        cmd = await self._run(["Gaggan"], namer, factory)
+        payload = _full_result(cmd)
+        assert [c.place.place_name for c in payload.candidates] == ["Gaggan"]
+        assert payload.candidates[0].source == "suggested"
+
+    async def test_supplying_names_skips_the_namer_model(self) -> None:
+        # The whole point: the orchestrator already holds this knowledge, so a
+        # second model is not paid to reproduce it.
+        namer = _make_namer([CandidateName(name="Unused", reason="r")])
+        factory, _search = _make_search_factory(
+            by_name={"Gaggan": [_place("Gaggan", place_id="p1")]}
+        )
+        await self._run(["Gaggan"], namer, factory)
+        namer.generate.assert_not_awaited()
+
+    async def test_blank_names_are_dropped_not_rejected(self) -> None:
+        namer = _make_namer([])
+        factory, _search = _make_search_factory(
+            by_name={"Gaggan": [_place("Gaggan", place_id="p1")]}
+        )
+        cmd = await self._run(["  ", "Gaggan"], namer, factory)
+        assert [c.place.place_name for c in _full_result(cmd).candidates] == ["Gaggan"]
+
+    async def test_no_names_falls_back_to_the_namer_model(self) -> None:
+        namer = _make_namer([CandidateName(name="Gaggan", reason="famous")])
+        factory, _search = _make_search_factory(
+            by_name={"Gaggan": [_place("Gaggan", place_id="p1")]}
+        )
+        cmd = await self._run(None, namer, factory)
+        namer.generate.assert_awaited_once()
+        assert [c.place.place_name for c in _full_result(cmd).candidates] == ["Gaggan"]
+
+    async def test_the_namer_fallback_is_called_with_the_signature_it_has(
+        self,
+    ) -> None:
+        # Regression: the fallback passed `location=` where the service takes
+        # `working=`, which raised on every call and burned the turn's tool
+        # budget on retries.
+        namer = _make_namer([])
+        factory, _search = _make_search_factory(by_name={})
+        await self._run(None, namer, factory)
+        kwargs = namer.generate.await_args.kwargs
+        assert "working" in kwargs
+        assert "location" not in kwargs

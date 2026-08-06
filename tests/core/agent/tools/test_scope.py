@@ -63,7 +63,5 @@ def test_mixed_categories_clamp_when_any_is_utility() -> None:
 def test_clamp_never_widens() -> None:
     # Already tighter than the walkable radius — left alone (min).
     working = _city_working(radius_m=500.0)
-    out = clamp_to_walkable_for_utility(
-        working, [PlaceCategory.atm], _movement()
-    )
+    out = clamp_to_walkable_for_utility(working, [PlaceCategory.atm], _movement())
     assert out.search_radius_m == 500.0

@@ -142,9 +142,7 @@ class EmbeddingService:
 
         loc = core.location
         if loc:
-            place_bits = [
-                b for b in (loc.neighborhood, loc.city, loc.country) if b
-            ]
+            place_bits = [b for b in (loc.neighborhood, loc.city, loc.country) if b]
             if place_bits:
                 parts.append(f"Location: {', '.join(place_bits)}")
 

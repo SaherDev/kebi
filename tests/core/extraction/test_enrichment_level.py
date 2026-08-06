@@ -17,9 +17,7 @@ async def test_run_executes_each_enricher() -> None:
     e2 = MagicMock()
     e2.enrich = AsyncMock()
 
-    level = EnrichmentLevel(
-        name="enrich", enrichers=[e1, e2], summary_fn=_summary
-    )
+    level = EnrichmentLevel(name="enrich", enrichers=[e1, e2], summary_fn=_summary)
     ctx = ExtractionContext(url=None, user_id="u1", supplementary_text="...")
 
     executed, fired = await level.run(ctx)

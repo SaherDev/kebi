@@ -115,9 +115,7 @@ class TestExtractionContext:
         ctx2 = ExtractionContext(url=None, user_id="u2")
         ctx1.text_evidence.append(_evidence())
         ctx1.known_places.append(
-            KnownPlace(
-                name="X", producer=Producer.GOOGLE_MAPS_LIST, medium=Medium.LIST
-            )
+            KnownPlace(name="X", producer=Producer.GOOGLE_MAPS_LIST, medium=Medium.LIST)
         )
         assert ctx2.text_evidence == []
         assert ctx2.known_places == []

@@ -1,0 +1,93 @@
+{
+    "type": "agent",
+    "message": "monday is actually a good night to be in [canggu](kebi://area/id/bali/canggu), here's how i'd play it from your saves\n\nstart at [Luigi's](kebi://venue/c59914af-38a0-499e-8d5a-b3416eb2ed3e), that's the one to anchor your monday around. they do house and techno nights specifically on mondays, pizza plus a proper dj, and it's 7:30 now so the energy is just starting to build. that's your first move.\n\nthen walk over to [Old Man's](kebi://venue/45a09352-bfd6-403a-b5c5-7b23699a1ce2), it's right there on batu bolong and runs every night of the week. classic beach bar energy, good for a drink between spots, easy backpacker vibe.\n\nif you want to keep going after that, [Sand Bar](kebi://venue/f01f4435-631c-41e9-a3a9-f05356eb82c2) does afterparties every day, beachfront, cocktails, easy end to the night.\n\n[Bella.](kebi://venue/3685d4ef-00be-4d91-9933-d82cf94b5315) is also worth knowing about, it's on berawa and turns into a house and techno spot at night too, so if luigi's gets too packed you've got a backup with the same vibe.\n\nskip for tonight:\n- [Vault](kebi://venue/7861b346-2a73-4a7a-a66c-b58840527758) is wed to sat only, not tonight\n- [The Mesa](kebi://venue/968ba4ad-fc09-4365-8d69-dac6358c1722) is a friday spot\n- [Motel Mexicola](kebi://venue/8099938c-7730-4890-93e1-bd333d3a8ffa) is tuesday's big night, you're one day early\n- [La Favela](kebi://venue/c00a6f5c-20d4-4955-924b-41a38a3fc9d8) is over in seminyak, not worth the ride when your monday is this sorted in canggu\n\nluigi's then old man's then sand bar, your monday is set.",
+    "data": {
+        "reasoning_steps": [
+            {
+                "step": "agent.location_resolved",
+                "title": "found your location",
+                "summary": "around Canggu, Bali, Indonesia",
+                "source": "agent",
+                "visibility": "user",
+                "timestamp": "2026-08-06T13:27:45.992685Z",
+                "duration_ms": 2049.8391250002896
+            },
+            {
+                "step": "find_known.summary",
+                "title": "checked what I know around here",
+                "summary": "5 spots \u2014 Luigi's Hot Pizza Canggu, BELLA. Canggu, +3 more",
+                "source": "agent",
+                "visibility": "user",
+                "timestamp": "2026-08-06T13:27:48.362209Z",
+                "duration_ms": 13.185083997086622
+            },
+            {
+                "step": "find_saved.summary",
+                "title": "searched your saved spots",
+                "summary": "10 spots \u2014 Motel Mexicola | Canggu, Old Man's, +8 more",
+                "source": "agent",
+                "visibility": "user",
+                "timestamp": "2026-08-06T13:27:55.508095Z",
+                "duration_ms": 430.3705830097897
+            }
+        ],
+        "entities": [
+            {
+                "kind": "area",
+                "key": "id/bali/canggu",
+                "name": "Canggu",
+                "uri": "kebi://area/id/bali/canggu"
+            },
+            {
+                "kind": "venue",
+                "key": "c59914af-38a0-499e-8d5a-b3416eb2ed3e",
+                "name": "Luigi's Hot Pizza Canggu",
+                "uri": "kebi://venue/c59914af-38a0-499e-8d5a-b3416eb2ed3e"
+            },
+            {
+                "kind": "venue",
+                "key": "45a09352-bfd6-403a-b5c5-7b23699a1ce2",
+                "name": "Old Man's",
+                "uri": "kebi://venue/45a09352-bfd6-403a-b5c5-7b23699a1ce2"
+            },
+            {
+                "kind": "venue",
+                "key": "f01f4435-631c-41e9-a3a9-f05356eb82c2",
+                "name": "Sand Bar",
+                "uri": "kebi://venue/f01f4435-631c-41e9-a3a9-f05356eb82c2"
+            },
+            {
+                "kind": "venue",
+                "key": "3685d4ef-00be-4d91-9933-d82cf94b5315",
+                "name": "Bella. Canggu",
+                "uri": "kebi://venue/3685d4ef-00be-4d91-9933-d82cf94b5315"
+            },
+            {
+                "kind": "venue",
+                "key": "7861b346-2a73-4a7a-a66c-b58840527758",
+                "name": "Vault Nightclub Bali",
+                "uri": "kebi://venue/7861b346-2a73-4a7a-a66c-b58840527758"
+            },
+            {
+                "kind": "venue",
+                "key": "968ba4ad-fc09-4365-8d69-dac6358c1722",
+                "name": "The Mesa Bali",
+                "uri": "kebi://venue/968ba4ad-fc09-4365-8d69-dac6358c1722"
+            },
+            {
+                "kind": "venue",
+                "key": "8099938c-7730-4890-93e1-bd333d3a8ffa",
+                "name": "Motel Mexicola",
+                "uri": "kebi://venue/8099938c-7730-4890-93e1-bd333d3a8ffa"
+            },
+            {
+                "kind": "venue",
+                "key": "c00a6f5c-20d4-4955-924b-41a38a3fc9d8",
+                "name": "La Favela",
+                "uri": "kebi://venue/c00a6f5c-20d4-4955-924b-41a38a3fc9d8"
+            }
+        ],
+        "recommendation_id": "1949d296-90e8-44e6-b638-29b12e489ab2"
+    },
+    "tool_calls_used": 2
+}

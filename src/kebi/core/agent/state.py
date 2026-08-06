@@ -124,6 +124,12 @@ class AgentState(TypedDict):
       location_clarification — reason string when the working location could
                             not be resolved (ambiguous / insufficient); None
                             otherwise. Reset to None each turn.
+      local_time          — the caller's local wall-clock time, ISO-8601
+                            from the client (ADR-138). Day of week is
+                            load-bearing for a scheduled answer — "tonight
+                            is Luigi's night" is only knowable if kebi knows
+                            it is Monday — and it is the client, not the
+                            server, that knows the user's actual clock.
       movement_profile    — the user's mobility profile from the request
                             (`MovementProfile.model_dump()`) or None when the
                             request omitted it. Plain overwrite, **no
@@ -149,6 +155,17 @@ class AgentState(TypedDict):
     working_location: Annotated[dict[str, Any] | None, merge_working_location]
     location_clarification: str | None
     movement_profile: dict[str, Any] | None
+    local_time: str | None
+    # Controlled-vocabulary values behind the taste summary (ADR-142). The
+    # summary itself is prose for the prompt; these are the same signal kept
+    # matchable, so retrieval can rank a claim or a place by what this user
+    # actually likes instead of leaving taste to the final write-up.
+    taste_values: list[str]
+    # Full tool payloads, server-side only (ADR-139). The ToolMessage the LLM
+    # reads carries a lean projection; the linker, the signal path, and the
+    # response layer need ids, aliases, and the recommendation id, so the
+    # untrimmed result rides here instead. Cleared before checkpoint.
+    tool_payloads: list[dict[str, Any]]
     reasoning_steps: list[ReasoningStep]
     # Structured tool-result payloads produced during the current turn.
     # Populated by `finalize_node` from the about-to-be-stripped

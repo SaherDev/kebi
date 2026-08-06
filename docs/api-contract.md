@@ -113,8 +113,10 @@ atmosphere) come from kebi's knowledge layer and **accumulate over
 time** — a freshly discovered place may initially carry only
 categories + cuisine tags and densify as content flows through
 extraction. Saved places are read via `GET /v1/user/library`;
-discovered and suggested places are returned inside chat responses as
-`tool_results`.
+discovered and suggested places are no longer returned inside chat
+responses at all (ADR-136) — chat sends text plus `kebi://venue/{id}`
+links, and the client fetches the place for the detail screen the link
+opens.
 
 ```json
 {
@@ -166,9 +168,20 @@ place provider), `discover_places` (direct provider lookup for
 utility intents and as a fall-through) — see ADR-089, ADR-090, ADR-091 —
 and `research` (insider answers from the knowledge layer's claims
 store, ADR-129: what to order, local tricks, fees, safety, timing).
-Each tool returns a structured payload that is surfaced to the
-caller in `data.tool_results` so the product UI can render places
-without re-parsing the agent's prose. URL submissions are redirected
+Tool payloads stay server-side (ADR-136). What the caller renders is
+the answer text with entity names already wrapped as markdown links to
+`kebi://{kind}/{entity_key}` URIs, plus a flat `entities` list
+resolving each link. Two kinds:
+
+| Kind    | URI                          | `entity_key`                              | Tap opens          |
+| ------- | ---------------------------- | ----------------------------------------- | ------------------ |
+| `venue` | `kebi://venue/{place id}`    | `places.id` — same id `POST /v1/user/places` takes | The place screen   |
+| `area`  | `kebi://area/{geo key}`      | `{cc}[/{city}[/{neighborhood}]]`, slugged | A light area sheet |
+
+Only entities actually retrieved this turn are ever linked, and only
+the first mention of each is wrapped — an unrecognised name stays
+plain text. A new tool therefore changes what the agent says, never
+what the client draws. URL submissions are redirected
 to `POST /v1/extract` — the chat path never writes to `user_places`.
 
 **Request:**
@@ -190,6 +203,7 @@ to `POST /v1/extract` — the chat path never writes to `user_places`.
 | ------------------ | ---------------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `message`          | `string`                     | Yes      | Natural-language message from the user. Max 4000 chars; longer payloads → 422.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | `location`         | `{ lat: float, lng: float }` | No       | The user's **actual** location — where they physically are. ADR-083 makes this the anchor for per-turn working-location resolution: the agent resolves the location a turn operates against (a place named in the message, one carried from the conversation, or this actual location as fallback) and reverse-geocodes these coords when they are used. Shape unchanged                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `local_time`       | `string \| null`             | No       | The caller's local wall-clock time, ISO-8601 (`2026-08-10T19:30:00+08:00`). Client-supplied for the same reason `location` is — only the device knows the user's real clock, and a server clock in another timezone answers for the wrong day. Day of week is load-bearing (ADR-138): a claim that Monday is a venue's big night is only usable if kebi knows today is Monday. Omitted → the agent answers without a schedule rather than guessing one. Max 40 chars |
 | `movement_profile` | `MovementProfile \| null`    | No       | The user's mobility capability (ADR-084 + ADR-085) — owned by the product repo's `user_settings`, sent each turn like `location`. `{ available_modes, reach }`. `available_modes` items ∈ `walking \| cycling \| motorbike \| driving \| transit \| rideshare`; list is non-empty and represents modes the user _can_ use (licence, owned vehicles, comfort) — NOT per-city availability. `reach` ∈ `compact \| normal \| far`, default `normal`. Omitted → kebi applies a neutral fallback. The agent resolves an effective mode per turn by pairing this capability with the working location's city + density; an explicit mode word in the message still overrides. It never mutates the profile. A stray `default_mode` key (from a pre-ADR-085 client) is silently ignored |
 
 > `user_id` is **no longer a body field**. kebi reads the caller from
@@ -200,18 +214,24 @@ to `POST /v1/extract` — the chat path never writes to `user_places`.
 ```json
 {
   "type": "agent",
-  "message": "Here are three places nearby that fit…",
+  "message": "its monday so tonight is [Luigis](kebi://venue/c0ffee00-…) night, their big night in [Canggu](kebi://area/id/badung/canggu)",
   "data": {
     "reasoning_steps": [],
-    "tool_results": [
+    "entities": [
       {
-        "tool": "find_saved",
-        "tool_call_id": "…",
-        "payload": {
-          /* ConsultResult */
-        }
+        "kind": "venue",
+        "key": "c0ffee00-…",
+        "name": "Luigis",
+        "uri": "kebi://venue/c0ffee00-…"
+      },
+      {
+        "kind": "area",
+        "key": "id/badung/canggu",
+        "name": "Canggu",
+        "uri": "kebi://area/id/badung/canggu"
       }
-    ]
+    ],
+    "recommendation_id": "9c1e…"
   },
   "tool_calls_used": 1
 }
@@ -220,9 +240,22 @@ to `POST /v1/extract` — the chat path never writes to `user_places`.
 | Field             | Type             | Notes                                                                                                                                                                                           |
 | ----------------- | ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `type`            | `string`         | One of `agent`, `error`. No other values are emitted.                                                                                                                                           |
-| `message`         | `string`         | Human-readable response text                                                                                                                                                                    |
-| `data`            | `object \| null` | `agent`: `{ "reasoning_steps": ReasoningStep[], "tool_results": ToolResult[] }` (user-visible steps only). `error`: `{ "detail": string }`                                                      |
+| `message`         | `string`         | Response text. On the `agent` path, entity names are already wrapped as markdown links to `kebi://{kind}/{key}` (ADR-136)                                                                       |
+| `data`            | `object \| null` | `agent`: `{ "reasoning_steps": ReasoningStep[], "entities": ChatEntity[], "recommendation_id": string \| null }` (user-visible steps only). `error`: `{ "detail": string }`                       |
 | `tool_calls_used` | `integer`        | Number of tool calls the agent made this turn (0 if the agent answered without retrieval). Surfaced for rate-limit accounting on the NestJS side and capped at `agent.max_tool_calls` (ADR-091) |
+
+`ChatEntity` shape — one per link in `message`, in the order they appear:
+
+| Field  | Type                  | Notes                                                                                    |
+| ------ | --------------------- | ---------------------------------------------------------------------------------------- |
+| `kind` | `"venue" \| "area"`   | Which detail surface the tap opens                                                        |
+| `key`  | `string`              | `places.id` for a venue; the slugged geo key for an area                                  |
+| `name` | `string`              | Canonical display name — may differ from the text the answer used ("Luigis" vs "Luigi's") |
+| `uri`  | `string`              | `kebi://{kind}/{key}`, pre-composed so the link handler never parses                      |
+
+`recommendation_id` is the turn's consult id, needed by `POST /v1/signal`
+to attribute an accept/reject. It moved here when the tool payloads left
+the wire; `null` on a turn where no place tool ran.
 
 `ReasoningStep` shape:
 
@@ -285,11 +318,8 @@ data: {"id":"find_saved#0","step":"find_saved","title":"searched your saved spot
 event: reasoning_step
 data: {"id":"find_saved#0","step":"find_saved.summary","title":"searched your saved spots","summary":"2 spots — Wagyu, Beef Tei","status":"done","source":"agent","visibility":"user","duration_ms":420.0}
 
-event: tool_result
-data: <ToolResult JSON>
-
 event: message
-data: {"content": "<final assistant text>"}
+data: {"content": "tonight is [Luigis](kebi://venue/c0ffee00-…) night", "entities": [{"kind":"venue","key":"c0ffee00-…","name":"Luigis","uri":"kebi://venue/c0ffee00-…"}]}
 
 event: done
 data: {"tool_calls_used": 1}
@@ -298,9 +328,12 @@ data: {"tool_calls_used": 1}
 | Frame            | When emitted                                                                                       | Data shape                                                 |
 | ---------------- | -------------------------------------------------------------------------------------------------- | ---------------------------------------------------------- |
 | `reasoning_step` | Twice per step over its lifecycle (see below) — the agent, every tool, and the fallback all stream | `ReasoningStep` + stream lifecycle fields (`id`, `status`) |
-| `tool_result`    | Once per completed tool call this turn                                                             | `ToolResult` (tool, tool_call_id, payload)                 |
-| `message`        | Once, after the graph completes, if there is text                                                  | `{"content": string}`                                      |
+| `message`        | Once, after the graph completes, if there is text                                                  | `{"content": string, "entities": ChatEntity[]}`            |
 | `done`           | Always last — even if no message was produced                                                      | `{"tool_calls_used": integer}`                             |
+
+There is no `tool_result` frame: chat renders text and links, and every
+richer view lives on the detail screen a link opens (ADR-136). `content`
+and `entities` follow the same rules as the JSON path.
 
 **Step lifecycle (ADR-102).** Each reasoning step is emitted as **two** `reasoning_step` frames keyed by a stable `id`: an `active` frame when the step starts and a `done` frame when it finishes. The frontend upserts by `id`. On the SSE stream `ReasoningStep` carries two fields beyond the JSON-path shape, and relaxes one:
 
@@ -614,8 +647,8 @@ POST /v1/user/places
 
 | Field               | Type            | Required | Notes                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | ------------------- | --------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `place_core_id`     | `string`        | Yes      | `places.id` of the candidate (consult `tool_results → payload.candidates[].place.id`)                                                                                                                                                                                                                                                                                                                                                      |
-| `recommendation_id` | `string`        | Yes      | The id kebi minted on that consult result (`tool_results → payload.recommendation_id`)                                                                                                                                                                                                                                                                                                                                                     |
+| `place_core_id`     | `string`        | Yes      | `places.id` of the candidate — the `key` on the venue link the user tapped (ADR-136)                                                                                                                                                                                                                                                                                                                                                      |
+| `recommendation_id` | `string`        | Yes      | The id kebi minted for that turn (`data.recommendation_id` on the chat response)                                                                                                                                                                                                                                                                                                                                                     |
 | `reason`            | `string`/`null` | No       | The pick's rationale the card is showing. The reason is **not** persisted server-side, so the client supplies it. On create it is written to the knowledge layer as a **user-scoped `kebi_message` claim** on the place (ADR-127) and surfaces in the Library's `claims` as a `kebi` note — it is **no longer stored on the save as a note** (this amends ADR-114). A re-tap adds nothing (claim-text dedup). Omit or `null` for no reason |
 
 > **ADR-127 note:** the save no longer echoes the reason back as `user_data.note`.
@@ -959,8 +992,8 @@ All protected calls additionally send the `X-Gateway-Token` + `X-Gateway-User-Id
 
 | Endpoint                    | Purpose                                    | NestJS Sends (body)                                          | kebi Returns                                                                                                                                 |
 | --------------------------- | ------------------------------------------ | ------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| POST /v1/chat               | Conversational turn (consult-family agent) | message, optional location, movement_profile                 | type (`agent`\|`error`), message, data (reasoning_steps + tool_results), tool_calls_used                                                     |
-| POST /v1/chat/stream        | SSE streaming chat                         | Same as POST /v1/chat                                        | reasoning_step + tool_result + message + done frames                                                                                         |
+| POST /v1/chat               | Conversational turn (consult-family agent) | message, optional location, movement_profile                 | type (`agent`\|`error`), message (with `kebi://` entity links), data (reasoning_steps + entities + recommendation_id), tool_calls_used        |
+| POST /v1/chat/stream        | SSE streaming chat                         | Same as POST /v1/chat                                        | reasoning_step + message (content + entities) + done frames                                                                                  |
 | GET /v1/home                | Home greeting + suggestion chips           | — (optional `lat`/`lng`/`city`/`local_time`/`weather` query) | HomeResponse (`greeting`, `chips: { text }[]`); fail-open, always `200`                                                                      |
 | GET /v1/user/intents        | "What you wanted" recall list              | — (optional `limit`/`cursor` query params)                   | IntentsResponse (`intents: { id, text, created_at }[]`, `next_cursor`)                                                                       |
 | POST /v1/extract            | Canonical extraction (save a place)        | raw_input                                                    | ExtractPlaceResponse                                                                                                                         |

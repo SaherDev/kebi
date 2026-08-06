@@ -12,7 +12,16 @@ from __future__ import annotations
 from typing import Protocol
 from uuid import uuid4
 
-from sqlalchemy import ColumnElement, and_, or_, select, true
+from sqlalchemy import (
+    ColumnElement,
+    Float,
+    and_,
+    cast,
+    func,
+    or_,
+    select,
+    true,
+)
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -22,8 +31,9 @@ from kebi.core.knowledge.schemas import (
     ReviewStatus,
     SourceType,
 )
+from kebi.core.places.places_repo import PLACES_TABLE as _PlacesTable
 from kebi.db.models import KnowledgeClaim as KnowledgeClaimRow
-from kebi.db.models import KnowledgeReviewStatus
+from kebi.db.models import KnowledgeEntityType, KnowledgeReviewStatus
 
 
 def _to_record(row: KnowledgeClaimRow) -> KnowledgeClaim:
@@ -103,6 +113,17 @@ class KnowledgeClaimRepository(Protocol):
         user_id: str | None = None,
         approved_only: bool = False,
     ) -> list[KnowledgeClaim]: ...
+
+    async def list_place_claims_in_area(
+        self,
+        *,
+        lat: float,
+        lng: float,
+        radius_m: float,
+        user_id: str | None = None,
+        approved_only: bool = True,
+        limit: int = 200,
+    ) -> list[tuple[str, KnowledgeClaim]]: ...
 
 
 class SQLAlchemyKnowledgeClaimRepository:
@@ -214,3 +235,58 @@ class SQLAlchemyKnowledgeClaimRepository:
             )
             rows = (await session.execute(stmt)).scalars().all()
         return [_to_record(row) for row in rows]
+
+    async def list_place_claims_in_area(
+        self,
+        *,
+        lat: float,
+        lng: float,
+        radius_m: float,
+        user_id: str | None = None,
+        approved_only: bool = True,
+        limit: int = 200,
+    ) -> list[tuple[str, KnowledgeClaim]]:
+        """Place-scoped claims whose place sits inside a geofence (ADR-138).
+
+        The inverse of every other read here: instead of "what does kebi know
+        about this place", it answers "which places around here does kebi know
+        anything about" — the query that lets a claim *surface* a venue rather
+        than only annotate one already retrieved.
+
+        Place claims are keyed `place:<id>`, so they carry no geo of their own
+        and cannot be found by a prefix scan over geo keys. The join to
+        `places` supplies the geography, reusing the same `earth_box`
+        predicate as the catalog's own radius search so one turn's geofence
+        means the same thing on both sides.
+
+        Returns `(place_id, claim)` pairs, strongest claim first, so the
+        caller can group per place without a second read.
+        """
+        place_key = func.concat("place:", _PlacesTable.c.id)
+        geo_lat = cast(_PlacesTable.c.location["lat"].astext, Float())
+        geo_lng = cast(_PlacesTable.c.location["lng"].astext, Float())
+        query_box = func.earth_box(func.ll_to_earth(lat, lng), float(radius_m))
+
+        stmt = (
+            select(KnowledgeClaimRow, _PlacesTable.c.id.label("place_id"))
+            .join(_PlacesTable, KnowledgeClaimRow.entity_key == place_key)
+            .where(
+                and_(
+                    KnowledgeClaimRow.entity_type == KnowledgeEntityType.PLACE,
+                    _scope_clause(user_id),
+                    _approved_clause(approved_only),
+                    _PlacesTable.c.location.isnot(None),
+                    _PlacesTable.c.location["lat"].astext.isnot(None),
+                    _PlacesTable.c.location["lng"].astext.isnot(None),
+                    query_box.op("@>")(func.ll_to_earth(geo_lat, geo_lng)),
+                )
+            )
+            .order_by(
+                KnowledgeClaimRow.confidence.desc(),
+                KnowledgeClaimRow.created_at.desc(),
+            )
+            .limit(limit)
+        )
+        async with self._session_factory() as session:
+            result = await session.execute(stmt)
+            return [(row.place_id, _to_record(row[0])) for row in result.all()]

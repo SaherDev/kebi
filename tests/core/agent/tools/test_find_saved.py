@@ -33,6 +33,15 @@ from kebi.core.places.models import (
 )
 
 
+def _full_result(cmd: Any) -> ConsultResult:
+    """The untrimmed result the tool put on the server-side channel (ADR-139).
+
+    The ToolMessage the model reads is now a lean projection, so assertions
+    about ids, scores, and user data read the payload channel instead.
+    """
+    return ConsultResult.model_validate(cmd.update["tool_payloads"][-1]["payload"])
+
+
 def _make_place(name: str = "Test Place", place_id: str = "p1") -> PlaceCore:
     return PlaceCore(
         id=place_id,
@@ -158,17 +167,45 @@ class TestAssembleFilters:
         assert f.lat is None and f.lng is None and f.radius_m is None
         assert f.city is None
 
-    def test_categories_and_tags_passed_through(self) -> None:
+    def test_categories_passed_through(self) -> None:
         f = _assemble_filters(
             categories=[PlaceCategory.restaurant, PlaceCategory.cafe],
-            tags=["Thai", "outdoor_seating"],
+            tags=None,
             neighborhood=None,
             city=None,
             country=None,
             working=None,
         )
         assert f.categories == [PlaceCategory.restaurant, PlaceCategory.cafe]
-        assert f.tags == ["Thai", "outdoor_seating"]
+
+    def test_only_safety_tags_become_a_filter_predicate(self) -> None:
+        """Soft tags must not AND-filter saved rows (ADR-137).
+
+        `HybridSearchFilters.tags` is an AND predicate over persisted tags,
+        so letting a vibe/cuisine value through would exclude every save that
+        extraction happened not to tag that way — the reason saves stopped
+        showing up in answers.
+        """
+        f = _assemble_filters(
+            categories=None,
+            tags=["Thai", "outdoor_seating", "vegetarian", "wheelchair_entrance"],
+            neighborhood=None,
+            city=None,
+            country=None,
+            working=None,
+        )
+        assert f.tags == ["vegetarian", "wheelchair_entrance"]
+
+    def test_no_safety_tags_means_no_tag_predicate_at_all(self) -> None:
+        f = _assemble_filters(
+            categories=None,
+            tags=["lively", "night"],
+            neighborhood=None,
+            city=None,
+            country=None,
+            working=None,
+        )
+        assert f.tags is None
 
     def test_redundant_city_is_stripped_and_geofence_kept(self) -> None:
         """An agent that re-passes the working_location's own city must not
@@ -288,7 +325,7 @@ async def test_happy_path_returns_candidates() -> None:
     assert len(msgs) == 1
     tool_msg = msgs[0]
     assert isinstance(tool_msg, ToolMessage)
-    payload = ConsultResult.model_validate_json(tool_msg.content)
+    payload = _full_result(cmd)
     assert len(payload.candidates) == 2
     assert payload.empty_reason is None
     assert all(c.source == "saved" for c in payload.candidates)
@@ -321,7 +358,7 @@ async def test_empty_results_with_location_returns_no_match() -> None:
         country=None,
         limit=10,
     )
-    payload = ConsultResult.model_validate_json(cmd.update["messages"][0].content)
+    payload = _full_result(cmd)
     assert payload.candidates == []
     assert payload.empty_reason == "no_match"
 
@@ -343,7 +380,7 @@ async def test_empty_results_no_location_no_named_area() -> None:
         country=None,
         limit=10,
     )
-    payload = ConsultResult.model_validate_json(cmd.update["messages"][0].content)
+    payload = _full_result(cmd)
     assert payload.empty_reason == "no_location"
 
 
@@ -364,13 +401,17 @@ async def test_empty_results_no_location_with_named_area_is_no_match() -> None:
         country=None,
         limit=10,
     )
-    payload = ConsultResult.model_validate_json(cmd.update["messages"][0].content)
+    payload = _full_result(cmd)
     assert payload.empty_reason == "no_match"
 
 
 @pytest.mark.asyncio
-async def test_agent_tags_pass_through_to_filter() -> None:
-    """Agent-supplied tags (incl. agent-translated hard constraints) reach SQL."""
+async def test_safety_tags_filter_and_soft_tags_steer_the_query() -> None:
+    """Hard constraints reach SQL; soft preferences reach the query text.
+
+    Both halves matter: a vegetarian must never see a steakhouse, and a
+    `lively` preference must never empty the user's library (ADR-137).
+    """
     hybrid = MagicMock()
     hybrid.search = AsyncMock(return_value=[])
 
@@ -386,8 +427,29 @@ async def test_agent_tags_pass_through_to_filter() -> None:
         country=None,
         limit=10,
     )
-    filters = hybrid.search.await_args.kwargs["filters"]
-    assert filters.tags == ["Thai", "vegetarian", "outdoor_seating"]
+    kwargs = hybrid.search.await_args.kwargs
+    assert kwargs["filters"].tags == ["vegetarian"]
+    assert kwargs["query"] == "dinner Thai outdoor_seating"
+
+
+@pytest.mark.asyncio
+async def test_soft_tag_already_in_the_query_is_not_repeated() -> None:
+    hybrid = MagicMock()
+    hybrid.search = AsyncMock(return_value=[])
+
+    await _run_find_saved(
+        hybrid_search=hybrid,
+        state=_state(working_location=_bangkok_working_location()),
+        tool_call_id="tc-1",
+        query="cozy thai dinner",
+        categories=None,
+        tags=["Thai", "cozy"],
+        neighborhood=None,
+        city=None,
+        country=None,
+        limit=10,
+    )
+    assert hybrid.search.await_args.kwargs["query"] == "cozy thai dinner"
 
 
 @pytest.mark.asyncio
@@ -526,7 +588,7 @@ async def test_saved_candidate_reason_left_for_agent_to_compose() -> None:
         country=None,
         limit=5,
     )
-    payload = ConsultResult.model_validate_json(cmd.update["messages"][0].content)
+    payload = _full_result(cmd)
     assert len(payload.candidates) == 2
     assert all(c.reason is None for c in payload.candidates)
     # `user_data` (which the agent will read to compose a reason) IS

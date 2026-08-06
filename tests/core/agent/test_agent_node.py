@@ -249,3 +249,45 @@ async def test_agent_node_trim_before_sanitize_no_orphaned_tool_message(
     assert ai_idx + 1 < len(history_sent)
     assert isinstance(history_sent[ai_idx + 1], ToolMessage)
     assert history_sent[ai_idx + 1].tool_call_id == tool_call_id
+
+
+class TestTimeContext:
+    """`{time_context}` — the turn knows what day it is (ADR-138).
+
+    A schedule answer ("tonight is Luigi's night") is only correct if the
+    agent knows the day, and only the client knows the user's real clock.
+    """
+
+    def test_a_supplied_clock_names_the_day_and_hour(self) -> None:
+        from kebi.core.agent.graph import _render_time_context
+
+        rendered = _render_time_context({"local_time": "2026-08-10T19:30:00+08:00"})
+        assert "Monday" in rendered
+        assert "19:30" in rendered
+
+    def test_no_clock_says_so_rather_than_assuming_a_day(self) -> None:
+        from kebi.core.agent.graph import _render_time_context
+
+        rendered = _render_time_context({})
+        assert "unknown" in rendered.lower()
+        assert "do not" in rendered.lower()
+
+    def test_an_unparseable_clock_degrades_to_unknown(self) -> None:
+        from kebi.core.agent.graph import _render_time_context
+
+        assert "unknown" in _render_time_context({"local_time": "tuesday-ish"}).lower()
+
+    def test_local_weekday_reads_the_turns_day(self) -> None:
+        from kebi.core.agent.graph import local_weekday
+
+        assert local_weekday({"local_time": "2026-08-10T19:30:00+08:00"}) == "Monday"
+        assert local_weekday({"local_time": None}) is None
+
+    def test_the_clock_is_read_in_the_users_own_offset(self) -> None:
+        # Same instant, two offsets, two different local days — which is the
+        # whole reason the client sends the clock instead of the server using
+        # its own.
+        from kebi.core.agent.graph import local_weekday
+
+        assert local_weekday({"local_time": "2026-08-10T23:30:00-05:00"}) == "Monday"
+        assert local_weekday({"local_time": "2026-08-11T00:30:00+08:00"}) == "Tuesday"

@@ -15,6 +15,12 @@ from langchain_core.messages import AIMessage
 
 from kebi.api.schemas.chat import ChatRequest, ChatResponse
 from kebi.core.agent._trace_context import feature_trace
+from kebi.core.agent.entity_links import (
+    build_entity_index,
+    linkify,
+    normalize_voice,
+    turn_recommendation_id,
+)
 from kebi.core.agent.invocation import build_turn_payload
 from kebi.core.agent.messages import extract_text_content
 from kebi.core.events.events import TurnCompleted
@@ -39,7 +45,13 @@ _CHAT_WALL_CLOCK_SECONDS = 90.0
 # "surfaced places" for the recall list (ADR-110): a `research` result is
 # insider notes, not places to go, so a research-only turn never enters
 # the home "what you wanted" list.
-_PLACE_TOOLS = frozenset({"find_saved", "suggest_places", "discover_places"})
+# `discover_places` is no longer a tool (ADR-140), but the catalog floor
+# inside `suggest_places` still stamps its candidates `source="discovered"`,
+# and older checkpointed turns carry the name. Dropping it here would silently
+# stop those turns counting as intent-bearing for the recall list.
+_PLACE_TOOLS = frozenset(
+    {"find_saved", "suggest_places", "discover_places", "find_known"}
+)
 
 
 def surfaced_place_results(tool_results: list[dict[str, Any]]) -> bool:
@@ -103,6 +115,7 @@ class ChatService:
         # Initialized before the try so the `finally` can always read it,
         # even if the agent stream raises before any tool ran (ADR-110).
         tool_results: list[dict[str, Any]] = []
+        working_location: dict[str, Any] | None = None
         async with feature_trace(
             "chat",
             user_id,
@@ -112,12 +125,11 @@ class ChatService:
             try:
                 # Pre-agent prep runs in parallel. Taste compose is gated by
                 # the plan tier — skip the read entirely when not entitled.
-                taste_summary, memory_summary = await asyncio.gather(
-                    self._compose_taste_summary(user_id)
-                    if taste_enabled
-                    else _empty_summary(),
+                taste, memory_summary = await asyncio.gather(
+                    self.compose_taste(user_id) if taste_enabled else _empty_taste(),
                     self._compose_memory_summary(user_id),
                 )
+                taste_summary, taste_values = taste
 
                 payload = build_turn_payload(
                     message=request.message,
@@ -132,6 +144,8 @@ class ChatService:
                         if request.movement_profile
                         else None
                     ),
+                    local_time=request.local_time,
+                    taste_values=taste_values,
                 )
 
                 graph_config = {
@@ -157,6 +171,12 @@ class ChatService:
                         snap_tool_results = snapshot.get("tool_results") or []
                         if snap_tool_results:
                             tool_results = snap_tool_results
+                        # The resolver writes the working location early in
+                        # the turn; hold the last populated one so the entity
+                        # index can link the area the answer is about.
+                        snap_working = snapshot.get("working_location")
+                        if isinstance(snap_working, dict) and snap_working:
+                            working_location = snap_working
 
                 messages = final_state.get("messages", [])
                 ai_message = _last_ai_message(messages)
@@ -171,6 +191,14 @@ class ChatService:
                     # something renderable rather than an empty bubble.
                     message_text = "I'm working on it."
 
+                # Chat renders text plus entity links and nothing else (ADR-136):
+                # the raw tool payloads stay server-side and the place names in
+                # the prose become `kebi://` links the client can resolve.
+                message_text, entities = linkify(
+                    normalize_voice(message_text),
+                    build_entity_index(tool_results, working_location),
+                )
+
                 return ChatResponse(
                     type="agent",
                     message=message_text,
@@ -182,7 +210,8 @@ class ChatService:
                             s.model_dump(mode="json", exclude={"id", "status"})
                             for s in user_steps
                         ],
-                        "tool_results": tool_results,
+                        "entities": [e.model_dump(mode="json") for e in entities],
+                        "recommendation_id": turn_recommendation_id(tool_results),
                     },
                     tool_calls_used=final_state.get("tool_calls_used", 0),
                 )
@@ -198,14 +227,36 @@ class ChatService:
                 )
 
     async def _compose_taste_summary(self, user_id: str) -> str:
+        lines = await self._taste_lines(user_id)
+        return format_summary_for_agent(lines) if lines else ""
+
+    async def _taste_lines(self, user_id: str) -> list[SummaryLine]:
         profile = await self._taste_service.get_taste_profile(user_id)
         if profile is None or not profile.taste_profile_summary:
-            return ""
-        lines = [
+            return []
+        return [
             SummaryLine.model_validate(item) if isinstance(item, dict) else item
             for item in profile.taste_profile_summary
         ]
-        return format_summary_for_agent(lines)
+
+    async def compose_taste(self, user_id: str) -> tuple[str, list[str]]:
+        """Both halves of the taste signal from ONE read (ADR-142).
+
+        The prose summary goes in the prompt; the vocabulary values behind it
+        go to retrieval, because `format_summary_for_agent` drops
+        `source_value` and that is the only part a ranker can match on. Derived
+        together deliberately — asking the taste service twice per turn for two
+        views of the same rows is a second round-trip for nothing.
+        """
+        lines = await self._taste_lines(user_id)
+        if not lines:
+            return "", []
+        seen: list[str] = []
+        for line in lines:
+            value = (line.source_value or "").strip()
+            if value and value.lower() not in {v.lower() for v in seen}:
+                seen.append(value)
+        return format_summary_for_agent(lines), seen
 
     async def _compose_memory_summary(self, user_id: str) -> str:
         memory_list = await self._memory.load_memories(user_id)
@@ -217,6 +268,11 @@ class ChatService:
 async def _empty_summary() -> str:
     """Awaitable stand-in for a skipped compose, so the gather stays uniform."""
     return ""
+
+
+async def _empty_taste() -> tuple[str, list[str]]:
+    """Same, for the plan tier that gets no taste personalisation."""
+    return "", []
 
 
 def _last_ai_message(messages: list[Any]) -> AIMessage | None:

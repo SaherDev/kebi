@@ -218,9 +218,7 @@ class TestRunRegen:
         repo.get_by_user_id.return_value = None
 
         mock_llm = AsyncMock()
-        mock_llm.complete.return_value = json.dumps(
-            _sample_artifacts().model_dump()
-        )
+        mock_llm.complete.return_value = json.dumps(_sample_artifacts().model_dump())
         mock_get_llm.return_value = mock_llm
 
         service = _make_service(repo, cores={"p1": _core("p1")})

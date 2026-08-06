@@ -80,9 +80,7 @@ def test_delete_user_data_scope_all_explicit_passes_all_scope(
     response = client.delete("/v1/user/data?scope=all")
 
     assert response.status_code == 204
-    svc.delete_user_data.assert_awaited_once_with(
-        _TEST_USER_ID, scopes={DataScope.all}
-    )
+    svc.delete_user_data.assert_awaited_once_with(_TEST_USER_ID, scopes={DataScope.all})
 
 
 def test_delete_user_data_unknown_scope_returns_422(svc: AsyncMock) -> None:
@@ -102,9 +100,7 @@ def test_delete_user_data_repeated_scope_param_collected_into_set(
     into a set before handing off to the service."""
     client = _make_app(svc)
 
-    response = client.delete(
-        "/v1/user/data?scope=chat_history&scope=all"
-    )
+    response = client.delete("/v1/user/data?scope=chat_history&scope=all")
 
     assert response.status_code == 204
     svc.delete_user_data.assert_awaited_once_with(

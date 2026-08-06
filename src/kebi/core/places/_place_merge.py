@@ -49,9 +49,7 @@ def merge_place(existing: PlaceCore | None, candidate: PlaceCore) -> PlaceCore:
             "place_name_aliases": _dedup_by_value(
                 existing.place_name_aliases, candidate.place_name_aliases
             ),
-            "categories": _merge_categories(
-                existing.categories, candidate.categories
-            ),
+            "categories": _merge_categories(existing.categories, candidate.categories),
             "tags": _dedup_by_value(existing.tags, candidate.tags),
             "icon": existing.icon or candidate.icon,
             "location": existing.location or candidate.location,

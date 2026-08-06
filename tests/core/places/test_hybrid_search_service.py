@@ -71,9 +71,7 @@ class TestEmbedAndDelegate:
     async def test_embedder_called_with_query_input_type(self) -> None:
         service, _, embedder = _make_service()
         await service.search("u1", "italian tokyo")
-        embedder.embed.assert_awaited_once_with(
-            ["italian tokyo"], input_type="query"
-        )
+        embedder.embed.assert_awaited_once_with(["italian tokyo"], input_type="query")
 
     async def test_repo_receives_first_returned_vector(self) -> None:
         vec = [0.5] * 1024
@@ -87,9 +85,7 @@ class TestEmbedAndDelegate:
         # so retrieval doesn't pay for leading/trailing noise.
         service, repo, embedder = _make_service()
         await service.search("u1", "  italian tokyo  ")
-        embedder.embed.assert_awaited_once_with(
-            ["italian tokyo"], input_type="query"
-        )
+        embedder.embed.assert_awaited_once_with(["italian tokyo"], input_type="query")
         kwargs = repo.search.await_args.kwargs
         assert kwargs["query"] == "italian tokyo"
 

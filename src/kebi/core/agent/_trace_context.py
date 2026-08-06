@@ -55,6 +55,7 @@ def _model_for_role(role: str | None) -> str | None:
     except (KeyError, AttributeError):
         return None
 
+
 current_tool: ContextVar[str | None] = ContextVar("current_tool", default=None)
 
 
@@ -255,9 +256,7 @@ async def _traced_span(
 
 def _end_span(call: TracedCall) -> None:
     """End the span with whatever fields the caller mutated."""
-    cost = (
-        {"total": call.cost_usd} if call.cost_usd is not None else None
-    )
+    cost = {"total": call.cost_usd} if call.cost_usd is not None else None
     call.span.end(
         level=call.level,
         output=call.output,

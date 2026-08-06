@@ -14,8 +14,7 @@ Mai" should not also require "within 2km of Bangkok".
 
 The shape of this tool — one structured payload, no LLM-supplied
 location coordinates, single `ConsultResult` JSON output — is the
-template for `suggest_places` (landed) and `discover_places` (landed)
-that complete the consult-family trio.
+template the other place tools follow.
 """
 
 from __future__ import annotations
@@ -23,7 +22,6 @@ from __future__ import annotations
 import logging
 from typing import Annotated, Any
 
-from langchain_core.messages import ToolMessage
 from langchain_core.tools import BaseTool, InjectedToolCallId, tool
 from langgraph.prebuilt import InjectedState
 from langgraph.types import Command
@@ -34,6 +32,10 @@ from kebi.core.agent.location import WorkingLocation
 from kebi.core.agent.reasoning import ReasoningStep
 from kebi.core.agent.state import AgentState
 from kebi.core.agent.stream_emit import emit_step_active, emit_step_done
+from kebi.core.agent.tools._hard_constraints import split_constraints
+from kebi.core.agent.tools._notes import attach_notes
+from kebi.core.agent.tools._packing import pack_consult_result
+from kebi.core.agent.tools._scope import anchor_to_corridor
 from kebi.core.agent.tools._search_args import (
     CATEGORIES_DESC,
     CITY_DESC,
@@ -48,6 +50,7 @@ from kebi.core.agent.tools._with_timeout import tool_step_base_id, with_timeout
 from kebi.core.agent.tools._working_location import maybe_working_location
 from kebi.core.agent.tools.consult_models import ConsultCandidate, ConsultResult
 from kebi.core.config import get_config
+from kebi.core.knowledge.candidate_notes_service import CandidateNotesService
 from kebi.core.places.hybrid_search_service import HybridSearchService
 from kebi.core.places.models import HybridSearchFilters, PlaceCategory
 
@@ -89,6 +92,18 @@ def _assemble_filters(
     rural/island Thailand — yielding zero results despite real saves
     on the island. After stripping, the turn uses the geofence and
     the saves surface.
+
+    **Soft tags never filter (ADR-137).** `HybridSearchFilters.tags`
+    is an AND predicate on persisted rows, so passing the agent's tags
+    through wholesale meant one vibe or time value — `lively`, `night`,
+    `serves_cocktails` — could zero out a user's entire saved
+    collection, because a saved row only carries the tags extraction
+    happened to give it. That is the single biggest reason saves failed
+    to show up in answers. Only the safety classes (dietary,
+    accessibility) filter here, matching what `suggest_places` and
+    `suggest_places` already does via `split_constraints`; the rest ride
+    the query text, where they steer the vector and FTS legs without
+    excluding anything.
     """
     eff_neighborhood = (
         None
@@ -120,9 +135,10 @@ def _assemble_filters(
             lng = None
             radius_m = None
 
+    hard_tags, _soft_tags = split_constraints(tags or [])
     return HybridSearchFilters(
         categories=categories or None,
-        tags=tags or None,
+        tags=hard_tags or None,
         neighborhood=eff_neighborhood or None,
         city=eff_city or None,
         country=eff_country or None,
@@ -132,6 +148,21 @@ def _assemble_filters(
     )
 
 
+def _query_with_soft_tags(query: str, tags: list[str] | None) -> str:
+    """Fold the non-safety tag values into the retrieval query text.
+
+    Values already present in the query are not repeated — the agent is told
+    not to duplicate constraint values into `query`, but this is cheap
+    insurance against double-weighting when it does.
+    """
+    _hard, soft = split_constraints(tags or [])
+    lowered = query.lower()
+    extra = [t for t in soft if t.strip() and t.strip().lower() not in lowered]
+    if not extra:
+        return query
+    return f"{query} {' '.join(extra)}".strip()
+
+
 def _summarise(result: ConsultResult) -> str:
     """One-line user-visible step summary.
 
@@ -139,7 +170,7 @@ def _summarise(result: ConsultResult) -> str:
     user-facing reasoning steps). The success branch surfaces the matched
     place names (capped to a short preview) so the user sees what was found
     without parsing the structured `tool_results` payload — shares the
-    `found_summary` register with `suggest_places` / `discover_places`.
+    `found_summary` register with the other place tools.
     """
     if result.empty_reason == "no_saves":
         return "no saved places yet"
@@ -152,7 +183,10 @@ def _summarise(result: ConsultResult) -> str:
     return found_summary(names)
 
 
-def build_find_saved_tool(hybrid_search: HybridSearchService) -> BaseTool:
+def build_find_saved_tool(
+    hybrid_search: HybridSearchService,
+    notes_service: CandidateNotesService | None = None,
+) -> BaseTool:
     """Factory — bind the request-scoped HybridSearchService into the tool.
 
     Per-request DI: hybrid_search closes over a request-scoped DB session
@@ -189,6 +223,7 @@ def build_find_saved_tool(hybrid_search: HybridSearchService) -> BaseTool:
             state=state,
             coro=_run_find_saved(
                 hybrid_search=hybrid_search,
+                notes_service=notes_service,
                 state=state,
                 tool_call_id=tool_call_id,
                 query=query,
@@ -207,6 +242,7 @@ def build_find_saved_tool(hybrid_search: HybridSearchService) -> BaseTool:
 async def _run_find_saved(
     *,
     hybrid_search: HybridSearchService,
+    notes_service: CandidateNotesService | None = None,
     state: AgentState,
     tool_call_id: str,
     query: str,
@@ -221,6 +257,7 @@ async def _run_find_saved(
     with set_tool(_TOOL_NAME):
         return await _run_find_saved_impl(
             hybrid_search=hybrid_search,
+            notes_service=notes_service,
             state=state,
             tool_call_id=tool_call_id,
             query=query,
@@ -236,6 +273,7 @@ async def _run_find_saved(
 async def _run_find_saved_impl(
     *,
     hybrid_search: HybridSearchService,
+    notes_service: CandidateNotesService | None = None,
     state: AgentState,
     tool_call_id: str,
     query: str,
@@ -254,6 +292,10 @@ async def _run_find_saved_impl(
     )
 
     working = maybe_working_location(state)
+    if working is not None:
+        # A saved place on the way counts as on the way (ADR-137) — without
+        # this the geofence is a circle around where the trip starts.
+        working = anchor_to_corridor(working)
     has_named_area = bool(neighborhood or city or country)
 
     filters = _assemble_filters(
@@ -267,7 +309,10 @@ async def _run_find_saved_impl(
 
     hits = await hybrid_search.search(
         user_id=user_id,
-        query=query,
+        # Soft tags no longer filter (see `_assemble_filters`), so they ride
+        # the query text — still steering the vector + FTS legs, never
+        # excluding a save that simply hasn't been tagged that way yet.
+        query=_query_with_soft_tags(query, tags),
         filters=filters,
         limit=limit,
     )
@@ -291,16 +336,13 @@ async def _run_find_saved_impl(
         else:
             empty_reason = "no_match"
 
-    result = ConsultResult(
-        candidates=candidates,
-        empty_reason=empty_reason,
+    result = await attach_notes(
+        ConsultResult(candidates=candidates, empty_reason=empty_reason),
+        notes_service=notes_service,
+        user_id=user_id,
+        working=working,
     )
 
-    tool_msg = ToolMessage(
-        content=result.model_dump_json(),
-        tool_call_id=tool_call_id,
-        name=_TOOL_NAME,
-    )
     step = ReasoningStep(
         step=f"{_TOOL_NAME}.summary",
         title=TITLES[_TOOL_NAME],
@@ -312,9 +354,14 @@ async def _run_find_saved_impl(
     emit_step_done(base_id, step, started=started)
 
     return Command(
-        update={
-            "messages": [tool_msg],
-            "reasoning_steps": (state.get("reasoning_steps") or []) + [step],
-            "tool_calls_used": state.get("tool_calls_used", 0) + 1,
-        }
+        update=pack_consult_result(
+            state=state,
+            tool_name=_TOOL_NAME,
+            tool_call_id=tool_call_id,
+            result=result,
+            extra={
+                "reasoning_steps": (state.get("reasoning_steps") or []) + [step],
+                "tool_calls_used": state.get("tool_calls_used", 0) + 1,
+            },
+        )
     )

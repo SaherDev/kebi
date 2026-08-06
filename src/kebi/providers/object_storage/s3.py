@@ -78,9 +78,7 @@ class S3ObjectStorage:
         keys: list[str] = []
         async with self._client() as s3:
             paginator = s3.get_paginator("list_objects_v2")
-            async for page in paginator.paginate(
-                Bucket=self._bucket, Prefix=prefix
-            ):
+            async for page in paginator.paginate(Bucket=self._bucket, Prefix=prefix):
                 for item in page.get("Contents", []) or []:
                     keys.append(item["Key"])
         return keys

@@ -86,9 +86,9 @@ class TestMergePlace:
         merged = merge_place(existing, candidate)
         values = [(t.value, t.source) for t in merged.tags]
         assert values == [
-            ("chill", "google"),     # existing kept (llm dropped)
-            ("outdoor", "tiktok"),   # carried over
-            ("italian", "user"),     # new appended
+            ("chill", "google"),  # existing kept (llm dropped)
+            ("outdoor", "tiktok"),  # carried over
+            ("italian", "user"),  # new appended
         ]
 
     def test_tags_dedup_collapses_repeats_within_incoming(self) -> None:
@@ -173,9 +173,7 @@ class TestMergePlace:
         assert merged.icon == "🗼"
 
     def test_candidate_with_null_tags_does_not_clobber_existing(self) -> None:
-        existing = _core(
-            tags=[PlaceTag(type="vibe", value="chill", source="google")]
-        )
+        existing = _core(tags=[PlaceTag(type="vibe", value="chill", source="google")])
         candidate = _core(tags=[])
         merged = merge_place(existing, candidate)
         assert len(merged.tags) == 1
