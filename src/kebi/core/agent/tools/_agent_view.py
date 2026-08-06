@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from kebi.core.agent.tools.consult_models import ConsultCandidate, ConsultResult
     from kebi.core.knowledge.research_models import ResearchResult
+    from kebi.core.web.models import WebSearchResult
 
 # Enough tags to characterise a place ("rooftop, lively, open_late"), few
 # enough that a 10-candidate list does not become a tag dump. Ordered as
@@ -142,4 +143,32 @@ def research_view(result: ResearchResult) -> dict[str, Any]:
         view["empty_reason"] = result.empty_reason
     if result.clarification:
         view["clarification"] = result.clarification
+    return view
+
+
+def web_search_view(result: WebSearchResult) -> dict[str, Any]:
+    """A web search: the text, who published it, and how old it is.
+
+    The URL is dropped on purpose. The model cannot follow a link, the chat
+    contract has nowhere to render one (ADR-136), and a URL is 15-30 tokens of
+    pure cost per finding. `source` (the bare domain) is what an answer
+    actually uses — "the schedule on fifa.com still has it at 9" — and `age`
+    is what lets it hedge honestly when the page is a year old.
+    """
+    view: dict[str, Any] = {}
+    if result.findings:
+        view["findings"] = [
+            {
+                k: v
+                for k, v in (
+                    ("text", f.text),
+                    ("source", f.source),
+                    ("published", f.age),
+                )
+                if v
+            }
+            for f in result.findings
+        ]
+    if result.empty_reason:
+        view["empty_reason"] = result.empty_reason
     return view

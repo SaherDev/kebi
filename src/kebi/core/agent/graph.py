@@ -1256,6 +1256,41 @@ def _location_clarification_update(
     }
 
 
+def _location_not_needed_update(
+    state: AgentState, *, started: float | None = None
+) -> dict[str, Any]:
+    """State update for a turn that is not about a place at all (ADR-145).
+
+    Distinct from a clarification, and the distinction matters: both leave
+    `working_location` empty, but a clarification *ends the turn* with a
+    question. Before web search existed that was harmless — every question
+    kebi could answer was about somewhere — but "where is the World Cup being
+    played" has no working location and needs none, and asking the user which
+    city they mean is a non-sequitur that burns the turn.
+
+    So the resolver gets to say "not applicable" explicitly rather than the
+    node inferring it from an empty result. The turn proceeds with no
+    location; every tool already treats that as a valid state.
+    """
+    step = ReasoningStep(
+        step="agent.location_not_needed",
+        title="checking your location",
+        summary="this one isn't about where you are",
+        source="agent",
+        # `debug`, not `user`: the client shows user-visible steps as the
+        # answer's narration, and "checking your location" on a World Cup
+        # question reads as confusion, not work.
+        visibility="debug",
+        duration_ms=0.0,
+    )
+    emit_step_done(_LOCATION_STEP_ID, step, started=started)
+    return {
+        "working_location": None,
+        "location_clarification": None,
+        "reasoning_steps": (state.get("reasoning_steps") or []) + [step],
+    }
+
+
 def _location_resolved_update(
     state: AgentState, working: WorkingLocation, *, started: float | None = None
 ) -> dict[str, Any]:
@@ -1365,6 +1400,11 @@ def make_resolve_location_node(resolver_llm: Any, geocoding_client: Any) -> Any:
             # Older / cached `with_structured_output` without include_raw —
             # treat the result as the parsed model directly.
             resolution = result
+
+        # Checked before the clarification branch: a question with no place in
+        # it must not be turned into "which city do you mean?" (ADR-145).
+        if resolution.location_irrelevant:
+            return _location_not_needed_update(state, started=started)
 
         if resolution.needs_clarification or resolution.is_ambiguous:
             reason = (

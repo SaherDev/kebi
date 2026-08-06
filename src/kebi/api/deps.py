@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import functools
+import logging
 import re
 import secrets
 from collections.abc import AsyncIterator
@@ -44,6 +46,7 @@ from kebi.core.knowledge.research_service import (
     ResearchRankingWeights,
     ResearchService,
 )
+from kebi.core.knowledge.web_harvester import WebKnowledgeHarvester
 from kebi.core.knowledge.writer import KnowledgeWriter
 from kebi.core.memory.buffer import MessageBuffer
 from kebi.core.memory.extractor import MemoryExtractor
@@ -69,6 +72,7 @@ from kebi.core.taste.debounce import regen_debouncer
 from kebi.core.taste.service import TasteModelService
 from kebi.core.user.intent_service import UserIntentService
 from kebi.core.user.service import UserDataDeletionService
+from kebi.core.web.service import WebKnowledgeService
 from kebi.db.repositories import (
     KnowledgeClaimRepository,
     SQLAlchemyKnowledgeClaimRepository,
@@ -89,6 +93,14 @@ from kebi.providers.object_storage import (
 )
 from kebi.providers.redis_cache import RedisCacheBackend, get_redis_client
 from kebi.providers.weather import NullWeatherProvider, WeatherProvider
+from kebi.providers.web_search import (
+    BraveWebSearchProvider,
+    CachedWebSearchProvider,
+    NullWebSearchProvider,
+    WebSearchProvider,
+)
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Gateway service-to-service auth.
@@ -286,6 +298,7 @@ async def get_event_dispatcher(
         ingestion=get_knowledge_ingestion(
             get_knowledge_writer(get_knowledge_claim_repository())
         ),
+        web_harvester=get_web_knowledge_harvester(),
     )
 
     dispatcher = EventDispatcher(background_tasks=background_tasks)
@@ -307,6 +320,10 @@ async def get_event_dispatcher(
     dispatcher.register_handler(
         "content_harvest_requested",
         handlers.on_content_harvest_requested,  # type: ignore[arg-type]
+    )
+    dispatcher.register_handler(
+        "web_findings_harvest_requested",
+        handlers.on_web_findings_harvest_requested,  # type: ignore[arg-type]
     )
 
     return dispatcher
@@ -868,6 +885,67 @@ def get_knowledge_harvester() -> KnowledgeHarvester:
     )
 
 
+def get_web_knowledge_harvester() -> WebKnowledgeHarvester:
+    """FastAPI dependency providing the WebKnowledgeHarvester (ADR-145).
+
+    A `web_search` ClaimProducer, keyed and floored exactly like the other
+    two so a web-mined claim is stored, ranked, and labelled by the same
+    rules — just with the lowest trust floor in the set. Runs only on the
+    background event path, after the answer is already sent.
+    """
+    knowledge = get_config().knowledge
+    return WebKnowledgeHarvester(
+        get_instructor_client("web_harvester"),
+        get_geocoding_client(),
+        confidence_floor=knowledge.web_search_confidence_floor,
+        review_status=knowledge.web_search_review_status,
+    )
+
+
+@functools.cache
+def get_web_search_provider() -> WebSearchProvider:
+    """The process-wide web-search backend (ADR-145).
+
+    Brave when `BRAVE_API_KEY` is set, the null provider otherwise — the same
+    degrade-don't-fail shape as object storage and weather. Wrapped in the
+    Redis cache whenever a Redis URL is configured, which is what makes the
+    tool's permissive firing rule affordable: the cache key is the question,
+    not the user, so a question trending across users is paid for once.
+
+    Cached at process scope: the adapter holds only the shared HTTP client
+    and a key, and the Redis client manages its own pool.
+    """
+    env = get_env()
+    provider: WebSearchProvider
+    if env.BRAVE_API_KEY:
+        provider = BraveWebSearchProvider(
+            api_key=env.BRAVE_API_KEY,
+            base_url=get_config().providers.brave.base_url,
+            http_client=get_shared_http_client(),
+        )
+    else:
+        logger.info("web_search_provider_null: BRAVE_API_KEY unset")
+        provider = NullWebSearchProvider()
+    if not env.REDIS_URL:
+        return provider
+    return CachedWebSearchProvider(
+        provider,
+        get_redis_client(env.REDIS_URL),
+        ttl_seconds=get_config().agent.web_search.cache_ttl_seconds,
+    )
+
+
+def get_web_knowledge_service() -> WebKnowledgeService:
+    """FastAPI dependency providing WebKnowledgeService (ADR-145).
+
+    Safe to construct per request — the provider underneath is process-cached.
+    """
+    return WebKnowledgeService(
+        provider=get_web_search_provider(),
+        config=get_config().agent.web_search,
+    )
+
+
 def get_knowledge_curator() -> KnowledgeCurator:
     """FastAPI dependency providing the KnowledgeCurator (ADR-121/122).
 
@@ -959,8 +1037,12 @@ def get_candidate_notes_service(
 def get_weather_provider() -> WeatherProvider:
     """FastAPI dependency providing the weather source (ADR-144).
 
-    Null until a real source is configured. Kept as an injected dependency
-    rather than an import so swapping it in is a change here and nowhere else.
+    Still null, deliberately. Weather *questions* are answered by the
+    `web_search` tool (ADR-145), which needs no weather dependency at all —
+    so a dedicated provider would buy only the ranking signal (preferring a
+    covered spot on a wet afternoon), and that is not worth a second external
+    dependency and a per-turn lookup yet. The seam stays so the decision
+    stays reversible.
     """
     return NullWeatherProvider()
 
@@ -1133,6 +1215,9 @@ def get_agent_graph(
     known_places: KnownPlacesService = Depends(  # noqa: B008
         get_known_places_service
     ),
+    web_knowledge: WebKnowledgeService = Depends(  # noqa: B008
+        get_web_knowledge_service
+    ),
 ) -> Any:
     """Build the agent StateGraph per-request.
 
@@ -1178,6 +1263,7 @@ def get_agent_graph(
             research_service,
             candidate_notes=candidate_notes,
             known_places=known_places,
+            web_knowledge=web_knowledge,
             discovery_enabled=identity.discovery_enabled,
         ),
         checkpointer,

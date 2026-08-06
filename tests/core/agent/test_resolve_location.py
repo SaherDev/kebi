@@ -555,3 +555,69 @@ async def test_density_from_geocoder_place_type_scales_the_radius() -> None:
         sparse["working_location"]["search_radius_m"]
         > dense["working_location"]["search_radius_m"]
     )
+
+
+class TestLocationIrrelevantTurns:
+    """A world question has no working location and needs none (ADR-145).
+
+    Before this branch existed, "where is the world cup being played" reached
+    the resolver, found nothing to carry and no GPS, and came back as a
+    clarification — which ends the turn with "which city do you mean?" before
+    any tool runs. Verified live: that is exactly what happened.
+    """
+
+    async def test_the_turn_proceeds_with_no_location(self) -> None:
+        node = make_resolve_location_node(
+            _resolver_llm(
+                LocationResolution(source="carried", location_irrelevant=True)
+            ),
+            _geocoder(),
+        )
+        update = await node(_state(message="where is the world cup being played"))
+        assert update["working_location"] is None
+        # The critical assertion: NOT a clarification, so the agent still runs.
+        assert update["location_clarification"] is None
+
+    async def test_it_does_not_narrate_confusion_to_the_user(self) -> None:
+        """"checking your location" on a World Cup question reads as the
+        assistant being lost, not as work."""
+        node = make_resolve_location_node(
+            _resolver_llm(
+                LocationResolution(source="carried", location_irrelevant=True)
+            ),
+            _geocoder(),
+        )
+        update = await node(_state(message="how does a visa on arrival work"))
+        assert all(s.visibility != "user" for s in update["reasoning_steps"])
+
+    async def test_it_never_geocodes(self) -> None:
+        geocoder = _geocoder(forward=(1.0, 2.0))
+        node = make_resolve_location_node(
+            _resolver_llm(
+                LocationResolution(
+                    source="carried",
+                    country="United States",
+                    location_irrelevant=True,
+                )
+            ),
+            geocoder,
+        )
+        await node(_state(message="is the world cup coming to Mexico"))
+        geocoder.forward.assert_not_called()
+        geocoder.search.assert_not_called()
+
+    async def test_a_place_turn_with_nothing_to_carry_still_asks(self) -> None:
+        """The new branch must not swallow genuine "I don't know where you
+        mean" cases — that ask is still the right behaviour."""
+        node = make_resolve_location_node(
+            _resolver_llm(
+                LocationResolution(
+                    source="carried",
+                    needs_clarification=True,
+                    clarification_reason="which city?",
+                )
+            ),
+            _geocoder(),
+        )
+        update = await node(_state(message="anywhere good for dinner"))
+        assert update["location_clarification"] == "which city?"

@@ -28,6 +28,31 @@ You classify by intent, not by keywords. Phrasings vary endlessly ("nearby",
 
 # Part 1 — Which location
 
+## Step 0 — Is this turn about a place at all?
+
+Some questions have no working location and need none. A question about a
+worldwide event, a general fact, a how-to, an opinion, or plain chit-chat is
+not asking kebi to search anywhere.
+
+If the turn is one of those, set **location_irrelevant true** and stop. Leave
+country, city and neighborhood empty, set source "carried", and do not set
+needs_clarification — there is nothing to clarify.
+
+Examples:
+- "where is the world cup being played next" → location_irrelevant true. It
+  names an event, not a place the user wants recommendations around.
+- "how does a visa on arrival work" → location_irrelevant true.
+- "what's the exchange rate like right now" → location_irrelevant true.
+- "thanks, that was helpful" → location_irrelevant true.
+
+Do NOT use this branch when the user wants somewhere to go, eat, drink, or
+visit — those always resolve a location, even when the message names no
+place ("what's good around here", "anywhere for dinner"). The test is whether
+a place name would change the answer's *subject*, not merely its examples.
+A named place in a question that is otherwise about the world ("is the world
+cup coming to Mexico") does not make it a place turn — it is still
+location_irrelevant.
+
 ## Step 1 — Look at the message FIRST.
 
 Before you consider GPS, the carried location, distance, or anything else,

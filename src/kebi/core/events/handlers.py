@@ -17,7 +17,9 @@ from kebi.core.events.events import (
     RecommendationRejected,
     RecommendationSaved,
     TurnCompleted,
+    WebFindingsHarvestRequested,
 )
+from kebi.core.web.models import WebSearchResult
 from kebi.db.models import InteractionType
 from kebi.providers.tracing import TracingClient, get_tracing_client
 
@@ -25,6 +27,7 @@ if TYPE_CHECKING:
     from kebi.core.knowledge.harvest_bucket import HarvestBucketReader
     from kebi.core.knowledge.harvester import KnowledgeHarvester
     from kebi.core.knowledge.producer import KnowledgeIngestion
+    from kebi.core.knowledge.web_harvester import WebKnowledgeHarvester
     from kebi.core.memory.service import UserMemoryService
     from kebi.core.taste.service import TasteModelService
     from kebi.core.user.intent_service import UserIntentService
@@ -37,6 +40,17 @@ _TASTE_EVENT_MAP: dict[str, InteractionType] = {
     "recommendation_rejected": InteractionType.REJECTED,
     "recommendation_saved": InteractionType.SAVED_RECOMMENDATION,
 }
+
+
+def _web_source_ref(result: WebSearchResult) -> str:
+    """Provenance for a web-mined claim: the query that surfaced it.
+
+    Not the URL of any one finding. A claim is normally synthesised from
+    several snippets, so pinning it to one page would be a citation that does
+    not hold; the query is the honest, reproducible pointer to how kebi came
+    to believe it.
+    """
+    return f"web_search:{result.query}"[:500]
 
 
 class EventHandlers:
@@ -52,6 +66,7 @@ class EventHandlers:
         harvest_reader: "HarvestBucketReader | None" = None,
         harvester: "KnowledgeHarvester | None" = None,
         ingestion: "KnowledgeIngestion | None" = None,
+        web_harvester: "WebKnowledgeHarvester | None" = None,
     ) -> None:
         self.taste_service = taste_service
         self.memory_service = memory_service
@@ -60,6 +75,7 @@ class EventHandlers:
         self._harvest_reader = harvest_reader
         self._harvester = harvester
         self._ingestion = ingestion
+        self._web_harvester = web_harvester
 
     async def on_taste_signal(self, event: DomainEvent) -> None:
         """Unified handler for all taste-related events.
@@ -156,6 +172,60 @@ class EventHandlers:
             )
             self._tracer.capture_message(
                 message=f"content_harvest error: {exc}",
+                level="error",
+                metadata={"event_id": event.event_id},
+                user_id=event.user_id,
+                session_id=event.user_id,
+            )
+            self._tracer.flush()
+
+    async def on_web_findings_harvest_requested(
+        self, event: WebFindingsHarvestRequested
+    ) -> None:
+        """Mine a turn's web findings into durable area claims (ADR-145).
+
+        This is the half of web search that pays for itself. The lookup
+        already happened and the answer is already gone; what is left is
+        deciding which of those findings were lasting local facts and writing
+        those to the claims store, so the next person asking gets them from
+        `find_known` for free instead of from a paid search.
+
+        Best-effort and silent, exactly like the content harvest: the user has
+        their answer, and nothing here is allowed to disturb a turn that
+        already succeeded. A missing writer stack, an unparseable payload, or
+        an LLM failure all no-op.
+        """
+        try:
+            if self._web_harvester is None or self._ingestion is None:
+                return
+            result = WebSearchResult.model_validate(event.result)
+            claims = await self._web_harvester.harvest(result, user_id=event.user_id)
+            if not claims:
+                return
+            written = await self._ingestion.ingest(
+                self._web_harvester,
+                claims,
+                source_ref=_web_source_ref(result),
+                # Global, not user-scoped: a fact about an area belongs to
+                # everyone who asks about that area.
+                user_id=None,
+            )
+            self._tracer.capture_message(
+                message=f"web_harvest wrote {len(written)} claim(s)",
+                level="info",
+                metadata={"event_id": event.event_id},
+                user_id=event.user_id,
+                session_id=event.user_id,
+            )
+        except Exception as exc:
+            logger.error(
+                "Failed web findings harvest: %s",
+                exc,
+                exc_info=True,
+                extra={"user_id": event.user_id},
+            )
+            self._tracer.capture_message(
+                message=f"web_harvest error: {exc}",
                 level="error",
                 metadata={"event_id": event.event_id},
                 user_id=event.user_id,

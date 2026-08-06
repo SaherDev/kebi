@@ -23,7 +23,7 @@ from kebi.core.agent.entity_links import (
 )
 from kebi.core.agent.invocation import build_turn_payload
 from kebi.core.agent.messages import extract_text_content
-from kebi.core.events.events import TurnCompleted
+from kebi.core.events.events import TurnCompleted, WebFindingsHarvestRequested
 from kebi.core.taste.regen import format_summary_for_agent
 from kebi.core.taste.schemas import SummaryLine
 
@@ -57,6 +57,22 @@ _PLACE_TOOLS = frozenset(
 def surfaced_place_results(tool_results: list[dict[str, Any]]) -> bool:
     """True when any captured tool result this turn came from a place tool."""
     return any(tr.get("tool") in _PLACE_TOOLS for tr in tool_results)
+
+
+def web_search_results(tool_results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The web-search payloads this turn produced, if any (ADR-145).
+
+    Only ones that actually found something: a search that came back empty
+    has nothing to mine, and dispatching it would spend an LLM call to
+    discover that.
+    """
+    return [
+        payload
+        for tr in tool_results
+        if tr.get("tool") == "web_search"
+        and isinstance(payload := tr.get("payload"), dict)
+        and payload.get("findings")
+    ]
 
 
 class ChatService:
@@ -225,6 +241,17 @@ class ChatService:
                         surfaced_places=surfaced_place_results(tool_results),
                     )
                 )
+                # Web findings are mined into durable claims after the answer
+                # is sent (ADR-145), so the lookup this user paid for makes
+                # the next person's question free. Same `finally` as
+                # TurnCompleted: enrichment never blocks the response.
+                if self._config.agent.web_search.harvest_enabled:
+                    for result in web_search_results(tool_results):
+                        await self._dispatcher.dispatch(
+                            WebFindingsHarvestRequested(
+                                user_id=user_id, result=result
+                            )
+                        )
 
     async def _compose_taste_summary(self, user_id: str) -> str:
         lines = await self._taste_lines(user_id)

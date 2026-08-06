@@ -45,3 +45,39 @@ def test_defaults_to_enabled() -> None:
         "suggest_places",
         "research",
     }
+
+
+def test_web_search_is_bound_when_the_service_is_wired() -> None:
+    tools = build_tools(
+        MagicMock(),
+        MagicMock(),
+        MagicMock(),
+        MagicMock(),
+        web_knowledge=MagicMock(),
+    )
+    assert "web_search" in {t.name for t in tools}
+
+
+def test_web_search_is_ungated_by_the_discovery_tier() -> None:
+    """A knowledge question is not place discovery. Withholding the outside
+    world from a lower tier would leave that tier answering "when is the
+    final" from training weights, which is the failure ADR-145 exists to
+    close — for everyone, not just payers."""
+    tools = build_tools(
+        MagicMock(),
+        MagicMock(),
+        MagicMock(),
+        MagicMock(),
+        web_knowledge=MagicMock(),
+        discovery_enabled=False,
+    )
+    names = {t.name for t in tools}
+    assert "web_search" in names
+    assert "suggest_places" not in names
+
+
+def test_no_web_service_means_no_web_tool() -> None:
+    """Omitted, the agent answers world questions from its own knowledge —
+    the pre-ADR-145 behaviour, not a crash."""
+    tools = build_tools(MagicMock(), MagicMock(), MagicMock(), MagicMock())
+    assert "web_search" not in {t.name for t in tools}

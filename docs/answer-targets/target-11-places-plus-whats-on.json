@@ -1,0 +1,79 @@
+{
+  "question": "im in canggu this weekend, anywhere good to eat and is there anything on i should know about?",
+  "tool_calls_used": 2,
+  "response": {
+    "type": "agent",
+    "message": "good timing, this is the sounds project weekend (tomorrow through sunday) if you're into live music and that kind of scene. that's the main thing on, it's across [bali](kebi://area/id/bali) but worth knowing about if you want to catch something.\n\nfor eating, the weekend in [canggu](kebi://area/id/bali/canggu) is really about the nightlife spots that double as restaurants. your main move is [vault](kebi://venue/7861b346-2a73-4a7a-a66c-b58840527758) on saturday night - that's their big night, runs wed to sat so saturday is the one to hit. proper underground vibe, cocktails, good energy.\n\nsunday is [sand bar](kebi://venue/f01f4435-631c-41e9-a3a9-f05356eb82c2)'s day, beachfront and more relaxed than vault. it's the casual sunday spot, good if you want something less intense than saturday. [old man's](kebi://venue/45a09352-bfd6-403a-b5c5-7b23699a1ce2) runs every night if you want a laid back beach bar feel with live music, that's your in-between spot any of the three nights.\n\n[motel mexicola](kebi://venue/8099938c-7730-4890-93e1-bd333d3a8ffa) is the big party venue but that's really a tuesday thing, you're a few days early for their night.\n\nwhat kind of food are you actually after - casual beach vibes, something more upscale, or just wherever the energy is good?",
+    "data": {
+      "reasoning_steps": [
+        {
+          "step": "agent.location_resolved",
+          "title": "found your location",
+          "summary": "around Canggu, Bali, Indonesia",
+          "source": "agent",
+          "visibility": "user",
+          "timestamp": "2026-08-06T14:24:52.764630Z",
+          "duration_ms": 3011.487666008179
+        },
+        {
+          "step": "find_known.summary",
+          "title": "checked what I know around here",
+          "summary": "5 spots — Vault Nightclub Bali, Sand Bar, +3 more",
+          "source": "agent",
+          "visibility": "user",
+          "timestamp": "2026-08-06T14:24:54.631301Z",
+          "duration_ms": 55.43508401024155
+        },
+        {
+          "step": "web_search.summary",
+          "title": "looked it up",
+          "summary": "read 5 sources — trac.astra.co.id, radarbali.jawapos.com, thebalisun.com, bal",
+          "source": "agent",
+          "visibility": "user",
+          "timestamp": "2026-08-06T14:24:57.971410Z",
+          "duration_ms": 1234.7976669989293
+        }
+      ],
+      "entities": [
+        {
+          "kind": "area",
+          "key": "id/bali",
+          "name": "Bali",
+          "uri": "kebi://area/id/bali"
+        },
+        {
+          "kind": "area",
+          "key": "id/bali/canggu",
+          "name": "Canggu",
+          "uri": "kebi://area/id/bali/canggu"
+        },
+        {
+          "kind": "venue",
+          "key": "7861b346-2a73-4a7a-a66c-b58840527758",
+          "name": "Vault Nightclub Bali",
+          "uri": "kebi://venue/7861b346-2a73-4a7a-a66c-b58840527758"
+        },
+        {
+          "kind": "venue",
+          "key": "f01f4435-631c-41e9-a3a9-f05356eb82c2",
+          "name": "Sand Bar",
+          "uri": "kebi://venue/f01f4435-631c-41e9-a3a9-f05356eb82c2"
+        },
+        {
+          "kind": "venue",
+          "key": "45a09352-bfd6-403a-b5c5-7b23699a1ce2",
+          "name": "Old Man's",
+          "uri": "kebi://venue/45a09352-bfd6-403a-b5c5-7b23699a1ce2"
+        },
+        {
+          "kind": "venue",
+          "key": "8099938c-7730-4890-93e1-bd333d3a8ffa",
+          "name": "Motel Mexicola",
+          "uri": "kebi://venue/8099938c-7730-4890-93e1-bd333d3a8ffa"
+        }
+      ],
+      "recommendation_id": "48acfaad-a4c4-4095-8675-c340faf573e7"
+    },
+    "tool_calls_used": 2
+  }
+}

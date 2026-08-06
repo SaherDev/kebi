@@ -1,0 +1,31 @@
+{
+  "question": "random one, why is bali water not safe to drink but ice in cafes is fine?",
+  "tool_calls_used": 0,
+  "response": {
+    "type": "agent",
+    "message": "Good question, it's the same water issue, just handled differently.\n\n[Bali](kebi://area/id/bali)'s tap water has bacteria and minerals that'll upset your stomach if you're not used to it. Locals are fine because they've built up immunity, but visitors get sick. So the rule is: don't drink tap water straight.\n\nIce in cafes is fine because it's made from filtered or boiled water. Any decent cafe, and that includes most places tourists go to, filters their water before freezing it. Same with bottled water, which is why that's the safe move. The filtering or boiling kills the bacteria that causes the problems.\n\nWhere people slip up is assuming all ice is safe, which it isn't. A dodgy warung or a place with no real water system might make ice from tap water. But established cafes and restaurants know tourists can't handle it, so they don't take the risk, bad for business.\n\nSo the short version: tap water straight up is a no, but ice made from treated water is a yes. If you're ever unsure about a place, stick with bottled water and you're golden.",
+    "data": {
+      "reasoning_steps": [
+        {
+          "step": "agent.location_resolved",
+          "title": "found your location",
+          "summary": "around Bali, Indonesia",
+          "source": "agent",
+          "visibility": "user",
+          "timestamp": "2026-08-06T14:19:07.207284Z",
+          "duration_ms": 2016.2001669959864
+        }
+      ],
+      "entities": [
+        {
+          "kind": "area",
+          "key": "id/bali",
+          "name": "Bali",
+          "uri": "kebi://area/id/bali"
+        }
+      ],
+      "recommendation_id": null
+    },
+    "tool_calls_used": 0
+  }
+}

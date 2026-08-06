@@ -1,6 +1,6 @@
 # The agent's tools — what each is for
 
-Four tools after ADR-140. The question each one answers is different; where two
+Five tools after ADR-145. The question each one answers is different; where two
 could answer the same question, one of them is gone.
 
 | Tool | Cost per call | Answers | Fires when |
@@ -9,6 +9,12 @@ could answer the same question, one of them is gone.
 | `find_saved` | free (one DB search) | "what does this user already have?" | any turn their own list could cover |
 | `suggest_places` | **paid** (N provider lookups) | verifies the places *the orchestrator* names | coverage gap: new city, thin saves, no claims |
 | `research` | free (claims read, maybe one geocode) | "what does a local know?" — no venue attached | pure knowledge questions |
+| `web_search` | **paid** (1 lookup, cached) | "what is true right now?" — dates, prices, schedules | anything the store never held |
+
+The first four read kebi's corpus. `web_search` is the only one that reads
+something kebi does not own, which is why it is also the only one whose
+results are treated as *read* rather than *known* — see Grounding in the
+agent prompt.
 
 ## Verified coverage
 
@@ -56,6 +62,18 @@ safe at night") and can be scoped to an area the user names rather than the one
 they are standing in. `find_known` is geofenced to the working location and
 always returns places, so it cannot cover this.
 
+**`web_search` is the only tool that can be wrong in a new way.** The other
+four can only return what kebi was told; this one returns what a page said,
+which may be stale, promotional, or simply incorrect. That is the price of
+answering "when is the final" at all, and three things bound it: findings are
+attributed and dated so the answer can hedge honestly, kebi's own claims win
+any disagreement, and only the facts the harvest judges durable are kept.
+
+It is deliberately **not** gated behind the discovery entitlement. A knowledge
+question is not place discovery, and withholding the outside world from a
+lower tier would leave that tier answering from training weights — the exact
+failure ADR-145 exists to close.
+
 ## What was removed, and why it was the right one
 
 `discover_places` (ADR-140). Its schema was byte-identical to
@@ -70,26 +88,32 @@ without the routing.
 
 | | tokens/request |
 | --- | --- |
-| `find_saved` | ~1,567 |
-| `suggest_places` | ~1,567 |
-| `research` | ~441 |
-| `find_known` | ~253 |
-| **total** | **~4,001** |
+| `suggest_places` | ~1,511 |
+| `find_saved` | ~1,349 |
+| `research` | ~473 |
+| `web_search` | ~328 |
+| `find_known` | (shares the place schema) |
+| **total** | **~3,661** |
 
-Against the ~5,397 baseline that included `discover_places`, that is a 26% cut.
-It was 3,830 after ADR-140; ADR-141 added ~171 tokens back for the `names`
-argument, buying the removal of an entire LLM call and its latency.
+Against the ~5,397 baseline that included `discover_places`, still a 32% cut
+even after adding a fifth tool. `web_search` is the second-cheapest schema in
+the set — it takes three arguments and no area vocabulary, because the working
+location scopes it server-side.
 
-`find_saved` and `suggest_places` are expensive for the same reason: they share
-the arg schema, and most of it is the controlled tag vocabulary moved there by
-ADR-137. That is the next cut available — the vocabulary is serialised twice,
-and only the dietary/accessibility classes actually filter.
+`find_saved` and `suggest_places` remain expensive for the same reason: they
+share the arg schema, and most of it is the controlled tag vocabulary moved
+there by ADR-137. That is the next cut available — the vocabulary is
+serialised twice, and only the dietary/accessibility classes actually filter.
 
 ## Where places come from
 
 Nothing here searches the world for a place and stores it speculatively. A
 catalog row exists because one of these put it there:
 
+0. **A question** — since ADR-145, `web_search` findings are mined for durable
+   area facts after the turn, so an area nobody has shared a video about can
+   accumulate knowledge from the questions asked about it. This writes claims,
+   never places: a finding carries no catalog id.
 1. **Ingestion** — a shared video is extracted, each named place validated
    against the provider, and the row persisted with any claims harvested from
    the same content. This is how `BNI CANGGU` and `Bank Mandiri` exist: they

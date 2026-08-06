@@ -50,5 +50,8 @@ See `.claude/workflows.md` for the 5-step workflow, constitution check, model as
 - Chat's render contract is text + `kebi://{venue|area}/{key}` links only (ADR-136) — links are attached server-side after the agent writes, so the agent must name places in plain prose, never markdown.
 - `/v1/chat` needs `local_time` from the client for schedule-aware answers (ADR-138) — without it kebi won't assert what day it is, so "tonight is X's night" never fires.
 - Place-tool filter vocabulary lives in the tool arg descriptions (`_search_args.py`), not the agent prompt (ADR-137) — don't move it back.
+- `web_search` fires entirely on the agent's judgement (ADR-145) — no code gate, no entitlement gate, no "corpus first" rule; a shared Redis cache keyed on the question, not the user, is what makes that affordable.
+- Web findings are mined into claims only when the harvest marks them durable (ADR-145) — event dates and prices are answered and deliberately never stored, so a `web_search` turn writing zero claims is correct, not a bug.
+- The location resolver can say a turn isn't about a place at all (`location_irrelevant`, ADR-145) — without it a world question resolves to nothing, reads as a clarification, and ends the turn asking which city they meant.
 - API testing: Bruno collection at `kebi-config/bruno/` — new endpoints get a corresponding `.bru` file there.
 - DB write ownership is split with the product repo — table map in @.claude/rules/architecture.md; never cross it.

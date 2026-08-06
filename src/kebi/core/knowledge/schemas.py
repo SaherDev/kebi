@@ -17,7 +17,13 @@ from anyascii import anyascii
 from pydantic import BaseModel, ConfigDict
 
 EntityType = Literal["country", "city", "neighborhood", "place"]
-SourceType = Literal["shared_content", "curated_expert", "kebi_message", "user_message"]
+SourceType = Literal[
+    "shared_content",
+    "curated_expert",
+    "kebi_message",
+    "user_message",
+    "web_search",
+]
 ReviewStatus = Literal["pending", "approved", "rejected"]
 
 # Coarse, user-facing origin label for a surfaced claim (ADR-127). The raw
@@ -28,6 +34,11 @@ NOTE_SOURCE_LABELS: dict[SourceType, str] = {
     "curated_expert": "expert",
     "kebi_message": "kebi",
     "user_message": "kebi",
+    # Not "kebi" and not "community": a fact kebi read on a page is neither
+    # something a person shared nor something kebi worked out. Labelling it
+    # honestly is the point — the voice is allowed to be sure about a save
+    # and hedged about a schedule it looked up.
+    "web_search": "web",
 }
 
 
