@@ -956,15 +956,22 @@ def trip_guard_node(state: AgentState) -> dict[str, Any]:
         return {}
     logger.info("trip guard fired: fetching verified picks for %s", stop)
 
-    taste = [v for v in (state.get("taste_values") or []) if v.strip()]
-    lens = " for someone whose saves lean " + ", ".join(taste) if taste else ""
+    # Taste LEADS the query, it doesn't trail it: "places worth a stop, for
+    # someone who likes X" returned the generic tourist canon with taste as
+    # an afterthought. Named first, the taste values are what the namer
+    # actually picks for — the coffee city surfaces its roaster, not only
+    # its castle.
+    taste = [v.replace("_", " ") for v in (state.get("taste_values") or []) if v.strip()]
+    query = (
+        f"the best {', '.join(taste)} spots in {stop}, plus the one or two "
+        f"sights genuinely worth their time"
+        if taste
+        else f"the places actually worth a stop in {stop}"
+    )
     tool_calls = [
         {
             "name": "suggest_places",
-            "args": {
-                "query": f"the places actually worth a stop in {stop}{lens}",
-                "city": stop,
-            },
+            "args": {"query": query, "city": stop},
             "id": f"trip_guard_{stop.lower().replace(' ', '_')}",
         }
     ]
