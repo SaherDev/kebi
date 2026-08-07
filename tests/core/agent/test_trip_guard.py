@@ -163,6 +163,85 @@ def test_a_trip_turn_runs_on_the_itinerary_budget() -> None:
     assert should_continue(_state(tool_calls_used=flat)) == NODE_TRIP_GUARD  # type: ignore[arg-type]
 
 
+def test_a_dropped_save_triggers_the_polish_pass() -> None:
+    """All stops covered, but the draft never names a save the user owns —
+    the deterministic completeness check sends it back once, tool-free."""
+    payload = {
+        "tool": "find_saved",
+        "payload": {
+            "candidates": [
+                {
+                    "place": {"place_name": "Mount Fuji"},
+                    "user_data": {"user_place_id": "up1"},
+                    "segment": "Kyoto",
+                },
+                {
+                    "place": {"place_name": "Shibuya Sky"},
+                    "user_data": {"user_place_id": "up2"},
+                    "segment": "Osaka",
+                },
+                {"place": {"place_name": "Cover"}, "segment": "Tokyo"},
+            ]
+        },
+    }
+    state = _state(
+        tool_payloads=[payload],
+        messages=[
+            HumanMessage(content="trip?"),
+            AIMessage(content="go see Shibuya Sky at sunset, skip the rest"),
+        ],
+    )
+    assert should_continue(state) == NODE_TRIP_GUARD  # type: ignore[arg-type]
+    update = trip_guard_node(state)  # type: ignore[arg-type]
+    msg = update["messages"][0]
+    assert msg.content.startswith(f"{_TRIP_GUARD_MARKER} target: polish")
+    assert "Mount Fuji" in msg.content
+    assert "Shibuya Sky" not in msg.content.split("dropped")[1].split(".")[0]
+    # Text-only, and user-side: an assistant message with no tool calls at
+    # the conversation's end reads as prefill to the Anthropic API (400).
+    assert isinstance(msg, HumanMessage)
+    assert not getattr(msg, "tool_calls", None)
+
+    # The polish pass runs once: after its marker, the answer stands.
+    state["messages"] = [
+        *state["messages"],
+        msg,
+        AIMessage(content="rewritten, still no fuji somehow"),
+    ]
+    assert should_continue(state) == "end"  # type: ignore[arg-type]
+
+
+def test_a_draft_naming_every_save_needs_no_polish() -> None:
+    payload = {
+        "tool": "find_saved",
+        "payload": {
+            "candidates": [
+                {
+                    "place": {
+                        "place_name": "Kalà Kalà Beach Club",
+                        "place_name_aliases": [
+                            {"value": "Kala Kala", "source": "manual"}
+                        ],
+                    },
+                    "user_data": {"user_place_id": "up1"},
+                    "segment": "Kyoto",
+                },
+                {"place": {"place_name": "C"}, "segment": "Osaka"},
+                {"place": {"place_name": "D"}, "segment": "Tokyo"},
+            ]
+        },
+    }
+    # Mentioned via its alias spelling — that counts as named.
+    state = _state(
+        tool_payloads=[payload],
+        messages=[
+            HumanMessage(content="trip?"),
+            AIMessage(content="kala kala at sunset is the move"),
+        ],
+    )
+    assert should_continue(state) == "end"  # type: ignore[arg-type]
+
+
 def test_a_non_itinerary_turn_never_guards() -> None:
     wl = _itinerary_wl() | {"scope_shape": "area", "itinerary": None}
     state = _state(working_location=wl, tool_payloads=[])
