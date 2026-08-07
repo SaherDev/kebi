@@ -911,6 +911,57 @@ def _trip_guard_next_stop(state: AgentState) -> str | None:
     return None
 
 
+# The polish mode's pseudo-target in the marker line — distinct from any
+# stop name, so the targeted-once bookkeeping covers both guard modes.
+_TRIP_POLISH_TARGET = "polish"
+
+
+def _trip_missing_saves(state: AgentState) -> list[str]:
+    """The user's retrieved saves that the draft answer never names.
+
+    Deterministic prose check: a save surfaced by retrieval is known by its
+    names and aliases, and a draft that contains none of them has silently
+    dropped a place the user owns — the single biggest observed variance in
+    trip answers (a saved Mount Fuji vanished between two otherwise-good
+    runs). Matching is case-folded substring over every known spelling, so
+    a mention via alias or display form counts.
+    """
+    working = state.get("working_location")
+    if not isinstance(working, dict) or working.get("scope_shape") != "itinerary":
+        return []
+    messages = state.get("messages") or []
+    if not messages:
+        return []
+    draft = extract_text_content(messages[-1].content).casefold()
+    if not draft:
+        return []
+
+    from kebi.core.places._place_utils import display_place_name
+
+    missing: list[str] = []
+    seen: set[str] = set()
+    for result in state.get("tool_payloads") or []:
+        payload = result.get("payload")
+        if not isinstance(payload, dict):
+            continue
+        for candidate in payload.get("candidates") or []:
+            if not isinstance(candidate, dict) or not candidate.get("user_data"):
+                continue
+            place = candidate.get("place") or {}
+            name = place.get("place_name")
+            if not isinstance(name, str) or not name or name in seen:
+                continue
+            seen.add(name)
+            spellings = {name, display_place_name(name)}
+            for alias in place.get("place_name_aliases") or []:
+                value = alias.get("value") if isinstance(alias, dict) else None
+                if isinstance(value, str) and value:
+                    spellings.add(value)
+            if not any(s.casefold() in draft for s in spellings if s):
+                missing.append(display_place_name(name))
+    return missing
+
+
 def _trip_guard_should_fire(state: AgentState) -> bool:
     """Whether to intercept a final trip answer that skipped verification.
 
@@ -922,17 +973,20 @@ def _trip_guard_should_fire(state: AgentState) -> bool:
     One stop is targeted per firing (parallel injected Commands collide on
     the plain payload channel), each stop at most once per turn — so the
     worst case is one verification round per stop, then the answer stands.
+
+    The second mode is the polish pass: every stop covered, but the draft
+    silently dropped a save the user owns. That costs no tool call — one
+    text-only round naming the dropped saves — and runs at most once.
     """
-    if _trip_guard_next_stop(state) is None:
-        return False
     cfg = get_config().agent
-    # Room for at least one more tool call — the guard injects exactly one
-    # suggest_places round, so the last slot is enough.
-    if state.get("tool_calls_used", 0) >= _effective_max_tool_calls(state):
-        return False
     if state.get("steps_taken", 0) >= cfg.max_steps - 1:
         return False
-    return True
+    targeted = _trip_guard_targeted_stops(state.get("messages") or [])
+    if _trip_guard_next_stop(state) is not None and state.get(
+        "tool_calls_used", 0
+    ) < _effective_max_tool_calls(state):
+        return True
+    return _TRIP_POLISH_TARGET not in targeted and bool(_trip_missing_saves(state))
 
 
 def trip_guard_node(state: AgentState) -> dict[str, Any]:
@@ -952,8 +1006,10 @@ def trip_guard_node(state: AgentState) -> dict[str, Any]:
     doubles as the fired-once flag.
     """
     stop = _trip_guard_next_stop(state)
-    if stop is None:  # racing guard checks; defensive, not expected
-        return {}
+    if stop is None or state.get("tool_calls_used", 0) >= _effective_max_tool_calls(
+        state
+    ):
+        return _trip_polish_update(state)
     logger.info("trip guard fired: fetching verified picks for %s", stop)
 
     # Taste LEADS the query, it doesn't trail it: "places worth a stop, for
@@ -961,7 +1017,9 @@ def trip_guard_node(state: AgentState) -> dict[str, Any]:
     # an afterthought. Named first, the taste values are what the namer
     # actually picks for — the coffee city surfaces its roaster, not only
     # its castle.
-    taste = [v.replace("_", " ") for v in (state.get("taste_values") or []) if v.strip()]
+    taste = [
+        v.replace("_", " ") for v in (state.get("taste_values") or []) if v.strip()
+    ]
     query = (
         f"the best {', '.join(taste)} spots in {stop}, plus the one or two "
         f"sights genuinely worth their time"
@@ -983,6 +1041,35 @@ def trip_guard_node(state: AgentState) -> dict[str, Any]:
         "every unverified name, and never mention this step."
     )
     return {"messages": [AIMessage(content=text, tool_calls=tool_calls)]}
+
+
+def _trip_polish_update(state: AgentState) -> dict[str, Any]:
+    """Text-only guard round: the draft dropped saves the user owns.
+
+    No tool call — the missing places are already retrieved and sitting in
+    the conversation's tool results; the model just failed to spend them.
+    The nudge names them and restates the trip-prose rules that land
+    intermittently, because this is the one deterministic hook the server
+    has into the draft's completeness.
+    """
+    missing = _trip_missing_saves(state)
+    logger.info("trip guard polish: draft omitted saves %s", missing)
+    names = ", ".join(missing) if missing else "(none)"
+    text = (
+        f"{_TRIP_GUARD_MARKER} target: {_TRIP_POLISH_TARGET}\n"
+        f"Your draft silently dropped saves the user owns: {names}. They "
+        "are already in your tool results. Rewrite the FULL answer: every "
+        "save earns its line (even a skip, with the reason), a taste-led "
+        'pick says "based on your taste", two same-kind saves get a '
+        "pick-one call with the reason, and the close folds the nights "
+        "question into an offer of the next piece of work. Never mention "
+        "this step."
+    )
+    # HumanMessage, not AIMessage: a text-only assistant message at the end
+    # of the conversation reads as prefill to the Anthropic API (400). The
+    # verification mode's AIMessage is fine because its tool calls are
+    # followed by tool results.
+    return {"messages": [HumanMessage(content=text)]}
 
 
 # --- Location resolution ---------------------------------------------------
@@ -1990,9 +2077,20 @@ def build_graph(
         },
     )
     graph.add_edge(NODE_TOOLS, NODE_AGENT)
-    # The guard appends its own suggest_places call(s), so it routes through
-    # the tool node — the model sees the verified results, then rewrites.
-    graph.add_edge(NODE_TRIP_GUARD, NODE_TOOLS)
+
+    # Verification mode appends its own suggest_places call, so it routes
+    # through the tool node; the polish mode is text-only and goes straight
+    # back to the model for the rewrite.
+    def _route_from_guard(state: AgentState) -> str:
+        messages = state.get("messages") or []
+        last = messages[-1] if messages else None
+        return NODE_TOOLS if getattr(last, "tool_calls", None) else NODE_AGENT
+
+    graph.add_conditional_edges(
+        NODE_TRIP_GUARD,
+        _route_from_guard,
+        {NODE_TOOLS: NODE_TOOLS, NODE_AGENT: NODE_AGENT},
+    )
     graph.add_edge(NODE_FALLBACK, NODE_FINALIZE)
     graph.add_edge(NODE_FINALIZE, NODE_SCRUB_TOOL_RESULTS)
     graph.add_edge(NODE_SCRUB_TOOL_RESULTS, END)
