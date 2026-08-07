@@ -84,7 +84,7 @@ keyed by the verified `X-Gateway-User-Id`.
 | POST /v1/knowledge/curate   | 30 / minute |
 | PATCH /v1/user/places/{id}  | 60 / minute |
 | DELETE /v1/user/places/{id} | 60 / minute |
-| POST /v1/signal             | 60 / minute |
+| GET /v1/places/{id}         | 60 / minute |
 | DELETE /v1/user/data        | 3 / hour    |
 
 ### Request-ID correlation
@@ -175,7 +175,7 @@ resolving each link. Two kinds:
 
 | Kind    | URI                          | `entity_key`                              | Tap opens          |
 | ------- | ---------------------------- | ----------------------------------------- | ------------------ |
-| `venue` | `kebi://venue/{place id}`    | `places.id` — same id `POST /v1/user/places` takes | The place screen   |
+| `venue` | `kebi://venue/{place id}`    | `places.id` — the id `GET /v1/places/{id}` and `POST /v1/user/places` take | The place screen   |
 | `area`  | `kebi://area/{geo key}`      | `{cc}[/{city}[/{neighborhood}]]`, slugged | A light area sheet |
 
 Only entities actually retrieved this turn are ever linked, and only
@@ -256,9 +256,9 @@ to `POST /v1/extract` — the chat path never writes to `user_places`.
 | `uri`  | `string`              | `kebi://{kind}/{key}`, pre-composed so the link handler never parses                      |
 | `icon` | `string \| null`      | Single emoji for the entity's identity (🍕, 🏄), drawn beside the name. A venue's comes off its catalog row (ADR-117); an area's is picked by the turn's location resolver (ADR-146). **Nullable by design** on both kinds — the client falls back to its own kind/category mapping |
 
-`recommendation_id` is the turn's consult id, needed by `POST /v1/signal`
-to attribute an accept/reject. It moved here when the tool payloads left
-the wire; `null` on a turn where no place tool ran.
+`recommendation_id` is the turn's consult id — an identifier of the
+recommendation itself (tracing, evals), not save ceremony: no endpoint
+takes it anymore (ADR-151). `null` on a turn where no place tool ran.
 
 `ReasoningStep` shape:
 
@@ -277,7 +277,7 @@ the wire; `null` on a turn where no place tool ran.
 
 `ToolResult` shape: `{ tool: "find_saved" | "suggest_places" | "discover_places" | "research", tool_call_id: string, payload: ConsultResult | ResearchResult }`. The `payload` is a union **discriminated by `tool`**: the three place tools carry a `ConsultResult`, `research` carries a `ResearchResult` (additive — a client that doesn't render research payloads still gets the agent's prose answer).
 
-`ConsultResult` carries `candidates` (each with `place`, `source ∈ {saved, suggested, discovered}`, optional namer `reason`), an `empty_reason` literal when no candidates were produced (e.g. `no_location`, `no_match`), and a `recommendation_id` (a per-recommendation id minted by kebi). The client echoes `recommendation_id` back when the user accepts/rejects (`POST /v1/signal`) or saves (`POST /v1/user/places`) a candidate, so the signal attributes to that recommendation.
+`ConsultResult` carries `candidates` (each with `place`, `source ∈ {saved, suggested, discovered}`, optional namer `reason`), an `empty_reason` literal when no candidates were produced (e.g. `no_location`, `no_match`), and a `recommendation_id` (a per-recommendation id minted by kebi, surfaced as `data.recommendation_id` for tracing/evals — no endpoint echoes it back, ADR-151).
 
 `ResearchResult` (ADR-129) carries `entity_name` + `entity_key` (the resolved area the notes are about), `notes` — each `{ id, text, tags, source, confidence, agree_count, disagree_count }`, where `id` is the underlying claim's stable id (ADR-128), `tags` are claim-vocabulary values, and `source` is the coarse origin label `community | expert | kebi` (raw provenance never crosses the wire) — plus, when empty, an `empty_reason ∈ { unresolved, ambiguous, no_claims, no_topic_match }` and a `clarification` string. Research results are knowledge, not place candidates: they carry no `recommendation_id` and nothing in them is save/signal-able. Note for the home surface: a turn whose only tool result is `research` does **not** count as a place-surfacing turn for the `GET /v1/user/intents` recall list (ADR-110 semantics preserved).
 
@@ -622,17 +622,72 @@ records which sort minted it; clients treat it as opaque and stop when
 
 ---
 
+## GET /v1/places/{place_id}
+
+The place screen behind every venue link (ADR-151). Any place kebi has
+surfaced resolves here, **saved or not** — a suggested pick is as openable
+as a library row. `place_id` is `places.id`, the `key` on the
+`kebi://venue/{id}` link the user tapped (ADR-136).
+
+**Request:** path param only. Plus the `X-Gateway-Token` +
+`X-Gateway-User-Id` headers.
+
+```
+GET /v1/places/c0ffee00-1111-2222-3333-444455556666
+```
+
+**Response (200):** a `LibraryItem` — the **same** `{ place, user_data,
+claims }` shape as one entry of the library response, so a venue tap and a
+library row open the identical screen. The one difference: **`user_data` is
+`null` when the caller never saved this place** — that null is the screen's
+"offer save" signal (`POST /v1/user/places` with this same id). `claims`
+are the place's insider notes (ADR-127): global approved claims plus the
+caller's own, strongest first; `from_shared` can only be `true` when the
+caller holds a save whose share ref matches — an unsaved place's notes are
+all simply global.
+
+```json
+{
+  "place": {
+    /* PlaceCore */
+  },
+  "user_data": null,
+  "claims": [
+    {
+      "id": "1e7c…",
+      "text": "sunset is the slot, daybeds book out on weekends",
+      "tags": ["timing"],
+      "source": "community",
+      "from_shared": false,
+      "agree_count": 0,
+      "disagree_count": 0
+    }
+  ]
+}
+```
+
+| Code  | When                                                              |
+| ----- | ----------------------------------------------------------------- |
+| `200` | The place is in the catalog (saved or not)                        |
+| `404` | `place_id` is not in the catalog (`detail: place_not_found`) — venue links kebi minted always resolve, so this means a stale or fabricated id |
+
+---
+
 ## POST /v1/user/places
 
-Save a place kebi recommended to the caller's library — the consult card's
-**"save it"** action. The place already exists in the catalog (it was just
-recommended), so this only links it to the caller. `user_id` is taken from
-`X-Gateway-User-Id`; a caller can only ever save into **their own** library.
+Save a place kebi surfaced to the caller's library — the plain **"save"**
+action on the place screen or a chat venue link (ADR-151). The place already
+exists in the catalog (kebi surfaced it), so this only links it to the
+caller. `user_id` is taken from `X-Gateway-User-Id`; a caller can only ever
+save into **their own** library.
 
 Saving also emits a **positive taste signal** — a _stronger_ one than a
 link-share save: its own `saved_recommendation` interaction type, weighted
 heavier in the taste evidence and **not** counted toward the discovery-source
-distribution (kebi is not a channel the user discovers from).
+distribution (kebi is not a channel the user discovers from). No turn
+context is needed for that: the only way a client holds a `places.id` is off
+a `kebi://venue/{id}` link kebi produced, so calling this endpoint at all is
+what marks the save as kebi-recommended.
 
 **Request:** JSON body + the `X-Gateway-Token` + `X-Gateway-User-Id` headers.
 
@@ -642,22 +697,18 @@ POST /v1/user/places
 
 ```json
 {
-  "place_core_id": "c0ffee00-1111-2222-3333-444455556666",
-  "recommendation_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
-  "reason": "great for a quiet date — the back room is candlelit"
+  "place_core_id": "c0ffee00-1111-2222-3333-444455556666"
 }
 ```
 
-| Field               | Type            | Required | Notes                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| ------------------- | --------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `place_core_id`     | `string`        | Yes      | `places.id` of the candidate — the `key` on the venue link the user tapped (ADR-136)                                                                                                                                                                                                                                                                                                                                                      |
-| `recommendation_id` | `string`        | Yes      | The id kebi minted for that turn (`data.recommendation_id` on the chat response)                                                                                                                                                                                                                                                                                                                                                     |
-| `reason`            | `string`/`null` | No       | The pick's rationale the card is showing. The reason is **not** persisted server-side, so the client supplies it. On create it is written to the knowledge layer as a **user-scoped `kebi_message` claim** on the place (ADR-127) and surfaces in the Library's `claims` as a `kebi` note — it is **no longer stored on the save as a note** (this amends ADR-114). A re-tap adds nothing (claim-text dedup). Omit or `null` for no reason |
+| Field           | Type     | Required | Notes                                                                                |
+| --------------- | -------- | -------- | ------------------------------------------------------------------------------------ |
+| `place_core_id` | `string` | Yes      | `places.id` of the place — the `key` on the venue link the user tapped (ADR-136) |
 
-> **ADR-127 note:** the save no longer echoes the reason back as `user_data.note`.
-> `user_data.note` is now set only by the user's own edit (`PATCH /v1/user/places/{id}`);
-> the reason appears instead in the place's Library `claims` (`source: "kebi"`).
-> Clients that sent `note` here must send `reason` and read it from `claims`.
+> **ADR-151 note:** the retired card ceremony (`recommendation_id`, `reason`)
+> is **rejected** as unknown keys (422). The reason-as-claim write (ADR-127)
+> retired with it; `user_data.note` is still set only by the user's own edit
+> (`PATCH /v1/user/places/{id}`).
 
 `source` is **not** a field — the server stamps `kebi`. Unknown fields → 422.
 
@@ -674,7 +725,7 @@ twice never double-trains taste.
 | `201` | Saved (or already saved) — returns the user-state                                                                                                        |
 | `403` | `X-Gateway-Save-Limit` already met (`detail: save_limit_reached`) — map to upgrade. A re-tap on an already-saved place is exempt and still returns `201` |
 | `404` | `place_core_id` is not in the catalog (`detail: place_not_found`)                                                                                        |
-| `422` | Missing `place_core_id`/`recommendation_id`, or an unknown field                                                                                         |
+| `422` | Missing `place_core_id`, or an unknown field (including the retired `recommendation_id`/`reason`)                                                        |
 
 ---
 
@@ -876,36 +927,6 @@ other SQL tables (saves, memories, taste model) are left untouched.
 
 ---
 
-## POST /v1/signal
-
-Behavioral signal endpoint (ADR-060, narrowed by ADR-076 to recommendation accept/reject only; ADR-078 made it trusted/un-validated).
-
-**Request:**
-
-```json
-{
-  "signal_type": "recommendation_accepted",
-  "recommendation_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
-  "place_core_id": "c0ffee00-1111-2222-3333-444455556666"
-}
-```
-
-(Plus `X-Gateway-Token` + `X-Gateway-User-Id` headers.)
-
-| Field               | Type     | Required | Notes                                                                                                                                    |
-| ------------------- | -------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| `signal_type`       | `string` | Yes      | `"recommendation_accepted"` or `"recommendation_rejected"`                                                                               |
-| `recommendation_id` | `string` | Yes      | **Trusted, not validated.** ADR-078 dropped the `recommendations` table; the id is recorded on the event, never looked up                |
-| `place_core_id`     | `string` | Yes      | `places.id` of the place (ADR-077; renamed from `place_id` to disambiguate from `user_place_id` / `provider_id`). Trusted, not validated |
-
-> `user_id` is sourced from `X-Gateway-User-Id`, not the body. A caller
-> can only register signals for themselves — never poison another
-> user's taste profile.
-
-**Responses:** `202 { "status": "accepted" }`; `422` on schema errors (including an unknown `signal_type`). **No `404`** — ADR-078 removed the recommendation existence check.
-
----
-
 ## POST /v1/knowledge/curate
 
 Push expert knowledge into the knowledge layer (ADR-121). The caller writes
@@ -1001,11 +1022,11 @@ All protected calls additionally send the `X-Gateway-Token` + `X-Gateway-User-Id
 | GET /v1/user/intents        | "What you wanted" recall list              | — (optional `limit`/`cursor` query params)                   | IntentsResponse (`intents: { id, text, created_at }[]`, `next_cursor`)                                                                       |
 | POST /v1/extract            | Canonical extraction (save a place)        | raw_input                                                    | ExtractPlaceResponse                                                                                                                         |
 | GET /v1/user/library        | Browse the user's saved places (Library)   | — (optional filter + `sort` + `limit`/`cursor` query params) | LibraryResponse (`places: SavedPlaceView[]`, `next_cursor`, `total`)                                                                         |
-| POST /v1/user/places        | Save a recommended place ("save it")       | place_core_id, recommendation_id, optional `reason`          | LibraryUserData (created user-state, `201`; `404` if uncatalogued); emits taste signal + writes `reason` as a `kebi_message` claim (ADR-127) |
+| GET /v1/places/{id}         | Open any surfaced place (the place screen) | — (path param only)                                          | LibraryItem (`place`, `user_data` — null when unsaved, `claims`); `404` if uncatalogued                                                      |
+| POST /v1/user/places        | Save a surfaced place (plain save)         | place_core_id                                                | LibraryUserData (created user-state, `201`; `404` if uncatalogued); emits the `saved_recommendation` taste signal                            |
 | PATCH /v1/user/places/{id}  | Update a save's user-state (pills/menu)    | partial body: `visited`/`liked`/`approved`/`note`            | LibraryUserData (updated user-state; `200`/`404`)                                                                                            |
 | DELETE /v1/user/places/{id} | Remove one saved place from the library    | — (path param only)                                          | 204 No Content (`404` if absent/not owned)                                                                                                   |
 | DELETE /v1/user/data        | Account-deletion sweep of AI data          | — (optional `scope` query param)                             | 204 No Content                                                                                                                               |
-| POST /v1/signal             | Recommendation accept/reject               | signal_type, recommendation_id, place_core_id                | status (202)                                                                                                                                 |
 | GET /v1/health              | Service health check (unauthenticated)     | —                                                            | status, db connectivity                                                                                                                      |
 
 ---

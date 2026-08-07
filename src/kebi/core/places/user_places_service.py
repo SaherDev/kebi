@@ -204,6 +204,15 @@ class UserPlacesService:
             raise PlaceNotFoundError(place_id) from exc
         return saved[0], True
 
+    async def get_save(self, user_id: str, place_id: str) -> UserPlace | None:
+        """The caller's save for a catalog place, or None when they hold none.
+
+        Backs the place screen's nullable `user_data`: a place kebi surfaced
+        is openable whether or not the user saved it, and this is the one
+        read that says which case the screen is in.
+        """
+        return await self._user_places_repo.get_by_user_and_place(user_id, place_id)
+
     async def browse(
         self,
         user_id: str,

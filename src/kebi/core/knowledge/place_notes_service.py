@@ -53,27 +53,49 @@ class PlaceNotesService:
         for claim in claims:
             grouped[claim.entity_key].append(claim)
 
-        result: dict[str, list[PlaceNote]] = {}
-        for entity_key, (place_id, save) in by_key.items():
-            save_ref = save.user_data.source_ref
-            ranked = self._rank(grouped.get(entity_key, []))
-            result[place_id] = [
-                PlaceNote(
-                    id=claim.id,
-                    text=claim.claim,
-                    tags=claim.tags,
-                    source_type=claim.source_type,
-                    from_shared=(
-                        claim.source_ref is not None
-                        and save_ref is not None
-                        and claim.source_ref == save_ref
-                    ),
-                    agree_count=claim.agree_count,
-                    disagree_count=claim.disagree_count,
-                )
-                for claim in ranked
-            ]
-        return result
+        return {
+            place_id: self._to_notes(
+                grouped.get(entity_key, []), save.user_data.source_ref
+            )
+            for entity_key, (place_id, save) in by_key.items()
+        }
+
+    async def notes_for_place(
+        self, place_id: str, user_id: str, save_ref: str | None = None
+    ) -> list[PlaceNote]:
+        """Insider notes for one place — saved or not (the place screen,
+        ADR-151).
+
+        `save_ref` is the caller's save's `source_ref` when they hold one, so
+        `from_shared` still marks notes mined from their own shared post; an
+        unsaved place has no share to match, so every note is simply global.
+        """
+        claims = await self._repo.list_for_entities(
+            [build_place_key(place_id)], user_id=user_id, approved_only=True
+        )
+        return self._to_notes(claims, save_ref)
+
+    def _to_notes(
+        self, claims: list[KnowledgeClaim], save_ref: str | None
+    ) -> list[PlaceNote]:
+        """Rank one place's claims and project them to notes, flagging the
+        ones that came from the very post the user shared."""
+        return [
+            PlaceNote(
+                id=claim.id,
+                text=claim.claim,
+                tags=claim.tags,
+                source_type=claim.source_type,
+                from_shared=(
+                    claim.source_ref is not None
+                    and save_ref is not None
+                    and claim.source_ref == save_ref
+                ),
+                agree_count=claim.agree_count,
+                disagree_count=claim.disagree_count,
+            )
+            for claim in self._rank(claims)
+        ]
 
     def _rank(self, claims: list[KnowledgeClaim]) -> list[KnowledgeClaim]:
         """Strongest first (confidence, then most recent), capped at the limit.

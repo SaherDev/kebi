@@ -170,13 +170,12 @@ def _area(geo_key: str, name: str, icon: str | None = None) -> ChatEntity:
 
 
 def turn_recommendation_id(tool_results: list[dict[str, Any]]) -> str | None:
-    """The turn's recommendation id, for attributing a later accept/reject.
+    """The turn's recommendation id, for attributing the turn's outcome.
 
-    Dropping the per-tool payloads from the wire (ADR-136) took
-    `recommendation_id` with them, and `POST /v1/signal` needs it. It comes
-    back on the response instead: the first place-tool result's id is the
-    turn's, and `place_core_id` on the signal — which the client now reads off
-    the venue link — says which place within the turn the user acted on.
+    The first place-tool result's id is the turn's. It rides the chat
+    response's `data` as an identifier of the recommendation itself —
+    tracing and evals — not as save ceremony: the save path stopped taking
+    it (ADR-151).
     """
     for result in tool_results:
         if result.get("tool") not in _PLACE_TOOLS:
