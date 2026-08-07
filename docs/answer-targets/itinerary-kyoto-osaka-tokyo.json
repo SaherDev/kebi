@@ -1,0 +1,162 @@
+{
+  "name": "itinerary-kyoto-osaka-tokyo",
+  "captured_at": "2026-08-07",
+  "adr": "ADR-148 / ADR-149",
+  "description": "Live /v1/chat answer for a Japan multi-stop trip, captured as the second itinerary quality target. Unlike the Vietnam target (seeded curated data), every save here came from real TikTok extractions, so the provenance attribution ('from a tiktok') is organic. What must hold: saves pinned per stop, tiktok provenance said out loud, a saved place inside a leg corridor called out as on-the-way (Mount Fuji on Osaka-Tokyo), honest gap for a city with no saves, one closing question.",
+  "request": {
+    "message": "im planning a trip to japan, visiting kyoto, then osaka, then tokyo. what should i stop at along the way?",
+    "local_time": "2026-08-07T19:30:00+07:00"
+  },
+  "seed": {
+    "saves": [
+      {
+        "place": "Mount Fuji",
+        "city": "Fujinomiya",
+        "source": "tiktok"
+      },
+      {
+        "place": "Shibuya Sky",
+        "city": "Tokyo",
+        "source": "tiktok"
+      },
+      {
+        "place": "teamLab Planets TOKYO DMM",
+        "city": "Tokyo",
+        "source": "tiktok"
+      },
+      {
+        "place": "Warner Bros. Studio Tour Tokyo",
+        "city": "Tokyo",
+        "source": "tiktok"
+      },
+      {
+        "place": "Universal Studios Japan",
+        "city": "Osaka",
+        "source": "tiktok"
+      },
+      {
+        "place": "teamLab Borderless",
+        "city": "Tokyo",
+        "source": "tiktok"
+      },
+      {
+        "place": "Meiji Jingu",
+        "city": "Tokyo",
+        "source": "tiktok"
+      },
+      {
+        "place": "Shinjuku Gyoen National Garden",
+        "city": "Tokyo",
+        "source": "tiktok"
+      }
+    ],
+    "taste": [
+      "beach_club",
+      "specialty_coffee",
+      "scenic_view"
+    ],
+    "claims": "none for Japan — claims store empty on this route"
+  },
+  "response": {
+    "type": "agent",
+    "message": "nice, you've got some solid saves across the trip. here's how i'd shape it stop by stop.\n\n[Kyoto](kebi://area/jp/kyoto)\n\nyou didn't save anything in kyoto yet, so i'd start with the temples and gardens that anchor the city. [Meiji Jingu](kebi://venue/d4104468-7ac7-4674-8b91-a9b1b559fcfb) is actually on your tokyo list, but kyoto's temple scene is where the real depth is, fushimi inari with its thousands of red gates, arashiyama bamboo grove, and the golden pavilion at kinkaku-ji are the classics. since you're there first, hit them in the morning before the crowds build, especially the bamboo grove.\n\nOsaka\n\nyou saved [Universal Studios Japan](kebi://venue/e68f1787-c5f6-4ed6-81b1-e0296a02ecf9) from a tiktok, and that's the anchor here. the super mario themed attractions are the draw if you're into that, though it's a full day commitment at the expensive end. if theme parks aren't your thing, osaka's street food scene in dotonbori is the move, takoyaki, okonomiyaki, all of it in one neighborhood.\n\nthe leg between Osaka and Tokyo\n\nthis is where your trip gets interesting. you've got [Mount Fuji](kebi://venue/67543868-5745-45bd-a5e9-4ab948480e30) saved, and that's genuinely on your way, it's the classic stop, though climbing it is a whole thing. you also saved [The Making of Harry Potter](kebi://venue/3d3d35f0-b134-4c2b-9dc0-e34ecef0576e), which is the Warner Bros. Studio Tour, a two-hour tour for forty-five dollars. [Shinjuku Gyoen](kebi://venue/1cf8682b-9ba4-4cc1-8a07-651c8b8b7b37) is marked as on this leg too, though it's technically in tokyo proper, it's a massive garden with japanese, english, and french landscaping, quiet and worth an afternoon if you need a break from the intensity.\n\nTokyo\n\nyou've got three saves here and they're all tiktok picks: [Shibuya Sky](kebi://venue/1bd47f5c-8855-4ba9-98e6-d4c6ccf6427f) for the city view, [teamLab Planets](kebi://venue/3546d397-b212-4cb4-866a-3a87cd06c485) and [teamLab Borderless](kebi://venue/ce8d6832-b63e-4b15-8d39-50133dabbe62) for the immersive digital art. Shibuya Sky is the quickest (sixteen dollars for the view), while the teamLab experiences are pricier and take longer but are genuinely the kind of thing that stops you, interactive digital art, very instagrammable. Meiji Jingu is also here, the shinto shrine in a forest, peaceful contrast to the neon.\n\nthe missing detail: how many nights do you have in each city? that changes whether you're doing kyoto as a quick temple run or staying long enough to explore the geisha districts and smaller gardens.",
+    "data": {
+      "reasoning_steps": [
+        {
+          "step": "agent.location_resolved",
+          "title": "found your location",
+          "summary": "around Kyoto, Japan",
+          "source": "agent",
+          "visibility": "user",
+          "timestamp": "2026-08-07T00:09:08.462871Z",
+          "duration_ms": 2573.7292080011684
+        },
+        {
+          "step": "find_saved.summary",
+          "title": "searched your saved spots",
+          "summary": "8 spots — Universal Studios Japan, Shibuya Sky, +6 more",
+          "source": "agent",
+          "visibility": "user",
+          "timestamp": "2026-08-07T00:09:11.486241Z",
+          "duration_ms": 428.52195899467915
+        }
+      ],
+      "entities": [
+        {
+          "kind": "area",
+          "key": "jp/kyoto",
+          "name": "Kyoto",
+          "uri": "kebi://area/jp/kyoto",
+          "icon": null
+        },
+        {
+          "kind": "venue",
+          "key": "d4104468-7ac7-4674-8b91-a9b1b559fcfb",
+          "name": "Meiji Jingu",
+          "uri": "kebi://venue/d4104468-7ac7-4674-8b91-a9b1b559fcfb",
+          "icon": null
+        },
+        {
+          "kind": "venue",
+          "key": "e68f1787-c5f6-4ed6-81b1-e0296a02ecf9",
+          "name": "Universal Studios Japan",
+          "uri": "kebi://venue/e68f1787-c5f6-4ed6-81b1-e0296a02ecf9",
+          "icon": null
+        },
+        {
+          "kind": "venue",
+          "key": "67543868-5745-45bd-a5e9-4ab948480e30",
+          "name": "Mount Fuji",
+          "uri": "kebi://venue/67543868-5745-45bd-a5e9-4ab948480e30",
+          "icon": null
+        },
+        {
+          "kind": "venue",
+          "key": "3d3d35f0-b134-4c2b-9dc0-e34ecef0576e",
+          "name": "The Making of Harry Potter",
+          "uri": "kebi://venue/3d3d35f0-b134-4c2b-9dc0-e34ecef0576e",
+          "icon": null
+        },
+        {
+          "kind": "venue",
+          "key": "1cf8682b-9ba4-4cc1-8a07-651c8b8b7b37",
+          "name": "Shinjuku Gyoen National Garden",
+          "uri": "kebi://venue/1cf8682b-9ba4-4cc1-8a07-651c8b8b7b37",
+          "icon": null
+        },
+        {
+          "kind": "venue",
+          "key": "1bd47f5c-8855-4ba9-98e6-d4c6ccf6427f",
+          "name": "Shibuya Sky",
+          "uri": "kebi://venue/1bd47f5c-8855-4ba9-98e6-d4c6ccf6427f",
+          "icon": null
+        },
+        {
+          "kind": "venue",
+          "key": "3546d397-b212-4cb4-866a-3a87cd06c485",
+          "name": "teamLab Planets Tokyo DMM",
+          "uri": "kebi://venue/3546d397-b212-4cb4-866a-3a87cd06c485",
+          "icon": null
+        },
+        {
+          "kind": "venue",
+          "key": "ce8d6832-b63e-4b15-8d39-50133dabbe62",
+          "name": "teamLab Borderless: MORI Building Digital ART Museum",
+          "uri": "kebi://venue/ce8d6832-b63e-4b15-8d39-50133dabbe62",
+          "icon": null
+        }
+      ],
+      "recommendation_id": "792c6459-e0da-40eb-8548-c5dccbf357a3"
+    },
+    "tool_calls_used": 1
+  },
+  "attribution_examples": [
+    "you saved Universal Studios Japan from a tiktok, and that's the anchor here",
+    "you've got Mount Fuji saved, and that's genuinely on your way",
+    "you've got three saves here and they're all tiktok picks",
+    "you didn't save anything in kyoto yet"
+  ],
+  "known_gaps": [
+    "Kyoto (zero saves) was answered from model memory instead of suggest_places: names unverified, not tappable — prompt hardened twice, compliance still partial; graph-level guard is the proposed fix"
+  ]
+}
