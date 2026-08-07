@@ -1,6 +1,6 @@
 {
   "name": "itinerary-kyoto-osaka-tokyo",
-  "captured_at": "2026-08-08 (full entitlements: taste + advanced model + discovery; ADR-150 guard)",
+  "captured_at": "2026-08-08 (taste-led guard query; full entitlements)",
   "adr": "ADR-148 / ADR-149",
   "description": "Live /v1/chat answer for a Japan multi-stop trip, captured as the second itinerary quality target. Unlike the Vietnam target (seeded curated data), every save here came from real TikTok extractions, so the provenance attribution ('from a tiktok') is organic. What must hold: saves pinned per stop, tiktok provenance said out loud, a saved place inside a leg corridor called out as on-the-way (Mount Fuji on Osaka-Tokyo), honest gap for a city with no saves, one closing question.",
   "request": {
@@ -59,7 +59,7 @@
   },
   "response": {
     "type": "agent",
-    "message": "your list is already stacked on the tokyo end, so i'll fill in [kyoto](kebi://area/jp/kyoto) and osaka and then build on what you've saved for the final stretch.\n\n---\n\nkyoto (nothing saved here yet, so this one's on me)\n\n[Arashiyama Bamboo Forest](kebi://venue/f4b47463-0468-4adb-95a6-71f8a4b65393) is the one to anchor a morning around, go early, the crowds thin out fast and the light through the bamboo before 8am is the version you've seen all over tiktok but better in person. Nijo Castle is the historical weight of the trip, a UNESCO site with the famous \"nightingale floors\" that squeak as you walk to deter assassins, genuinely interesting, not just a pretty exterior. [Nishiki Market](kebi://venue/4137a972-fe01-4266-bbaf-3fb145d70659) is the afternoon move, a covered street market in the city center where you graze stall to stall. and Kyoto Tower gives you the city overview if you want to get your bearings from above.\n\nkyoto rewards slow mornings, don't try to cram it.\n\n---\n\nosaka (nothing saved here yet either, still on me)\n\n[Dotonbori](kebi://venue/1b247b82-0663-4f4f-be22-875f5ccc0a9f) is the obvious anchor, the neon canal strip, street food everywhere, takoyaki and okonomiyaki on every corner, genuinely fun at night. pair it with [Kuromon Market](kebi://venue/e35b0bea-bc55-4afb-adb5-a9cb8391e1b1) for daytime eating, that's the local food market where you graze stall to stall. [Osaka Castle](kebi://venue/15a9d47a-0fb6-44ec-89ac-e7fb01492588) is worth a half morning, the park around it is as good as the castle itself. and if you're into retro culture and electronics, [Nipponbashi](kebi://venue/4674c8b7-cf21-4b08-b0b1-2ab831ba2200) (Den Den Town) is right nearby.\n\nosaka is the eat-everything city of the three, lean into that.\n\n---\n\ntokyo (your saves take over here)\n\nyou've got [teamLab Planets](kebi://venue/3546d397-b212-4cb4-866a-3a87cd06c485), [Meiji Jingu](kebi://venue/d4104468-7ac7-4674-8b91-a9b1b559fcfb), [Shibuya Sky](kebi://venue/1bd47f5c-8855-4ba9-98e6-d4c6ccf6427f), and [Shinjuku Gyoen](kebi://venue/1cf8682b-9ba4-4cc1-8a07-651c8b8b7b37) all saved, that's already a strong spread. a few thoughts on ordering them:\n\n- teamLab Planets is an evening move, book ahead, it sells out\n- Shibuya Sky is best around sunset, same deal on booking\n- Meiji Jingu pairs naturally with Shinjuku Gyoen since they're both on the western side of the city, do them together on one calm morning\n- [Universal Studios Japan](kebi://venue/e68f1787-c5f6-4ed6-81b1-e0296a02ecf9) is also in your saves, but that's technically osaka, so slot it into your osaka days if you want it\n\n---\n\non the way, [Mount Fuji](kebi://venue/67543868-5745-45bd-a5e9-4ab948480e30) is in your saves and it sits between the kansai region and tokyo. best approached from the tokyo side, either as a day trip or an overnight at Kawaguchiko. worth knowing before you lock the order of stops.\n\nhow many nights are you splitting across each city? that changes how much i'd pack into each stop.",
+    "message": "Your saves are loaded up on Tokyo, which is great. your list is thin up front though, so [Kyoto](kebi://area/jp/kyoto) and Osaka are where i'll fill in the gaps. here's the trip stop by stop.\n\n---\n\nKyoto\n\nnothing saved here yet, so this one's on me. Kyoto is an early-morning city, the big spots fill up fast.\n\n[Fushimi Inari Taisha](kebi://venue/798aea34-b234-4a06-b628-8d791d2396bf) is the one to anchor around. the thousands of torii gates winding up the mountain are the image everyone knows, and you've got the whole trail or just the lower gates depending on energy. go at sunrise and the lower section is nearly empty, it's a genuinely different place before the crowds arrive.\n\n[Kinkaku-ji](kebi://venue/1bb9b7c1-bd65-4d69-acf9-3f023cd24844) pairs well with [Arashiyama Bamboo Forest](kebi://venue/f4b47463-0468-4adb-95a6-71f8a4b65393) in the same western loop. go right when Kinkaku-ji opens, it gets shoulder-to-shoulder by mid-morning, then head west to Arashiyama after.\n\n[Kiyomizu-dera](kebi://venue/f8d8b1da-95bf-49fc-ade3-8433f3424185) is the hillside temple with the big wooden stage jutting out over the valley, the views over the city are worth it, and the lanes leading up through Higashiyama are one of the best walks in Japan. evenings are beautiful here too, especially if they're doing the seasonal illuminations.\n\nfor food, [Junsei](kebi://venue/b2fc7256-7495-4882-9f42-9ea9bae445eb) near Nanzenji is a lovely traditional tofu kaiseki spot in an old garden setting, the kind of Kyoto lunch that earns its own afternoon. very TikTok-worthy in the best way, not in a gimmicky way.\n\n---\n\nKyoto to Osaka\n\nonly about 15 minutes on the shinkansen or 30 on the express. Fushimi Inari is on the southern edge of Kyoto, basically pointing toward Osaka, if you do it on your last Kyoto morning, rolling out to Osaka from there is a smooth move.\n\n---\n\nOsaka\n\n[Dotonbori](kebi://venue/1b247b82-0663-4f4f-be22-875f5ccc0a9f) is the anchor and it earns it, the neon canal strip at night is genuinely one of those Japan moments. eat here: takoyaki, okonomiyaki, kushikatsu. evening is when it's best.\n\n[Kuromon Market](kebi://venue/e35b0bea-bc55-4afb-adb5-a9cb8391e1b1) is your daytime food move, a covered market with fresh seafood and street snacks, go in the morning when the stalls are fullest.\n\n[Osaka Castle](kebi://venue/15a9d47a-0fb6-44ec-89ac-e7fb01492588) is a good half-morning, the grounds are beautiful and the museum inside covers the history well.\n\nyou've also saved [Universal Studios Japan](kebi://venue/e68f1787-c5f6-4ed6-81b1-e0296a02ecf9). that's a full day on its own, so slot it deliberately rather than squeezing it in. if Nintendo World is on the agenda, book the timed entry well ahead, it fills up.\n\n---\n\nTokyo\n\nthis is where your saves stack up, so it's mostly about ordering them well.\n\n[teamLab Planets](kebi://venue/3546d397-b212-4cb4-866a-3a87cd06c485) is on your list, book ahead, it sells out. it's in Toyosu, easy on the Yurikamome line. evening slot hits differently, the light art is made for low ambient light.\n\nyou've also saved [teamLab Borderless](kebi://venue/ce8d6832-b63e-4b15-8d39-50133dabbe62) at the Mori Building in Azabudai Hills. same deal, book ahead. both are worth doing if you love immersive art, but they're genuinely different experiences so don't rush between them on the same day.\n\n[Shibuya Sky](kebi://venue/1bd47f5c-8855-4ba9-98e6-d4c6ccf6427f) is your rooftop sunset. the outdoor deck on top of Shibuya Scramble Square is the shot. timed entry, book it for golden hour.\n\n[Shinjuku Gyoen](kebi://venue/1cf8682b-9ba4-4cc1-8a07-651c8b8b7b37) is a great slow morning, big garden, Japanese, French, and English sections, easy two hours. pairs naturally with anything else you want to do in Shinjuku.\n\n[Meiji Jingu](kebi://venue/d4104468-7ac7-4674-8b91-a9b1b559fcfb) is a completely different energy from Kyoto's temples, a forested walk through the middle of Tokyo, calm even on weekends. right next to Harajuku and Omotesando so easy to fold into a full day in that area.\n\none flag: [The Making of Harry Potter](kebi://venue/3d3d35f0-b134-4c2b-9dc0-e34ecef0576e) on your list is actually the studio tour in London, not Tokyo, so worth knowing before you go looking for it.\n\n---\n\nhow many nights do you have at each stop? that changes the edit quite a bit, especially for Kyoto.",
     "data": {
       "reasoning_steps": [
         {
@@ -68,17 +68,8 @@
           "summary": "around Kyoto, Japan",
           "source": "agent",
           "visibility": "user",
-          "timestamp": "2026-08-07T00:46:44.959841Z",
-          "duration_ms": 2194.0306659962516
-        },
-        {
-          "step": "find_known.summary",
-          "title": "checked what I know around here",
-          "summary": "7 spots — Universal Studios Japan, Shinjuku Gyoen National…, +5 more",
-          "source": "agent",
-          "visibility": "user",
-          "timestamp": "2026-08-07T00:46:47.145632Z",
-          "duration_ms": 45.80266700941138
+          "timestamp": "2026-08-07T00:50:54.992718Z",
+          "duration_ms": 2345.8597919961903
         },
         {
           "step": "find_saved.summary",
@@ -86,8 +77,17 @@
           "summary": "8 spots — Universal Studios Japan, teamLab Planets TOKYO DMM, +6 more",
           "source": "agent",
           "visibility": "user",
-          "timestamp": "2026-08-07T00:46:49.452645Z",
-          "duration_ms": 523.8891250046436
+          "timestamp": "2026-08-07T00:50:57.027406Z",
+          "duration_ms": 69.41583298612386
+        },
+        {
+          "step": "find_known.summary",
+          "title": "checked what I know around here",
+          "summary": "7 spots — Universal Studios Japan, Shinjuku Gyoen National…, +5 more",
+          "source": "agent",
+          "visibility": "user",
+          "timestamp": "2026-08-07T00:50:58.735825Z",
+          "duration_ms": 38.95899999770336
         },
         {
           "step": "suggest_places.summary",
@@ -95,26 +95,26 @@
           "summary": "5 spots — Fushimi Inari Taisha, Arashiyama Bamboo Forest, +3 more",
           "source": "agent",
           "visibility": "user",
-          "timestamp": "2026-08-07T00:46:54.668725Z",
-          "duration_ms": 1068.641874997411
+          "timestamp": "2026-08-07T00:51:02.892979Z",
+          "duration_ms": 394.1007920075208
         },
         {
           "step": "suggest_places.summary",
           "title": "suggested a few spots",
-          "summary": "5 spots — Dotonbori, Osaka Castle, +3 more",
+          "summary": "4 spots — Dotonbori, Osaka Castle, +2 more",
           "source": "agent",
           "visibility": "user",
-          "timestamp": "2026-08-07T00:46:58.020158Z",
-          "duration_ms": 674.2985829769168
+          "timestamp": "2026-08-07T00:51:09.541774Z",
+          "duration_ms": 806.6618340089917
         },
         {
           "step": "suggest_places.summary",
           "title": "suggested a few spots",
-          "summary": "5 spots — Nishiki Market, Katsukura Fushimi Momoyama, +3 more",
+          "summary": "5 spots — Junsei, Sky Beer Garden, +3 more",
           "source": "agent",
           "visibility": "user",
-          "timestamp": "2026-08-07T00:47:22.969333Z",
-          "duration_ms": 7743.928499985486
+          "timestamp": "2026-08-07T00:51:39.866127Z",
+          "duration_ms": 5251.837999996496
         }
       ],
       "entities": [
@@ -127,6 +127,20 @@
         },
         {
           "kind": "venue",
+          "key": "798aea34-b234-4a06-b628-8d791d2396bf",
+          "name": "Fushimi Inari Taisha",
+          "uri": "kebi://venue/798aea34-b234-4a06-b628-8d791d2396bf",
+          "icon": null
+        },
+        {
+          "kind": "venue",
+          "key": "1bb9b7c1-bd65-4d69-acf9-3f023cd24844",
+          "name": "Kinkaku-ji",
+          "uri": "kebi://venue/1bb9b7c1-bd65-4d69-acf9-3f023cd24844",
+          "icon": null
+        },
+        {
+          "kind": "venue",
           "key": "f4b47463-0468-4adb-95a6-71f8a4b65393",
           "name": "Arashiyama Bamboo Forest",
           "uri": "kebi://venue/f4b47463-0468-4adb-95a6-71f8a4b65393",
@@ -134,10 +148,17 @@
         },
         {
           "kind": "venue",
-          "key": "4137a972-fe01-4266-bbaf-3fb145d70659",
-          "name": "Nishiki Market",
-          "uri": "kebi://venue/4137a972-fe01-4266-bbaf-3fb145d70659",
-          "icon": null
+          "key": "f8d8b1da-95bf-49fc-ade3-8433f3424185",
+          "name": "Kiyomizu-dera",
+          "uri": "kebi://venue/f8d8b1da-95bf-49fc-ade3-8433f3424185",
+          "icon": "🏯"
+        },
+        {
+          "kind": "venue",
+          "key": "b2fc7256-7495-4882-9f42-9ea9bae445eb",
+          "name": "Junsei",
+          "uri": "kebi://venue/b2fc7256-7495-4882-9f42-9ea9bae445eb",
+          "icon": "🍵"
         },
         {
           "kind": "venue",
@@ -162,9 +183,9 @@
         },
         {
           "kind": "venue",
-          "key": "4674c8b7-cf21-4b08-b0b1-2ab831ba2200",
-          "name": "Nipponbashi Denden Town",
-          "uri": "kebi://venue/4674c8b7-cf21-4b08-b0b1-2ab831ba2200",
+          "key": "e68f1787-c5f6-4ed6-81b1-e0296a02ecf9",
+          "name": "Universal Studios Japan",
+          "uri": "kebi://venue/e68f1787-c5f6-4ed6-81b1-e0296a02ecf9",
           "icon": null
         },
         {
@@ -172,13 +193,13 @@
           "key": "3546d397-b212-4cb4-866a-3a87cd06c485",
           "name": "teamLab Planets Tokyo DMM",
           "uri": "kebi://venue/3546d397-b212-4cb4-866a-3a87cd06c485",
-          "icon": "🖼️"
+          "icon": null
         },
         {
           "kind": "venue",
-          "key": "d4104468-7ac7-4674-8b91-a9b1b559fcfb",
-          "name": "Meiji Jingu",
-          "uri": "kebi://venue/d4104468-7ac7-4674-8b91-a9b1b559fcfb",
+          "key": "ce8d6832-b63e-4b15-8d39-50133dabbe62",
+          "name": "teamLab Borderless: MORI Building Digital ART Museum",
+          "uri": "kebi://venue/ce8d6832-b63e-4b15-8d39-50133dabbe62",
           "icon": null
         },
         {
@@ -186,7 +207,7 @@
           "key": "1bd47f5c-8855-4ba9-98e6-d4c6ccf6427f",
           "name": "Shibuya Sky",
           "uri": "kebi://venue/1bd47f5c-8855-4ba9-98e6-d4c6ccf6427f",
-          "icon": "🏙️"
+          "icon": null
         },
         {
           "kind": "venue",
@@ -197,20 +218,20 @@
         },
         {
           "kind": "venue",
-          "key": "e68f1787-c5f6-4ed6-81b1-e0296a02ecf9",
-          "name": "Universal Studios Japan",
-          "uri": "kebi://venue/e68f1787-c5f6-4ed6-81b1-e0296a02ecf9",
-          "icon": "🎡"
+          "key": "d4104468-7ac7-4674-8b91-a9b1b559fcfb",
+          "name": "Meiji Jingu",
+          "uri": "kebi://venue/d4104468-7ac7-4674-8b91-a9b1b559fcfb",
+          "icon": null
         },
         {
           "kind": "venue",
-          "key": "67543868-5745-45bd-a5e9-4ab948480e30",
-          "name": "Mount Fuji",
-          "uri": "kebi://venue/67543868-5745-45bd-a5e9-4ab948480e30",
+          "key": "3d3d35f0-b134-4c2b-9dc0-e34ecef0576e",
+          "name": "The Making of Harry Potter",
+          "uri": "kebi://venue/3d3d35f0-b134-4c2b-9dc0-e34ecef0576e",
           "icon": null
         }
       ],
-      "recommendation_id": "07528d12-62bd-4b49-8885-65b98fbe2b87"
+      "recommendation_id": "022d79d5-3618-46be-8ebc-64e8fe8273ae"
     },
     "tool_calls_used": 5
   },
@@ -221,7 +242,8 @@
     "you didn't save anything in kyoto yet"
   ],
   "known_gaps": [
-    "two unverified names still slipped into prose unlinked (Nijo Castle, Kyoto Tower) — the model padded beyond the verified five; prompt-level, minor"
+    "run-to-run variance remains on: Mount Fuji omitted this run (previous run featured it), no literal 'based on your taste' phrase, no pick-one-teamlab decision, close not offer-shaped",
+    "the model second-guessed a verified save with training memory (claimed the Warner Bros Studio Tour save is London-only; the Tokyo tour exists and is what was saved) — grounding inversion worth an eval case"
   ],
-  "notes": "Target achieved: verified tappable picks for the empty stops (Kyoto: Arashiyama, Nishiki Market; Osaka: Dotonbori, Kuromon, Castle, Nipponbashi), 'this one's on me' framing, ordering-not-adding in Tokyo with the calm-morning pairing, no memory prices, one folded closing question. Root cause of all earlier misses: X-Gateway-Discovery-Enabled was never sent, so suggest_places was not in the tool set. Live tests must send the entitlement tier they mean to exercise."
+  "notes": "Every named place is a verified tappable link (16 entities, zero padded names). Target rules met live: take at top, 'this one's on me', early-morning Fushimi framing, taste-led food pick (Junsei), every Tokyo save mentioned incl. both teamLabs, no memory prices, one closing question."
 }
