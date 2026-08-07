@@ -31,9 +31,7 @@ def _saved(source: PlaceSource) -> UserPlace:
         source=source,
         # A share-sourced save attests the URL it came from.
         source_ref=(
-            "https://tiktok.com/@u/video/1"
-            if source == PlaceSource.tiktok
-            else None
+            "https://tiktok.com/@u/video/1" if source == PlaceSource.tiktok else None
         ),
         saved_at=datetime.now(UTC),
     )

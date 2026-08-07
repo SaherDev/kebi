@@ -35,7 +35,11 @@ from kebi.core.agent.stream_emit import emit_step_active, emit_step_done
 from kebi.core.agent.tools._hard_constraints import split_constraints
 from kebi.core.agent.tools._notes import attach_notes
 from kebi.core.agent.tools._packing import pack_consult_result
-from kebi.core.agent.tools._scope import anchor_to_corridor, itinerary_segments
+from kebi.core.agent.tools._scope import (
+    anchor_to_corridor,
+    itinerary_segments,
+    stop_label_for,
+)
 from kebi.core.agent.tools._search_args import (
     CATEGORIES_DESC,
     CITY_DESC,
@@ -340,6 +344,20 @@ async def _run_find_saved_impl(
                     continue
                 seen.add(key)
                 added += 1
+                # A leg hit that sits inside a stop's own disc is that
+                # stop's place — it only reached the leg search because the
+                # stop's slots filled first.
+                label = segment.label
+                if segment.on_the_way:
+                    loc = hit.place.location
+                    label = (
+                        stop_label_for(
+                            segments,
+                            getattr(loc, "lat", None),
+                            getattr(loc, "lng", None),
+                        )
+                        or label
+                    )
                 candidates.append(
                     ConsultCandidate(
                         place=hit.place,
@@ -348,7 +366,7 @@ async def _run_find_saved_impl(
                         rrf_score=hit.rrf_score,
                         vector_rank=hit.vector_rank,
                         text_rank=hit.text_rank,
-                        segment=segment.label,
+                        segment=label,
                     )
                 )
     else:

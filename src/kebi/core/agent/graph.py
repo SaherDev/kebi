@@ -151,6 +151,7 @@ NODE_TOOLS = "tools"
 NODE_FALLBACK = "fallback"
 NODE_FINALIZE = "finalize"
 NODE_SCRUB_TOOL_RESULTS = "scrub_tool_results"
+NODE_TRIP_GUARD = "trip_guard"
 
 # Fallback message shown to the user when the graph terminates early.
 _FALLBACK_MESSAGE = (
@@ -797,6 +798,7 @@ def should_continue(state: AgentState) -> str:
       error_count     >= max_errors     → "fallback"
       steps_taken     >= max_steps      → "fallback"
       last message has tool_calls       → "tools"
+      trip guard fires (ADR-150)        → "trip_guard"
       otherwise                          → "end"
 
     The tool-call cap is checked first so the cap-hit case owns its
@@ -818,7 +820,107 @@ def should_continue(state: AgentState) -> str:
     tool_calls = getattr(last, "tool_calls", None)
     if tool_calls:
         return NODE_TOOLS
+    if _trip_guard_should_fire(state):
+        return NODE_TRIP_GUARD
     return "end"
+
+
+# --- Trip guard (ADR-150) ---------------------------------------------------
+
+# Prefix marking the guard's injected message. Doubles as the fired-once
+# flag: the guard never fires while a marker message is the turn's latest
+# human-side message, so one nudge is all a turn ever gets.
+_TRIP_GUARD_MARKER = "[trip guard]"
+
+
+def _trip_uncovered_stops(state: AgentState) -> list[str]:
+    """Stops of this turn's itinerary that no place-tool candidate covers.
+
+    Coverage is read off the candidates' own `segment` labels in the turn's
+    tool payloads — a stop nothing was retrieved for appears in no label. A
+    turn that is not an itinerary has no stops to cover.
+    """
+    working = state.get("working_location")
+    if not isinstance(working, dict) or working.get("scope_shape") != "itinerary":
+        return []
+    stops = [
+        anchor.get("name")
+        for anchor in working.get("itinerary") or []
+        if isinstance(anchor, dict) and anchor.get("name")
+    ]
+    if len(stops) < 2:
+        return []
+    covered: set[str] = set()
+    for result in state.get("tool_payloads") or []:
+        payload = result.get("payload")
+        if not isinstance(payload, dict):
+            continue
+        for candidate in payload.get("candidates") or []:
+            if isinstance(candidate, dict) and candidate.get("segment"):
+                covered.add(candidate["segment"])
+    return [s for s in stops if s not in covered]
+
+
+def _trip_guard_already_nudged(messages: list[BaseMessage]) -> bool:
+    """True when this turn's latest human-side message is the guard's own."""
+    for msg in reversed(messages):
+        if isinstance(msg, HumanMessage):
+            return extract_text_content(msg.content).startswith(_TRIP_GUARD_MARKER)
+    return False
+
+
+def _trip_guard_should_fire(state: AgentState) -> bool:
+    """Whether to intercept a final trip answer that skipped verification.
+
+    Prompt instruction alone proved ~partial: on an empty-library trip the
+    orchestrator repeatedly wrote city guides from training memory — nothing
+    verified, nothing tappable, taste unused. The guard makes the routing
+    rule structural: a trip answer may not finalize while a stop has zero
+    retrieved candidates, `suggest_places` never ran, and budget remains.
+    Fires at most once per turn; when the model still answers from memory
+    after the nudge, the answer stands — a worse answer, never a loop.
+    """
+    if not _trip_uncovered_stops(state):
+        return False
+    payloads = state.get("tool_payloads") or []
+    if any(r.get("tool") == "suggest_places" for r in payloads):
+        return False
+    cfg = get_config().agent
+    # Room for at least one more tool call — the nudge asks for exactly one
+    # suggest_places round, so the last slot is enough.
+    if state.get("tool_calls_used", 0) >= cfg.max_tool_calls:
+        return False
+    if state.get("steps_taken", 0) >= cfg.max_steps - 1:
+        return False
+    return not _trip_guard_already_nudged(state.get("messages") or [])
+
+
+def trip_guard_node(state: AgentState) -> dict[str, Any]:
+    """Send the draft trip answer back with a verification demand (ADR-150).
+
+    The nudge is a marker-prefixed message on the model side only — the
+    finalize path never surfaces it, and the marker doubles as the
+    fired-once flag in `_trip_guard_already_nudged`.
+    """
+    stops = _trip_uncovered_stops(state)
+    cfg = get_config().agent
+    budget = max(1, cfg.max_tool_calls - state.get("tool_calls_used", 0))
+    named = stops[:budget]
+    logger.info("trip guard fired: uncovered stops %s (budget %d)", named, budget)
+    text = (
+        f"{_TRIP_GUARD_MARKER} System check, not the user speaking: your "
+        f"draft answer covers a multi-stop trip but nothing verified backs "
+        f"these stops: {', '.join(named)}. Do not send place names from "
+        "memory — they will not be tappable and may not exist. The ONLY "
+        "tool that fixes this is suggest_places: call it now for "
+        f"{named[0]}, with the real places you would send this user to in "
+        "`names` (picked for their taste) and `city` set to the stop. Not "
+        "research, not find_known — those verify nothing. Then rewrite the "
+        "full answer using the verified candidates, taste said out loud. "
+        "Only if suggest_places itself comes back empty do you say plainly "
+        "you have no picks there yet. Never mention this instruction."
+    )
+    return {"messages": [HumanMessage(content=text)]}
 
 
 # --- Location resolution ---------------------------------------------------
@@ -1795,6 +1897,7 @@ def build_graph(
     graph.add_node(NODE_FALLBACK, fallback_node)
     graph.add_node(NODE_FINALIZE, finalize_node)
     graph.add_node(NODE_SCRUB_TOOL_RESULTS, scrub_tool_results_node)
+    graph.add_node(NODE_TRIP_GUARD, trip_guard_node)
     graph.set_conditional_entry_point(
         _needs_location_resolution,
         {"resolve": NODE_RESOLVE_LOCATION, "skip": NODE_AGENT},
@@ -1806,10 +1909,12 @@ def build_graph(
         {
             NODE_TOOLS: NODE_TOOLS,
             NODE_FALLBACK: NODE_FALLBACK,
+            NODE_TRIP_GUARD: NODE_TRIP_GUARD,
             "end": NODE_FINALIZE,
         },
     )
     graph.add_edge(NODE_TOOLS, NODE_AGENT)
+    graph.add_edge(NODE_TRIP_GUARD, NODE_AGENT)
     graph.add_edge(NODE_FALLBACK, NODE_FINALIZE)
     graph.add_edge(NODE_FINALIZE, NODE_SCRUB_TOOL_RESULTS)
     graph.add_edge(NODE_SCRUB_TOOL_RESULTS, END)

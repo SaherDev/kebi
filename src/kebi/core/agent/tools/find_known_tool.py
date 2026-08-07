@@ -35,7 +35,11 @@ from kebi.core.agent.state import AgentState
 from kebi.core.agent.stream_emit import emit_step_active, emit_step_done
 from kebi.core.agent.tools._notes import attach_notes
 from kebi.core.agent.tools._packing import pack_consult_result
-from kebi.core.agent.tools._scope import anchor_to_corridor, itinerary_segments
+from kebi.core.agent.tools._scope import (
+    anchor_to_corridor,
+    itinerary_segments,
+    stop_label_for,
+)
 from kebi.core.agent.tools._summaries import NEED_LOCATION, TITLES, found_summary
 from kebi.core.agent.tools._with_timeout import tool_step_base_id, with_timeout
 from kebi.core.agent.tools._working_location import maybe_working_location
@@ -197,6 +201,19 @@ async def _run_find_known_impl(
                         continue
                     seen.add(key)
                     added += 1
+                    # Same geometry rule as find_saved: a leg hit inside a
+                    # stop's own disc belongs to the stop.
+                    label = segment.label
+                    if segment.on_the_way:
+                        loc = k.place.location
+                        label = (
+                            stop_label_for(
+                                segments,
+                                getattr(loc, "lat", None),
+                                getattr(loc, "lng", None),
+                            )
+                            or label
+                        )
                     candidates.append(
                         ConsultCandidate(
                             place=k.place,
@@ -204,7 +221,7 @@ async def _run_find_known_impl(
                             source="known",
                             rrf_score=0.0,
                             notes=k.notes,
-                            segment=segment.label,
+                            segment=label,
                         )
                     )
             result = ConsultResult(
