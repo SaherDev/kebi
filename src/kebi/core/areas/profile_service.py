@@ -50,7 +50,10 @@ _LOCK_KEY_PREFIX = "area_profile:inflight:"
 
 
 class _ProfilerChip(BaseModel):
-    icon: str | None = None
+    # Required in the LLM schema on purpose: an optional icon is an icon the
+    # cheap tier reliably skips. Junk still normalizes away to None below,
+    # so the client fallback survives — required-at-generation, nullable-at-rest.
+    icon: str
     text: str
 
 
@@ -61,11 +64,16 @@ class _ProfilerSubArea(BaseModel):
 
 
 class _ProfilerResponse(BaseModel):
-    """Structured output of the profiler LLM call."""
+    """Structured output of the profiler LLM call.
+
+    `icon` fields are required here but nullable at rest: an optional icon
+    is one the cheap tier reliably skips, while junk output still
+    normalizes away to None so the client fallback survives.
+    """
 
     name: str
     level: AreaLevel
-    icon: str | None = None
+    icon: str
     summary: str
     best_for: list[_ProfilerChip] = Field(default_factory=list)
     # Ancestor display names, outermost first — one per parent key segment.

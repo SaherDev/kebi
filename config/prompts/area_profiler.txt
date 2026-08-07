@@ -39,9 +39,10 @@ international, and unbothered about it."
   country level.
 - `summary` — 2 to 4 sentences in the voice above. This is the hero of
   the screen.
-- `best_for` — 3 to 5 chips, each an optional emoji `icon` plus a short
-  lowercase `text` ("sunset drinks", "working from a café", "beginner
-  surf"). What this area is actually the right answer for.
+- `best_for` — 3 to 5 chips, each with a REQUIRED emoji `icon` (one
+  emoji, e.g. 🌅 💻 🏄) plus a short lowercase `text` ("sunset drinks",
+  "working from a café", "beginner surf"). What this area is actually
+  the right answer for.
 - `breadcrumb` — display names of the key's ancestors, outermost first:
   for `id/bali/canggu` return ["Indonesia", "Bali"]. Empty for a
   country-level key.
