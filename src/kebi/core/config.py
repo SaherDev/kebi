@@ -426,6 +426,27 @@ class HomeConfig(BaseModel):
         return self
 
 
+class AreasConfig(BaseModel):
+    """Area screen + profiler knobs (ADR-153).
+
+    `claims_input_limit` caps how many approved claims feed one profiling
+    call — highest-confidence first when it bites. `notable_sub_areas_max`
+    caps the profiler's "worth knowing" children stored on the row.
+    """
+
+    claims_input_limit: int = 30
+    notable_sub_areas_max: int = 6
+
+    @model_validator(mode="after")
+    def _bounds(self) -> "AreasConfig":
+        if self.claims_input_limit < 1 or self.notable_sub_areas_max < 1:
+            raise ValueError(
+                "areas.claims_input_limit / notable_sub_areas_max must be >= 1 "
+                f"(got {self.claims_input_limit}, {self.notable_sub_areas_max})"
+            )
+        return self
+
+
 class KnowledgeResearchConfig(BaseModel):
     """Research read-path knobs (the knowledge layer's agent-facing reader).
 
@@ -1069,6 +1090,7 @@ class AppConfig(BaseModel):
     taste_model: TasteModelConfig = TasteModelConfig()
     memory: MemoryConfig = MemoryConfig()
     home: HomeConfig = HomeConfig()
+    areas: AreasConfig = AreasConfig()
     user_intents: UserIntentConfig = UserIntentConfig()
     knowledge: KnowledgeConfig = KnowledgeConfig()
     agent: AgentConfig = AgentConfig()

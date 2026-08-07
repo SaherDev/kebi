@@ -15,6 +15,7 @@ from fastapi import BackgroundTasks, Depends, Header, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from kebi.core.agent.tools.candidate_namer import CandidateNamerService
+from kebi.core.areas import AreaProfileService, AreaScreenService
 from kebi.core.chat.consult_quota import ConsultQuotaService
 from kebi.core.chat.service import ChatService
 from kebi.core.config import AppConfig, ExtractionConfig, get_config, get_env
@@ -73,6 +74,7 @@ from kebi.core.user.service import UserDataDeletionService
 from kebi.core.web.service import WebKnowledgeService
 from kebi.db.repositories import (
     KnowledgeClaimRepository,
+    SQLAlchemyAreaRepository,
     SQLAlchemyKnowledgeClaimRepository,
 )
 from kebi.db.repositories.user_intent_repository import (
@@ -220,6 +222,33 @@ def get_cache_backend() -> CacheBackend:
     return RedisCacheBackend(client=get_redis_client(get_env().REDIS_URL))
 
 
+def get_area_repository() -> SQLAlchemyAreaRepository:
+    """FastAPI dependency providing the AreaRepository (ADR-153).
+
+    Uses session_factory — each method opens its own session, so it is safe
+    in both the request path (area screen) and the background profiler.
+    """
+    return SQLAlchemyAreaRepository(_get_session_factory())
+
+
+def get_area_profile_service() -> AreaProfileService:
+    """Build the area profiler (ADR-153) from process-wide providers.
+
+    Needs no request scope: it runs as a background task after the response,
+    so every collaborator opens its own session, and the shared Redis cache
+    backs its in-flight dedup lock.
+    """
+    cfg = get_config().areas
+    return AreaProfileService(
+        instructor_client=get_instructor_client("area_profiler"),
+        area_repo=get_area_repository(),
+        claim_repo=get_knowledge_claim_repository(),
+        cache=get_cache_backend(),
+        claims_input_limit=cfg.claims_input_limit,
+        notable_sub_areas_max=cfg.notable_sub_areas_max,
+    )
+
+
 def get_place_profile_service() -> PlaceProfileService:
     """Build the place profiler (ADR-152) from process-wide providers.
 
@@ -312,6 +341,7 @@ async def get_event_dispatcher(
         ),
         web_harvester=get_web_knowledge_harvester(),
         profile_service=get_place_profile_service(),
+        area_profile_service=get_area_profile_service(),
     )
 
     dispatcher = EventDispatcher(background_tasks=background_tasks)
@@ -339,6 +369,10 @@ async def get_event_dispatcher(
     dispatcher.register_handler(
         "place_profile_requested",
         handlers.on_place_profile_requested,  # type: ignore[arg-type]
+    )
+    dispatcher.register_handler(
+        "area_profile_requested",
+        handlers.on_area_profile_requested,  # type: ignore[arg-type]
     )
 
     return dispatcher
@@ -715,6 +749,24 @@ def get_user_places_service(
 ) -> UserPlacesService:
     """FastAPI dependency providing UserPlacesService (places)."""
     return UserPlacesService(user_places_repo=user_places_repo)
+
+
+def get_area_screen_service(
+    places_repo: PlacesRepo = Depends(get_places_repo),  # noqa: B008
+    user_places_repo: UserPlacesRepo = Depends(get_user_places_repo),  # noqa: B008
+) -> AreaScreenService:
+    """FastAPI dependency providing AreaScreenService (ADR-153).
+
+    Lives below the places deps so the default-value `Depends()` factories
+    exist at definition time. The places repos ride the request session; the
+    area repo opens its own sessions per method (it is shared with the
+    background profiler).
+    """
+    return AreaScreenService(
+        area_repo=get_area_repository(),
+        user_places_repo=user_places_repo,
+        places_repo=places_repo,
+    )
 
 
 # ---------------------------------------------------------------------------

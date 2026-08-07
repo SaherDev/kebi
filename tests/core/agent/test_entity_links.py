@@ -15,6 +15,12 @@ from kebi.core.agent.entity_links import (
     normalize_voice,
     turn_recommendation_id,
 )
+from kebi.core.areas.keys import encode_area_id
+
+# Area URIs carry the geo key encoded as one opaque segment (ADR-153); the
+# raw key stays on the entity's `key` field.
+_CANGGU_URI = f"kebi://area/{encode_area_id('id/badung/canggu')}"
+_BADUNG_URI = f"kebi://area/{encode_area_id('id/badung')}"
 
 
 def _place_result(
@@ -104,8 +110,8 @@ class TestBuildEntityIndex:
     def test_working_location_contributes_area_entities(self) -> None:
         index = build_entity_index([], _CANGGU)
         by_alias = dict(index)
-        assert by_alias["Canggu"].uri == "kebi://area/id/badung/canggu"
-        assert by_alias["Badung"].uri == "kebi://area/id/badung"
+        assert by_alias["Canggu"].uri == _CANGGU_URI
+        assert by_alias["Badung"].uri == _BADUNG_URI
 
     def test_working_location_without_country_code_is_not_linkable(self) -> None:
         # No ISO code, no canonical key — an unkeyed area cannot be tapped.
@@ -128,7 +134,7 @@ class TestBuildEntityIndex:
             ]
         )
         assert index[0][1].kind == "area"
-        assert index[0][1].uri == "kebi://area/id/badung/canggu"
+        assert index[0][1].uri == _CANGGU_URI
 
     def test_research_place_key_becomes_a_venue(self) -> None:
         index = build_entity_index(
@@ -258,7 +264,7 @@ class TestLinkify:
         text, entities = linkify("Luigis is the Monday move in Canggu", index)
         assert text == (
             "[Luigis](kebi://venue/p1) is the Monday move in "
-            "[Canggu](kebi://area/id/badung/canggu)"
+            f"[Canggu]({_CANGGU_URI})"
         )
         assert [e.kind for e in entities] == ["venue", "area"]
 
@@ -351,16 +357,16 @@ class TestAreaNameCollisions:
 
     def test_a_real_area_mention_still_links(self) -> None:
         text, entities = linkify("a good night to be in Canggu", self._index())
-        assert text == "a good night to be in [Canggu](kebi://area/id/badung/canggu)"
+        assert text == f"a good night to be in [Canggu]({_CANGGU_URI})"
         assert [e.kind for e in entities] == ["area"]
 
     def test_an_area_opening_a_sentence_still_links(self) -> None:
         text, _ = linkify("Canggu is busy tonight", self._index())
-        assert text.startswith("[Canggu](kebi://area/id/badung/canggu)")
+        assert text.startswith(f"[Canggu]({_CANGGU_URI})")
 
     def test_an_area_after_a_sentence_end_still_links(self) -> None:
         text, _ = linkify("thats sorted. Canggu is busy.", self._index())
-        assert "[Canggu](kebi://area/id/badung/canggu)" in text
+        assert f"[Canggu]({_CANGGU_URI})" in text
 
 
 class TestDisplayNames:

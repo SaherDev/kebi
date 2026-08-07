@@ -52,7 +52,8 @@ See `.claude/workflows.md` for the 5-step workflow, constitution check, model as
 - Place-tool filter vocabulary lives in the tool arg descriptions (`_search_args.py`), not the agent prompt (ADR-137) — don't move it back.
 - `web_search` fires entirely on the agent's judgement (ADR-145) — no code gate, no entitlement gate, no "corpus first" rule; a shared Redis cache keyed on the question, not the user, is what makes that affordable.
 - Web findings are mined into claims only when the harvest marks them durable (ADR-145) — event dates and prices are answered and deliberately never stored, so a `web_search` turn writing zero claims is correct, not a bug.
-- Area icons come off the location resolver's output, not a separate call (ADR-146) — a venue's `icon` rides its catalog row, an area has no row, and both stay nullable so the client keeps its fallback.
+- Area icons come off the location resolver's output, not a separate call (ADR-146) — a venue's `icon` rides its catalog row, and both stay nullable so the client keeps its fallback.
+- Area URIs carry the geo key **encoded** (`kebi://area/{token}`, ADR-153) — mint/decode only via `core/areas/keys.py`; an area's row is created lazily by the profiler on first open of `GET /v1/areas/{id}`, and row presence *is* the "already profiled" signal.
 - The location resolver can say a turn isn't about a place at all (`location_irrelevant`, ADR-145) — without it a world question resolves to nothing, reads as a clarification, and ends the turn asking which city they meant.
 - API testing: Bruno collection at `kebi-config/bruno/` — new endpoints get a corresponding `.bru` file there.
 - DB write ownership is split with the product repo — table map in @.claude/rules/architecture.md; never cross it.

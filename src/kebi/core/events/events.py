@@ -90,6 +90,20 @@ class PlaceProfileRequested(DomainEvent):
     place_id: str
 
 
+class AreaProfileRequested(DomainEvent):
+    """Event: an unprofiled area was opened and should be dressed (ADR-153).
+
+    Fired by the area route when the geo key has no row yet. The handler
+    runs one claims-plus-geography profiling call and persists the row:
+    global, once per area, so the cost is bounded by areas users actually
+    open. `user_id` is the opener, for tracing only — the profile is never
+    user-scoped.
+    """
+
+    event_type: str = "area_profile_requested"
+    geo_key: str
+
+
 class LibraryStateChanged(DomainEvent):
     """Event: a saved place's Library pills changed (visited/liked/approved).
 

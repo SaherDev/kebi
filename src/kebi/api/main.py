@@ -39,6 +39,7 @@ except Exception:
 from kebi.api.deps import require_gateway_identity
 from kebi.api.errors import register_error_handlers
 from kebi.api.rate_limit import limiter
+from kebi.api.routes.areas import router as areas_router
 from kebi.api.routes.chat import router as chat_router
 from kebi.api.routes.extraction import router as extraction_router
 from kebi.api.routes.home import router as home_router
@@ -274,6 +275,7 @@ async def health() -> dict[str, str]:
 # Mount the protected routes (ADR-052: /v1/chat handles conversational
 # traffic). Each is mounted under the same `/v1` prefix as the public
 # router — auth is enforced uniformly by the parent dependency.
+protected_router.include_router(areas_router, prefix="")
 protected_router.include_router(chat_router, prefix="")
 protected_router.include_router(extraction_router, prefix="")
 protected_router.include_router(home_router, prefix="")

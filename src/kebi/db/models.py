@@ -274,3 +274,42 @@ class UserMemory(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
+
+
+class Area(Base):
+    """One row per profiled geo entity — the area screen's global half (ADR-153).
+
+    Keyed by the canonical geo key (`build_geo_key` output: `id`, `id/bali`,
+    `id/bali/canggu`), the same identity claims already use, so an area's
+    claims, links, and screen all resolve through one key. The row exists
+    only once the profiler has dressed the area: presence *is* the
+    "already profiled" signal, exactly as experiential tags are for places
+    (ADR-152). Everything here is user-independent — Jumeirah is Jumeirah
+    for everyone; the personal half of the screen is computed per request
+    and never stored.
+    """
+
+    __tablename__ = "areas"
+
+    geo_key: Mapped[str] = mapped_column(String, primary_key=True)
+    name: Mapped[str] = mapped_column(String, nullable=False)
+    # Display label ("region", "neighbourhood"), not the key's structural
+    # position — Bali sits in the city slot but is not a city.
+    level: Mapped[str] = mapped_column(String, nullable=False)
+    icon: Mapped[str | None] = mapped_column(String, nullable=True)
+    summary: Mapped[str] = mapped_column(Text, nullable=False)
+    # [{icon, text}] chips, ancestor display names, and
+    # [{geo_key, name, icon, hook}] children — shapes owned by
+    # `core.areas.models`.
+    best_for: Mapped[list] = mapped_column(  # type: ignore[type-arg]
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
+    breadcrumb: Mapped[list] = mapped_column(  # type: ignore[type-arg]
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
+    notable_sub_areas: Mapped[list] = mapped_column(  # type: ignore[type-arg]
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
+    profiled_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
