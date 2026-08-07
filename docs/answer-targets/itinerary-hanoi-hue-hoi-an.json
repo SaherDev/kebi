@@ -130,7 +130,7 @@
     "tool_calls_used": 2
   },
   "known_gaps": [
-    "taste attribution ('you keep saving photo spots') is the weakest layer: when a place has several how_you_know lines the model tends to voice only the strongest (tiktok provenance beat the taste match on the same venue)"
+    "eval case from a later rerun: the model can mis-narrate geography against its own segment labels (placed Hai Van Pass on the Hanoi-Hue leg; filed a Hoi An save under Hanoi) — segment labels are correct in the payload, the prose contradicted them"
   ],
   "attribution_examples": [
     "that's the one from your saves",
