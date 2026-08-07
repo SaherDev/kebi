@@ -87,6 +87,22 @@ async def test_browse_orders_newest_first_with_tiebreak() -> None:
 
 
 @pytest.mark.asyncio
+async def test_browse_selects_the_icon_column() -> None:
+    """The Library once returned `icon: null` for every saved place: this
+    SELECT names its place columns one by one and `icon` was not among
+    them, so `row_to_place_core` read a key that was never fetched. The
+    client then fell back to its category emoji, and the same place wore
+    two different glyphs in the list and on its own screen."""
+    session = MagicMock()
+    session.execute = AsyncMock(return_value=[])
+    repo = UserPlacesRepo(session=session)
+
+    await repo.browse("u1", SavedPlaceFilters(), limit=20)
+
+    assert "places.icon" in _compiled(session)
+
+
+@pytest.mark.asyncio
 async def test_browse_cursor_adds_keyset_predicate() -> None:
     session = MagicMock()
     session.execute = AsyncMock(return_value=[])

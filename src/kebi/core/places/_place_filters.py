@@ -56,6 +56,7 @@ _PlacesTable = Table(
     Column("place_name_aliases", JSONB),
     Column("categories", ARRAY(String)),
     Column("tags", JSONB),
+    Column("icon", String),
     Column("location", JSONB),
     Column("created_at", DateTime(timezone=True)),
     Column("refreshed_at", DateTime(timezone=True)),

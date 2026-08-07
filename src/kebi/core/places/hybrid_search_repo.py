@@ -179,6 +179,7 @@ class HybridSearchRepo:
                 _p.place_name_aliases,
                 _p.categories,
                 _p.tags,
+                _p.icon,
                 _p.location,
                 _p.created_at,
                 _p.refreshed_at,
