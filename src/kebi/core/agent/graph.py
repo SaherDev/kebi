@@ -860,9 +860,11 @@ def _trip_uncovered_stops(state: AgentState) -> list[str]:
     if not isinstance(working, dict) or working.get("scope_shape") != "itinerary":
         return []
     stops = [
-        anchor.get("name")
+        name
         for anchor in working.get("itinerary") or []
-        if isinstance(anchor, dict) and anchor.get("name")
+        if isinstance(anchor, dict)
+        and isinstance(name := anchor.get("name"), str)
+        and name
     ]
     if len(stops) < 2:
         return []
