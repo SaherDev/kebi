@@ -93,13 +93,58 @@ def _saved_context(user_data: Any) -> dict[str, Any] | None:
     return context
 
 
-def candidate_view(candidate: ConsultCandidate) -> dict[str, Any]:
+# Save sources that mean the user shared content about the place — the
+# answer can say "the one from your tiktok" and be right.
+_SHARE_SOURCES = frozenset({"tiktok", "instagram", "youtube"})
+
+
+def _how_you_know(candidate: ConsultCandidate, taste_values: list[str]) -> list[str]:
+    """Ready-to-voice, attested connection lines for one candidate.
+
+    The prompt demands every named place carries its "how I know you" out
+    loud, and live runs showed the model forgets when it has to derive the
+    line itself — so the derivation happens here, deterministically, and the
+    model's only job is phrasing. Each line is backed by data on the
+    candidate right now: a library row with its provenance, a tag matching
+    the user's taste vocabulary. Empty for a place kebi has no personal
+    connection to — absence must read as silence, never as a claim.
+    """
+    lines: list[str] = []
+    user_data = candidate.user_data
+    if user_data is not None:
+        source = getattr(user_data, "source", None)
+        source = getattr(source, "value", source)
+        if source in _SHARE_SOURCES:
+            lines.append(f"in their library, saved from a {source} they shared")
+        elif source == "google_maps_list":
+            lines.append("in their library, from a google maps list they imported")
+        elif source == "kebi":
+            lines.append("in their library, saved from a kebi recommendation")
+        else:
+            lines.append("in their library, saved by them directly")
+    wanted = {v.strip().casefold() for v in taste_values if v.strip()}
+    if wanted:
+        for tag in candidate.place.tags or []:
+            raw = getattr(tag, "value", None)
+            value = getattr(raw, "value", raw)
+            if isinstance(value, str) and value.strip().casefold() in wanted:
+                lines.append(f"matches their taste, they keep saving {value}")
+                break
+    return lines
+
+
+def candidate_view(
+    candidate: ConsultCandidate, taste_values: list[str] | None = None
+) -> dict[str, Any]:
     """One candidate as the orchestrator needs to see it."""
     place = candidate.place
     view: dict[str, Any] = {
         "name": candidate.display_name,
         "source": candidate.source,
     }
+    how = _how_you_know(candidate, taste_values or [])
+    if how:
+        view["how_you_know"] = how
     where = _where(place)
     if where:
         view["where"] = where
@@ -136,17 +181,17 @@ def _note_view(note: Any) -> dict[str, Any]:
     return view
 
 
-def consult_view(result: ConsultResult) -> dict[str, Any]:
+def consult_view(
+    result: ConsultResult, taste_values: list[str] | None = None
+) -> dict[str, Any]:
     """A whole place-tool result, minus everything the model cannot use."""
     view: dict[str, Any] = {
-        "candidates": [candidate_view(c) for c in result.candidates]
+        "candidates": [candidate_view(c, taste_values) for c in result.candidates]
     }
     if result.empty_reason:
         view["empty_reason"] = result.empty_reason
     if result.area_notes:
-        view["kebi_knows_about_the_area"] = [
-            _note_view(n) for n in result.area_notes
-        ]
+        view["kebi_knows_about_the_area"] = [_note_view(n) for n in result.area_notes]
     return view
 
 

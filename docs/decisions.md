@@ -17,6 +17,16 @@ Format:
 
 ---
 
+## ADR-149: Attribution is derived; the model only phrases it
+
+**Date:** 2026-08-07\
+**Status:** accepted\
+**Context:** The product's differentiator is that an answer shows kebi *knows this user* — the save is named as theirs, a place saved from a video is "the one from your tiktok", a taste pick says the taste, an insider fact says where it came from. The prompt demanded all of this and live runs showed it landing in roughly two turns out of three: the model had to notice a provenance field, connect it to a rule several sections away, and remember to phrase it, and any of those steps could lose to the rest of the answer. A visual alternative — provenance chips rendered by the client — was considered and rejected by the product owner: the knowing should be said in the text, as words.\
+**Decision:** The connection lines are derived server-side and handed to the model ready to voice. Every candidate the orchestrator reads arrives with its attested connections — the library row with its provenance spelled out, the taste-vocabulary match named — as short prewritten sentences, and each insider fact carries its coarse origin. The model's job shrinks from "derive and remember to mention" to "rephrase the line in front of you", which is the kind of instruction it follows reliably. A line exists only when the underlying data exists, so attribution can never claim a save, a share, or a taste the store doesn't hold; a place kebi has no connection to arrives with silence, not an empty claim.\
+**Consequences:** Fresh-thread runs attribute every layer: saves named as saves, the video provenance said, claim origins voiced in the same breath as the claim. Nothing changes on the wire — this is entirely between the tools and the model — so no client work follows. Two limits. When one place carries several connection lines the model tends to voice the strongest and compress the rest, so a taste match sharing a candidate with a tiktok save can still go unsaid; the lines are in context, so tightening is a prompt matter, not a data one. And within one conversation the model reasonably stops re-attributing places it already attributed a few turns ago — that reads as memory, not as a failure, and only a fresh thread shows the true baseline.
+
+---
+
 ## ADR-148: A multi-stop trip is one turn, and the route itself gets searched
 
 **Date:** 2026-08-07\
