@@ -33,7 +33,9 @@ def pack_consult_result(
     update: dict[str, Any] = {
         "messages": [
             ToolMessage(
-                content=json.dumps(consult_view(result)),
+                content=json.dumps(
+                    consult_view(result, state.get("taste_values") or [])
+                ),
                 tool_call_id=tool_call_id,
                 name=tool_name,
             )

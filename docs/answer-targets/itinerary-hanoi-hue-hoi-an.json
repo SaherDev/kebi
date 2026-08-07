@@ -1,6 +1,6 @@
 {
   "name": "itinerary-hanoi-hue-hoi-an",
-  "captured_at": "2026-08-07 (run 4, after leg-crowding fix)",
+  "captured_at": "2026-08-07 (fresh thread, after how_you_know / ADR-149)",
   "adr": "ADR-148",
   "description": "Live /v1/chat answer for a multi-stop trip turn, captured as the quality target for itinerary answers. Seeded user: six saves along the route, a taste profile, and curated claims per place and city. What must hold: stop-by-stop structure in trip order, saves pinned to their city with insider notes spent, an on-the-way call-out for a city the user never named, the leg treated as part of the trip, and exactly one closing question (trip nights).",
   "request": {
@@ -137,6 +137,13 @@
     "tool_calls_used": 2
   },
   "known_gaps": [
-    "provenance attribution ('you saved this', 'your taste', 'from a shared video') fires inconsistently across runs — prompt rule added, but the guarantee should come from server-derived entity badges, not the model"
+    "taste attribution ('you keep saving photo spots') is the weakest layer: when a place has several how_you_know lines the model tends to voice only the strongest (tiktok provenance beat the taste match on the same venue)"
+  ],
+  "attribution_examples": [
+    "that's the one from your saves",
+    "is on your list here",
+    "the one from your tiktok",
+    "someone shared the intel that the 7pm train is the one worth waiting for",
+    "this leg is where your saves shine"
   ]
 }
