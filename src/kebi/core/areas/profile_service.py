@@ -181,9 +181,30 @@ class AreaProfileService:
             f"- {c.claim}" + (f" [tags: {', '.join(c.tags)}]" if c.tags else "")
             for c in claims
         )
+        # The subject line pins WHICH entity is being profiled. Claims under
+        # a wide key are dominated by its most-talked-about child (a country
+        # key's claims are mostly about one island), and without this anchor
+        # the model profiles the child the evidence describes instead of the
+        # entity the key names.
+        parts = geo_key.split("/")
+        if len(parts) == 1:
+            subject = (
+                f"the COUNTRY with ISO 3166 code {parts[0]!r} — name and "
+                "profile the country itself, not any place inside it"
+            )
+        elif len(parts) == 2:
+            subject = (
+                f"the city/region {display_from_slug(parts[1])!r} in country "
+                f"code {parts[0]!r}"
+            )
+        else:
+            subject = (
+                f"the neighbourhood/district {display_from_slug(parts[2])!r} of "
+                f"{display_from_slug(parts[1])} (country code {parts[0]!r})"
+            )
         user_content = (
             f"geo key: {geo_key}\n"
-            f"segments: {', '.join(display_from_slug(p) for p in geo_key.split('/'))}\n"
+            f"subject to profile: {subject}\n"
             f"known claims about this area and inside it:\n"
             f"{claim_lines or '(none)'}\n"
         )

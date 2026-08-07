@@ -171,6 +171,22 @@ async def test_claims_feed_the_call_highest_confidence_first_under_the_cap(
     assert "weak claim" not in user_content
 
 
+async def test_a_country_key_anchors_the_subject_against_child_heavy_claims(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Claims under a country prefix are dominated by its loudest child; the
+    # call must pin the subject or the model profiles the child instead.
+    svc, extract, _ = _service(
+        _FakeAreaRepo(), _FakeCache(), _response(), monkeypatch
+    )
+
+    await svc.profile_area("id")
+
+    user_content = extract.await_args.kwargs["messages"][1]["content"]
+    assert "COUNTRY with ISO 3166 code 'id'" in user_content
+    assert "not any place inside it" in user_content
+
+
 async def test_child_keys_are_built_mechanically_from_names(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
