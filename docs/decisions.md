@@ -17,6 +17,16 @@ Format:
 
 ---
 
+## ADR-151: Every surfaced place is openable; saving needs no ceremony
+
+**Date:** 2026-08-07\
+**Status:** accepted\
+**Context:** Chat renders text plus venue links, but a link only resolved to data the client already held: a saved place lived in the library, while a suggested or discovered place — the very thing kebi is for — became a dead link the moment the turn scrolled away, even though its catalog row and insider notes were sitting in the store. Saving, meanwhile, still carried the retired recommendation card's ceremony: the body demanded a recommendation id that attributed to a table dropped long ago and a reason string no client surface holds anymore, and the accept/reject signal endpoint existed to serve a card UI that no longer exists.\
+**Decision:** One read endpoint opens any catalog place for any caller, saved or not, returning exactly the shape a library row already renders — with the caller's relationship nullable, so the same screen serves both cases and the null itself is the "offer save" signal. Saving shrinks to the place id alone. The strong taste signal survives without any attribution: the only way a client holds a place id is off a link kebi produced, so reaching the save endpoint at all is what marks the save as kebi-recommended. The accept/reject signal loop — endpoint, events, and the reason-as-claim write — retires with the card that fed it. The turn's recommendation id stays minted on the consult result for tracing and evals; it is an identifier of the turn, not save ceremony.\
+**Consequences:** The tap → view → save loop is whole: chat surfaces places, the place screen is where the user acts on them, and the library is just the subset they kept — one identity end to end. A save through the place screen still cannot overwrite provenance (idempotency returns the existing row, so a tiktok save stays tiktok). Two losses accepted with eyes open: explicit negative taste input is gone until some future place-screen affordance replaces it (library pills remain the only negative signal), and saved-recommendation reasons stop feeding the knowledge layer (historical reason-claims still surface). Clients still sending the retired fields fail loudly with a validation error, not silently.
+
+---
+
 ## ADR-150: A trip answer may not finalize past an unverified stop
 
 **Date:** 2026-08-07\

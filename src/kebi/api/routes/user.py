@@ -7,9 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from kebi.api.deps import (
     GatewayIdentity,
     get_event_dispatcher,
-    get_kebi_note_service,
     get_place_notes_service,
-    get_places_repo,
     get_user_data_deletion_service,
     get_user_intent_service,
     get_user_places_service,
@@ -26,7 +24,6 @@ from kebi.api.schemas.library import (
 )
 from kebi.core.events.dispatcher import EventDispatcher
 from kebi.core.events.events import LibraryStateChanged, RecommendationSaved
-from kebi.core.knowledge.kebi_note_service import KebiNoteService
 from kebi.core.knowledge.place_notes_service import PlaceNotesService
 from kebi.core.places import (
     PlaceNotFoundError,
@@ -34,7 +31,6 @@ from kebi.core.places import (
     SaveLimitExceededError,
     UserPlacesService,
 )
-from kebi.core.places.protocols import PlacesRepoProtocol
 from kebi.core.user.intent_service import UserIntentService
 from kebi.core.user.service import DataScope, UserDataDeletionService
 
@@ -130,23 +126,18 @@ async def save_user_place(
     identity: Annotated[GatewayIdentity, Depends(require_gateway_identity)],
     service: UserPlacesService = Depends(get_user_places_service),  # noqa: B008
     event_dispatcher: EventDispatcher = Depends(get_event_dispatcher),  # noqa: B008
-    note_service: KebiNoteService = Depends(get_kebi_note_service),  # noqa: B008
-    places_repo: PlacesRepoProtocol = Depends(get_places_repo),  # noqa: B008
 ) -> LibraryUserData:
-    """Save a recommended place to the caller's library (the consult card's
-    "save it" action).
+    """Save a place kebi surfaced to the caller's library (the place screen's
+    "save" action, ADR-151).
 
     Links the already-cataloged place to the caller as a `user_places` row
-    with `source=kebi`, and emits a `RecommendationSaved` event — the positive
-    taste signal half of "save it". This is a stronger signal than a passive
-    link-share save (its own `saved_recommendation` interaction type, weighted
-    heavier, and not counted toward the `source` distribution).
-
-    The pick's `reason` (client-supplied) is written to the knowledge layer as
-    a user-scoped `kebi_message` claim on the place (ADR-127), not stored on the
-    save as a note — it then surfaces in the Library's insider notes. It is
-    recorded only when the save is first created; the writer's claim-text dedup
-    means a re-tap adds nothing.
+    with `source=kebi`, and emits a `RecommendationSaved` event — the strong
+    positive taste signal. No turn context is required: the only way a client
+    holds a `places.id` is off a `kebi://venue/{id}` link kebi produced, so
+    reaching this endpoint at all is what marks the save as kebi-recommended
+    (its own `saved_recommendation` interaction type, weighted heavier than a
+    passive link-share save, and not counted toward the `source`
+    distribution).
 
     Idempotent: a re-tap on an already-saved place returns the existing save
     and does **not** re-emit the signal, so saving twice never double-trains
@@ -183,20 +174,9 @@ async def save_user_place(
         await event_dispatcher.dispatch(
             RecommendationSaved(
                 user_id=identity.user_id,
-                recommendation_id=body.recommendation_id,
                 place_core_id=body.place_core_id,
             )
         )
-        if body.reason:
-            cores = await places_repo.get_by_ids([body.place_core_id])
-            if cores:
-                await note_service.record(
-                    reason=body.reason,
-                    place_id=body.place_core_id,
-                    place_name=cores[0].place_name,
-                    user_id=identity.user_id,
-                    recommendation_id=body.recommendation_id,
-                )
     return LibraryUserData.from_user_place(user_place)
 
 

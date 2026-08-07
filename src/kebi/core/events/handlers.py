@@ -13,8 +13,6 @@ from kebi.core.events.events import (
     DomainEvent,
     LibraryStateChanged,
     PlaceSaved,
-    RecommendationAccepted,
-    RecommendationRejected,
     RecommendationSaved,
     TurnCompleted,
     WebFindingsHarvestRequested,
@@ -33,13 +31,6 @@ if TYPE_CHECKING:
     from kebi.core.user.intent_service import UserIntentService
 
 logger = logging.getLogger(__name__)
-
-# Map event_type → InteractionType for single-place recommendation signals.
-_TASTE_EVENT_MAP: dict[str, InteractionType] = {
-    "recommendation_accepted": InteractionType.ACCEPTED,
-    "recommendation_rejected": InteractionType.REJECTED,
-    "recommendation_saved": InteractionType.SAVED_RECOMMENDATION,
-}
 
 
 def _web_source_ref(result: WebSearchResult) -> str:
@@ -81,19 +72,17 @@ class EventHandlers:
         """Unified handler for all taste-related events.
 
         Dispatches to handle_signal with the correct InteractionType.
-        Handles PlaceSaved (multiple place_core_ids), RecommendationAccepted,
-        RecommendationRejected, and RecommendationSaved.
+        Handles PlaceSaved (multiple place_core_ids) and RecommendationSaved.
+        The accept/reject events are gone with their UI (ADR-151); their
+        interaction types remain readable for historical rows.
         """
         try:
             # Build (signal_type, place_core_id) pairs from the event shape
             pairs: list[tuple[InteractionType, str]] = []
             if isinstance(event, PlaceSaved):
                 pairs = [(InteractionType.SAVE, pcid) for pcid in event.place_core_ids]
-            elif isinstance(
-                event,
-                RecommendationAccepted | RecommendationRejected | RecommendationSaved,
-            ):
-                pairs = [(_TASTE_EVENT_MAP[event.event_type], event.place_core_id)]
+            elif isinstance(event, RecommendationSaved):
+                pairs = [(InteractionType.SAVED_RECOMMENDATION, event.place_core_id)]
 
             for signal_type, place_core_id in pairs:
                 await self.taste_service.handle_signal(

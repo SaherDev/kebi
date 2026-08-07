@@ -93,11 +93,10 @@ class ConsultResult(BaseModel):
     whatever the tool filtered by is exactly what the agent passed in,
     and the agent already knows it.
 
-    `recommendation_id` identifies this recommendation so the client can
-    attribute a later accept/reject/save signal back to it (`POST
-    /v1/signal`, `POST /v1/user/places`). It is minted here, once per
-    result, and returned in the tool payload; `place_core_id` on the chosen
-    candidate disambiguates which place within the result the user acted on.
+    `recommendation_id` identifies this recommendation — minted here, once
+    per result, and surfaced on the chat response's `data` so a turn's
+    outcome stays attributable (tracing, evals). The save path no longer
+    carries it (ADR-151); it is an identifier of the turn, not of the save.
     """
 
     candidates: list[ConsultCandidate] = Field(default_factory=list)

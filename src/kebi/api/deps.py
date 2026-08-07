@@ -36,8 +36,6 @@ from kebi.core.knowledge.curator import KnowledgeCurator
 from kebi.core.knowledge.geo_resolve import EntityGeoResolver
 from kebi.core.knowledge.harvest_bucket import HarvestBucketReader, HarvestBucketWriter
 from kebi.core.knowledge.harvester import KnowledgeHarvester
-from kebi.core.knowledge.kebi_note import KebiNoteProducer
-from kebi.core.knowledge.kebi_note_service import KebiNoteService
 from kebi.core.knowledge.known_places_service import KnownPlacesService
 from kebi.core.knowledge.place_notes_service import PlaceNotesService
 from kebi.core.knowledge.producer import KnowledgeIngestion
@@ -67,7 +65,6 @@ from kebi.core.places import (
     UserPlacesRepo,
     UserPlacesService,
 )
-from kebi.core.signal.service import SignalService
 from kebi.core.taste.debounce import regen_debouncer
 from kebi.core.taste.service import TasteModelService
 from kebi.core.user.intent_service import UserIntentService
@@ -304,8 +301,6 @@ async def get_event_dispatcher(
     dispatcher = EventDispatcher(background_tasks=background_tasks)
     for event_type in (
         "place_saved",
-        "recommendation_accepted",
-        "recommendation_rejected",
         "recommendation_saved",
     ):
         dispatcher.register_handler(event_type, handlers.on_taste_signal)
@@ -453,18 +448,6 @@ def _get_deep_level() -> EnrichmentLevel:
 # PlaceUpsertService / UserPlacesService / UserPlacesRepo factories
 # (defined there) are already in scope when FastAPI resolves the
 # default-value Depends() at module load time.
-
-
-def get_signal_service(
-    event_dispatcher: EventDispatcher = Depends(get_event_dispatcher),  # noqa: B008
-) -> SignalService:
-    """FastAPI dependency providing SignalService (ADR-060, ADR-078).
-
-    Recommendation accept/reject signals are no longer DB-validated — the
-    recommendations table was dropped (ADR-078); the signal is trusted from
-    the product repo and dispatched as an event.
-    """
-    return SignalService(event_dispatcher=event_dispatcher)
 
 
 def get_agent_checkpointer(request: Request) -> Any:
@@ -968,34 +951,6 @@ def get_knowledge_curation_service(
     """FastAPI dependency providing the KnowledgeCurationService (ADR-121)."""
     return KnowledgeCurationService(
         curator=get_knowledge_curator(),
-        ingestion=ingestion,
-    )
-
-
-def get_kebi_note_producer() -> KebiNoteProducer:
-    """FastAPI dependency providing the KebiNoteProducer (ADR-127).
-
-    A `kebi_message` ClaimProducer — turns a saved-recommendation reason into a
-    place-scoped claim. Trust floor and review status come from config, so
-    gating these notes later is a config change (no LLM, no geocoder).
-    """
-    knowledge = get_config().knowledge
-    return KebiNoteProducer(
-        confidence_floor=knowledge.kebi_message_confidence_floor,
-        review_status=knowledge.kebi_message_review_status,
-    )
-
-
-def get_kebi_note_service(
-    ingestion: KnowledgeIngestion = Depends(get_knowledge_ingestion),  # noqa: B008
-) -> KebiNoteService:
-    """FastAPI dependency providing the KebiNoteService (ADR-127).
-
-    Records a saved-recommendation reason as a user-scoped `kebi_message`
-    claim, through the same source-agnostic ingestion seam the curator uses.
-    """
-    return KebiNoteService(
-        producer=get_kebi_note_producer(),
         ingestion=ingestion,
     )
 

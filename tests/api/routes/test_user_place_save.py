@@ -1,10 +1,12 @@
-"""Tests for POST /v1/user/places — the consult card's "save it" action.
+"""Tests for POST /v1/user/places — the plain "save this place" action.
 
-The route's contract: link a recommended catalog place to the caller
-(`source=kebi`), emit a `RecommendationSaved` positive taste signal on a
-genuinely new save (and *not* on an idempotent re-tap), identity from the
-gateway never the body, the created user-state DTO on success (never the raw
-domain model — ADR-105), and a 404 when the place is not in the catalog.
+The route's contract (ADR-151): link a kebi-surfaced catalog place to the
+caller (`source=kebi`) from nothing but its `places.id`, emit a
+`RecommendationSaved` positive taste signal on a genuinely new save (and
+*not* on an idempotent re-tap), identity from the gateway never the body,
+the created user-state DTO on success (never the raw domain model —
+ADR-105), and a 404 when the place is not in the catalog. The retired card
+ceremony (`recommendation_id`, `reason`) is rejected as unknown keys.
 """
 
 from __future__ import annotations
@@ -19,15 +21,12 @@ from fastapi.testclient import TestClient
 from kebi.api.deps import (
     GatewayIdentity,
     get_event_dispatcher,
-    get_kebi_note_service,
-    get_places_repo,
     get_user_places_service,
     require_gateway_identity,
 )
 from kebi.api.routes.user import router as user_router
 from kebi.core.events.events import RecommendationSaved
 from kebi.core.places import (
-    PlaceCore,
     PlaceNotFoundError,
     PlaceSource,
     UserPlace,
@@ -35,16 +34,6 @@ from kebi.core.places import (
 )
 
 _TEST_USER_ID = "user_test_dummy_123456789012345"
-_REC_ID = "rec-abc-123"
-
-
-def _body(**overrides: object) -> dict[str, object]:
-    base: dict[str, object] = {
-        "place_core_id": "p1",
-        "recommendation_id": _REC_ID,
-    }
-    base.update(overrides)
-    return base
 
 
 def _saved(**overrides: object) -> UserPlace:
@@ -60,22 +49,11 @@ def _saved(**overrides: object) -> UserPlace:
     return UserPlace(**base)  # type: ignore[arg-type]
 
 
-def _make_app(
-    service: UserPlacesService,
-    dispatcher: AsyncMock,
-    note_service: AsyncMock | None = None,
-    places_repo: AsyncMock | None = None,
-) -> TestClient:
-    note_service = note_service or AsyncMock(record=AsyncMock(return_value=[]))
-    places_repo = places_repo or AsyncMock(
-        get_by_ids=AsyncMock(return_value=[PlaceCore(id="p1", place_name="Nara")])
-    )
+def _make_app(service: UserPlacesService, dispatcher: AsyncMock) -> TestClient:
     app = FastAPI()
     app.include_router(user_router, prefix="/v1")
     app.dependency_overrides[get_user_places_service] = lambda: service
     app.dependency_overrides[get_event_dispatcher] = lambda: dispatcher
-    app.dependency_overrides[get_kebi_note_service] = lambda: note_service
-    app.dependency_overrides[get_places_repo] = lambda: places_repo
     app.dependency_overrides[require_gateway_identity] = lambda: GatewayIdentity(
         user_id=_TEST_USER_ID
     )
@@ -99,7 +77,7 @@ def test_save_returns_201_and_user_state_dto(
 ) -> None:
     client = _make_app(svc, dispatcher)
 
-    response = client.post("/v1/user/places", json=_body())
+    response = client.post("/v1/user/places", json={"place_core_id": "p1"})
 
     assert response.status_code == 201
     body = response.json()
@@ -113,7 +91,7 @@ def test_save_response_omits_user_id(svc: AsyncMock, dispatcher: AsyncMock) -> N
     """ADR-105 — the caller's identity is never echoed back in the payload."""
     client = _make_app(svc, dispatcher)
 
-    response = client.post("/v1/user/places", json=_body())
+    response = client.post("/v1/user/places", json={"place_core_id": "p1"})
 
     assert response.status_code == 201
     assert "user_id" not in response.json()
@@ -125,7 +103,7 @@ def test_save_stamps_kebi_source_and_gateway_identity(
     """source is server-set to kebi; user_id comes from the gateway, not body."""
     client = _make_app(svc, dispatcher)
 
-    client.post("/v1/user/places", json=_body())
+    client.post("/v1/user/places", json={"place_core_id": "p1"})
 
     user_id, place_id, source = svc.save_one.await_args.args
     assert user_id == _TEST_USER_ID
@@ -133,70 +111,18 @@ def test_save_stamps_kebi_source_and_gateway_identity(
     assert source is PlaceSource.kebi
 
 
-def test_save_records_reason_as_kebi_message_claim(
-    svc: AsyncMock, dispatcher: AsyncMock
-) -> None:
-    """The pick's reason is written to the knowledge layer as a claim on the
-    place (ADR-127), keyed by place name, user, and recommendation — never
-    stored on the save as a note (save_one gets no note kwarg)."""
-    note_service = AsyncMock(record=AsyncMock(return_value=[]))
-    places_repo = AsyncMock(
-        get_by_ids=AsyncMock(return_value=[PlaceCore(id="p1", place_name="Nara")])
-    )
-    client = _make_app(svc, dispatcher, note_service, places_repo)
-
-    client.post("/v1/user/places", json=_body(reason="great for a quiet date"))
-
-    assert "note" not in svc.save_one.await_args.kwargs
-    note_service.record.assert_awaited_once()
-    kwargs = note_service.record.await_args.kwargs
-    assert kwargs["reason"] == "great for a quiet date"
-    assert kwargs["place_id"] == "p1"
-    assert kwargs["place_name"] == "Nara"
-    assert kwargs["user_id"] == _TEST_USER_ID
-    assert kwargs["recommendation_id"] == _REC_ID
-
-
-def test_save_without_reason_writes_no_claim(
-    svc: AsyncMock, dispatcher: AsyncMock
-) -> None:
-    """No reason in the body → no knowledge claim is recorded."""
-    note_service = AsyncMock(record=AsyncMock(return_value=[]))
-    client = _make_app(svc, dispatcher, note_service)
-
-    client.post("/v1/user/places", json=_body())
-
-    note_service.record.assert_not_awaited()
-
-
-def test_resave_with_reason_writes_no_claim(
-    svc: AsyncMock, dispatcher: AsyncMock
-) -> None:
-    """A re-tap (created=False) records no claim even with a reason — the
-    reason write is gated on a genuinely new save."""
-    svc.save_one = AsyncMock(return_value=(_saved(), False))
-    note_service = AsyncMock(record=AsyncMock(return_value=[]))
-    client = _make_app(svc, dispatcher, note_service)
-
-    client.post("/v1/user/places", json=_body(reason="great for a quiet date"))
-
-    note_service.record.assert_not_awaited()
-
-
 def test_save_dispatches_recommendation_saved_signal_on_new_save(
     svc: AsyncMock, dispatcher: AsyncMock
 ) -> None:
-    """A new save emits exactly one RecommendationSaved carrying the
-    recommendation it came from and the saved place."""
+    """A new save emits exactly one RecommendationSaved for the saved place."""
     client = _make_app(svc, dispatcher)
 
-    client.post("/v1/user/places", json=_body())
+    client.post("/v1/user/places", json={"place_core_id": "p1"})
 
     dispatcher.dispatch.assert_awaited_once()
     event = dispatcher.dispatch.await_args.args[0]
     assert isinstance(event, RecommendationSaved)
     assert event.user_id == _TEST_USER_ID
-    assert event.recommendation_id == _REC_ID
     assert event.place_core_id == "p1"
 
 
@@ -208,7 +134,7 @@ def test_resave_is_idempotent_and_skips_signal(
     svc.save_one = AsyncMock(return_value=(_saved(), False))
     client = _make_app(svc, dispatcher)
 
-    response = client.post("/v1/user/places", json=_body())
+    response = client.post("/v1/user/places", json={"place_core_id": "p1"})
 
     assert response.status_code == 201
     dispatcher.dispatch.assert_not_awaited()
@@ -219,20 +145,11 @@ def test_save_unknown_place_returns_404(svc: AsyncMock, dispatcher: AsyncMock) -
     svc.save_one = AsyncMock(side_effect=PlaceNotFoundError("ghost"))
     client = _make_app(svc, dispatcher)
 
-    response = client.post("/v1/user/places", json=_body(place_core_id="ghost"))
+    response = client.post("/v1/user/places", json={"place_core_id": "ghost"})
 
     assert response.status_code == 404
     assert response.json()["detail"] == "place_not_found"
     dispatcher.dispatch.assert_not_awaited()
-
-
-def test_save_unknown_field_returns_422(svc: AsyncMock, dispatcher: AsyncMock) -> None:
-    client = _make_app(svc, dispatcher)
-
-    response = client.post("/v1/user/places", json=_body(bogus=True))
-
-    assert response.status_code == 422
-    svc.save_one.assert_not_awaited()
 
 
 def test_save_missing_place_core_id_returns_422(
@@ -240,18 +157,23 @@ def test_save_missing_place_core_id_returns_422(
 ) -> None:
     client = _make_app(svc, dispatcher)
 
-    response = client.post("/v1/user/places", json={"recommendation_id": _REC_ID})
+    response = client.post("/v1/user/places", json={})
 
     assert response.status_code == 422
     svc.save_one.assert_not_awaited()
 
 
-def test_save_missing_recommendation_id_returns_422(
+def test_retired_card_ceremony_is_rejected(
     svc: AsyncMock, dispatcher: AsyncMock
 ) -> None:
+    """The old card fields are unknown keys now (extra=forbid) — a client
+    still sending them learns immediately, not silently (ADR-151)."""
     client = _make_app(svc, dispatcher)
 
-    response = client.post("/v1/user/places", json={"place_core_id": "p1"})
+    response = client.post(
+        "/v1/user/places",
+        json={"place_core_id": "p1", "recommendation_id": "rec-1", "reason": "nice"},
+    )
 
     assert response.status_code == 422
     svc.save_one.assert_not_awaited()

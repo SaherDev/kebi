@@ -60,25 +60,9 @@ class WebFindingsHarvestRequested(DomainEvent):
     result: dict[str, Any]
 
 
-class RecommendationAccepted(DomainEvent):
-    """Event: User accepted a recommendation"""
-
-    event_type: str = "recommendation_accepted"
-    recommendation_id: str
-    place_core_id: str
-
-
-class RecommendationRejected(DomainEvent):
-    """Event: User rejected a recommendation"""
-
-    event_type: str = "recommendation_rejected"
-    recommendation_id: str
-    place_core_id: str
-
-
 class RecommendationSaved(DomainEvent):
-    """Event: User saved a place kebi recommended (the consult card's "save
-    it" action).
+    """Event: User saved a place kebi surfaced (the place screen's "save"
+    action, ADR-151 — no recommendation attribution rides along anymore).
 
     A stronger positive than the passive `PlaceSaved` of a link-share import:
     it maps to its own taste interaction type (`saved_recommendation`) with a
@@ -87,7 +71,6 @@ class RecommendationSaved(DomainEvent):
     """
 
     event_type: str = "recommendation_saved"
-    recommendation_id: str
     place_core_id: str
 
 

@@ -248,9 +248,7 @@ class ChatService:
                 if self._config.agent.web_search.harvest_enabled:
                     for result in web_search_results(tool_results):
                         await self._dispatcher.dispatch(
-                            WebFindingsHarvestRequested(
-                                user_id=user_id, result=result
-                            )
+                            WebFindingsHarvestRequested(user_id=user_id, result=result)
                         )
 
     async def _compose_taste_summary(self, user_id: str) -> str:

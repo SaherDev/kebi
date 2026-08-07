@@ -43,7 +43,7 @@ from kebi.api.routes.chat import router as chat_router
 from kebi.api.routes.extraction import router as extraction_router
 from kebi.api.routes.home import router as home_router
 from kebi.api.routes.knowledge import router as knowledge_router
-from kebi.api.routes.signal import router as signal_router
+from kebi.api.routes.places import router as places_router
 from kebi.api.routes.user import router as user_router
 
 # Agent checkpointer warmup (feature 028 M6). The compiled StateGraph is
@@ -278,7 +278,7 @@ protected_router.include_router(chat_router, prefix="")
 protected_router.include_router(extraction_router, prefix="")
 protected_router.include_router(home_router, prefix="")
 protected_router.include_router(knowledge_router, prefix="")
-protected_router.include_router(signal_router, prefix="")
+protected_router.include_router(places_router, prefix="")
 protected_router.include_router(user_router, prefix="")
 app.include_router(public_router)
 app.include_router(protected_router)
