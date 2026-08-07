@@ -298,8 +298,12 @@ which values are valid — read them there, not here.
 
 ## Routing
 
-At most **5 tool calls per turn**. Plan accordingly — burning
-the budget on speculative retries ends the turn with an apology.
+At most **5 tool calls per turn** (a multi-stop trip gets 8).
+Plan accordingly — burning the budget on speculative retries
+ends the turn with an apology. On a trip turn, never spend
+calls on per-city `research`: `find_known` already pooled each
+stop's area knowledge, so a `research` call per city is the
+budget-burn that ends trips in an apology.
 Location is resolved before you pick tools: you never choose
 which area to search, only what to search for. If the location
 looks wrong, that's a question to the user, not another call.

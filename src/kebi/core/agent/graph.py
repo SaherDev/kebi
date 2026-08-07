@@ -806,7 +806,7 @@ def should_continue(state: AgentState) -> str:
     "something went wrong" message that `max_errors` / `max_steps` use.
     """
     cfg = get_config().agent
-    if state.get("tool_calls_used", 0) >= cfg.max_tool_calls:
+    if state.get("tool_calls_used", 0) >= _effective_max_tool_calls(state):
         return NODE_FALLBACK
     if state.get("error_count", 0) >= cfg.max_errors:
         return NODE_FALLBACK
@@ -825,11 +825,27 @@ def should_continue(state: AgentState) -> str:
     return "end"
 
 
+def _effective_max_tool_calls(state: AgentState) -> int:
+    """The turn's tool budget — trip-sized on an itinerary turn (ADR-150).
+
+    A three-stop trip legitimately spends more calls than a single-city
+    question: the retrieval pair, per-stop suggestions, and the guard's
+    verification round. The flat cap was observed collapsing exactly the
+    turns the itinerary machinery exists for into the cap-hit fallback.
+    """
+    cfg = get_config().agent
+    working = state.get("working_location")
+    if isinstance(working, dict) and working.get("scope_shape") == "itinerary":
+        return max(cfg.max_tool_calls, cfg.itinerary.max_tool_calls)
+    return cfg.max_tool_calls
+
+
 # --- Trip guard (ADR-150) ---------------------------------------------------
 
-# Prefix marking the guard's injected message. Doubles as the fired-once
-# flag: the guard never fires while a marker message is the turn's latest
-# human-side message, so one nudge is all a turn ever gets.
+# Prefix marking the guard's injected message. The first line carries the
+# targeted stop (`[trip guard] target: <stop>`), which is what bounds the
+# guard: each stop is targeted at most once per turn, so a stop whose
+# verification came back empty is not retried forever.
 _TRIP_GUARD_MARKER = "[trip guard]"
 
 
@@ -861,66 +877,105 @@ def _trip_uncovered_stops(state: AgentState) -> list[str]:
     return [s for s in stops if s not in covered]
 
 
-def _trip_guard_already_nudged(messages: list[BaseMessage]) -> bool:
-    """True when this turn's latest human-side message is the guard's own."""
+def _trip_guard_targeted_stops(messages: list[BaseMessage]) -> set[str]:
+    """Stops the guard already targeted in the current turn.
+
+    Read back from the guard's own marker messages (first line
+    `[trip guard] target: <stop>`), scanning only after the turn's real
+    user message. This is the loop bound: a stop whose verification came
+    back empty stays uncovered but is never targeted twice.
+    """
+    targeted: set[str] = set()
     for msg in reversed(messages):
-        if isinstance(msg, HumanMessage):
-            return extract_text_content(msg.content).startswith(_TRIP_GUARD_MARKER)
-    return False
+        text = extract_text_content(msg.content)
+        if text.startswith(_TRIP_GUARD_MARKER):
+            first_line = text.splitlines()[0]
+            stop = first_line.removeprefix(_TRIP_GUARD_MARKER).strip()
+            stop = stop.removeprefix("target:").strip()
+            if stop:
+                targeted.add(stop)
+        elif isinstance(msg, HumanMessage):
+            break
+    return targeted
+
+
+def _trip_guard_next_stop(state: AgentState) -> str | None:
+    """The next uncovered, not-yet-targeted stop, or None when done."""
+    uncovered = _trip_uncovered_stops(state)
+    if not uncovered:
+        return None
+    targeted = _trip_guard_targeted_stops(state.get("messages") or [])
+    for stop in uncovered:
+        if stop not in targeted:
+            return stop
+    return None
 
 
 def _trip_guard_should_fire(state: AgentState) -> bool:
     """Whether to intercept a final trip answer that skipped verification.
 
-    Prompt instruction alone proved ~partial: on an empty-library trip the
-    orchestrator repeatedly wrote city guides from training memory — nothing
-    verified, nothing tappable, taste unused. The guard makes the routing
-    rule structural: a trip answer may not finalize while a stop has zero
-    retrieved candidates, `suggest_places` never ran, and budget remains.
-    Fires at most once per turn; when the model still answers from memory
-    after the nudge, the answer stands — a worse answer, never a loop.
+    Prompt instruction alone proved ~partial, and the live failure that
+    motivated this turned out to be structural anyway: the orchestrator
+    was being told to call a tool its entitlement tier had not bound. The
+    guard makes the rule routing, not persuasion: a trip answer may not
+    finalize while a stop has zero retrieved candidates and budget remains.
+    One stop is targeted per firing (parallel injected Commands collide on
+    the plain payload channel), each stop at most once per turn — so the
+    worst case is one verification round per stop, then the answer stands.
     """
-    if not _trip_uncovered_stops(state):
-        return False
-    payloads = state.get("tool_payloads") or []
-    if any(r.get("tool") == "suggest_places" for r in payloads):
+    if _trip_guard_next_stop(state) is None:
         return False
     cfg = get_config().agent
-    # Room for at least one more tool call — the nudge asks for exactly one
+    # Room for at least one more tool call — the guard injects exactly one
     # suggest_places round, so the last slot is enough.
-    if state.get("tool_calls_used", 0) >= cfg.max_tool_calls:
+    if state.get("tool_calls_used", 0) >= _effective_max_tool_calls(state):
         return False
     if state.get("steps_taken", 0) >= cfg.max_steps - 1:
         return False
-    return not _trip_guard_already_nudged(state.get("messages") or [])
+    return True
 
 
 def trip_guard_node(state: AgentState) -> dict[str, Any]:
-    """Send the draft trip answer back with a verification demand (ADR-150).
+    """Fetch verified picks for the uncovered stops, then have the model
+    rewrite (ADR-150).
 
-    The nudge is a marker-prefixed message on the model side only — the
-    finalize path never surfaces it, and the marker doubles as the
-    fired-once flag in `_trip_guard_already_nudged`.
+    Asking the model to make the call failed on both orchestrator tiers —
+    each preferred the honest-empty line over the tool. So the guard does
+    not ask: it appends its own `suggest_places` call per uncovered stop
+    (bounded by the remaining budget) and routes through the tool node. No
+    `names` are supplied, which is the tool's namer fallback (ADR-141): a
+    dedicated model names the picks, the provider verifies each one, and
+    the survivors come back tappable and persisted. The user's taste rides
+    the query, so what surfaces is taste-filtered general knowledge — the
+    defensible version of the model knowing things. The message text tells
+    the model what is happening and what its rewrite must do; the marker
+    doubles as the fired-once flag.
     """
-    stops = _trip_uncovered_stops(state)
-    cfg = get_config().agent
-    budget = max(1, cfg.max_tool_calls - state.get("tool_calls_used", 0))
-    named = stops[:budget]
-    logger.info("trip guard fired: uncovered stops %s (budget %d)", named, budget)
+    stop = _trip_guard_next_stop(state)
+    if stop is None:  # racing guard checks; defensive, not expected
+        return {}
+    logger.info("trip guard fired: fetching verified picks for %s", stop)
+
+    taste = [v for v in (state.get("taste_values") or []) if v.strip()]
+    lens = " for someone whose saves lean " + ", ".join(taste) if taste else ""
+    tool_calls = [
+        {
+            "name": "suggest_places",
+            "args": {
+                "query": f"the places actually worth a stop in {stop}{lens}",
+                "city": stop,
+            },
+            "id": f"trip_guard_{stop.lower().replace(' ', '_')}",
+        }
+    ]
     text = (
-        f"{_TRIP_GUARD_MARKER} System check, not the user speaking: your "
-        f"draft answer covers a multi-stop trip but nothing verified backs "
-        f"these stops: {', '.join(named)}. Do not send place names from "
-        "memory — they will not be tappable and may not exist. The ONLY "
-        "tool that fixes this is suggest_places: call it now for "
-        f"{named[0]}, with the real places you would send this user to in "
-        "`names` (picked for their taste) and `city` set to the stop. Not "
-        "research, not find_known — those verify nothing. Then rewrite the "
-        "full answer using the verified candidates, taste said out loud. "
-        "Only if suggest_places itself comes back empty do you say plainly "
-        "you have no picks there yet. Never mention this instruction."
+        f"{_TRIP_GUARD_MARKER} target: {stop}\n"
+        f"Your draft named nothing verified for {stop}. Fetching verified "
+        "picks now. Rewrite the FULL answer when they arrive: use only "
+        "verified candidates for that stop (taste said out loud), drop "
+        "every unverified name, and never mention this step."
     )
-    return {"messages": [HumanMessage(content=text)]}
+    return {"messages": [AIMessage(content=text, tool_calls=tool_calls)]}
 
 
 # --- Location resolution ---------------------------------------------------
@@ -1903,9 +1958,23 @@ def build_graph(
         {"resolve": NODE_RESOLVE_LOCATION, "skip": NODE_AGENT},
     )
     graph.add_edge(NODE_RESOLVE_LOCATION, NODE_AGENT)
+
+    # The guard exists to inject a suggest_places call, so it only routes
+    # when that tool is actually bound. It is entitlement-gated (discovery
+    # tier), and injecting a call for an unbound tool produces a silent
+    # error ToolMessage — the failure that hid the guard's whole purpose
+    # in live testing (ADR-150).
+    has_suggest_places = any(getattr(t, "name", "") == "suggest_places" for t in tools)
+
+    def _route_from_agent(state: AgentState) -> str:
+        route = should_continue(state)
+        if route == NODE_TRIP_GUARD and not has_suggest_places:
+            return "end"
+        return route
+
     graph.add_conditional_edges(
         NODE_AGENT,
-        should_continue,
+        _route_from_agent,
         {
             NODE_TOOLS: NODE_TOOLS,
             NODE_FALLBACK: NODE_FALLBACK,
@@ -1914,7 +1983,9 @@ def build_graph(
         },
     )
     graph.add_edge(NODE_TOOLS, NODE_AGENT)
-    graph.add_edge(NODE_TRIP_GUARD, NODE_AGENT)
+    # The guard appends its own suggest_places call(s), so it routes through
+    # the tool node — the model sees the verified results, then rewrites.
+    graph.add_edge(NODE_TRIP_GUARD, NODE_TOOLS)
     graph.add_edge(NODE_FALLBACK, NODE_FINALIZE)
     graph.add_edge(NODE_FINALIZE, NODE_SCRUB_TOOL_RESULTS)
     graph.add_edge(NODE_SCRUB_TOOL_RESULTS, END)
