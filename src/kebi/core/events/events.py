@@ -74,6 +74,22 @@ class RecommendationSaved(DomainEvent):
     place_core_id: str
 
 
+class PlaceProfileRequested(DomainEvent):
+    """Event: a thin catalog row was opened and should be profiled (ADR-152).
+
+    Fired by the place-detail route when the row carries no experiential
+    tags — i.e. it entered through the provider write-through and no LLM has
+    ever looked at it. The handler runs one identity-only profiling call and
+    persists the tags (and icon, if missing) onto the catalog row: global,
+    once per place, so the cost is bounded by places users actually open.
+    `user_id` is the opener, for tracing only — the enrichment is never
+    user-scoped.
+    """
+
+    event_type: str = "place_profile_requested"
+    place_id: str
+
+
 class LibraryStateChanged(DomainEvent):
     """Event: a saved place's Library pills changed (visited/liked/approved).
 

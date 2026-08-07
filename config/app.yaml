@@ -68,6 +68,15 @@ models:
     max_tokens: 1024
     temperature: 0
 
+  # Place profiler (ADR-152) — experiential tags for a thin catalog row from
+  # venue identity alone, fired in the background on the place screen's first
+  # open. One call per unique place ever; gpt-4o-mini, off the critical path.
+  place_profiler:
+    provider: openai
+    model: gpt-4o-mini
+    max_tokens: 512
+    temperature: 0
+
   # Mines durable area facts out of a turn's web-search findings (ADR-145).
   # Runs after the answer is already sent, so latency does not matter and
   # cheap does: same tier as the other knowledge writers.
@@ -323,6 +332,7 @@ prompts:
   agent: agent.txt
   place_resolver: place_resolver.txt
   place_classifier: place_classifier.txt
+  place_profiler: place_profiler.txt
   location_resolver: location_resolver.txt
   candidate_namer: candidate_namer.txt
   home_suggester: home_suggester.txt

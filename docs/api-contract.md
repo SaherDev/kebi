@@ -666,6 +666,12 @@ all simply global.
 }
 ```
 
+> **Lazy enrichment (ADR-152):** a place that entered the catalog through
+> the suggestion path opens thin (no experiential tags) the first time —
+> that open triggers a background profiling pass, so tags and icon are
+> filled within seconds and appear on the next fetch. Clients should not
+> treat an empty `place.tags` as permanent.
+
 | Code  | When                                                              |
 | ----- | ----------------------------------------------------------------- |
 | `200` | The place is in the catalog (saved or not)                        |

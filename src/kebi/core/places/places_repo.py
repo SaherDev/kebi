@@ -258,6 +258,43 @@ class PlacesRepo:
         await self._session.commit()
         return [_row_to_core(row._mapping) for row in result]
 
+    async def update_enrichment(
+        self, place_id: str, tags: list[PlaceTag], icon: str | None = None
+    ) -> PlaceCore | None:
+        """Write a profiling pass's output onto one catalog row (ADR-152).
+
+        Targeted by design — `upsert_places` overwrites every mutable column
+        and demands a `provider_id`, both wrong for enriching a row in place.
+        This sets `tags` (the caller passes the already-merged list) and
+        `icon` only when one is provided and the row has none (an icon an
+        LLM already picked is never overwritten by a later guess).
+
+        Returns the updated core, or None when `place_id` matched nothing.
+        """
+        values: dict[str, object] = {
+            "tags": [t.model_dump() for t in tags] or None,
+        }
+        stmt = (
+            update(_PlacesTable)
+            .where(_t.id == place_id)
+            .values(**values)
+            .returning(*_PlacesTable.c)
+        )
+        if icon is not None:
+            stmt = (
+                update(_PlacesTable)
+                .where(_t.id == place_id)
+                .values(
+                    **values,
+                    icon=func.coalesce(_t.icon, icon),
+                )
+                .returning(*_PlacesTable.c)
+            )
+        result = await self._session.execute(stmt)
+        await self._session.commit()
+        row = result.first()
+        return _row_to_core(row._mapping) if row is not None else None
+
     async def wipe_stale_locations(self, cutoff: datetime) -> list[PlaceCore]:
         """Strip Google-derived location from rows last refreshed before cutoff.
 

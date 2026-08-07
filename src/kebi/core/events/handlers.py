@@ -12,6 +12,7 @@ from kebi.core.events.events import (
     ContentHarvestRequested,
     DomainEvent,
     LibraryStateChanged,
+    PlaceProfileRequested,
     PlaceSaved,
     RecommendationSaved,
     TurnCompleted,
@@ -27,6 +28,7 @@ if TYPE_CHECKING:
     from kebi.core.knowledge.producer import KnowledgeIngestion
     from kebi.core.knowledge.web_harvester import WebKnowledgeHarvester
     from kebi.core.memory.service import UserMemoryService
+    from kebi.core.places.profile_service import PlaceProfileService
     from kebi.core.taste.service import TasteModelService
     from kebi.core.user.intent_service import UserIntentService
 
@@ -58,6 +60,7 @@ class EventHandlers:
         harvester: "KnowledgeHarvester | None" = None,
         ingestion: "KnowledgeIngestion | None" = None,
         web_harvester: "WebKnowledgeHarvester | None" = None,
+        profile_service: "PlaceProfileService | None" = None,
     ) -> None:
         self.taste_service = taste_service
         self.memory_service = memory_service
@@ -67,6 +70,7 @@ class EventHandlers:
         self._harvester = harvester
         self._ingestion = ingestion
         self._web_harvester = web_harvester
+        self._profile_service = profile_service
 
     async def on_taste_signal(self, event: DomainEvent) -> None:
         """Unified handler for all taste-related events.
@@ -110,6 +114,42 @@ class EventHandlers:
                 message=f"{event.event_type} handler error: {exc}",
                 level="error",
                 metadata={"event_id": event.event_id},
+                user_id=event.user_id,
+                session_id=event.user_id,
+            )
+            self._tracer.flush()
+
+    async def on_place_profile_requested(self, event: PlaceProfileRequested) -> None:
+        """Profile a thin catalog row in the background (ADR-152).
+
+        Best-effort like every handler here (ADR-043): the user already has
+        their (thin) place screen; a failure leaves the row as it was and
+        the next open retries. The service holds the dedup lock and the
+        no-longer-thin re-check, so this stays a thin dispatch.
+        """
+        try:
+            if self._profile_service is None:
+                return
+            updated = await self._profile_service.profile_place(event.place_id)
+            if updated is not None:
+                self._tracer.capture_message(
+                    message=f"place_profile wrote {len(updated.tags)} tag(s)",
+                    level="info",
+                    metadata={"event_id": event.event_id, "place_id": event.place_id},
+                    user_id=event.user_id,
+                    session_id=event.user_id,
+                )
+        except Exception as exc:
+            logger.error(
+                "Failed place profile: %s",
+                exc,
+                exc_info=True,
+                extra={"place_id": event.place_id},
+            )
+            self._tracer.capture_message(
+                message=f"place_profile error: {exc}",
+                level="error",
+                metadata={"event_id": event.event_id, "place_id": event.place_id},
                 user_id=event.user_id,
                 session_id=event.user_id,
             )
