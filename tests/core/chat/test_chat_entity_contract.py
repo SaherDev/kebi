@@ -15,7 +15,11 @@ from unittest.mock import AsyncMock, MagicMock
 from langchain_core.messages import AIMessage
 
 from kebi.api.schemas.chat import ChatRequest
+from kebi.core.areas.keys import encode_area_id
 from kebi.core.chat.service import ChatService
+
+# Area URIs carry the geo key encoded as one opaque segment (ADR-153).
+_CANGGU_URI = f"kebi://area/{encode_area_id('id/badung/canggu')}"
 
 _CANGGU = {
     "country": "Indonesia",
@@ -109,7 +113,7 @@ async def test_place_names_come_back_as_links() -> None:
 
 async def test_area_names_link_too() -> None:
     result = await _run("monday is their big night in Canggu")
-    assert "[Canggu](kebi://area/id/badung/canggu)" in result.message
+    assert f"[Canggu]({_CANGGU_URI})" in result.message
 
 
 async def test_entities_resolve_each_link() -> None:
@@ -127,7 +131,7 @@ async def test_entities_resolve_each_link() -> None:
             "kind": "area",
             "key": "id/badung/canggu",
             "name": "Canggu",
-            "uri": "kebi://area/id/badung/canggu",
+            "uri": _CANGGU_URI,
             "icon": "🏄",
         },
     ]

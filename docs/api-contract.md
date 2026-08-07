@@ -679,6 +679,87 @@ all simply global.
 
 ---
 
+## GET /v1/areas/{area_id}
+
+The area screen behind every area link (ADR-153). `area_id` is the encoded
+geo key carried by the `kebi://area/{id}` link the user tapped — one opaque
+URL-safe segment; the raw key still rides the chat entity's `key` field.
+Every level of the key hierarchy is openable: country, city/region,
+neighbourhood.
+
+**Request:** path param only. Plus the `X-Gateway-Token` +
+`X-Gateway-User-Id` headers.
+
+```
+GET /v1/areas/aWQvYmFsaS9jYW5nZ3U
+```
+
+**Response (200):** the area's **global half** (profile: `name`, `level`,
+`icon`, `summary`, `best_for` chips, tappable `breadcrumb`) plus the
+caller's **personal half** (`saved_count`, the body `section`), composed
+per request and never stored.
+
+`section` is the one block below the profile:
+
+- `kind: "saved"` — the caller has saves under this key. At a wide level
+  they group into child-`areas` rows (each with its own `saved_count`,
+  `hook`, and tappable `uri`); at neighbourhood level they are venue
+  `places` rows (server-composed `subtitle`, the caller's `liked`/`visited`
+  for row accents). A save whose place carries no deeper geo than the
+  current level appears as a venue row at that level.
+- `kind: "worth_knowing"` — no saves here: the profiler's notable child
+  areas with one-line hooks. Never venue suggestions — discovery stays in
+  chat via the ask bar.
+- `null` — nothing to show below the profile (e.g. a save-less
+  neighbourhood).
+
+```json
+{
+  "key": "id/bali/canggu",
+  "uri": "kebi://area/aWQvYmFsaS9jYW5nZ3U",
+  "name": "Canggu",
+  "level": "neighbourhood",
+  "icon": "🏄",
+  "summary": "the surf-and-laptop end of bali. …",
+  "best_for": [{ "icon": "🌅", "text": "sunset drinks" }],
+  "breadcrumb": [
+    { "key": "id", "name": "Indonesia", "uri": "kebi://area/aWQ" },
+    { "key": "id/bali", "name": "Bali", "uri": "kebi://area/aWQvYmFsaQ" }
+  ],
+  "saved_count": 4,
+  "profiled": true,
+  "section": {
+    "kind": "saved",
+    "areas": [],
+    "places": [
+      {
+        "id": "c0ffee00-…",
+        "name": "Savaya Bali",
+        "uri": "kebi://venue/c0ffee00-…",
+        "icon": "🍸",
+        "subtitle": "beach club · lively",
+        "liked": true,
+        "visited": true
+      }
+    ]
+  }
+}
+```
+
+> **Lazy profiling (ADR-153):** an area opens thin the first time
+> (`profiled: false` — `summary`/`level`/`icon` null, slug-derived
+> name/breadcrumb) and that open triggers a background profiling pass, so
+> the dressed screen is there within seconds on the next fetch — the same
+> first-open contract as the place screen (ADR-152). The personal fields
+> are always live, thin or not.
+
+| Code  | When                                                              |
+| ----- | ----------------------------------------------------------------- |
+| `200` | The id decodes to a geo key (profiled or not)                     |
+| `404` | `area_id` is not a token kebi minted (`detail: area_not_found`)   |
+
+---
+
 ## POST /v1/user/places
 
 Save a place kebi surfaced to the caller's library — the plain **"save"**
@@ -1029,6 +1110,7 @@ All protected calls additionally send the `X-Gateway-Token` + `X-Gateway-User-Id
 | POST /v1/extract            | Canonical extraction (save a place)        | raw_input                                                    | ExtractPlaceResponse                                                                                                                         |
 | GET /v1/user/library        | Browse the user's saved places (Library)   | — (optional filter + `sort` + `limit`/`cursor` query params) | LibraryResponse (`places: SavedPlaceView[]`, `next_cursor`, `total`)                                                                         |
 | GET /v1/places/{id}         | Open any surfaced place (the place screen) | — (path param only)                                          | LibraryItem (`place`, `user_data` — null when unsaved, `claims`); `404` if uncatalogued                                                      |
+| GET /v1/areas/{id}          | Open any linked area (the area screen)     | — (path param only; id = encoded geo key)                    | AreaScreenResponse (profile + breadcrumb + `saved_count` + one body section: saved drill-down or worth-knowing); `404` if the id is no token |
 | POST /v1/user/places        | Save a surfaced place (plain save)         | place_core_id                                                | LibraryUserData (created user-state, `201`; `404` if uncatalogued); emits the `saved_recommendation` taste signal                            |
 | PATCH /v1/user/places/{id}  | Update a save's user-state (pills/menu)    | partial body: `visited`/`liked`/`approved`/`note`            | LibraryUserData (updated user-state; `200`/`404`)                                                                                            |
 | DELETE /v1/user/places/{id} | Remove one saved place from the library    | — (path param only)                                          | 204 No Content (`404` if absent/not owned)                                                                                                   |

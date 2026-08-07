@@ -17,6 +17,16 @@ Format:
 
 ---
 
+## ADR-153: An area link lands on a screen; the drill-down is your footprint
+
+**Date:** 2026-08-07\
+**Status:** accepted\
+**Context:** Chat has linked areas since ADR-136, but the two entity kinds were unequal: a venue link resolves to its catalog row and screen (ADR-151/152), while an area existed only as a geo key threaded through claims and links — a tap had nowhere to land. Two structural questions blocked a screen. First, identity: the geo key is a slash path, which reads as URL structure in routes and links (Indonesia's country code being literally `id` makes the failure vivid). Second, containment: every Canggu place is also a Bali place, so a wide-scope screen that lists venues either duplicates its children's inventory or truncates it arbitrarily.\
+**Decision:** Areas get a row, a screen, and an encoded id. The key travels as one opaque URL-safe segment minted and decoded by a single reversible codec — no lookup table, no second id space; the raw key stays on the chat entity for clients that want it. The row is created by a profiler on the area's first open, mirroring the thin-place pattern: one LLM call synthesizes the global profile — summary in kebi's voice, "best for" chips, display names, level label, notable children — from the approved claims under the key's prefix plus the model's own geography knowledge, so a zero-claim area still opens with substance. The profile is user-independent and generated once; everything personal is computed per request and never stored. The containment question is answered by making the hierarchy itself the navigation: a wide-scope screen shows *where you've saved* — child-area rows with counts, not a venue list — and only the leaf level shows venue rows; with no saves under the key, the profiler's notable children stand in ("worth knowing"). Venue suggestions on the area screen were rejected: discovery stays in chat, which the screen's ask bar reaches in one tap. The LLM emits names only — child keys are built mechanically from the parent key, the same never-invent-a-key rule the chat linkifier follows.\
+**Consequences:** Both entity kinds now behave identically — thin until first opened, then dressed, globally, once — and every level of the key hierarchy is openable, each row on the screen itself a tappable entity, so Bali routes you to Canggu instead of repeating its venues. Cost is bounded by unique areas actually opened, on the cheap tier, off the critical path. Claims written after an area is profiled do not reshape its summary — a refresh policy is deliberately deferred, as is any claims/notes block on the screen. The wire change is contained: area URIs are now encoded (clients treating the URI as opaque notice nothing; nothing parsed the old raw-key form). Live verification surfaced one standing data gap: catalog rows carry the provider's administrative geo (a save in Canggu stores its regency as the neighborhood), so such saves group under the admin name at the parent level and never match the colloquially-keyed leaf — the same variant-splitting problem ADR-144 solved for cities, now needing the neighborhood-level treatment.
+
+---
+
 ## ADR-152: A thin place profiles itself on first open
 
 **Date:** 2026-08-07\

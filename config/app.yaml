@@ -77,6 +77,16 @@ models:
     max_tokens: 512
     temperature: 0
 
+  # Area profiler (ADR-153) — an area's global profile (summary, chips,
+  # breadcrumb names, notable children) from its claims + geography
+  # knowledge, fired in the background on the area screen's first open.
+  # One call per unique area ever; off the critical path.
+  area_profiler:
+    provider: openai
+    model: gpt-4o-mini
+    max_tokens: 800
+    temperature: 0
+
   # Mines durable area facts out of a turn's web-search findings (ADR-145).
   # Runs after the answer is already sent, so latency does not matter and
   # cheap does: same tier as the other knowledge writers.
@@ -333,6 +343,7 @@ prompts:
   place_resolver: place_resolver.txt
   place_classifier: place_classifier.txt
   place_profiler: place_profiler.txt
+  area_profiler: area_profiler.txt
   location_resolver: location_resolver.txt
   candidate_namer: candidate_namer.txt
   home_suggester: home_suggester.txt
@@ -610,6 +621,19 @@ home:
   # enforces these bounds; the fallback emits exactly chip_min generic chips.
   chip_min: 3
   chip_max: 4
+
+# ---------------------------------------------------------------------------
+# Area screen + profiler (ADR-153)
+# An area's row is generated once, on its first open, by the area_profiler
+# role — from the approved claims under its geo-key prefix plus the model's
+# own geography knowledge.
+# ---------------------------------------------------------------------------
+areas:
+  # Cap on approved claims fed into one profiling call (highest-confidence
+  # first when it bites).
+  claims_input_limit: 30
+  # Cap on "worth knowing" child areas stored on the row.
+  notable_sub_areas_max: 6
 
 # ---------------------------------------------------------------------------
 # User intents — the "what you wanted" recall list (ADR-110)

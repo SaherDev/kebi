@@ -9,6 +9,7 @@ from collections.abc import Awaitable
 from typing import TYPE_CHECKING
 
 from kebi.core.events.events import (
+    AreaProfileRequested,
     ContentHarvestRequested,
     DomainEvent,
     LibraryStateChanged,
@@ -23,6 +24,7 @@ from kebi.db.models import InteractionType
 from kebi.providers.tracing import TracingClient, get_tracing_client
 
 if TYPE_CHECKING:
+    from kebi.core.areas.profile_service import AreaProfileService
     from kebi.core.knowledge.harvest_bucket import HarvestBucketReader
     from kebi.core.knowledge.harvester import KnowledgeHarvester
     from kebi.core.knowledge.producer import KnowledgeIngestion
@@ -61,6 +63,7 @@ class EventHandlers:
         ingestion: "KnowledgeIngestion | None" = None,
         web_harvester: "WebKnowledgeHarvester | None" = None,
         profile_service: "PlaceProfileService | None" = None,
+        area_profile_service: "AreaProfileService | None" = None,
     ) -> None:
         self.taste_service = taste_service
         self.memory_service = memory_service
@@ -71,6 +74,7 @@ class EventHandlers:
         self._ingestion = ingestion
         self._web_harvester = web_harvester
         self._profile_service = profile_service
+        self._area_profile_service = area_profile_service
 
     async def on_taste_signal(self, event: DomainEvent) -> None:
         """Unified handler for all taste-related events.
@@ -150,6 +154,42 @@ class EventHandlers:
                 message=f"place_profile error: {exc}",
                 level="error",
                 metadata={"event_id": event.event_id, "place_id": event.place_id},
+                user_id=event.user_id,
+                session_id=event.user_id,
+            )
+            self._tracer.flush()
+
+    async def on_area_profile_requested(self, event: AreaProfileRequested) -> None:
+        """Dress an unprofiled area in the background (ADR-153).
+
+        Best-effort like every handler here (ADR-043): the user already has
+        their (thin) area screen; a failure writes no row and the next open
+        retries. The service holds the dedup lock and the already-profiled
+        re-check, so this stays a thin dispatch.
+        """
+        try:
+            if self._area_profile_service is None:
+                return
+            profile = await self._area_profile_service.profile_area(event.geo_key)
+            if profile is not None:
+                self._tracer.capture_message(
+                    message=f"area_profile wrote {profile.geo_key}",
+                    level="info",
+                    metadata={"event_id": event.event_id, "geo_key": event.geo_key},
+                    user_id=event.user_id,
+                    session_id=event.user_id,
+                )
+        except Exception as exc:
+            logger.error(
+                "Failed area profile: %s",
+                exc,
+                exc_info=True,
+                extra={"geo_key": event.geo_key},
+            )
+            self._tracer.capture_message(
+                message=f"area_profile error: {exc}",
+                level="error",
+                metadata={"event_id": event.event_id, "geo_key": event.geo_key},
                 user_id=event.user_id,
                 session_id=event.user_id,
             )

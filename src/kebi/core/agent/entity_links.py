@@ -5,14 +5,17 @@ display: no per-tool card payloads, no bespoke render shape per tool. A tool
 that lands next month changes what the agent *says*, never what the client
 *draws*.
 
-The link format is `kebi://{kind}/{entity_key}` with exactly two kinds:
+The link format is `kebi://{kind}/{id}` with exactly two kinds:
 
-    venue  →  kebi://venue/<place id>            (the catalog id)
-    area   →  kebi://area/<cc>/<city>/<hood>     (the knowledge geo key)
+    venue  →  kebi://venue/<place id>       (the catalog id)
+    area   →  kebi://area/<encoded geo key> (the knowledge geo key, encoded)
 
-Both keys are the ones those surfaces already use — a venue key is what
-`POST /v1/user/places` takes, an area key is `build_geo_key`'s output — so a
-tap resolves against existing endpoints with no new identity scheme.
+Both ids are the ones those surfaces already use — a venue id is what
+`POST /v1/user/places` takes, an area id is what `GET /v1/areas/{id}`
+decodes — so a tap resolves against existing endpoints with no new identity
+scheme. An area's key is a slash path (`build_geo_key` output), so it rides
+the URI as one opaque segment via the shared codec (ADR-153); the entity's
+`key` field still carries it raw.
 
 Links are attached **deterministically, after** the agent writes its answer:
 the LLM writes plain prose naming places, and `linkify` wraps the names it
@@ -27,6 +30,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel
 
+from kebi.core.areas.keys import encode_area_id
 from kebi.core.knowledge.schemas import build_geo_key
 from kebi.core.places._place_utils import display_place_name
 from kebi.core.places.models import normalize_icon
@@ -148,8 +152,8 @@ def venue_uri(place_id: str) -> str:
 
 
 def area_uri(geo_key: str) -> str:
-    """`kebi://area/<geo key>` — the key keeps its slashes as path segments."""
-    return f"{URI_SCHEME}://area/{geo_key.strip('/')}"
+    """`kebi://area/<encoded key>` — one opaque segment, decoded by the route."""
+    return f"{URI_SCHEME}://area/{encode_area_id(geo_key)}"
 
 
 def _venue(place_id: str, name: str, icon: str | None = None) -> ChatEntity:

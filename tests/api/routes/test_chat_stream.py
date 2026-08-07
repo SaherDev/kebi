@@ -12,8 +12,12 @@ from fastapi.testclient import TestClient
 from kebi.api.deps import get_agent_graph, get_chat_service
 from kebi.api.main import app
 from kebi.core.agent.reasoning import ReasoningStep
+from kebi.core.areas.keys import encode_area_id
 from kebi.core.chat.service import ChatService
 from kebi.core.config import AppConfig
+
+# Area URIs carry the geo key encoded as one opaque segment (ADR-153).
+_CANGGU_URI = f"kebi://area/{encode_area_id('id/badung/canggu')}"
 
 
 def _make_mock_service() -> MagicMock:
@@ -485,7 +489,7 @@ class TestChatStreamEntityLinks:
         frame = self._message_frame(mock_service)
         assert frame["content"] == (
             "tonight is [Luigis](kebi://venue/p1) night in "
-            "[Canggu](kebi://area/id/badung/canggu)"
+            f"[Canggu]({_CANGGU_URI})"
         )
 
     def test_message_frame_carries_entities(self, mock_service: MagicMock) -> None:
