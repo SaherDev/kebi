@@ -40,7 +40,6 @@ from kebi.core.config import get_prompt
 from kebi.core.extraction.candidate_mapper import (
     ResolverOutput,
     evidence_field_to_medium,
-    llm_tags_to_place_tags,
     location_hint_from,
     normalize_query,
 )
@@ -51,6 +50,9 @@ from kebi.core.extraction.types import (
     Producer,
 )
 from kebi.core.places import LocationContext
+from kebi.core.places.tag_merge import (
+    llm_tags_to_place_tags,
+)
 from kebi.providers.llm import InstructorClient
 
 logger = logging.getLogger(__name__)

@@ -17,6 +17,16 @@ Format:
 
 ---
 
+## ADR-152: A thin place profiles itself on first open
+
+**Date:** 2026-08-07\
+**Status:** accepted\
+**Context:** The place screen (ADR-151) made every surfaced place openable — and immediately exposed a data gap. A place saved from shared content arrives rich: the extraction classifier read the post and asserted its experiential tags, and the harvest mined insider notes. A place that entered through the suggestion path arrives thin: the provider write-through persists identity, location, category, and icon, and nothing else — no LLM has ever looked at it. So exactly the places kebi discovers for the user, its differentiating inventory, opened as an empty screen: no vibe, no features, no notes.\
+**Decision:** Thin rows profile themselves lazily. Opening a place whose row carries no experiential tags fires a background pass — one LLM call that tags the venue from its identity alone, under the same structural rules and the same accessibility ban the extraction classifier follows, persisted onto the catalog row globally. The trigger is the row's own state, so it is self-clearing; a short lock dedupes concurrent opens; already-attested tags always win over newly inferred ones; a failure changes nothing and the next open retries. Profiling at suggestion time was rejected — it would spend on every candidate surfaced rather than every place actually opened, an order of magnitude more calls for the same screens seen.\
+**Consequences:** The first open of a fresh discovery is still thin; the next one is dressed — tags and icon arrive within seconds, globally, for every user. Cost is bounded by unique places users actually open, on the cheap model tier, off the critical path. Insider notes remain honestly empty for a place nobody has shared or researched: notes are evidence, not generation, and faking them from the same LLM that tags vibes would collapse the distinction the claims store exists to keep. If thin-place notes are wanted later, the web-research harvest (ADR-145) is the honest source.
+
+---
+
 ## ADR-151: Every surfaced place is openable; saving needs no ceremony
 
 **Date:** 2026-08-07\

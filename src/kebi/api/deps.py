@@ -65,6 +65,7 @@ from kebi.core.places import (
     UserPlacesRepo,
     UserPlacesService,
 )
+from kebi.core.places.profile_service import PlaceProfileService
 from kebi.core.taste.debounce import regen_debouncer
 from kebi.core.taste.service import TasteModelService
 from kebi.core.user.intent_service import UserIntentService
@@ -219,6 +220,20 @@ def get_cache_backend() -> CacheBackend:
     return RedisCacheBackend(client=get_redis_client(get_env().REDIS_URL))
 
 
+def get_place_profile_service() -> PlaceProfileService:
+    """Build the place profiler (ADR-152) from process-wide providers.
+
+    Needs no request scope: it runs as a background task after the response,
+    so it takes the session *factory* (each run opens its own session) and
+    the shared Redis cache for its in-flight dedup lock.
+    """
+    return PlaceProfileService(
+        instructor_client=get_instructor_client("place_profiler"),
+        session_factory=_get_session_factory(),
+        cache=get_cache_backend(),
+    )
+
+
 def _build_message_buffer() -> MessageBuffer:
     """Construct a per-user message buffer backed by the shared Redis client.
 
@@ -296,6 +311,7 @@ async def get_event_dispatcher(
             get_knowledge_writer(get_knowledge_claim_repository())
         ),
         web_harvester=get_web_knowledge_harvester(),
+        profile_service=get_place_profile_service(),
     )
 
     dispatcher = EventDispatcher(background_tasks=background_tasks)
@@ -319,6 +335,10 @@ async def get_event_dispatcher(
     dispatcher.register_handler(
         "web_findings_harvest_requested",
         handlers.on_web_findings_harvest_requested,  # type: ignore[arg-type]
+    )
+    dispatcher.register_handler(
+        "place_profile_requested",
+        handlers.on_place_profile_requested,  # type: ignore[arg-type]
     )
 
     return dispatcher

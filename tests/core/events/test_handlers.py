@@ -164,3 +164,43 @@ class TestOnTurnCompleted:
         )
         await handlers.on_turn_completed(event)  # must not raise
         mock_intent_service.record_intent.assert_awaited_once()
+
+
+class TestOnPlaceProfileRequested:
+    """The profile handler is a thin, best-effort dispatch (ADR-152)."""
+
+    def _handlers(self, profile_service: MagicMock | None) -> EventHandlers:
+        return EventHandlers(
+            taste_service=MagicMock(),
+            memory_service=MagicMock(),
+            intent_service=MagicMock(),
+            tracer=MagicMock(capture_message=MagicMock(), flush=MagicMock()),
+            profile_service=profile_service,
+        )
+
+    async def test_delegates_to_the_profile_service(self) -> None:
+        from kebi.core.events.events import PlaceProfileRequested
+
+        service = MagicMock(profile_place=AsyncMock(return_value=None))
+        handlers = self._handlers(service)
+        await handlers.on_place_profile_requested(
+            PlaceProfileRequested(user_id="u1", place_id="p1")
+        )
+        service.profile_place.assert_awaited_once_with("p1")
+
+    async def test_no_service_wired_is_a_noop(self) -> None:
+        from kebi.core.events.events import PlaceProfileRequested
+
+        handlers = self._handlers(None)
+        await handlers.on_place_profile_requested(
+            PlaceProfileRequested(user_id="u1", place_id="p1")
+        )  # should not raise
+
+    async def test_a_service_failure_never_propagates(self) -> None:
+        from kebi.core.events.events import PlaceProfileRequested
+
+        service = MagicMock(profile_place=AsyncMock(side_effect=RuntimeError("boom")))
+        handlers = self._handlers(service)
+        await handlers.on_place_profile_requested(
+            PlaceProfileRequested(user_id="u1", place_id="p1")
+        )  # should not raise

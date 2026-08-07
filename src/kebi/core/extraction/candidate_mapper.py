@@ -18,9 +18,7 @@ from __future__ import annotations
 
 import logging
 import re
-from collections.abc import Iterable
 from dataclasses import dataclass, field
-from typing import Protocol
 
 from kebi.core.config import ConfidenceConfig
 from kebi.core.extraction.confidence import calculate_confidence
@@ -34,14 +32,12 @@ from kebi.core.extraction.types import (
     ValidatedCandidate,
 )
 from kebi.core.places import (
-    AccessibilityTag,
     LocationContext,
     PlaceCategory,
     PlaceCore,
     PlaceNameAlias,
     PlaceObject,
     PlaceTag,
-    TagType,
 )
 
 logger = logging.getLogger(__name__)
@@ -356,69 +352,6 @@ class ResolverOutput:
     # populate it; absent ⇒ the shared `location` is used.
     query_locations: dict[str, LocationContext] = field(default_factory=dict)
     post_tags: list[PlaceTag] = field(default_factory=list)
-
-
-class _LLMTagLike(Protocol):
-    type: str
-    value: str
-
-
-# Accessibility tag values, matched case-insensitively against ANY emitted
-# value regardless of the type label the LLM chose — defense against
-# mislabeling (e.g. type="feature", value="wheelchair_entrance").
-_ACCESSIBILITY_VALUES: frozenset[str] = frozenset(a.value for a in AccessibilityTag)
-
-
-def llm_tags_to_place_tags(tags: Iterable[_LLMTagLike]) -> list[PlaceTag]:
-    """Convert flat LLM-emitted tags → `PlaceTag` with `source="llm"`.
-
-    Shared by the resolver (post-level tags) and the classifier
-    (per-place tags). Type values outside `TagType` fall through as
-    plain strings — `PlaceTag.type` accepts `TagType | str`. Empty
-    type/value pairs are skipped.
-
-    Accessibility tags are categorically dropped (ADR-118): a
-    hallucinated "wheelchair accessible" is real-world harm, not a
-    mis-rank, so inferred sources may never assert accessibility. The
-    prompts forbid it too; this is the code backstop for both callers.
-    """
-    out: list[PlaceTag] = []
-    for t in tags:
-        if not t.value or not t.type:
-            continue
-        try:
-            tag_type: TagType | str = TagType(t.type)
-        except ValueError:
-            tag_type = t.type
-        if (
-            tag_type == TagType.accessibility
-            or t.value.strip().lower() in _ACCESSIBILITY_VALUES
-        ):
-            logger.warning("llm_accessibility_tag_dropped %s=%s", t.type, t.value)
-            continue
-        out.append(PlaceTag(type=tag_type, value=t.value, source="llm"))
-    return out
-
-
-def merge_tags(per_place: list[PlaceTag], shared: list[PlaceTag]) -> list[PlaceTag]:
-    """Union per-place tags with shared post-level tags (ADR-080).
-
-    Dedupe by `(type, value)`; the per-place tag wins on conflict
-    (its evidence is venue-specific). Order: per-place first, then any
-    shared tag whose `(type, value)` is not already present.
-    """
-
-    def _key(tag: PlaceTag) -> tuple[str, str]:
-        type_str = tag.type.value if isinstance(tag.type, TagType) else tag.type
-        return (type_str, str(tag.value))
-
-    seen = {_key(t) for t in per_place}
-    out = list(per_place)
-    for t in shared:
-        if _key(t) not in seen:
-            seen.add(_key(t))
-            out.append(t)
-    return out
 
 
 def location_hint_from(context: ExtractionContext) -> LocationContext | None:

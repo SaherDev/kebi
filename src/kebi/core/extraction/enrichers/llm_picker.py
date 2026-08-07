@@ -28,8 +28,6 @@ from kebi.core.config import ConfidenceConfig, get_prompt
 from kebi.core.extraction.candidate_mapper import (
     AttributedSearchResult,
     evidence_field_to_medium,
-    llm_tags_to_place_tags,
-    merge_tags,
     reconcile_picks,
 )
 from kebi.core.extraction.types import (
@@ -41,6 +39,10 @@ from kebi.core.extraction.types import (
     ValidatedCandidate,
 )
 from kebi.core.places import PlaceCategory, PlaceTag, normalize_icon
+from kebi.core.places.tag_merge import (
+    llm_tags_to_place_tags,
+    merge_tags,
+)
 from kebi.providers.llm import InstructorClient
 
 logger = logging.getLogger(__name__)

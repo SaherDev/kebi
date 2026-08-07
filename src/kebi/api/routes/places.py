@@ -14,6 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from kebi.api.deps import (
     GatewayIdentity,
+    get_event_dispatcher,
     get_place_notes_service,
     get_places_repo,
     get_user_places_service,
@@ -21,8 +22,11 @@ from kebi.api.deps import (
 )
 from kebi.api.rate_limit import limiter
 from kebi.api.schemas.library import LibraryItem
+from kebi.core.events.dispatcher import EventDispatcher
+from kebi.core.events.events import PlaceProfileRequested
 from kebi.core.knowledge.place_notes_service import PlaceNotesService
 from kebi.core.places import UserPlacesService
+from kebi.core.places.profile_service import needs_profile
 from kebi.core.places.protocols import PlacesRepoProtocol
 
 router = APIRouter()
@@ -37,6 +41,7 @@ async def get_place(
     places_repo: PlacesRepoProtocol = Depends(get_places_repo),  # noqa: B008
     user_places: UserPlacesService = Depends(get_user_places_service),  # noqa: B008
     notes_service: PlaceNotesService = Depends(get_place_notes_service),  # noqa: B008
+    event_dispatcher: EventDispatcher = Depends(get_event_dispatcher),  # noqa: B008
 ) -> LibraryItem:
     """One catalog place as the client renders it, saved or not.
 
@@ -61,6 +66,14 @@ async def get_place(
     if not cores:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="place_not_found"
+        )
+    if needs_profile(cores[0]):
+        # A row with no experiential tags entered via the provider
+        # write-through and no LLM ever looked at it — profile it in the
+        # background so the screen has something to show next open
+        # (ADR-152). This response still returns the thin row.
+        await event_dispatcher.dispatch(
+            PlaceProfileRequested(user_id=identity.user_id, place_id=place_id)
         )
     save = await user_places.get_save(identity.user_id, place_id)
     notes = await notes_service.notes_for_place(
