@@ -85,13 +85,14 @@ def test_the_guard_injects_one_suggest_places_call_for_the_next_stop() -> None:
     assert "names" not in args
 
 
-def test_the_injected_query_leads_with_the_users_taste() -> None:
+def test_the_injected_query_demands_a_pick_per_taste() -> None:
     state = _state(taste_values=["specialty_coffee", "scenic_view"])
     update = trip_guard_node(state)  # type: ignore[arg-type]
     query = update["messages"][0].tool_calls[0]["args"]["query"]
-    # Taste leads (human-readable, underscores dropped) — trailing it
-    # returned the tourist canon with taste as an afterthought.
-    assert query.startswith("the best specialty coffee, scenic view spots")
+    # One spot per taste, demanded explicitly — taste merely leading the
+    # phrasing still returned the tourist canon with no coffee pick.
+    assert "EACH of their tastes" in query
+    assert "specialty coffee, scenic view" in query
 
 
 def test_every_stop_covered_means_no_guard() -> None:
