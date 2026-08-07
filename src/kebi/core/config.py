@@ -826,11 +826,16 @@ class ItineraryConfig(BaseModel):
     geocodes — a runaway stop list costs one geocode each. `per_segment_limit`
     is the per-stop / per-leg candidate cap the fan-out tools use, replacing
     the single-search limit: an itinerary answer wants a few strong names per
-    segment, not one city's worth from each.
+    segment, not one city's worth from each. `max_tool_calls` replaces the
+    flat per-turn tool budget on itinerary turns: a three-stop trip
+    legitimately spends more calls than a single-city question (retrieval,
+    per-stop suggestions, the guard's verification round), and the flat cap
+    was observed collapsing trip turns into the cap-hit fallback.
     """
 
     max_stops: int = 5
     per_segment_limit: int = 4
+    max_tool_calls: int = 8
 
     @model_validator(mode="after")
     def _positive_integers(self) -> "ItineraryConfig":
@@ -840,6 +845,11 @@ class ItineraryConfig(BaseModel):
                 "per_segment_limit >= 1 "
                 f"(got max_stops={self.max_stops}, "
                 f"per_segment_limit={self.per_segment_limit})"
+            )
+        if self.max_tool_calls < 1:
+            raise ValueError(
+                "agent.itinerary.max_tool_calls must be >= 1 "
+                f"(got {self.max_tool_calls})"
             )
         return self
 

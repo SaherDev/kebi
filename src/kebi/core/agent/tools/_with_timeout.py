@@ -138,6 +138,9 @@ async def with_timeout(
     only when this wrapper awaits it — keeping the `asyncio.wait_for`
     cancellation semantics intact.
     """
+    # One INFO line per tool execution — a tool that ran but surfaced
+    # nothing is otherwise indistinguishable from one that never ran.
+    logger.info("tool %s executing (call %s)", tool_name, tool_call_id)
     try:
         return await asyncio.wait_for(coro, timeout=seconds)
     except TimeoutError:

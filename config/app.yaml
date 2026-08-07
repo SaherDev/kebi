@@ -499,6 +499,9 @@ agent:
   itinerary:
     max_stops: 5
     per_segment_limit: 4
+    # Trip turns get their own tool budget: retrieval + per-stop suggestions
+    # + the ADR-150 verification round don't fit the flat 5-call cap.
+    max_tool_calls: 8
 
 # ---------------------------------------------------------------------------
 # Movement / search-scope (ADR-084)

@@ -71,12 +71,25 @@ def test_a_final_trip_answer_with_an_empty_stop_is_intercepted() -> None:
     assert should_continue(_state()) == NODE_TRIP_GUARD  # type: ignore[arg-type]
 
 
-def test_the_nudge_names_only_the_uncovered_stops() -> None:
+def test_the_guard_injects_one_suggest_places_call_for_the_next_stop() -> None:
     update = trip_guard_node(_state())  # type: ignore[arg-type]
-    text = update["messages"][0].content
-    assert text.startswith(_TRIP_GUARD_MARKER)
-    assert "Kyoto" in text
-    assert "Osaka" not in text and "Tokyo" not in text
+    msg = update["messages"][0]
+    assert msg.content.startswith(f"{_TRIP_GUARD_MARKER} target: Kyoto")
+    # The guard does not ask the model to call the tool — it calls it.
+    # Exactly ONE call: parallel injected Commands would collide on the
+    # plain tool_payloads channel.
+    assert [c["name"] for c in msg.tool_calls] == ["suggest_places"]
+    args = msg.tool_calls[0]["args"]
+    assert args["city"] == "Kyoto"
+    # No names: the namer fallback produces the picks, provider-verified.
+    assert "names" not in args
+
+
+def test_the_injected_query_carries_the_users_taste() -> None:
+    state = _state(taste_values=["specialty_coffee", "scenic_view"])
+    update = trip_guard_node(state)  # type: ignore[arg-type]
+    query = update["messages"][0].tool_calls[0]["args"]["query"]
+    assert "specialty_coffee" in query and "scenic_view" in query
 
 
 def test_every_stop_covered_means_no_guard() -> None:
@@ -84,36 +97,68 @@ def test_every_stop_covered_means_no_guard() -> None:
     assert should_continue(state) == "end"  # type: ignore[arg-type]
 
 
-def test_a_suggest_places_round_clears_the_guard() -> None:
+def test_a_stop_covered_by_suggested_candidates_stops_firing() -> None:
     state = _state(
         tool_payloads=[
             _saved_payload("Osaka", "Tokyo"),
-            {"tool": "suggest_places", "payload": {"candidates": []}},
+            {
+                "tool": "suggest_places",
+                "payload": {
+                    "candidates": [{"place": {"place_name": "W"}, "segment": "Kyoto"}]
+                },
+            },
         ]
     )
     assert should_continue(state) == "end"  # type: ignore[arg-type]
 
 
-def test_the_guard_fires_once_per_turn() -> None:
+def test_a_targeted_stop_is_never_targeted_twice() -> None:
+    # Verification came back empty: the stop stays uncovered, but the
+    # marker blocks a retry — one round per stop, then the answer stands.
     state = _state()
     nudge = trip_guard_node(state)["messages"][0]  # type: ignore[arg-type]
     state["messages"] = [
         *state["messages"],
         nudge,
-        AIMessage(content="still answering from memory"),
+        AIMessage(content="still answering, kyoto came back empty"),
     ]
     assert should_continue(state) == "end"  # type: ignore[arg-type]
 
 
+def test_each_uncovered_stop_gets_its_own_round() -> None:
+    # Two empty stops: after Kyoto's round, the guard targets Osaka next.
+    state = _state(tool_payloads=[_saved_payload("Tokyo")])
+    first = trip_guard_node(state)["messages"][0]  # type: ignore[arg-type]
+    assert first.tool_calls[0]["args"]["city"] == "Kyoto"
+    state["messages"] = [
+        *state["messages"],
+        first,
+        AIMessage(content="second draft"),
+    ]
+    assert should_continue(state) == NODE_TRIP_GUARD  # type: ignore[arg-type]
+    second = trip_guard_node(state)["messages"][0]  # type: ignore[arg-type]
+    assert second.tool_calls[0]["args"]["city"] == "Osaka"
+
+
 def test_no_budget_means_no_guard() -> None:
-    # Room for one more call is required: nudging with an empty budget would
-    # send the model into the cap-hit fallback instead of a better answer.
-    # One remaining slot IS enough — the nudge asks for exactly one call.
+    # Room for one more call is required: intervening with an empty budget
+    # would send the model into the cap-hit fallback instead of a better
+    # answer. One remaining slot IS enough — the guard injects exactly one
+    # call per uncovered stop. Trip turns run on the itinerary budget.
     from kebi.core.config import get_config
 
-    cap = get_config().agent.max_tool_calls
+    cap = get_config().agent.itinerary.max_tool_calls
     assert should_continue(_state(tool_calls_used=cap)) == "fallback"  # type: ignore[arg-type]
     assert should_continue(_state(tool_calls_used=cap - 1)) == NODE_TRIP_GUARD  # type: ignore[arg-type]
+
+
+def test_a_trip_turn_runs_on_the_itinerary_budget() -> None:
+    # The flat cap collapsed real trip turns into the cap-hit fallback
+    # before the guard could ever run.
+    from kebi.core.config import get_config
+
+    flat = get_config().agent.max_tool_calls
+    assert should_continue(_state(tool_calls_used=flat)) == NODE_TRIP_GUARD  # type: ignore[arg-type]
 
 
 def test_a_non_itinerary_turn_never_guards() -> None:
