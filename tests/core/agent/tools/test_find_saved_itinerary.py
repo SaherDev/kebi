@@ -177,6 +177,29 @@ async def test_stop_duplicates_cannot_crowd_a_leg_save_off_the_end() -> None:
     assert service.search.await_args_list[4].kwargs["limit"] == per_segment + 4
 
 
+async def test_a_leg_hit_inside_a_stops_disc_comes_home_to_the_stop() -> None:
+    """Regression (live): Tokyo had more saves than the stop's slots, so two
+    resurfaced from the Osaka-Tokyo leg wearing the leg label and the answer
+    filed a Tokyo garden under "on the way". Geometry re-homes them."""
+    from kebi.core.places.models import LocationContext
+
+    in_tokyo = _make_hit("Shinjuku Gyoen", "p-gyoen")
+    in_tokyo.place.location = LocationContext(lat=35.685, lng=139.71)
+    on_the_road = _make_hit("Mount Fuji", "p-fuji")
+    on_the_road.place.location = LocationContext(lat=35.36, lng=138.73)
+    # Hue-stop position in this fixture's geography stands in for Tokyo —
+    # what matters is: inside the second stop's disc vs. genuinely between.
+    in_hue = _make_hit("Gyoen Stand-in", "p-home")
+    in_hue.place.location = LocationContext(lat=16.462, lng=107.592)
+    far_out = _make_hit("Roadside", "p-road")
+    far_out.place.location = LocationContext(lat=16.2, lng=107.9)
+    service = _search([[], [], [], [], [in_hue, far_out]])
+    cmd = await _run(service)
+    by_name = {c.place.place_name: c.segment for c in _full_result(cmd).candidates}
+    assert by_name["Gyoen Stand-in"] == "Hue"
+    assert by_name["Roadside"] == "on the way between Hue and Hoi An"
+
+
 async def test_empty_fan_out_reads_as_no_match() -> None:
     service = _search([[] for _ in range(_SEGMENT_COUNT)])
     cmd = await _run(service)

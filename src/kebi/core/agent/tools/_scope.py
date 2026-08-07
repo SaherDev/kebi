@@ -156,6 +156,28 @@ def itinerary_segments(working: WorkingLocation) -> list[ItinerarySegment]:
     return segments
 
 
+def stop_label_for(
+    segments: list[ItinerarySegment], lat: float | None, lng: float | None
+) -> str | None:
+    """The stop a point actually belongs to, or None when it is on no stop.
+
+    A leg's circle contains its end stops, so a save that ranked out of its
+    own stop's limited slots can resurface from the leg search wearing the
+    leg's label — and the answer then files a Tokyo garden under "on the way
+    between Osaka and Tokyo". Geometry settles it: a hit inside a stop's own
+    disc is that stop's, wherever it was found.
+    """
+    if lat is None or lng is None:
+        return None
+    for segment in segments:
+        if segment.on_the_way:
+            continue
+        working = segment.working
+        if haversine_m(working.lat, working.lng, lat, lng) <= working.search_radius_m:
+            return segment.label
+    return None
+
+
 def clamp_to_walkable_for_utility(
     working: WorkingLocation,
     categories: list[PlaceCategory] | None,
