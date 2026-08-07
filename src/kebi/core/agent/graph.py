@@ -1023,8 +1023,9 @@ def trip_guard_node(state: AgentState) -> dict[str, Any]:
         v.replace("_", " ") for v in (state.get("taste_values") or []) if v.strip()
     ]
     query = (
-        f"the best {', '.join(taste)} spots in {stop}, plus the one or two "
-        f"sights genuinely worth their time"
+        f"for {stop}: one standout spot for EACH of their tastes "
+        f"({', '.join(taste)}), plus the one or two sights genuinely worth "
+        "their time"
         if taste
         else f"the places actually worth a stop in {stop}"
     )

@@ -107,15 +107,18 @@ models:
   orchestrator:
     default: claude-haiku
     advanced: claude-sonnet
+    # 2048, not 1024: a multi-stop trip answer walks five sections and was
+    # observed truncating mid-close at 1024. Single-city answers stay short
+    # by prompt; the ceiling only needs to clear the long-answer shape.
     claude-sonnet:
       provider: anthropic
       model: claude-sonnet-4-6
-      max_tokens: 1024
+      max_tokens: 2048
       temperature: 0.7
     claude-haiku:
       provider: anthropic
       model: claude-haiku-4-5-20251001
-      max_tokens: 1024
+      max_tokens: 2048
       temperature: 0.7
     gpt-4o-mini:
       provider: openai
