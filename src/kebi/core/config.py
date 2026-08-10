@@ -962,18 +962,28 @@ class MovementRadiusTiers(BaseModel):
 
 
 class MovementFallback(BaseModel):
-    """Neutral mobility capability applied when a `/v1/chat` request omits
-    `movement_profile` (ADR-085 / ADR-086).
+    """Mobility applied when nobody has told kebi how this user gets around
+    (ADR-085 / ADR-086, reversed by ADR-156).
 
-    Deliberately conservative: walking is listed first so the system's
-    deterministic mode pick — `available_modes[0]` when the resolver leaves
-    `effective_mode` empty — is walking rather than something that silently
-    widens every search radius. The resolver may still pick transit per turn
-    based on the working location and the message.
+    This used to lead with walking, on the reasoning that a conservative guess
+    was the safe one. It is not. Narrow-when-ignorant fails *invisibly*: a
+    driver capped at walking range never learns that the places beyond it were
+    removed, so there is nothing to correct and no signal anything went wrong.
+    Guessing wide fails visibly instead — a place turns out to be twenty
+    minutes away, the user says so, and the turn recovers.
+
+    `rideshare` leads because it is the one mode almost anyone has almost
+    anywhere: it assumes no licence, no vehicle, no fitness, and it reaches
+    whatever a car reaches. Walking and transit stay listed so the resolver can
+    still pick them when the message or the city calls for it.
+
+    This is a guess, not an answer, and the caller must keep saying so —
+    `_mobility_profile` reports it as unresolved, and the prompt is required
+    to flag distance in the prose rather than assert it silently.
     """
 
     reach: Reach = "normal"
-    available_modes: list[MovementMode] = ["walking", "transit"]
+    available_modes: list[MovementMode] = ["rideshare", "walking", "transit"]
 
 
 class MovementConfig(BaseModel):
@@ -1120,6 +1130,7 @@ _REQUIRED_PROMPT_SLOTS: dict[str, list[str]] = {
         "{location_context}",
         "{time_context}",
         "{movement_context}",
+        "{user_profile_context}",
         "{taste_profile_summary}",
         "{memory_summary}",
     ],

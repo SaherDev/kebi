@@ -70,12 +70,18 @@ def test_renders_corridor_scope_with_destination() -> None:
 
 def test_no_profile_flags_fallback_on_resolved_turn() -> None:
     """A resolved turn whose request omitted the profile still renders scope,
-    but caveats that a neutral fallback — not the user's profile — was used."""
+    but says plainly that nobody told kebi how this user gets around.
+
+    The obligation changed with ADR-156. Asking is no longer the point: the
+    scope is guessed wide on purpose, and what the agent owes the user is the
+    distance said out loud, so a pick that turns out to be a drive is
+    something they can push back on rather than something they never see.
+    """
     text = _render_movement_context(
         _state(working_location=_AREA_WL, movement_profile=None)
     )
-    assert "fallback" in text.lower()
-    assert "ask" in text.lower()
+    assert "That is a guess" in text
+    assert "owe them the distance out loud" in text
 
 
 def test_no_location_and_no_profile_asks_when_load_bearing() -> None:
