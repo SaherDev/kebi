@@ -534,9 +534,13 @@ agent:
 # mode_multiplier[mode] × density_factor[density]. reach shifts the tier ±1
 # (compact -1, far +1); density comes from the geocoder's place type so
 # "near me" scales with how dense the area is.
-# `fallback` is the neutral mobility capability used when a /v1/chat
-# request omits movement_profile (ADR-086) — walking listed first so the
-# deterministic fallback mode is walking (most conservative radius).
+# `fallback` is the mobility used when nobody has told kebi how this user
+# gets around (ADR-086, reversed by ADR-156). It used to lead with walking,
+# on the reasoning that the conservative guess was the safe one. It is not:
+# narrowing when ignorant fails invisibly, because a driver capped at walking
+# range never learns the places past it were dropped. Rideshare leads now —
+# the one mode almost anyone has almost anywhere, assuming no licence, no
+# vehicle and no fitness — so an unknown user is guessed wide and told so.
 # ---------------------------------------------------------------------------
 movement:
   radius_tiers:        # base metres per scope tier, before mode/reach scaling
@@ -561,9 +565,9 @@ movement:
   # A corridor search may exceed this — that width is route geometry, not a
   # guess (see anchor_to_corridor).
   max_radius_m: 60000
-  fallback:            # used when the request carries no movement_profile
+  fallback:            # used whenever movement is unresolved, not just absent
     reach: normal
-    available_modes: [walking, transit]
+    available_modes: [rideshare, walking, transit]
 
 # ---------------------------------------------------------------------------
 # Taste Model Configuration

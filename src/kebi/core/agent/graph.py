@@ -41,7 +41,7 @@ from kebi.core.agent.location import (
 )
 from kebi.core.agent.messages import extract_text_content
 from kebi.core.agent.reasoning import ReasoningStep
-from kebi.core.agent.state import AgentState
+from kebi.core.agent.state import TRIP_MOVEMENT_INHERIT, AgentState
 from kebi.core.agent.stream_emit import emit_step_active, emit_step_done
 from kebi.core.config import get_config
 from kebi.core.places.nominatim_geocoding_client import GeocodingError
@@ -534,6 +534,79 @@ def _render_time_context(state: AgentState) -> str:
     )
 
 
+def _render_user_profile_context(state: AgentState) -> str:
+    """Render the `{user_profile_context}` slot — the user's "about me" block.
+
+    Three fields, all optional, all arriving on the request (ADR-154). Two of
+    them are free text the user typed, so the block itself is wrapped
+    `trust="low"` and the instructions about how to weigh it sit outside the
+    wrapper, where the user cannot reach them.
+
+    The weighting is the point of this slot. `about` is a *prior*, not an
+    order: it is what the agent leans on before there is behavior to read,
+    and observed behavior overrides it the moment there is any. The single
+    exception is a stated restriction — dietary, religious, an allergy —
+    because that is a constraint the user is reporting rather than a taste
+    they are describing, and getting it wrong makes an answer unusable
+    rather than merely mediocre.
+    """
+    from kebi.core.prompt_safety import wrap_untrusted
+
+    profile = state.get("user_profile")
+    if not isinstance(profile, dict) or not profile:
+        return (
+            "The user has not filled in an about-me profile. You know them "
+            "only through their behavior — do not invent a name, a home "
+            "country, or a preference they never stated."
+        )
+
+    lines: list[str] = []
+    if call_me := profile.get("call_me"):
+        lines.append(f"Goes by: {call_me}")
+    if home_country := profile.get("home_country"):
+        lines.append(f"Home country (ISO 3166-1 alpha-2): {home_country}")
+    if about := profile.get("about"):
+        lines.append(f"In their own words: {about}")
+    if not lines:
+        return (
+            "The user has not filled in an about-me profile. You know them "
+            "only through their behavior — do not invent a name, a home "
+            "country, or a preference they never stated."
+        )
+
+    parts = [
+        wrap_untrusted("\n".join(lines), "user_profile"),
+    ]
+    if profile.get("call_me"):
+        parts.append(
+            "This is the name to address them by, under the naming rule in "
+            "the Voice section — used where a person would reach for it, "
+            "never on every reply."
+        )
+    parts += [
+        "Weigh this correctly. Anything they describe as a *preference* is "
+        "a starting point for a new user and nothing more — the taste "
+        "profile below is what they actually do, and where the two "
+        "disagree, behavior wins. Never justify a pick by quoting their "
+        "self-description back at them.",
+        "Anything they state as a *restriction* — a diet, a religious rule, "
+        "an allergy, something they do not drink — is not a preference and "
+        "does not decay. Treat it exactly like a memory-summary constraint: "
+        "a place that breaks it is not a place you name, and if you cannot "
+        "tell whether a place breaks it, say so rather than guessing.",
+    ]
+    if profile.get("home_country"):
+        parts.append(
+            "Their home country is the passport side of any entry question "
+            "— visas, permits, how long they may stay. Those rules change "
+            "and being wrong about one costs the user a flight, so look "
+            "them up with `web_search` every time and answer from what "
+            "came back. Never answer an entry question from memory, and "
+            "never let one harden into something kebi 'knows'."
+        )
+    return " ".join(parts)
+
+
 def _render_movement_context(state: AgentState) -> str:
     """Render the `{movement_context}` slot — the turn's resolved search scope.
 
@@ -542,7 +615,9 @@ def _render_movement_context(state: AgentState) -> str:
     fallback kept the radius math working — but the slot flags that so the
     agent asks / caveats rather than asserting a distance confidently.
     """
-    _am, _reach, is_fallback = _mobility_profile(state.get("movement_profile"))
+    _am, _reach, is_fallback = _mobility_profile(
+        state.get("movement_profile"), _trip_movement(state)
+    )
     working = state.get("working_location")
     # Same defensive coercion as `_render_location_context`: the gate
     # may skip the resolver and leave the inherit sentinel string in
@@ -578,11 +653,27 @@ def _render_movement_context(state: AgentState) -> str:
             "each stop scale to the mode above, but the stops themselves are "
             "a journey, not a radius."
         )
+    trip = _trip_movement(state)
+    if trip and trip.get("available_modes"):
+        modes = ", ".join(str(m) for m in trip["available_modes"])
+        parts.append(
+            f"They told you what they have on this trip: {modes}. That is "
+            "first-hand and current, so it beats any saved setting — do not "
+            "ask again, and do not name a place it cannot reach."
+        )
     if is_fallback:
         parts.append(
-            "This used a neutral fallback, not the user's own profile — if "
-            "distance is load-bearing, ask how they will get around rather "
-            "than asserting it."
+            "Nobody has told you how this user gets around, so the scope above "
+            "assumes they can take a ride. That is a guess, and it is "
+            "deliberately a generous one: it is better to surface a place that "
+            "turns out to be a drive than to silently drop everything past "
+            "walking range, which they would never know happened. Because it "
+            "is a guess you owe them the distance out loud — say which picks "
+            "are close and which need a ride, in a clause, not a disclaimer "
+            "('the first two are walkable, savaya is a twenty minute drive'). "
+            "If getting around is genuinely the thing that decides the answer, "
+            "that is a constraint, and a constraint outranks a preference for "
+            "your one question."
         )
     return " ".join(parts)
 
@@ -622,6 +713,7 @@ def _render_system_prompt(state: AgentState) -> tuple[str, str]:
         location_context=_render_location_context(state),
         time_context=_render_time_context(state),
         movement_context=_render_movement_context(state),
+        user_profile_context=_render_user_profile_context(state),
         taste_profile_summary=wrap_untrusted(
             state.get("taste_profile_summary"), "taste_profile"
         ),
@@ -1238,30 +1330,72 @@ def _format_history_for_resolver(messages: list[BaseMessage]) -> str:
     return "\n".join(lines)
 
 
+def _trip_movement(state: AgentState) -> dict[str, Any] | None:
+    """Read `trip_movement` off state, coercing a stray sentinel to None.
+
+    Same defensive shape as `_carried_working_location`: on a brand-new
+    thread LangGraph stores the seeded sentinel as-is, so the raw string can
+    be the value the first time anything reads it.
+    """
+    trip = state.get("trip_movement")
+    return trip if isinstance(trip, dict) else None
+
+
 def _mobility_profile(
     profile: dict[str, Any] | None,
+    trip: dict[str, Any] | None = None,
 ) -> tuple[list[str], str, bool]:
     """Return ``(available_modes, reach, is_fallback)``.
 
-    A request without a `movement_profile` uses the config fallback — the
-    radius math stays functional, but `is_fallback` lets the agent prompt know
-    movement is unresolved (it should ask / caveat rather than assert).
+    Three sources, in falling order of authority (ADR-155):
+
+    1. `trip` — modes the user stated for the stay they are on right now.
+       Nothing outranks someone saying "we rented a scooter": it is both
+       current and first-hand.
+    2. `profile` — the per-request settings block, but only when a human
+       actually chose it (`source == "user"`).
+    3. the config fallback.
+
+    `is_fallback` is the honest-ignorance flag: true whenever nothing here
+    came from the user. It drives the prompt's ask-don't-assert branch, so
+    treating a seeded default as an answer silently disables the only
+    mechanism that would have surfaced the gap — which is exactly what a
+    settings row seeded with a neutral capability did in production. The
+    radius math stays functional either way; what changes is whether the
+    agent is entitled to sound certain about distance.
     """
-    if profile:
+    if trip and trip.get("available_modes"):
+        return (
+            [str(m) for m in trip["available_modes"]],
+            str(trip.get("reach") or (profile or {}).get("reach") or "normal"),
+            False,
+        )
+    if profile and profile.get("source") == "user":
         return (
             [str(m) for m in (profile.get("available_modes") or [])],
             str(profile.get("reach") or "normal"),
             False,
         )
+    # An unchosen profile's modes are deliberately ignored (ADR-156). They are
+    # a guess with no more standing than kebi's own, and the product seeds a
+    # narrow one — so honouring it would reinstate exactly the silent capping
+    # this is meant to end. kebi's fallback guesses wide on purpose and says
+    # so; two guesses are not better than one, and the wide one fails visibly.
     fb = get_config().movement.fallback
     return list(fb.available_modes), fb.reach, True
 
 
 def _render_mobility_profile(state: AgentState) -> str:
     """Render the `{mobility_profile}` slot for the resolver prompt."""
-    available, reach, is_fallback = _mobility_profile(state.get("movement_profile"))
+    available, reach, is_fallback = _mobility_profile(
+        state.get("movement_profile"), _trip_movement(state)
+    )
     note = (
-        " (the request carried no profile — these are neutral fallbacks)"
+        " NOTE: nobody has told us how this user gets around, so this list is "
+        "a guess, not their capability. Do not apply the conservative "
+        "tie-break here — when the capability set itself is unknown, pick the "
+        "wider option, because a search capped at walking silently hides "
+        "everything past it and the user never finds out."
         if is_fallback
         else ""
     )
@@ -1520,11 +1654,63 @@ async def _resolve_itinerary(
     return anchors
 
 
+def _next_trip_movement(
+    resolution: LocationResolution,
+    working: WorkingLocation,
+    carried: dict[str, Any] | None,
+    current_trip: dict[str, Any] | None = None,
+) -> Any:
+    """Decide this turn's `trip_movement` update (ADR-155).
+
+    Three outcomes, in order:
+
+    - The user stated what they have for the stay → record it, replacing
+      whatever the trip held before. Someone who says "the scooter's gone
+      back, we're walking now" is correcting the record, not adding to it.
+    - The working location moved to a different country → clear it. A new
+      country is a new trip, and last trip's rental is not this one's. Country
+      rather than city because moving Canggu → Ubud keeps the same scooter,
+      while Bali → Singapore does not.
+    - Otherwise → the inherit sentinel, so the trip's modes ride along.
+
+    Returns the sentinel rather than omitting the key so carry-forward is
+    something the code says out loud, the same reasoning as `LOCATION_INHERIT`.
+    """
+    stated = [str(m) for m in resolution.stated_modes]
+    prev_country = (carried or {}).get("country")
+    crossed = bool(
+        prev_country
+        and working.country
+        and str(prev_country).strip().casefold() != working.country.strip().casefold()
+    )
+    # An echo, not a statement. The resolver reads conversation history, so on
+    # the turn where someone says "we're in Singapore now" it will happily
+    # restate the scooter they mentioned in Bali — and a restatement arriving
+    # first would keep overriding the clear, which is how a rental follows its
+    # owner across a border. A genuinely new statement made while crossing
+    # ("we picked up a car here") names different modes, so it survives this.
+    if crossed and stated == (current_trip or {}).get("available_modes"):
+        stated = []
+    if stated:
+        logger.info("trip_movement set from stated modes: %s", stated)
+        return {"available_modes": stated}
+    if crossed:
+        logger.info(
+            "trip_movement cleared: country changed %s -> %s",
+            prev_country,
+            working.country,
+        )
+        return None
+    return TRIP_MOVEMENT_INHERIT
+
+
 async def _resolve_search_scope(
     working: WorkingLocation,
     resolution: LocationResolution,
     movement_profile: dict[str, Any] | None,
     geocoding_client: Any,
+    trip_movement: dict[str, Any] | None = None,
+    trip_just_cleared: bool = False,
 ) -> WorkingLocation | None:
     """Fold the resolved movement scope onto a working location (ADR-084 /
     ADR-085).
@@ -1535,9 +1721,46 @@ async def _resolve_search_scope(
     `None` only when the turn is a corridor whose destination cannot be
     resolved; the caller maps that to a clarification ask.
     """
-    available, reach, _is_fallback = _mobility_profile(movement_profile)
+    available, reach, is_unresolved = _mobility_profile(movement_profile, trip_movement)
     fallback_mode = available[0] if available else "transit"
     effective_mode = resolution.effective_mode or fallback_mode
+    # Guess wide when ignorant (ADR-156). The resolver's own tie-break prefers
+    # the slower mode when it is unsure, which is right when the *city* is the
+    # unknown and wrong when the user's capability is: capping someone at
+    # walking drops everything past it, and they never learn what they did not
+    # see. Told in the prompt, the resolver kept picking walking anyway, so the
+    # floor is enforced here instead. Only inferred modes are lifted — a mode
+    # the user actually said is not a guess and is left exactly as stated.
+    # A walkable-tier turn is already a statement that this one is on foot
+    # ("anywhere round the corner?"), so widening it would answer a different
+    # question than the one asked. The floor exists for turns where the scope
+    # is open and only the capability is missing.
+    if (
+        is_unresolved
+        and not resolution.mode_is_explicit
+        and resolution.scope_tier != "walkable"
+    ):
+        multipliers = get_config().movement.mode_multiplier
+        if multipliers.get(effective_mode, 1.0) < multipliers.get(fallback_mode, 1.0):
+            logger.info(
+                "widening inferred mode %s -> %s (movement unresolved)",
+                effective_mode,
+                fallback_mode,
+            )
+            effective_mode = fallback_mode
+    # A resolver-named mode normally outranks the capability list on purpose:
+    # the user knows about the rental this turn and the list does not. The one
+    # exception is the turn the trip's modes were just cleared, because the
+    # resolver reads conversation history and will keep naming the vehicle
+    # from the country they left. Without this the clear has no visible
+    # effect — the scooter stays in the radius all the way to Singapore.
+    if trip_just_cleared and available and effective_mode not in available:
+        logger.info(
+            "dropping stale effective_mode %s after trip reset; using %s",
+            effective_mode,
+            fallback_mode,
+        )
+        effective_mode = fallback_mode
 
     corridor: CorridorTarget | None = None
     if resolution.scope_shape == "corridor":
@@ -1647,9 +1870,18 @@ def _location_not_needed_update(
 
 
 def _location_resolved_update(
-    state: AgentState, working: WorkingLocation, *, started: float | None = None
+    state: AgentState,
+    working: WorkingLocation,
+    *,
+    trip_movement: Any = TRIP_MOVEMENT_INHERIT,
+    started: float | None = None,
 ) -> dict[str, Any]:
-    """State update that records a fully resolved working location."""
+    """State update that records a fully resolved working location.
+
+    `trip_movement` rides along because the resolve node is the only place
+    that can decide it: it is the one node that knows both what the user just
+    said and which country the turn landed in (ADR-155).
+    """
     # Scope is invisible in the trace otherwise: a corridor turn that silently
     # degraded to an area search looks identical to a normal one, and the only
     # symptom is an answer confidently naming places in the wrong direction.
@@ -1676,6 +1908,7 @@ def _location_resolved_update(
     emit_step_done(_LOCATION_STEP_ID, step, started=started)
     return {
         "working_location": working.model_dump(),
+        "trip_movement": trip_movement,
         "location_clarification": None,
         "reasoning_steps": (state.get("reasoning_steps") or []) + [step],
     }
@@ -1781,6 +2014,20 @@ def make_resolve_location_node(resolver_llm: Any, geocoding_client: Any) -> Any:
                 return _location_clarification_update(
                     state, _LOCATION_ASK_CONFIRM, started=started
                 )
+            # Trip modes are decided before the scope so the radius and the
+            # effective mode are computed against what the user actually has
+            # on this trip, not what their settings row guessed months ago.
+            trip_update = _next_trip_movement(
+                resolution,
+                working,
+                _carried_working_location(state),
+                _trip_movement(state),
+            )
+            trip_now = (
+                state.get("trip_movement")
+                if trip_update == TRIP_MOVEMENT_INHERIT
+                else trip_update
+            )
             # Fold in the movement scope (effective mode + tier → radius, and
             # for a corridor, the eagerly geocoded destination).
             working = await _resolve_search_scope(
@@ -1788,6 +2035,10 @@ def make_resolve_location_node(resolver_llm: Any, geocoding_client: Any) -> Any:
                 resolution,
                 state.get("movement_profile"),
                 geocoding_client,
+                trip_movement=trip_now if isinstance(trip_now, dict) else None,
+                # `None` (as opposed to the inherit sentinel) is exactly the
+                # "cleared this turn" signal — see `_next_trip_movement`.
+                trip_just_cleared=trip_update is None,
             )
         except GeocodingError as exc:
             logger.warning("resolve_location geocoding failed: %s", exc)
@@ -1799,7 +2050,9 @@ def make_resolve_location_node(resolver_llm: Any, geocoding_client: Any) -> Any:
             # The point resolved, but a corridor destination did not — ask
             # rather than silently degrading to an area search.
             return _location_clarification_update(state, _CORRIDOR_ASK, started=started)
-        return _location_resolved_update(state, working, started=started)
+        return _location_resolved_update(
+            state, working, trip_movement=trip_update, started=started
+        )
 
     return resolve_location_node
 

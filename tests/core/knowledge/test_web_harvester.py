@@ -14,6 +14,7 @@ from kebi.core.knowledge.web_harvester import (
     WebKnowledgeHarvester,
     _WebClaim,
     _WebHarvestResponse,
+    is_entry_rule,
 )
 from kebi.core.web.models import WebFinding, WebSearchResult
 
@@ -86,6 +87,68 @@ async def test_the_durable_ones_survive_alongside_the_dated_ones() -> None:
         ]
     ).harvest(_result())
     assert [c.claim for c in claims] == ["Cash is expected at warungs."]
+
+
+# --- entry rules never bank (ADR-154) --------------------------------------
+
+
+async def test_an_entry_rule_is_dropped_even_when_marked_durable() -> None:
+    """The model marks these durable because they read stable, and they are not.
+
+    Visa rules change without notice and differ by passport, so a stored one
+    is later asserted either after it expired or to the wrong traveller —
+    and being wrong about one costs someone a flight. The prompt forbids
+    them; this is the backstop for when it slips.
+    """
+    claims = await _harvester(
+        [
+            _claim(
+                claim="UAE citizens can enter Indonesia visa-free for 30 days.",
+                entity_name="Indonesia",
+                scope="country",
+                durable=True,
+            )
+        ]
+    ).harvest(_result())
+    assert claims == []
+
+
+async def test_an_entry_rule_does_not_take_the_real_claims_with_it() -> None:
+    """The guard drops one claim, not the whole harvest."""
+    claims = await _harvester(
+        [
+            _claim(claim="Cash is expected at warungs."),
+            _claim(claim="Your passport must be valid six months on arrival."),
+        ]
+    ).harvest(_result())
+    assert [c.claim for c in claims] == ["Cash is expected at warungs."]
+
+
+def test_is_entry_rule_catches_the_vocabulary() -> None:
+    for text in (
+        "Visa-free entry is 30 days.",
+        "A PASSPORT must be valid for six months.",
+        "Immigration will ask for an onward ticket.",
+        "The residence permit takes four weeks.",
+        "Fill the arrival card before landing.",
+    ):
+        assert is_entry_rule(text), text
+
+
+def test_is_entry_rule_leaves_ordinary_local_knowledge_alone() -> None:
+    """Over-dropping is the safe direction, but not at any price.
+
+    Local custom and etiquette are the harvester's whole purpose, so the
+    vocabulary deliberately omits "customs" — it collides with them.
+    """
+    for text in (
+        "Cash is expected at warungs.",
+        "It is local custom to remove your shoes.",
+        "Customs here favour a small offering at the door.",
+        "The ferry needs booking a day ahead.",
+        "Wet season runs November to March.",
+    ):
+        assert not is_entry_rule(text), text
 
 
 # --- key verification ------------------------------------------------------

@@ -428,7 +428,13 @@ async def test_resolver_effective_mode_is_honored() -> None:
 async def test_no_resolver_mode_falls_back_to_first_capability() -> None:
     """When the resolver leaves effective_mode empty (no explicit signal —
     e.g. "tired of walking" is scope language, not a mode word), the system
-    falls back to the first listed capability (ADR-085)."""
+    falls back to the first listed capability (ADR-085).
+
+    "Listed" means the *chosen* profile's list. This one carries no `source`,
+    so it is an unchosen guess and ADR-156 ignores its modes in favour of
+    kebi's own deliberately wide fallback — the point being that a narrow
+    guess nobody made must not quietly cap the search.
+    """
     resolution = LocationResolution(
         source="explicit_query",
         country="Thailand",
@@ -449,7 +455,7 @@ async def test_no_resolver_mode_falls_back_to_first_capability() -> None:
         )
     )
     # First capability in the list wins as the deterministic fallback.
-    assert update["working_location"]["effective_mode"] == "transit"
+    assert update["working_location"]["effective_mode"] == "rideshare"
 
 
 async def test_no_profile_uses_config_fallback_first_capability() -> None:

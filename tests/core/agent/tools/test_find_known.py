@@ -37,6 +37,8 @@ def _state(
         "working_location": working_location,
         "location_clarification": None,
         "movement_profile": None,
+        "trip_movement": None,
+        "user_profile": None,
         "local_time": local_time,
         "reasoning_steps": [],
         "tool_results": [],

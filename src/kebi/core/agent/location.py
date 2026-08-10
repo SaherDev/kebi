@@ -253,6 +253,19 @@ class LocationResolution(BaseModel):
     scope_tier: ScopeTier = "city"
     scope_shape: ScopeShape = "area"
     effective_mode: MovementMode | None = None
+    # True when the *current message* named the mode ("if I drive", "walking
+    # distance"), false when `effective_mode` is the resolver's own inference
+    # (ADR-156). The distinction is load-bearing: when nobody has told kebi
+    # how the user gets around, an inferred narrow mode is overridden upward,
+    # because guessing narrow hides places silently — but a mode the user
+    # actually said is never overridden, because that is not a guess.
+    mode_is_explicit: bool = False
+    # Modes the user has said they actually have for this stay (ADR-155) —
+    # "we rented a scooter", "no car this trip, we're walking". Distinct from
+    # `effective_mode`, which is this turn's pick and dies with the turn: a
+    # stated capability outlives the turn and is cleared when the country
+    # changes. A hypothetical ("what if I drive") sets the mode, never this.
+    stated_modes: list[MovementMode] = []
     corridor_destination: str | None = None
     # Ordered stops for `scope_shape == "itinerary"` (ADR-148), each as a
     # geocodable "City, Country" string in trip order, first stop included.

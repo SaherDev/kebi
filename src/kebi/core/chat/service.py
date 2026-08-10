@@ -160,6 +160,11 @@ class ChatService:
                         if request.movement_profile
                         else None
                     ),
+                    user_profile=(
+                        request.user_profile.model_dump()
+                        if request.user_profile
+                        else None
+                    ),
                     local_time=request.local_time,
                     taste_values=taste_values,
                 )

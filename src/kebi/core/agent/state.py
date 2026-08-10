@@ -108,6 +108,37 @@ def merge_working_location(current: Any, update: Any) -> dict[str, Any] | None:
     return cast("dict[str, Any] | None", update)
 
 
+# Sentinel for `trip_movement`, same contract as `LOCATION_INHERIT`.
+TRIP_MOVEMENT_INHERIT = "__inherit_trip_movement__"
+
+
+def merge_trip_movement(current: Any, update: Any) -> dict[str, Any] | None:
+    """Reducer for `state["trip_movement"]` (ADR-155).
+
+    How someone gets around is not a lifelong trait for a travelling user —
+    it is a fact about the stay they are on. Someone who drives daily at home
+    is a pedestrian abroad without a rental, and a scooter rider in Canggu who
+    has never ridden anywhere else. So a stated mode outlives the turn it was
+    said in (unlike the resolver's per-turn `effective_mode`) but not the trip
+    (unlike the settings profile), which is precisely the lifetime the
+    `working_location` carry-forward already models. Same shape, same reducer
+    contract: the sentinel means keep, a dict replaces, `None` clears when the
+    resolve node sees the country change.
+
+    Unlike `merge_working_location`, this one coerces the carried value: on a
+    brand-new thread LangGraph stores the seeded sentinel as-is (the reducer
+    only combines *subsequent* writes), so "keep" would otherwise hand back
+    the sentinel string and leave it on state. `working_location` never shows
+    the symptom because the resolve node overwrites it with a concrete value
+    before any tool reads state; `trip_movement` is usually left untouched,
+    and the tools validate injected state against the annotation, so a
+    lingering string fails the whole tool call.
+    """
+    if update == TRIP_MOVEMENT_INHERIT:
+        return current if isinstance(current, dict) else None
+    return cast("dict[str, Any] | None", update)
+
+
 class AgentState(TypedDict):
     """Per-turn state flowing through the LangGraph agent.
 
@@ -138,6 +169,18 @@ class AgentState(TypedDict):
                             which carries via `merge_working_location` — it
                             must NOT persist. A turn that omits it must see
                             None, not a stale value from an earlier turn.
+      trip_movement       — modes the user stated for the stay they are on
+                            (ADR-155), or None. Carries across turns via
+                            `merge_trip_movement` and is cleared by the
+                            resolve node when the working location's country
+                            changes, because a new country is a new trip and
+                            last trip's rental is not this trip's.
+      user_profile        — the user's "about me" block from the request
+                            (`UserProfile.model_dump()`) or None (ADR-154).
+                            Same plain-overwrite rule as `movement_profile`:
+                            re-supplied every turn from the request, so a
+                            profile the user just cleared cannot survive on
+                            state from the turn before.
       reasoning_steps     — agent trace; reset to [] on every new user
                             message; no reducer (plain overwrite, FR-021).
       steps_taken         — incremented by agent_node; bounds should_continue.
@@ -155,6 +198,8 @@ class AgentState(TypedDict):
     working_location: Annotated[dict[str, Any] | None, merge_working_location]
     location_clarification: str | None
     movement_profile: dict[str, Any] | None
+    trip_movement: Annotated[dict[str, Any] | None, merge_trip_movement]
+    user_profile: dict[str, Any] | None
     local_time: str | None
     # Controlled-vocabulary values behind the taste summary (ADR-142). The
     # summary itself is prose for the prompt; these are the same signal kept

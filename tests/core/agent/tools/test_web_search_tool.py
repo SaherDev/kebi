@@ -44,6 +44,8 @@ def _state(**kw: Any) -> dict[str, Any]:
         "working_location": _working(),
         "location_clarification": None,
         "movement_profile": None,
+        "trip_movement": None,
+        "user_profile": None,
         "reasoning_steps": [],
         "steps_taken": 0,
         "error_count": 0,

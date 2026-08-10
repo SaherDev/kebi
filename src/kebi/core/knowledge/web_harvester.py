@@ -50,6 +50,50 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+# Entry-rule vocabulary. A claim whose text matches any of these is dropped
+# before it can be stored, no matter what the model said about it (ADR-154).
+#
+# The prompt already forbids these, and the prompt is not enough: entry rules
+# read as stable to a model asking "will this be true in six months", so they
+# get marked durable and stored. They are not stable — they change without
+# notice and they differ by the traveller's passport, so a stored one is
+# asserted later either after it stopped being true or to someone holding a
+# different passport, and being wrong about one costs a person a flight. This
+# is the same backstop reasoning as the accessibility guard in
+# `places/tag_merge.py`: a prompt rule for a fact with real-world cost gets a
+# deterministic check behind it.
+#
+# Tuned to over-drop. A false positive costs one area claim kebi would have
+# stored; a false negative is the failure above. "customs" is deliberately
+# absent — it collides with local custom / etiquette, which is exactly the
+# kind of fact this harvester exists to keep.
+_ENTRY_RULE_TERMS: tuple[str, ...] = (
+    "visa",
+    "passport",
+    "immigration",
+    "entry requirement",
+    "entry permit",
+    "residence permit",
+    "work permit",
+    "length of stay",
+    "permitted stay",
+    "border crossing",
+    "port of entry",
+    "arrival card",
+    "departure card",
+)
+
+
+def is_entry_rule(claim: str) -> bool:
+    """True when a claim states a visa / entry / immigration rule.
+
+    Pure and substring-based so it is testable inline and cannot be skipped
+    by a caller that forgot a flag — the same shape as `compute_confidence`.
+    """
+    text = claim.casefold()
+    return any(term in text for term in _ENTRY_RULE_TERMS)
+
+
 class _WebClaim(BaseModel):
     """One claim as the model emits it, before keys are resolved."""
 
@@ -158,6 +202,14 @@ class WebKnowledgeHarvester:
             if not raw.durable:
                 logger.debug(
                     "web_claim_dropped_dated", extra={"entity": raw.entity_name}
+                )
+                continue
+            if is_entry_rule(raw.claim):
+                # Logged at info, not debug: the model was told not to emit
+                # these at all, so one arriving means the prompt rule slipped
+                # and the backstop is the only thing holding.
+                logger.info(
+                    "web_claim_dropped_entry_rule", extra={"entity": raw.entity_name}
                 )
                 continue
             entity = await self._resolve_entity(raw, result, resolver, country_code)

@@ -70,6 +70,8 @@ def _state(message: str) -> Any:
         "user_location": None,
         "working_location": None,
         "movement_profile": None,
+        "trip_movement": None,
+        "user_profile": None,
         "reasoning_steps": [],
     }
 

@@ -199,6 +199,7 @@ async def chat_stream(
         movement_profile=(
             body.movement_profile.model_dump() if body.movement_profile else None
         ),
+        user_profile=(body.user_profile.model_dump() if body.user_profile else None),
         local_time=body.local_time,
         taste_values=taste_values,
     )

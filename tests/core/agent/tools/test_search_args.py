@@ -29,6 +29,8 @@ def _agent_state() -> dict[str, Any]:
         "working_location": None,
         "location_clarification": None,
         "movement_profile": None,
+        "trip_movement": None,
+        "user_profile": None,
         "local_time": None,
         "taste_values": [],
         "tool_payloads": [],

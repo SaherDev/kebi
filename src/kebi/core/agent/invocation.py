@@ -12,7 +12,7 @@ from typing import Any
 
 from langchain_core.messages import HumanMessage
 
-from kebi.core.agent.state import LOCATION_INHERIT
+from kebi.core.agent.state import LOCATION_INHERIT, TRIP_MOVEMENT_INHERIT
 
 
 def build_turn_payload(
@@ -22,6 +22,7 @@ def build_turn_payload(
     memory_summary: str,
     user_location: dict[str, Any] | None = None,
     movement_profile: dict[str, Any] | None = None,
+    user_profile: dict[str, Any] | None = None,
     local_time: str | None = None,
     taste_values: list[str] | None = None,
 ) -> dict[str, Any]:
@@ -51,6 +52,13 @@ def build_turn_payload(
       movement_profile: the user's mobility profile, optional. Plain overwrite
         — re-supplied every turn from the request, never carried (contrast
         `working_location`); a turn that omits it resets state to None.
+      user_profile: the user's "about me" block, optional (ADR-154).
+        Note `trip_movement` takes the inherit sentinel, not a request value:
+        modes stated mid-conversation belong to the trip, so they carry like
+        `working_location` rather than being re-supplied per turn (ADR-155). Same
+        plain-overwrite rule as `movement_profile` — it lives in the product
+        repo's settings, so the request is the only source of truth and a
+        profile the user just cleared must not survive from the prior turn.
 
     Returns:
       dict payload suitable for `graph.ainvoke(payload, config=...)`.
@@ -65,8 +73,10 @@ def build_turn_payload(
         "user_id": user_id,
         "user_location": user_location,
         "working_location": LOCATION_INHERIT,
+        "trip_movement": TRIP_MOVEMENT_INHERIT,
         "location_clarification": None,
         "movement_profile": movement_profile,
+        "user_profile": user_profile,
         "local_time": local_time,
         "taste_values": taste_values or [],
         "steps_taken": 0,
