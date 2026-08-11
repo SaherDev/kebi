@@ -123,6 +123,25 @@ _CANONICAL: dict[str, str] = {
 
 CLAIM_TAG_VALUES: frozenset[str] = frozenset(_CANONICAL.values())
 
+_TYPE_LABELS: frozenset[str] = frozenset(_fold(label) for label in CLAIM_TAG_TYPES)
+
+
+def _canonical_for(raw: str) -> str | None:
+    """Canonical vocabulary value for one raw tag, or None.
+
+    Accepts the bare value and the "type:value" form the prompt's own
+    rendering invites ("- money: cash_only, ..." reads back as
+    "money:cash_only" to a model) — the intent is unambiguous, so dropping
+    it would lose real tags to a formatting quirk.
+    """
+    canonical = _CANONICAL.get(_fold(raw))
+    if canonical is not None:
+        return canonical
+    prefix, sep, value = raw.partition(":")
+    if sep and _fold(prefix) in _TYPE_LABELS:
+        return _CANONICAL.get(_fold(value))
+    return None
+
 
 def normalize_claim_tags(tags: list[str]) -> list[str]:
     """Map raw tags onto the vocabulary: keep known ones in canonical form,
@@ -134,7 +153,7 @@ def normalize_claim_tags(tags: list[str]) -> list[str]:
     seen: set[str] = set()
     normalized: list[str] = []
     for raw in tags:
-        canonical = _CANONICAL.get(_fold(raw))
+        canonical = _canonical_for(raw)
         if canonical is not None and canonical not in seen:
             seen.add(canonical)
             normalized.append(canonical)

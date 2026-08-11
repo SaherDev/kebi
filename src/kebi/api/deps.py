@@ -32,8 +32,12 @@ from kebi.core.extraction.result_cache import ExtractionResultCache
 from kebi.core.extraction.service import ExtractionService
 from kebi.core.home import HomeService
 from kebi.core.knowledge.candidate_notes_service import CandidateNotesService
-from kebi.core.knowledge.curation_service import KnowledgeCurationService
+from kebi.core.knowledge.curation_service import (
+    CuratorClaimsService,
+    KnowledgeCurationService,
+)
 from kebi.core.knowledge.curator import KnowledgeCurator
+from kebi.core.knowledge.entity_search_service import EntitySearchService
 from kebi.core.knowledge.geo_resolve import EntityGeoResolver
 from kebi.core.knowledge.harvest_bucket import HarvestBucketReader, HarvestBucketWriter
 from kebi.core.knowledge.harvester import KnowledgeHarvester
@@ -1019,12 +1023,55 @@ def get_knowledge_curator() -> KnowledgeCurator:
 
 def get_knowledge_curation_service(
     ingestion: KnowledgeIngestion = Depends(get_knowledge_ingestion),  # noqa: B008
+    places_repo: PlacesRepo = Depends(get_places_repo),  # noqa: B008
 ) -> KnowledgeCurationService:
-    """FastAPI dependency providing the KnowledgeCurationService (ADR-121)."""
+    """FastAPI dependency providing the KnowledgeCurationService (ADR-121).
+
+    Carries the places and area repositories for anchor resolution: a
+    request's `place_id`/`area_id` is turned into a verified `CurationAnchor`
+    before the curator's LLM ever runs.
+    """
     return KnowledgeCurationService(
         curator=get_knowledge_curator(),
         ingestion=ingestion,
+        places_repo=places_repo,
+        area_repo=get_area_repository(),
     )
+
+
+def get_entity_search_service(
+    hybrid_search: HybridSearchService = Depends(  # noqa: B008
+        get_hybrid_search_service
+    ),
+) -> EntitySearchService:
+    """FastAPI dependency providing the EntitySearchService — the curation
+    anchor-chip typeahead (deterministic; no LLM).
+
+    The resolver cache degrades to None without a Redis URL (dev mode): the
+    endpoint still answers, each unseen-area lookup just pays its own
+    geocode.
+    """
+    env = get_env()
+    cache = (
+        RedisCacheBackend(client=get_redis_client(env.REDIS_URL))
+        if env.REDIS_URL
+        else None
+    )
+    entity_search = get_config().knowledge.entity_search
+    return EntitySearchService(
+        area_repo=get_area_repository(),
+        hybrid_search=hybrid_search,
+        geo_resolver=EntityGeoResolver(get_geocoding_client()),
+        cache=cache,
+        cache_ttl_seconds=entity_search.resolver_cache_ttl_seconds,
+        area_limit=entity_search.area_limit,
+    )
+
+
+def get_curator_claims_service() -> CuratorClaimsService:
+    """FastAPI dependency providing the CuratorClaimsService — list/retract
+    over the caller's own curated claims, keyed by their source_ref."""
+    return CuratorClaimsService(repo=get_knowledge_claim_repository())
 
 
 def get_place_notes_service(
