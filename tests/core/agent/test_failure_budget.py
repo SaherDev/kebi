@@ -34,9 +34,9 @@ async def test_error_count_increments_on_agent_node_failure(
     monkeypatch: Any,
 ) -> None:
     """agent_node increments error_count after exhausting LLM retries,
-    appends an AIMessage explaining the connection error, and emits a
-    debug reasoning step (the orchestrator's thinking is never a user row —
-    ADR-103; the user-facing error rides the message content)."""
+    appends an AIMessage explaining the connection error, and closes the
+    user-visible thinking line (ADR-157) with a short summary — the full
+    user-facing error rides the message content."""
     from kebi.core.agent import graph as graph_module
     from kebi.core.agent.graph import make_agent_node
 
@@ -73,11 +73,11 @@ async def test_error_count_increments_on_agent_node_failure(
     assert isinstance(error_message, AIMessage)
     assert isinstance(error_message.content, str)
     assert "connection issue" in error_message.content.lower()
-    # The orchestrator step is debug on both frames (ADR-103) — no user row.
-    assert not [s for s in result["reasoning_steps"] if s.visibility == "user"]
+    # The thinking line is user-visible on both frames (ADR-157) — it must
+    # close even on the failure path, or the client strands the skeleton.
     decision = [s for s in result["reasoning_steps"] if s.step == "agent.tool_decision"]
     assert len(decision) == 1
-    assert decision[0].visibility == "debug"
+    assert decision[0].visibility == "user"
     # Plain copy — no exception class name leaked into the summary.
     assert "connection issue" in decision[0].summary.lower()
 

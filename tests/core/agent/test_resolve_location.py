@@ -326,7 +326,10 @@ async def test_llm_failure_fails_toward_clarification() -> None:
     assert update["location_clarification"]
 
 
-async def test_emits_user_visible_reasoning_step() -> None:
+async def test_resolved_step_is_debug_only() -> None:
+    """Location resolution is silent infrastructure (ADR-157): the step is
+    recorded for tracing but never shown to the user — the agent mentions
+    the place in its own narration when it matters."""
     resolution = LocationResolution(
         source="explicit_query", country="Japan", city="Tokyo", neighborhood="Shibuya"
     )
@@ -337,7 +340,7 @@ async def test_emits_user_visible_reasoning_step() -> None:
     steps = update["reasoning_steps"]
     assert len(steps) == 1
     assert steps[0].step == "agent.location_resolved"
-    assert steps[0].visibility == "user"
+    assert steps[0].visibility == "debug"
 
 
 # --- Movement / search scope (ADR-084) -------------------------------------

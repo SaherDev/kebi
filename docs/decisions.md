@@ -17,6 +17,36 @@ Format:
 
 ---
 
+## ADR-159: The in-between talk streams too — narration types out, then promotes or steps aside
+
+**Date:** 2026-08-11\
+**Status:** accepted — extends ADR-158\
+**Context:** ADR-158 streamed only the terminal answer; the agent's in-between talk (ADR-157's narration) still landed as a finished line when each LLM call completed, because a message's kind — talk-before-a-tool vs. the answer — is unknowable while its first tokens arrive (tool calls stream last). The product goal is the full conversational arc: the agent talks a little, works, talks again, and the answer types out — like a person.\
+**Decision:** Every agent message starts as narration and earns promotion. While the verdict is unknown, its tokens stream as `reasoning_delta` frames keyed to the active thinking step's id, typing into the row live. A tool-call chunk confirms it was narration: the text stays in the row and the step's `done` frame supersedes it. A message that outgrows any plausible narration mid-stream, or ends cleanly with no tool call, is the answer: the first `message_delta` carries `promote: true` with the full normalized prefix — the client clears the row's typed text and seeds the answer bubble with it, then appends the rest. The narration prompt loosens from a twelve-word label to one-two conversational sentences (~25 words) that react to the previous result; the promotion threshold sits above that length with margin. Narration streams the model's text raw (matching the step summary); answer deltas keep ADR-158's normalize-and-holdback so they byte-match the terminal frame. Links are untouched: they only ever ride the terminal `message` frame.\
+**Consequences:** The wire now carries the complete talk → work → talk → answer rhythm. Old clients ignore `reasoning_delta` and the `promote` flag and behave exactly as ADR-158; new clients need three rules — type `reasoning_delta` text into the matching active step, on `promote` move to the answer bubble seeded with that delta's text, and swap in the terminal `message` frame wholesale. An over-long narration that crosses the threshold before its tool call briefly leaks into the answer bubble; the authoritative swap self-heals it. Prompt template changed → Redis LLM cache needs invalidation on deploy.
+
+---
+
+## ADR-158: The answer streams as plain-prose deltas; links only ever arrive whole
+
+**Date:** 2026-08-11\
+**Status:** accepted\
+**Context:** `/v1/chat/stream` streamed reasoning steps live but delivered the answer as one `message` frame after the whole graph finished — the user watched thinking, then a wall of text landed at once. Token streaming has two hazards here: the orchestrator's text before a tool call is its thinking line (ADR-157), not answer prose, and which kind a message is cannot be known while its first tokens arrive (text streams first, tool calls last); and the render contract wraps place names as `kebi://` links (ADR-136), which must never be split across frames or lost.\
+**Decision:** Subscribe to the orchestrator's token stream and emit new `message_delta` SSE frames — plain prose only, gated by a server-side buffer (`core/chat/delta_buffer.py`). The buffer holds each LLM call's text until it outgrows any plausible narration (threshold above the prompted one-line length); a tool-call chunk before that suppresses the message, crossing it streams everything live. Each flushed delta passes through the same `normalize_voice` as the final text, holding back trailing characters that could be a partial pattern, so the streamed prose is byte-identical to the terminal content. Linkification is untouched: it runs once over the complete answer and rides the terminal `message` frame, which remains authoritative — clients replace accumulated deltas with it wholesale, so the swap only makes names tappable.\
+**Consequences:** Answers type out live; short answers (under the threshold) still arrive in one frame, which at that length is indistinguishable. Existing clients ignore `message_delta` and behave exactly as before — adopting streaming is a frontend-side choice. A long narration that violates the prompt's one-line rule can briefly stream before its tool call arrives; the authoritative swap self-heals it. The `message` frame remains the only carrier of links and entities.
+
+---
+
+## ADR-157: The reasoning trace narrates the thinking, not the pipeline
+
+**Date:** 2026-08-11\
+**Status:** accepted — supersedes ADR-103's visibility choice for the orchestrator step; location steps' user visibility from ADR-083 is withdrawn\
+**Context:** Every turn's visible trace opened with "found your location" — even "whats my name?" — because the resolve node emitted a user-visible step whenever it ran, and the gate deliberately resolves by default. Worse, on a `location_irrelevant` turn the step's `active` frame was `user` but its `done` frame was `debug`; the client keys on `id` and drops debug frames, so the step never resolved and rendered as a failed (red) step. More broadly, every user-visible step title was a fixed string emitted by whichever node happened to execute, so all traces read identically — the pipeline was the story, not the thinking.\
+**Decision:** Three rules. (1) Location resolution is silent infrastructure: it still runs eagerly, but every frame it emits — active, resolved, clarify, not-needed — is `debug`. The agent mentions the place in its own words when it matters. (2) The orchestrator's `agent.tool_decision` step is the user-visible "thinking" line, one per LLM call, on every turn: when the response carries tool calls its `done` summary is the model's own narration text (the prompt instructs one short first-person action line before every tool call), so the visible trace is model-authored and differs per turn; a terminal response closes with a neutral summary, never the answer text (which is byte-identical to the message frame). (3) A step's visibility never changes between its `active` and `done` frames — flipping strands the skeleton.\
+**Consequences:** A trivial turn shows exactly one thinking line and an answer; a tool turn reads think → act → think → answer, in the model's words. The persisted `agent.tool_decision` step no longer records the answer text (the message itself is persisted; the step records the narration). Clients need no changes — they already filter `debug` — but no longer receive `agent.location_resolved` as a user step; the wire contract (id-keyed lifecycle, `user`/`debug` visibility) is unchanged. Prompt template changed → Redis LLM cache needs invalidation on deploy.
+
+---
+
 ## ADR-156: When kebi does not know, it guesses wide and says so
 
 **Date:** 2026-08-10\

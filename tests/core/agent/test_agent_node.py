@@ -132,29 +132,43 @@ async def test_agent_node_appends_ai_message(captured_llm: MagicMock) -> None:
     assert msgs[0].content == "mocked agent response"
 
 
-async def test_agent_node_terminal_answer_step_is_debug(
+async def test_agent_node_terminal_answer_step_is_user_visible_and_neutral(
     captured_llm: MagicMock,
 ) -> None:
-    """The orchestrator's own thinking is debug (ADR-103): the terminal answer
-    is identical to the `message` frame, so emitting it as a user step would
-    duplicate the answer in the thinking panel."""
+    """Every turn shows a thinking line (ADR-157) — but a terminal answer's
+    text is identical to the `message` frame, so the step closes with a
+    neutral summary rather than duplicating the answer."""
     node = make_agent_node(captured_llm, [])
     update = await node(_base_state())
     step = update["reasoning_steps"][-1]
     assert step.step == "agent.tool_decision"
     assert step.title == "thinking"
-    assert step.visibility == "debug"
+    assert step.visibility == "user"
+    assert step.summary != "mocked agent response"
+    assert step.summary == "answered from what I already know"
 
 
-async def test_agent_node_tool_call_step_is_also_debug(
+async def test_agent_node_terminal_after_tools_summary_says_composing(
     captured_llm: MagicMock,
 ) -> None:
-    """Between-tool monologue is debug too — the tool steps narrate the work, so
-    the orchestrator never produces a user-visible row (ADR-103, option b)."""
+    """A terminal answer that follows tool work closes its thinking line with
+    the composing summary, not the first-turn 'answered from what I know'."""
+    node = make_agent_node(captured_llm, [])
+    update = await node(_base_state(steps_taken=1, tool_calls_used=1))
+    step = update["reasoning_steps"][-1]
+    assert step.visibility == "user"
+    assert step.summary == "putting the answer together"
+
+
+async def test_agent_node_tool_call_step_carries_model_narration(
+    captured_llm: MagicMock,
+) -> None:
+    """A tool-call response's text is the model's own narration — it becomes
+    the user-visible thinking line, so the trace is model-authored (ADR-157)."""
 
     async def _with_tool_call(_messages: Any) -> AIMessage:
         return AIMessage(
-            content="Let me look that up",
+            content="checking your saved spots in haifa",
             tool_calls=[{"id": "c1", "name": "find_saved", "args": {}}],
         )
 
@@ -164,7 +178,28 @@ async def test_agent_node_tool_call_step_is_also_debug(
     step = update["reasoning_steps"][-1]
     assert step.step == "agent.tool_decision"
     assert step.title == "thinking"
-    assert step.visibility == "debug"
+    assert step.visibility == "user"
+    assert step.summary == "checking your saved spots in haifa"
+
+
+async def test_agent_node_tool_call_without_narration_falls_back(
+    captured_llm: MagicMock,
+) -> None:
+    """A tool-call response with no text still closes its thinking line —
+    the fallback fires so the `done` frame never carries a null summary."""
+
+    async def _bare_tool_call(_messages: Any) -> AIMessage:
+        return AIMessage(
+            content="",
+            tool_calls=[{"id": "c1", "name": "find_saved", "args": {}}],
+        )
+
+    captured_llm.ainvoke = MagicMock(side_effect=_bare_tool_call)
+    node = make_agent_node(captured_llm, [])
+    update = await node(_base_state())
+    step = update["reasoning_steps"][-1]
+    assert step.visibility == "user"
+    assert step.summary == "Let me look into that…"
 
 
 async def test_agent_node_empty_summaries_still_renders(
@@ -291,3 +326,17 @@ class TestTimeContext:
 
         assert local_weekday({"local_time": "2026-08-10T23:30:00-05:00"}) == "Monday"
         assert local_weekday({"local_time": "2026-08-11T00:30:00+08:00"}) == "Tuesday"
+
+
+async def test_agent_node_later_thinking_steps_get_varied_titles(
+    captured_llm: MagicMock,
+) -> None:
+    """After the first step, the thinking title rotates through the curated
+    list (never plain "thinking" again) — three identical bold rows read
+    like a machine logging (ADR-157)."""
+    from kebi.core.agent.graph import _THINKING_TITLES
+
+    node = make_agent_node(captured_llm, [])
+    update = await node(_base_state(steps_taken=1, tool_calls_used=1))
+    step = update["reasoning_steps"][-1]
+    assert step.title in _THINKING_TITLES[1:]

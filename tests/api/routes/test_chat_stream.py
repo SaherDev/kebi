@@ -488,8 +488,7 @@ class TestChatStreamEntityLinks:
     def test_message_content_is_linkified(self, mock_service: MagicMock) -> None:
         frame = self._message_frame(mock_service)
         assert frame["content"] == (
-            "tonight is [Luigis](kebi://venue/p1) night in "
-            f"[Canggu]({_CANGGU_URI})"
+            f"tonight is [Luigis](kebi://venue/p1) night in [Canggu]({_CANGGU_URI})"
         )
 
     def test_message_frame_carries_entities(self, mock_service: MagicMock) -> None:
@@ -502,3 +501,225 @@ class TestChatStreamEntityLinks:
     def test_no_tool_result_frames_are_emitted(self, mock_service: MagicMock) -> None:
         self._message_frame(mock_service)
         assert "event: tool_result" not in self._raw
+
+
+class TestChatStreamMessageDeltas:
+    """`message_delta` token streaming (ADR-158).
+
+    The route subscribes to the orchestrator token stream: answer prose
+    streams as plain-text deltas, narration before tool calls is
+    suppressed, other nodes' LLM chunks are ignored, and the terminal
+    `message` frame stays authoritative.
+    """
+
+    _ANSWER = (
+        "tonight is Luigis night — the counter seats are the move, and if "
+        "you get there before seven you will beat the queue that forms "
+        "once the sunset crowd rolls off the beach and floods the lane."
+    )
+
+    def _client_for(self, graph: MagicMock, mock_service: MagicMock) -> TestClient:
+        app.dependency_overrides[get_chat_service] = lambda: mock_service
+        app.dependency_overrides[get_agent_graph] = lambda: graph
+        return TestClient(app)
+
+    def _chunk(self, text: str, *, cid: str = "m1", tools: bool = False) -> Any:
+        from types import SimpleNamespace
+
+        return SimpleNamespace(
+            id=cid, content=text, tool_call_chunks=[{"name": "x"}] if tools else []
+        )
+
+    def _graph(self, message_chunks: list[tuple[Any, dict[str, Any]]]) -> MagicMock:
+        graph = MagicMock()
+        answer = self._ANSWER
+
+        async def _astream(
+            payload: Any, config: Any, stream_mode: Any = None
+        ) -> AsyncGenerator[tuple[str, Any], None]:
+            for pair in message_chunks:
+                yield ("messages", pair)
+            from langchain_core.messages import AIMessage
+
+            yield (
+                "values",
+                {"messages": [AIMessage(content=answer)], "tool_calls_used": 0},
+            )
+
+        graph.astream = _astream
+        return graph
+
+    def _frames(self, raw: str, event: str) -> list[dict[str, Any]]:
+        import json as _json
+
+        lines = raw.splitlines()
+        return [
+            _json.loads(lines[i + 1][len("data: ") :])
+            for i, line in enumerate(lines)
+            if line == f"event: {event}"
+        ]
+
+    def test_answer_tokens_stream_as_plain_deltas(
+        self, mock_service: MagicMock
+    ) -> None:
+        half = len(self._ANSWER) // 2
+        graph = self._graph(
+            [
+                (self._chunk(self._ANSWER[:half]), {"langgraph_node": "agent"}),
+                (
+                    self._chunk(self._ANSWER[half:], cid="m1"),
+                    {"langgraph_node": "agent"},
+                ),
+            ]
+        )
+        client = self._client_for(graph, mock_service)
+        response = client.post("/v1/chat/stream", json={"message": "dinner"})
+        app.dependency_overrides.clear()
+        deltas = self._frames(response.text, "message_delta")
+        assert deltas, "expected message_delta frames"
+        streamed = "".join(d["text"] for d in deltas)
+        # Plain prose only — links never stream (they ride the final frame).
+        assert "kebi://" not in streamed
+        # The invariant that makes the swap invisible: the streamed text is
+        # byte-identical to the terminal frame's content (both pass through
+        # normalize_voice; linkify is a no-op here with no tool results).
+        messages = self._frames(response.text, "message")
+        assert messages and messages[0]["content"] == streamed
+        assert "counter seats are the move" in streamed
+
+    def test_narration_before_tool_call_is_suppressed(
+        self, mock_service: MagicMock
+    ) -> None:
+        graph = self._graph(
+            [
+                (
+                    self._chunk("checking your saved spots in haifa"),
+                    {"langgraph_node": "agent"},
+                ),
+                (self._chunk("", tools=True), {"langgraph_node": "agent"}),
+            ]
+        )
+        client = self._client_for(graph, mock_service)
+        response = client.post("/v1/chat/stream", json={"message": "dinner"})
+        app.dependency_overrides.clear()
+        assert self._frames(response.text, "message_delta") == []
+
+    def test_non_agent_node_chunks_are_ignored(self, mock_service: MagicMock) -> None:
+        graph = self._graph(
+            [(self._chunk(self._ANSWER), {"langgraph_node": "resolve_location"})]
+        )
+        client = self._client_for(graph, mock_service)
+        response = client.post("/v1/chat/stream", json={"message": "dinner"})
+        app.dependency_overrides.clear()
+        assert self._frames(response.text, "message_delta") == []
+
+
+class TestChatStreamReasoningDeltas:
+    """`reasoning_delta` live narration + promote flag (ADR-159)."""
+
+    def _run(self, chunks: list[tuple[str, Any]], mock_service: MagicMock) -> str:
+        graph = MagicMock()
+
+        async def _astream(
+            payload: Any, config: Any, stream_mode: Any = None
+        ) -> AsyncGenerator[tuple[str, Any], None]:
+            for pair in chunks:
+                yield pair
+            from langchain_core.messages import AIMessage
+
+            yield (
+                "values",
+                {"messages": [AIMessage(content="final text")], "tool_calls_used": 1},
+            )
+
+        graph.astream = _astream
+        app.dependency_overrides[get_chat_service] = lambda: mock_service
+        app.dependency_overrides[get_agent_graph] = lambda: graph
+        client = TestClient(app)
+        response = client.post("/v1/chat/stream", json={"message": "dinner"})
+        app.dependency_overrides.clear()
+        return response.text
+
+    @staticmethod
+    def _frames(raw: str, event: str) -> list[dict[str, Any]]:
+        import json as _json
+
+        lines = raw.splitlines()
+        return [
+            _json.loads(lines[i + 1][len("data: ") :])
+            for i, line in enumerate(lines)
+            if line == f"event: {event}"
+        ]
+
+    @staticmethod
+    def _chunk(text: str, *, tools: bool = False) -> Any:
+        from types import SimpleNamespace
+
+        return SimpleNamespace(
+            id="m1", content=text, tool_call_chunks=[{"name": "x"}] if tools else []
+        )
+
+    def test_narration_types_into_the_active_thinking_step(
+        self, mock_service: MagicMock
+    ) -> None:
+        active = ReasoningStep(
+            step="agent.tool_decision",
+            title="thinking",
+            summary=None,
+            source="agent",
+            id="agent.tool_decision#0",
+            status="active",
+        )
+        raw = self._run(
+            [
+                ("custom", active.model_dump(mode="json")),
+                (
+                    "messages",
+                    (
+                        self._chunk("checking what you've saved in canggu"),
+                        {"langgraph_node": "agent"},
+                    ),
+                ),
+                (
+                    "messages",
+                    (self._chunk("", tools=True), {"langgraph_node": "agent"}),
+                ),
+            ],
+            mock_service,
+        )
+        deltas = self._frames(raw, "reasoning_delta")
+        assert deltas, "expected reasoning_delta frames"
+        assert all(d["id"] == "agent.tool_decision#0" for d in deltas)
+        assert "".join(d["text"] for d in deltas) == (
+            "checking what you've saved in canggu"
+        )
+        # Narration never leaks to the answer lane.
+        assert self._frames(raw, "message_delta") == []
+
+    def test_first_answer_delta_carries_promote(self, mock_service: MagicMock) -> None:
+        raw = self._run(
+            [("messages", (self._chunk("final text"), {"langgraph_node": "agent"}))],
+            mock_service,
+        )
+        deltas = self._frames(raw, "message_delta")
+        assert deltas and deltas[0].get("promote") is True
+        assert deltas[0]["text"] == "final text"
+
+    def test_narration_without_active_step_is_dropped(
+        self, mock_service: MagicMock
+    ) -> None:
+        raw = self._run(
+            [
+                (
+                    "messages",
+                    (self._chunk("orphan narration"), {"langgraph_node": "agent"}),
+                ),
+                (
+                    "messages",
+                    (self._chunk("", tools=True), {"langgraph_node": "agent"}),
+                ),
+            ],
+            mock_service,
+        )
+        assert self._frames(raw, "reasoning_delta") == []
+        assert self._frames(raw, "message_delta") == []
