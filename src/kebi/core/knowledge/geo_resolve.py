@@ -15,6 +15,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
+from kebi.core.areas.keys import display_from_slug
 from kebi.core.knowledge.schemas import ResolvedGeo, _slugify
 
 if TYPE_CHECKING:
@@ -35,6 +36,54 @@ def slugs_match(a: str | None, b: str | None) -> bool:
     return _slugify(a) == _slugify(b)
 
 
+# Trailing administrative-unit words Nominatim appends to a settlement's
+# name ("Ubud District", "Badung Regency") that a human never types. "city"
+# is deliberately absent: stripping it would let "Kansas City" verify an ask
+# for Kansas — a wrong-entity swap, the exact thing verification exists for.
+_ADMIN_SUFFIXES = (
+    "district",
+    "subdistrict",
+    "regency",
+    "municipality",
+    "prefecture",
+    "province",
+    "county",
+)
+
+
+def _admin_stripped_slug(value: str) -> str:
+    slug = _slugify(value)
+    for suffix in _ADMIN_SUFFIXES:
+        if slug.endswith("-" + suffix):
+            return slug.removesuffix("-" + suffix)
+    return slug
+
+
+def _verified_city_component(name: str, result: GeocodeResult | None) -> str | None:
+    """The city component a verified lookup keys under, or None.
+
+    Verification accepts, keyed by what actually matched — never a
+    mismatched other field, so a wrong component can't swap the entity:
+    the address `city` or the feature's own `name` slug-matches the asked
+    name (the `name` case covers settlements above city rank — Tokyo the
+    prefecture, Bali the province — which carry their name at the top level
+    and nothing under address city/town/village; keying them in the city
+    slot is the established practice: `id/bali` already is Bali's key).
+    A match modulo a trailing admin-unit word ("Ubud" ≈ "Ubud District")
+    also verifies, keyed under the stripped form.
+    """
+    if result is None or not result.country_code:
+        return None
+    for component in (result.city, result.name):
+        if component and slugs_match(name, component):
+            return component
+    asked = _admin_stripped_slug(name)
+    for component in (result.city, result.name):
+        if component and _admin_stripped_slug(component) == asked:
+            return display_from_slug(asked)
+    return None
+
+
 class EntityGeoResolver:
     """Structured-geocode an entity name to a verified `ResolvedGeo`.
 
@@ -51,22 +100,42 @@ class EntityGeoResolver:
     async def resolve_city(self, name: str, country_code: str) -> ResolvedGeo | None:
         """Resolve a city name within a country, verified round-trip.
 
-        The result's `city` component (the part `build_geo_key` slugifies)
-        must slug-match the requested name — a top hit that merely *contains*
-        the name ("Paris Kavin" in Huế for "Paris") fails verification.
+        The component that will form the key must slug-match the requested
+        name (see `_verified_city_component`) — a top hit that merely
+        *contains* the name ("Paris Kavin" in Huế for "Paris") fails
+        verification.
         """
         key = ("city", f"{country_code}:{_slugify(name)}")
         if key in self._cache:
             return self._cache[key]
         geo: ResolvedGeo | None = None
         result = await self._search(city=name, countrycodes=country_code)
-        if (
-            result is not None
-            and result.country_code
-            and result.city
-            and slugs_match(name, result.city)
-        ):
-            geo = ResolvedGeo(country_code=result.country_code, city=result.city)
+        city = _verified_city_component(name, result)
+        if result is not None and city is not None:
+            geo = ResolvedGeo(country_code=result.country_code, city=city)
+        self._cache[key] = geo
+        return geo
+
+    async def resolve_city_global(self, name: str) -> ResolvedGeo | None:
+        """Resolve a bare city name with no country constraint, verified.
+
+        Same structured `city=` lookup and round-trip check as
+        `resolve_city`, just unconstrained: Nominatim's importance ranking
+        picks the prominent bearer of a shared name (Paris → France), and
+        the returned component must still slug-match the asked-for name and
+        carry a country — so a name that isn't really a city still refuses.
+        For famous-city typeahead ("Tokyo"), the prominent pick is the one
+        the human meant; callers needing a specific lesser namesake pass a
+        country and go through `resolve_city`.
+        """
+        key = ("city_global", _slugify(name))
+        if key in self._cache:
+            return self._cache[key]
+        geo: ResolvedGeo | None = None
+        result = await self._search(city=name)
+        city = _verified_city_component(name, result)
+        if result is not None and city is not None:
+            geo = ResolvedGeo(country_code=result.country_code, city=city)
         self._cache[key] = geo
         return geo
 

@@ -55,6 +55,83 @@ async def test_resolve_city_no_result_returns_none() -> None:
     assert await resolver.resolve_city("Muine", "vn") is None
 
 
+async def test_resolve_city_global_verified_without_country_constraint() -> None:
+    resolver, geocoder = _resolver(
+        GeocodeResult(lat=35.68, lng=139.76, country_code="jp", city="Tokyo")
+    )
+    geo = await resolver.resolve_city_global("Tokyo")
+    assert geo == ResolvedGeo(country_code="jp", city="Tokyo")
+    geocoder.search_structured.assert_awaited_once_with(city="Tokyo")
+
+
+async def test_resolve_city_global_accepts_above_city_rank_by_name() -> None:
+    # Tokyo is a prefecture: address has NO city/town/village, but the
+    # feature's own name is "Tokyo" — name-verified, keyed in the city slot
+    # (the Bali precedent: id/bali).
+    resolver, _ = _resolver(
+        GeocodeResult(
+            lat=35.68,
+            lng=139.76,
+            country_code="jp",
+            place_type="province",
+            name="Tokyo",
+        )
+    )
+    geo = await resolver.resolve_city_global("Tokyo")
+    assert geo == ResolvedGeo(country_code="jp", city="Tokyo")
+
+
+async def test_verification_keys_only_the_matched_component() -> None:
+    # A result whose city is a DIFFERENT settlement must not leak in as the
+    # key even when the feature's name matches — key what matched, only.
+    resolver, _ = _resolver(
+        GeocodeResult(
+            lat=-8.5, lng=115.26, country_code="id", city="Gianyar", name="Ubud"
+        )
+    )
+    geo = await resolver.resolve_city("Ubud", "id")
+    assert geo == ResolvedGeo(country_code="id", city="Ubud")
+
+
+async def test_admin_suffix_stripped_match_verifies() -> None:
+    # Nominatim names Ubud "Ubud District" — the admin word is its
+    # convention, not the settlement's name; verified, keyed stripped.
+    resolver, _ = _resolver(
+        GeocodeResult(
+            lat=-8.5,
+            lng=115.26,
+            country_code="id",
+            city="Ubud District",
+            name="Ubud District",
+        )
+    )
+    geo = await resolver.resolve_city("Ubud", "id")
+    assert geo == ResolvedGeo(country_code="id", city="Ubud")
+
+
+async def test_city_suffix_is_never_stripped() -> None:
+    # "Kansas" must not verify against "Kansas City" — a different entity.
+    resolver, _ = _resolver(
+        GeocodeResult(
+            lat=39.1,
+            lng=-94.6,
+            country_code="us",
+            city="Kansas City",
+            name="Kansas City",
+        )
+    )
+    assert await resolver.resolve_city("Kansas", "us") is None
+
+
+async def test_resolve_city_global_rejects_mismatch_and_memoizes() -> None:
+    resolver, geocoder = _resolver(
+        GeocodeResult(lat=16.46, lng=107.59, country_code="vn", city="Huế")
+    )
+    assert await resolver.resolve_city_global("Paris") is None
+    assert await resolver.resolve_city_global("Paris") is None
+    geocoder.search_structured.assert_awaited_once()
+
+
 async def test_resolve_country_requires_country_feature() -> None:
     resolver, geocoder = _resolver(
         GeocodeResult(lat=16.0, lng=106.0, country_code="vn", place_type="country")

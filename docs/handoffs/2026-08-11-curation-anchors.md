@@ -56,6 +56,8 @@ build the screens is yours.
   ADR-153).
 - **Typeahead expectations:** results can be empty (`{"results": []}` is a
   normal answer, not an error). An area the system has never seen resolves
-  only as `"Name, Country"` (city) or a bare country name — surface a hint
-  in the empty state if you want new-area anchoring discoverable. `icon` is
-  nullable; keep the category fallback (ADR-146).
+  from a bare name when it's a country or a verifiable prominent city
+  ("Tokyo", "Paris"); a lesser namesake needs `"Name, Country"`. A name
+  that can't be verified returns no area row — surface a "try adding the
+  country" hint in the empty state if you want that discoverable. `icon`
+  is nullable; keep the category fallback (ADR-146).
