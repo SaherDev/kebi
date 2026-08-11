@@ -1161,9 +1161,12 @@ Typeahead behind the curation anchor chip — places and areas in one typed
 list. **Gated** on `X-Gateway-Can-Curate`. Deterministic (no LLM): catalog
 places via unscoped hybrid search, areas from the profiled areas table, and
 — only when the known corpus has no area hit — a verified-or-refuse geocode
-so a never-opened area can still be anchored. `"Name, Country"` pins a new
-city; a bare unseen name resolves only as a country (free-text geocoding of
-bare names is the documented failure mode and is never used).
+so a never-opened area can still be anchored. A bare unseen name resolves
+as a country or, failing that, as the prominent city of that name via a
+structured lookup whose answer must slug-match the typed name ("Tokyo" →
+Tokyo, JP); `"Name, Country"` constrains a lesser namesake to its country.
+Free-text geocoding is never used, and an unverifiable name returns no
+area rather than a guess.
 
 **Query params:** `q` (required, 2–120 chars), `limit` (default 8, max 20).
 

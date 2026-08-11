@@ -54,6 +54,11 @@ class GeocodeResult(BaseModel):
     neighborhood: str | None = None
     place_type: str | None = None
     bbox: list[float] | None = None
+    # The matched feature's own name (response top-level `name`). Carried
+    # because settlements above city rank (Tokyo the prefecture, Bali the
+    # province) surface here and NOT under address city/town/village — a
+    # verifier that only reads `city` cannot recognize them.
+    name: str | None = None
 
 
 def _parse_bbox(raw: Any) -> list[float] | None:
@@ -144,6 +149,7 @@ class NominatimGeocodingClient:
             ),
             place_type=first.get("addresstype") or first.get("type"),
             bbox=_parse_bbox(first.get("boundingbox")),
+            name=first.get("name") or None,
         )
 
     async def forward(

@@ -42,6 +42,7 @@ def _service(
     place_hits: list[HybridSearchHit] | None = None,
     resolve_country: ResolvedGeo | None = None,
     resolve_city: ResolvedGeo | None = None,
+    resolve_city_global: ResolvedGeo | None = None,
     cache: _FakeCache | None = None,
 ) -> tuple[EntitySearchService, AsyncMock, AsyncMock]:
     area_repo = AsyncMock()
@@ -51,6 +52,7 @@ def _service(
     geo = AsyncMock()
     geo.resolve_country = AsyncMock(return_value=resolve_country)
     geo.resolve_city = AsyncMock(return_value=resolve_city)
+    geo.resolve_city_global = AsyncMock(return_value=resolve_city_global)
     svc = EntitySearchService(
         area_repo=area_repo,
         hybrid_search=hybrid,
@@ -82,13 +84,29 @@ async def test_places_searched_unscoped() -> None:
     assert kwargs["user_id"] is None
 
 
-async def test_bare_name_resolves_only_as_country() -> None:
+async def test_bare_name_tries_country_first() -> None:
     svc, geo, _ = _service(resolve_country=ResolvedGeo(country_code="vn"))
     out = await svc.search("Vietnam", limit=8)
     assert len(out.areas) == 1
     assert out.areas[0].geo_key == "vn"
     assert out.areas[0].level == "country"
+    # A verified country never falls through to a city named like one.
+    geo.resolve_city_global.assert_not_awaited()
     geo.resolve_city.assert_not_awaited()
+
+
+async def test_bare_city_name_resolves_via_global_lookup() -> None:
+    # The Tokyo case: not a country, so the verified unconstrained city
+    # lookup runs and mints an anchorable key.
+    svc, geo, _ = _service(
+        resolve_country=None,
+        resolve_city_global=ResolvedGeo(country_code="jp", city="Tokyo"),
+    )
+    out = await svc.search("Tokyo", limit=8)
+    assert len(out.areas) == 1
+    assert out.areas[0].geo_key == "jp/tokyo"
+    assert out.areas[0].level == "city"
+    geo.resolve_city_global.assert_awaited_once_with("Tokyo")
 
 
 async def test_name_comma_country_resolves_as_city() -> None:

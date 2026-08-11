@@ -30,7 +30,9 @@ from kebi.providers.cache import CacheBackend
 
 logger = logging.getLogger(__name__)
 
-_CACHE_PREFIX = "entsearch:v1:"
+# v2: bare names gained verified global-city resolution — old v1 misses
+# ("tokyo" → nothing) must not shadow the new behavior for their TTL.
+_CACHE_PREFIX = "entsearch:v2:"
 _CACHE_MISS = '{"miss": true}'
 
 
@@ -132,14 +134,17 @@ class EntitySearchService:
                 return None
             geo = await self._geo.resolve_city(name, country_geo.country_code)
             return self._city_hit(geo)
+        # Bare name: a country first ("Vietnam" must never resolve as some
+        # city named Vietnam), then a verified unconstrained city lookup —
+        # prominence-ranked, round-trip checked ("Tokyo" → jp/tokyo).
         geo = await self._geo.resolve_country(name)
-        if geo is None or not geo.country_code:
-            return None
-        try:
-            key = build_geo_key(geo.country_code)
-        except ValueError:
-            return None
-        return AreaHit(geo_key=key, name=name, level="country")
+        if geo is not None and geo.country_code:
+            try:
+                key = build_geo_key(geo.country_code)
+            except ValueError:
+                return None
+            return AreaHit(geo_key=key, name=name, level="country")
+        return self._city_hit(await self._geo.resolve_city_global(name))
 
     @staticmethod
     def _city_hit(geo: ResolvedGeo | None) -> AreaHit | None:
