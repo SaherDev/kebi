@@ -59,22 +59,22 @@ async def test_agent_decision_streams_active_then_done(
 
     assert [f["status"] for f in decision] == ["active", "done"]
     assert decision[0]["id"] == decision[1]["id"]
-    # The orchestrator's action line is "thinking" on both frames (ADR-103).
+    # The orchestrator's action line is "thinking" on both frames (ADR-157).
     assert decision[0]["title"] == "thinking"
     assert decision[1]["title"] == "thinking"
     assert decision[0]["summary"] is None
     assert decision[0]["duration_ms"] is None
-    # done carries the full LLM text and a real measured duration (not the
-    # 0.0 placeholder the step is constructed with).
-    assert decision[1]["summary"] == "here is my answer"
+    # done closes with a neutral summary — never the answer text, which is
+    # byte-identical to the message frame — and a real measured duration
+    # (not the 0.0 placeholder the step is constructed with).
+    assert decision[1]["summary"] == "answered from what I already know"
     assert decision[1]["duration_ms"] is not None
     assert decision[1]["duration_ms"] >= 0.0
-    # The orchestrator's thinking is debug on BOTH frames (ADR-103): the client
-    # filters it (so the answer never renders twice), and — critically — a
-    # step's visibility must not change across its lifecycle or the client,
-    # which keys on `id`, would keep the active frame and never resolve it.
-    assert decision[0]["visibility"] == "debug"
-    assert decision[1]["visibility"] == "debug"
+    # The thinking line is user-visible on BOTH frames (ADR-157) — a step's
+    # visibility must not change across its lifecycle or the client, which
+    # keys on `id`, would keep the active frame and never resolve it.
+    assert decision[0]["visibility"] == "user"
+    assert decision[1]["visibility"] == "user"
 
 
 async def test_every_done_frame_has_a_prior_active(

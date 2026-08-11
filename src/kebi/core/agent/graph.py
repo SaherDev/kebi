@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import random
 import re
 from collections.abc import Callable
 from datetime import datetime
@@ -143,6 +144,34 @@ def _structured_usage(result: Any) -> dict[str, int]:
 # returns empty content (a silent tool call, no preamble prose). Plain,
 # non-technical wording — this is a user-visible reasoning step.
 _DIRECT_RESPONSE_FALLBACK = "Let me look into that…"
+# Thinking-line summaries for terminal responses (ADR-157). A terminal
+# response's text is the answer itself — byte-identical to the message frame —
+# so it never rides the step; these neutral lines close the skeleton instead.
+_DIRECT_ANSWER_SUMMARY = "answered from what I already know"
+_ANSWER_AFTER_TOOLS_SUMMARY = "putting the answer together"
+
+# Titles for the thinking line. A turn with three identical bold "thinking"
+# rows reads like a machine logging; varying the action word is the same
+# trick Claude's rotating spinner verbs use — a curated list, picked
+# per step, lowercase per the step-title style. The first step of a turn
+# always gets plain "thinking" (the turn opens calmly); later steps draw
+# from the rest. The chosen title rides BOTH lifecycle frames of its step
+# (the client keys on `id` — the title must not change mid-step).
+_THINKING_TITLES: tuple[str, ...] = (
+    "thinking",
+    "mulling it over",
+    "connecting the dots",
+    "sizing it up",
+    "piecing it together",
+    "working it out",
+)
+
+
+def _thinking_title(steps_taken: int) -> str:
+    if steps_taken <= 0:
+        return _THINKING_TITLES[0]
+    return random.choice(_THINKING_TITLES[1:])
+
 
 # Node names are re-used by tests asserting graph structure.
 NODE_RESOLVE_LOCATION = "resolve_location"
@@ -732,18 +761,15 @@ def make_agent_node(llm: Any, tools: list[Any]) -> Any:
     `messages`, increments `steps_taken`, and emits one user-visible
     `agent.tool_decision` reasoning step per LLM call (feature 028 M5).
 
-    The persisted reasoning step's `summary` carries `AIMessage.content`
-    truncated to 200 chars. When `content` is empty (tool-call-only
-    response), a plain fallback summary is used. The SSE lifecycle frames
-    (via `stream_emit`) carry an `active` frame before the LLM call and a
-    `done` frame with the full, untruncated text after it.
-
-    Visibility is gated on tool calls (ADR-102): a response that carries
-    tool calls is intermediate narration the client shows; a response with
-    no tool calls IS the terminal answer, whose content is byte-identical
-    to the `message` frame, so the step is marked `debug` to keep it off
-    the user-visible trace (it still rides SSE for tracing). Otherwise the
-    thinking panel would render the whole answer, then the answer again.
+    Every LLM call emits one user-visible "thinking" step (ADR-157): the
+    `active` frame goes out before the call so the client shows a skeleton
+    while the orchestrator thinks, and the `done` frame's `summary` is the
+    model's own narration when the response carries tool calls — the text
+    the model wrote alongside them ("checking your saved spots in haifa").
+    A response with no tool calls IS the terminal answer, whose content is
+    byte-identical to the `message` frame — so its step closes with a
+    neutral summary instead of the answer text, and the persisted step
+    truncates to 200 chars either way.
     """
     bound = llm.bind_tools(tools, parallel_tool_calls=False)
 
@@ -799,18 +825,19 @@ def make_agent_node(llm: Any, tools: list[Any]) -> Any:
         # client can show a skeleton while the orchestrator thinks. The id is
         # keyed by `steps_taken` (read before the +1 write) so the matching
         # `done` frame below carries the same id across both branches.
-        # The orchestrator's own thinking is debug on BOTH frames (ADR-103):
-        # it's either between-tool monologue (the tool steps already narrate the
-        # work) or the terminal answer (identical to the message frame). Keeping
-        # the visibility identical across active+done is also required — the
-        # client keys on `id`, so a step that flips user→debug never resolves.
+        # `user` on BOTH frames (ADR-157, supersedes ADR-103 here): the
+        # thinking line is the trace's heartbeat — every turn shows at least
+        # one, and on a tool-call response its `done` summary is the model's
+        # own narration. Keeping the visibility identical across active+done
+        # is required — the client keys on `id`, so a step that flips
+        # user→debug never resolves.
         step_id = f"agent.tool_decision#{state.get('steps_taken', 0)}"
+        step_title = _thinking_title(state.get("steps_taken", 0))
         started = emit_step_active(
             step_id,
             "agent.tool_decision",
-            title="thinking",
+            title=step_title,
             source="agent",
-            visibility="debug",
         )
 
         try:
@@ -836,10 +863,12 @@ def make_agent_node(llm: Any, tools: list[Any]) -> Any:
             )
             step = ReasoningStep(
                 step="agent.tool_decision",
-                title="thinking",
-                summary="I hit a brief connection issue — give that another try.",
+                title=step_title,
+                summary="hit a brief connection issue",
                 source="agent",
-                visibility="debug",
+                # `user` to match the active frame — a flipped visibility
+                # strands the skeleton (see the active-frame comment above).
+                visibility="user",
                 duration_ms=0.0,
             )
             emit_step_done(step_id, step, started=started)
@@ -852,18 +881,28 @@ def make_agent_node(llm: Any, tools: list[Any]) -> Any:
 
         full_text = extract_text_content(getattr(ai_msg, "content", None)).strip()
 
-        summary_source = full_text if full_text else _DIRECT_RESPONSE_FALLBACK
+        # The thinking line the user sees (ADR-157). On a tool-call response
+        # the model's own text IS the narration ("checking your saved spots
+        # in haifa") — model-authored, so every trace reads differently. A
+        # terminal response's text is the answer itself, byte-identical to
+        # the message frame, so it never rides the step: a neutral line
+        # closes the skeleton instead, and which one depends on whether any
+        # work preceded it.
+        if getattr(ai_msg, "tool_calls", None):
+            summary_source = full_text if full_text else _DIRECT_RESPONSE_FALLBACK
+        elif state.get("steps_taken", 0) or state.get("tool_calls_used", 0):
+            summary_source = _ANSWER_AFTER_TOOLS_SUMMARY
+        else:
+            summary_source = _DIRECT_ANSWER_SUMMARY
 
-        # The streamed `done` frame keeps the full, untruncated text; the
-        # persisted step truncates to 200 chars so checkpointer history stays
-        # bounded. Debug-only (see the active frame above) — the client filters
-        # it, so the answer never duplicates and the thinking row never lingers.
+        # The persisted step truncates to 200 chars so checkpointer history
+        # stays bounded; narration lines are short so this rarely bites.
         done_step = ReasoningStep(
             step="agent.tool_decision",
-            title="thinking",
+            title=step_title,
             summary=summary_source,
             source="agent",
-            visibility="debug",
+            visibility="user",
             duration_ms=0.0,
         )
         emit_step_done(step_id, done_step, started=started)
@@ -1823,7 +1862,10 @@ def _location_clarification_update(
         title="checking your location",
         summary=reason,
         source="agent",
-        visibility="user",
+        # `debug` like every location frame (ADR-157): the clarifying
+        # question reaches the user as the turn's answer; a step saying the
+        # same thing is pipeline noise.
+        visibility="debug",
         duration_ms=0.0,
     )
     emit_step_done(_LOCATION_STEP_ID, step, started=started)
@@ -1902,7 +1944,11 @@ def _location_resolved_update(
         title="found your location",
         summary=f"around {place}",
         source="agent",
-        visibility="user",
+        # `debug` (ADR-157): location resolution is eager background context,
+        # not reasoning the user watches. The agent mentions the place in its
+        # own narration when it matters; a fixed "found your location" step
+        # opening every trace made the pipeline the story.
+        visibility="debug",
         duration_ms=0.0,
     )
     emit_step_done(_LOCATION_STEP_ID, step, started=started)
@@ -1946,11 +1992,16 @@ def make_resolve_location_node(resolver_llm: Any, geocoding_client: Any) -> Any:
         # SSE lifecycle: announce location resolution before the resolver LLM
         # call. The matching `done` frame is emitted by the resolved/clarify
         # update helpers under the same id; `started` carries the timing token.
+        # `debug` on BOTH frames (ADR-157) — the client keys on `id`, so a
+        # step that flips user→debug never resolves and renders as a failed
+        # step. Location resolution is silent infrastructure now: it never
+        # narrates to the user, whichever way it ends.
         started = emit_step_active(
             _LOCATION_STEP_ID,
             "agent.location",
-            title="found your location",
+            title="checking your location",
             source="agent",
+            visibility="debug",
         )
 
         def _resolver_span() -> TracingSpan:
