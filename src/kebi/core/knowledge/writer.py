@@ -92,6 +92,7 @@ class KnowledgeWriter:
             # Off-vocabulary tags are dropped, not stored: the tag index is
             # only useful if reader and writer share one bounded vocabulary.
             # (Accessibility was checked on the RAW tags above, on purpose.)
+            stored_tags = normalize_claim_tags(claim.tags)
             claim_id = await self._repo.save(
                 entity_type=claim.scope,
                 entity_key=key,
@@ -99,13 +100,20 @@ class KnowledgeWriter:
                 claim=claim.claim,
                 source_type=source_type,
                 confidence=confidence,
-                tags=normalize_claim_tags(claim.tags),
+                tags=stored_tags,
                 source_ref=source_ref,
                 user_id=user_id,
                 review_status=review_status,
             )
             if claim_id is not None:
-                written.append(WrittenClaim(id=claim_id, claim=claim))
+                # The returned claim carries what was STORED — echoing the
+                # raw tags would show the caller values the index never kept.
+                written.append(
+                    WrittenClaim(
+                        id=claim_id,
+                        claim=claim.model_copy(update={"tags": stored_tags}),
+                    )
+                )
         return written
 
 

@@ -25,6 +25,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from kebi.core.agent._trace_context import traced_call
 from kebi.core.config import get_prompt
+from kebi.core.knowledge.geo_resolve import slugs_match
 from kebi.core.knowledge.schemas import (
     CurationAnchor,
     ResolvedGeo,
@@ -58,6 +59,22 @@ class _CuratedClaim(BaseModel):
 
 class _CuratorResponse(BaseModel):
     claims: list[_CuratedClaim] = Field(default_factory=list)
+
+
+def _names_anchor(raw: _CuratedClaim, anchor: CurationAnchor | None) -> bool:
+    """True when a geo claim is about the anchored entity (or a geo level the
+    anchor already sits in), so the anchor's verified geo keys it directly.
+    An empty area_query under an anchor means "here" — also the anchor."""
+    if anchor is None:
+        return False
+    if not raw.area_query.strip():
+        return True
+    geo = anchor.geo
+    return (
+        slugs_match(raw.entity_name, anchor.name)
+        or slugs_match(raw.entity_name, geo.neighborhood)
+        or slugs_match(raw.entity_name, geo.city)
+    )
 
 
 def _render_anchor_line(anchor: CurationAnchor) -> str:
@@ -168,7 +185,15 @@ class KnowledgeCurator:
                     )
                 )
                 continue
-            geo = await self._resolve_area(raw.area_query, cache) or anchor_geo
+            if _names_anchor(raw, anchor):
+                # The anchor supplies the key for claims about itself —
+                # re-geocoding the anchor's own name risks an incomplete or
+                # differently-keyed answer that would split the entity's
+                # claims (the harvester's own rule, ADR-126). Only a claim
+                # about a *different* area earns a geocode.
+                geo = anchor_geo
+            else:
+                geo = await self._resolve_area(raw.area_query, cache) or anchor_geo
             if geo is None:
                 continue
             resolved.append(

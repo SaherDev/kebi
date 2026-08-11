@@ -96,6 +96,48 @@ async def test_place_claim_dropped_under_area_anchor() -> None:
     assert await curator.structure("prose", _AREA_ANCHOR) == []
 
 
+async def test_claim_naming_anchor_takes_anchor_geo_over_geocode() -> None:
+    # Live failure this pins: geocoding "Canggu" free-text returned its
+    # district (city="North Kuta", no neighborhood) — a successful-but-wrong
+    # answer that beat the fallback and then dropped at the writer. A claim
+    # about the anchor itself must key to the anchor, never re-geocode.
+    wrong = GeocodeResult(lat=-8.6, lng=115.1, country_code="id", city="North Kuta")
+    claim = _CuratedClaim(
+        scope="neighborhood",
+        entity_name="Canggu",
+        area_query="Canggu, Bali, Indonesia",
+        claim="rent a scooter; taxis are scarce",
+        tags=["transport"],
+        confidence=0.9,
+    )
+    anchor = CurationAnchor(
+        place_id=None,
+        name="Canggu",
+        geo=ResolvedGeo(country_code="id", city="bali", neighborhood="canggu"),
+    )
+    curator, geocoder = _curator([claim], wrong)
+    out = await curator.structure("prose", anchor)
+    assert len(out) == 1
+    assert out[0].geo.city == "bali"
+    assert out[0].geo.neighborhood == "canggu"
+    geocoder.search.assert_not_awaited()
+
+
+async def test_empty_area_query_under_anchor_means_here() -> None:
+    claim = _CuratedClaim(
+        scope="neighborhood",
+        entity_name="Canggu",
+        area_query="",
+        claim="gojek pickups get blocked from gated streets",
+        confidence=0.8,
+    )
+    curator, geocoder = _curator([claim], geocode=None)
+    out = await curator.structure("prose", _AREA_ANCHOR)
+    assert len(out) == 1
+    assert out[0].geo == _AREA_ANCHOR.geo
+    geocoder.search.assert_not_awaited()
+
+
 async def test_geo_spillover_under_venue_anchor() -> None:
     # An area-level remark in venue-anchored prose still lands geo-scoped,
     # falling back to the venue's own location when the geocoder has nothing.

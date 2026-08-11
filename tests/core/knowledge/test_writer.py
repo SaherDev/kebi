@@ -129,7 +129,7 @@ async def test_drops_accessibility_claim() -> None:
 async def test_tags_normalized_to_vocabulary_on_write() -> None:
     """Known tags stored in canonical form; off-vocab hallucinations dropped."""
     repo = _FakeRepo()
-    await _persist(
+    written = await _persist(
         repo,
         [
             _claim(
@@ -139,6 +139,8 @@ async def test_tags_normalized_to_vocabulary_on_write() -> None:
         ],
     )
     assert repo.saved[0]["tags"] == ["Thai", "cash_only", "go_early"]
+    # The returned claim echoes what was stored, not the raw emission.
+    assert written[0].claim.tags == ["Thai", "cash_only", "go_early"]
 
 
 async def test_accessibility_checked_on_raw_tags_before_normalization() -> None:
