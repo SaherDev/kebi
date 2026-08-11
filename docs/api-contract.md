@@ -45,7 +45,7 @@ tier is a gateway-only change — kebi never sees it.
 | `X-Gateway-Save-Limit`              | integer        | absent = unlimited    | Max saved places (`/v1/extract`, `/v1/user/places`)         |
 | `X-Gateway-Consults-Per-Day`        | integer        | absent = unlimited    | Daily consult quota on `/v1/chat`(+`/stream`)               |
 | `X-Gateway-Advanced-Models-Enabled` | `true`/`false` | `false` (fail closed) | Higher-quality orchestrator model on consults               |
-| `X-Gateway-Can-Curate`              | `true`/`false` | `false` (fail closed) | Push curated-expert knowledge (`POST /v1/knowledge/curate`) |
+| `X-Gateway-Can-Curate`              | `true`/`false` | `false` (fail closed) | All `/v1/knowledge/*` curation endpoints: curate, list/retract own claims, entity typeahead |
 
 Asymmetry by design (ADR-112): the boolean feature flags **fail closed** (a
 missing header denies the paid feature); the numeric limits **fail open** to
@@ -82,6 +82,9 @@ keyed by the verified `X-Gateway-User-Id`.
 | GET /v1/user/library        | 60 / minute |
 | POST /v1/user/places        | 60 / minute |
 | POST /v1/knowledge/curate   | 30 / minute |
+| GET /v1/knowledge/claims    | 60 / minute |
+| DELETE /v1/knowledge/claims/{id} | 60 / minute |
+| GET /v1/knowledge/entities  | 120 / minute |
 | PATCH /v1/user/places/{id}  | 60 / minute |
 | DELETE /v1/user/places/{id} | 60 / minute |
 | GET /v1/places/{id}         | 60 / minute |
@@ -1023,9 +1026,12 @@ other SQL tables (saves, memories, taste model) are left untouched.
 ## POST /v1/knowledge/curate
 
 Push expert knowledge into the knowledge layer (ADR-121). The caller writes
-prose; kebi's LLM structures it into geo-scoped claims (country / city /
-neighborhood) and stores them as `curated_expert` — **global** knowledge, not
-scoped to the caller. v1 does not curate individual venues.
+prose; kebi's LLM structures it into claims and stores them as
+`curated_expert` — **global** knowledge, not scoped to the caller. An
+**anchored** request pins the prose to one entity: a venue anchor is what
+makes `place`-scoped claims expressible (unanchored prose remains geo-scoped
+only), and the anchor's own geography is the fallback when a claim's area
+can't be geocoded from the prose.
 
 **Gated:** requires the `X-Gateway-Can-Curate` capability header set to
 `true`. Missing/`false` → `403 { "detail": "curation_not_permitted" }` (fail
@@ -1038,18 +1044,23 @@ closed, since these are global writes). `user_id` is taken only from
 
 ```json
 {
-  "text": "Jumeirah's beach clubs are pricey but the sunset views are unreal. Dubai nightlife peaks after midnight.",
-  "location_hint": { "country_alpha2": "ae", "city": "Dubai" }
+  "text": "Cash only at the bar. The whole street around it is great for coffee.",
+  "anchor": { "place_id": "5f0c1a2b-..." }
 }
 ```
 
-| Field                          | Type     | Notes                                                               |
-| ------------------------------ | -------- | ------------------------------------------------------------------- |
-| `text`                         | `string` | Required, non-empty. The expert's prose.                            |
-| `location_hint`                | `object` | Optional. Fallback geography when a claim's area can't be geocoded. |
-| `location_hint.country_alpha2` | `string` | ISO-3166 alpha-2 (e.g. `"ae"`).                                     |
-| `location_hint.city`           | `string` | Optional.                                                           |
-| `location_hint.neighborhood`   | `string` | Optional.                                                           |
+| Field             | Type     | Notes                                                                                                     |
+| ----------------- | -------- | ---------------------------------------------------------------------------------------------------------- |
+| `text`            | `string` | Required, non-empty. The expert's prose.                                                                  |
+| `anchor`          | `object` | Optional. Exactly one of `place_id` / `area_id` — both or neither inside the object → 422.                |
+| `anchor.place_id` | `string` | A catalog place id — the same id `kebi://venue/{id}` links carry and `GET /v1/places/{id}` takes.          |
+| `anchor.area_id`  | `string` | An encoded area token — the same token `kebi://area/{id}` links carry and `GET /v1/areas/{id}` takes.      |
+
+`location_hint` was removed when anchors landed: an area anchor is the same
+fallback geography, verified. An unknown `place_id` or an undecodable
+`area_id` token → `404 { "detail": "anchor_not_found" }` before any LLM
+runs. A valid but never-opened area is **not** a 404 (area rows are lazy,
+ADR-153).
 
 **Response (200):**
 
@@ -1058,16 +1069,18 @@ closed, since these are global writes). `user_id` is taken only from
   "claims_written": 2,
   "claims": [
     {
-      "scope": "neighborhood",
-      "entity_name": "Jumeirah",
-      "claim": "Beach clubs are pricey but the sunset views are exceptional.",
-      "tags": ["nightlife", "price", "scenery"]
+      "id": "0b9f4c1e-...",
+      "scope": "place",
+      "entity_name": "Beach Club X",
+      "claim": "Cash only at the bar.",
+      "tags": ["cash_only"]
     },
     {
-      "scope": "city",
-      "entity_name": "Dubai",
-      "claim": "Nightlife peaks after midnight.",
-      "tags": ["nightlife"]
+      "id": "7d2e9a03-...",
+      "scope": "neighborhood",
+      "entity_name": "Jumeirah",
+      "claim": "The surrounding street is known for its coffee shops.",
+      "tags": ["coffee"]
     }
   ]
 }
@@ -1076,9 +1089,117 @@ closed, since these are global writes). `user_id` is taken only from
 | Field            | Type       | Notes                                                                                                                                                 |
 | ---------------- | ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `claims_written` | `integer`  | Count of **new** rows stored. May be less than the prose implied — dedup collapses re-submissions, and unkeyable or accessibility claims are dropped. |
-| `claims`         | `object[]` | The stored claims: `{ scope, entity_name, claim, tags }`. Empty when nothing was stored.                                                              |
+| `claims`         | `object[]` | The stored claims: `{ id, scope, entity_name, claim, tags }`. `id` is the reference `DELETE /v1/knowledge/claims/{id}` takes. Empty when nothing was stored. |
 
-Accessibility claims are never stored (an unverified accessibility claim is real-world harm). Harvested (`shared_content`) and curated (`curated_expert`) claims about the same entity merge on the same key and are separable only by their source.
+A deduped re-submission does **not** reappear in `claims` — `GET
+/v1/knowledge/claims`, not this response, is the source of truth for "what
+you've added". Accessibility claims are never stored (an unverified
+accessibility claim is real-world harm). Harvested (`shared_content`) and
+curated (`curated_expert`) claims about the same entity merge on the same
+key and are separable only by their source.
+
+---
+
+## GET /v1/knowledge/claims
+
+One newest-first page of the caller's own curated claims — what backs "what
+you've added". **Gated** on `X-Gateway-Can-Curate` like all curation
+endpoints. Ownership is the claim's provenance (its `source_ref` names the
+author), since curated claims are global rows.
+
+**Query params:** `limit` (default 20, max 100), `cursor` (opaque, from a
+prior response's `next_cursor`; malformed → 400).
+
+**Response (200):**
+
+```json
+{
+  "claims": [
+    {
+      "id": "0b9f4c1e-...",
+      "scope": "place",
+      "claim": "Cash only at the bar.",
+      "tags": ["cash_only"],
+      "created_at": "2026-08-10T12:00:00Z",
+      "anchor": { "type": "place", "place_id": "5f0c1a2b-...", "area_id": null, "name": "Beach Club X" }
+    },
+    {
+      "id": "7d2e9a03-...",
+      "scope": "neighborhood",
+      "claim": "The surrounding street is known for its coffee shops.",
+      "tags": ["coffee"],
+      "created_at": "2026-08-10T12:00:00Z",
+      "anchor": { "type": "area", "place_id": null, "area_id": "YWUvZHViYWkvanVtZWlyYWg", "name": "Jumeirah" }
+    }
+  ],
+  "next_cursor": null
+}
+```
+
+Every claim carries a renderable, **openable** anchor: a place claim the
+catalog id venue links use, a geo claim the encoded token area links use —
+group rows by anchor client-side. `created_at` is a raw ISO-8601 instant.
+Provenance, confidence, and review internals never leave the service.
+
+---
+
+## DELETE /v1/knowledge/claims/{claim_id}
+
+Retract one of the caller's own curated claims. **Gated** on
+`X-Gateway-Can-Curate`. Author-only: the claim's provenance must name the
+caller.
+
+**Response:** `204` on success. `404 { "detail": "claim_not_found" }` covers
+both a claim that doesn't exist and one that isn't the caller's — the two
+are deliberately indistinguishable, so ids can't be probed.
+
+---
+
+## GET /v1/knowledge/entities
+
+Typeahead behind the curation anchor chip — places and areas in one typed
+list. **Gated** on `X-Gateway-Can-Curate`. Deterministic (no LLM): catalog
+places via unscoped hybrid search, areas from the profiled areas table, and
+— only when the known corpus has no area hit — a verified-or-refuse geocode
+so a never-opened area can still be anchored. `"Name, Country"` pins a new
+city; a bare unseen name resolves only as a country (free-text geocoding of
+bare names is the documented failure mode and is never used).
+
+**Query params:** `q` (required, 2–120 chars), `limit` (default 8, max 20).
+
+**Response (200):**
+
+```json
+{
+  "results": [
+    {
+      "type": "area",
+      "place_id": null,
+      "area_id": "aWQvYmFsaS9jYW5nZ3U",
+      "name": "Canggu",
+      "level": "neighbourhood",
+      "icon": null,
+      "context": "Bali, ID"
+    },
+    {
+      "type": "place",
+      "place_id": "5f0c1a2b-...",
+      "area_id": null,
+      "name": "Canggu Coffee Lab",
+      "level": null,
+      "icon": "☕",
+      "context": "Canggu, Bali"
+    }
+  ]
+}
+```
+
+Areas lead, then places in relevance order. The id field **is** the anchor
+payload: `place_id` / `area_id` go into a curate `anchor` verbatim, and each
+also opens on its own screen (`GET /v1/places/{id}` / `GET /v1/areas/{id}` —
+an unprofiled area opens thin and profiles lazily). `icon` is nullable; the
+client keeps its category fallback (ADR-146). No matches is
+`{ "results": [] }`, never an error.
 
 ---
 

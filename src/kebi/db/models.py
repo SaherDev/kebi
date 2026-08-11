@@ -185,6 +185,14 @@ class KnowledgeClaim(Base):
             postgresql_where=text("user_id IS NOT NULL"),
         ),
         Index("ix_knowledge_claims_review_status", "review_status"),
+        # Author lookups: a curated claim is global (user_id NULL) and its
+        # author lives only in source_ref ("curator:{user_id}"), so "my
+        # claims" and author-only delete both filter here.
+        Index(
+            "ix_knowledge_claims_source_ref",
+            "source_ref",
+            postgresql_where=text("source_ref IS NOT NULL"),
+        ),
     )
 
     id: Mapped[str] = mapped_column(

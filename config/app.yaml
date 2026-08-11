@@ -349,6 +349,7 @@ prompts:
   home_suggester: home_suggester.txt
   knowledge_harvester: knowledge_harvester.txt
   knowledge_curator: knowledge_curator.txt
+  knowledge_curator_anchor: knowledge_curator_anchor.txt
   web_harvester: web_harvester.txt
 
 # ---------------------------------------------------------------------------
@@ -399,6 +400,13 @@ knowledge:
     w_trust: 0.2
     w_prox: 0.1
     topic_relevance_floor: 0.05
+  # Curation anchor-chip typeahead (/v1/knowledge/entities). Areas lead the
+  # result list (few, exact-ish); the resolver cache remembers a verified or
+  # missed geocode of an unseen area name so typeahead traffic can't hammer
+  # the rate-limited public Nominatim instance.
+  entity_search:
+    area_limit: 3
+    resolver_cache_ttl_seconds: 604800
 
 # ---------------------------------------------------------------------------
 # Agent Configuration (feature 027 M2, ADR-062)

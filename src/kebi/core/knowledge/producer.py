@@ -16,7 +16,12 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import Protocol, runtime_checkable
 
-from kebi.core.knowledge.schemas import ReviewStatus, SourceType, StructuredClaim
+from kebi.core.knowledge.schemas import (
+    ReviewStatus,
+    SourceType,
+    StructuredClaim,
+    WrittenClaim,
+)
 from kebi.core.knowledge.writer import KnowledgeWriter
 
 
@@ -54,10 +59,11 @@ class KnowledgeIngestion:
         *,
         source_ref: str | None,
         user_id: str | None = None,
-    ) -> list[StructuredClaim]:
+    ) -> list[WrittenClaim]:
         """Write `claims` stamped with `producer`'s provenance; return the
-        claims that produced a new row. `user_id` is None for global sources
-        (harvest, curation) and set only for conversation-scoped ones."""
+        claims that produced a new row, each with its row id. `user_id` is
+        None for global sources (harvest, curation) and set only for
+        conversation-scoped ones."""
         return await self._writer.persist(
             claims,
             source_type=producer.source_type,

@@ -69,14 +69,14 @@ def _scalars_result(rows: list[SimpleNamespace]) -> MagicMock:
 # ---- save: dedup + three origins under one shape ---------------------------
 
 
-async def test_save_curated_expert_claim_returns_true_on_insert() -> None:
+async def test_save_curated_expert_claim_returns_id_on_insert() -> None:
     factory, session = _mock_session_factory()
     result = MagicMock()
     result.first.return_value = ("new-id",)
     session.execute = AsyncMock(return_value=result)
     repo = SQLAlchemyKnowledgeClaimRepository(factory)
 
-    inserted = await repo.save(
+    claim_id = await repo.save(
         entity_type="place",
         entity_key="place:9f3c2a",
         entity_name="Café Rider",
@@ -85,7 +85,7 @@ async def test_save_curated_expert_claim_returns_true_on_insert() -> None:
         confidence=0.95,
     )
 
-    assert inserted is True
+    assert claim_id == "new-id"
     session.commit.assert_awaited_once()
 
 
@@ -96,7 +96,7 @@ async def test_save_shared_content_claim() -> None:
     session.execute = AsyncMock(return_value=result)
     repo = SQLAlchemyKnowledgeClaimRepository(factory)
 
-    inserted = await repo.save(
+    claim_id = await repo.save(
         entity_type="place",
         entity_key="place:9f3c2a",
         entity_name="Café Rider",
@@ -106,7 +106,7 @@ async def test_save_shared_content_claim() -> None:
         source_ref="https://example.com/post/123",
     )
 
-    assert inserted is True
+    assert claim_id == "new-id-2"
 
 
 async def test_save_user_message_claim_carries_user_id() -> None:
@@ -131,14 +131,14 @@ async def test_save_user_message_claim_carries_user_id() -> None:
     assert stmt.compile().params["user_id"] == "user_abc"
 
 
-async def test_save_returns_false_on_conflict() -> None:
+async def test_save_returns_none_on_conflict() -> None:
     factory, session = _mock_session_factory()
     result = MagicMock()
     result.first.return_value = None  # ON CONFLICT DO NOTHING -> no row returned
     session.execute = AsyncMock(return_value=result)
     repo = SQLAlchemyKnowledgeClaimRepository(factory)
 
-    inserted = await repo.save(
+    claim_id = await repo.save(
         entity_type="place",
         entity_key="place:9f3c2a",
         entity_name="Café Rider",
@@ -147,7 +147,7 @@ async def test_save_returns_false_on_conflict() -> None:
         confidence=0.95,
     )
 
-    assert inserted is False
+    assert claim_id is None
 
 
 # ---- list_for_entity: user-scoping never leaks -----------------------------
@@ -236,6 +236,69 @@ async def test_list_for_entities_short_circuits_on_empty_keys() -> None:
 
     assert claims == []
     session.execute.assert_not_called()
+
+
+# ---- author-scoped list + delete (curation self-management) ----------------
+
+
+async def test_list_by_source_ref_pages_and_filters_on_ref() -> None:
+    factory, session = _mock_session_factory()
+    rows = [
+        _row("c1", "ae/dubai", "fact one", KnowledgeSourceType.CURATED_EXPERT),
+        _row("c2", "ae/dubai", "fact two", KnowledgeSourceType.CURATED_EXPERT),
+    ]
+    session.execute = AsyncMock(return_value=_scalars_result(rows))
+    repo = SQLAlchemyKnowledgeClaimRepository(factory)
+
+    claims, next_cursor = await repo.list_by_source_ref("curator:user_abc", 5, None)
+
+    assert [c.id for c in claims] == ["c1", "c2"]
+    assert next_cursor is None  # 2 rows for limit 5 — no further page
+    stmt = session.execute.await_args.args[0]
+    compiled = str(stmt.compile(compile_kwargs={"literal_binds": False}))
+    assert "knowledge_claims.source_ref" in compiled
+
+
+async def test_list_by_source_ref_emits_cursor_when_more() -> None:
+    factory, session = _mock_session_factory()
+    rows = [
+        _row("c1", "ae/dubai", "fact one", KnowledgeSourceType.CURATED_EXPERT),
+        _row("c2", "ae/dubai", "fact two", KnowledgeSourceType.CURATED_EXPERT),
+    ]
+    session.execute = AsyncMock(return_value=_scalars_result(rows))
+    repo = SQLAlchemyKnowledgeClaimRepository(factory)
+
+    claims, next_cursor = await repo.list_by_source_ref("curator:user_abc", 1, None)
+
+    assert [c.id for c in claims] == ["c1"]  # limit+1 fetch trimmed back
+    assert next_cursor is not None
+
+
+async def test_delete_owned_requires_matching_source_ref() -> None:
+    factory, session = _mock_session_factory()
+    result = MagicMock()
+    result.first.return_value = None  # no row matched (missing or not theirs)
+    session.execute = AsyncMock(return_value=result)
+    repo = SQLAlchemyKnowledgeClaimRepository(factory)
+
+    deleted = await repo.delete_owned("c1", "curator:user_abc")
+
+    assert deleted is False
+    stmt = session.execute.await_args.args[0]
+    compiled = str(stmt.compile(compile_kwargs={"literal_binds": False}))
+    assert "knowledge_claims.id" in compiled
+    assert "knowledge_claims.source_ref" in compiled
+
+
+async def test_delete_owned_true_when_row_went_away() -> None:
+    factory, session = _mock_session_factory()
+    result = MagicMock()
+    result.first.return_value = ("c1",)
+    session.execute = AsyncMock(return_value=result)
+    repo = SQLAlchemyKnowledgeClaimRepository(factory)
+
+    assert await repo.delete_owned("c1", "curator:user_abc") is True
+    session.commit.assert_awaited_once()
 
 
 # ---- list_under_prefix: geo prefix scan ------------------------------------

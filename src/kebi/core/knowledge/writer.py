@@ -22,6 +22,7 @@ from kebi.core.knowledge.schemas import (
     ReviewStatus,
     SourceType,
     StructuredClaim,
+    WrittenClaim,
     build_geo_key,
     build_place_key,
 )
@@ -71,11 +72,12 @@ class KnowledgeWriter:
         user_id: str | None,
         confidence_floor: float,
         review_status: ReviewStatus = "approved",
-    ) -> list[StructuredClaim]:
+    ) -> list[WrittenClaim]:
         """Write each claim under its canonical key; return the claims that
-        produced a new row (dedup collapses re-runs, so a re-persist returns
-        fewer). Unkeyable and accessibility claims are skipped silently."""
-        written: list[StructuredClaim] = []
+        produced a new row, each paired with its row id (dedup collapses
+        re-runs, so a re-persist returns fewer). Unkeyable and accessibility
+        claims are skipped silently."""
+        written: list[WrittenClaim] = []
         for claim in claims:
             key = _build_key(claim)
             if key is None:
@@ -90,7 +92,7 @@ class KnowledgeWriter:
             # Off-vocabulary tags are dropped, not stored: the tag index is
             # only useful if reader and writer share one bounded vocabulary.
             # (Accessibility was checked on the RAW tags above, on purpose.)
-            created = await self._repo.save(
+            claim_id = await self._repo.save(
                 entity_type=claim.scope,
                 entity_key=key,
                 entity_name=claim.entity_name,
@@ -102,8 +104,8 @@ class KnowledgeWriter:
                 user_id=user_id,
                 review_status=review_status,
             )
-            if created:
-                written.append(claim)
+            if claim_id is not None:
+                written.append(WrittenClaim(id=claim_id, claim=claim))
         return written
 
 

@@ -41,6 +41,8 @@ class AreaRepository(Protocol):
 
     async def upsert(self, profile: AreaProfile) -> AreaProfile: ...
 
+    async def search_by_name(self, q: str, limit: int) -> list[AreaProfile]: ...
+
 
 class SQLAlchemyAreaRepository:
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
@@ -87,3 +89,21 @@ class SQLAlchemyAreaRepository:
             row = (await session.execute(stmt)).scalar_one()
             await session.commit()
             return _to_profile(row)
+
+    async def search_by_name(self, q: str, limit: int) -> list[AreaProfile]:
+        """Name-prefix match over profiled areas, A–Z.
+
+        Prefix (not substring): a typeahead types names from the front, and
+        prefix keeps the match anchored to what was typed. ILIKE wildcards
+        in the query are escaped — "100%" is a name fragment, not a pattern.
+        """
+        escaped = q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        stmt = (
+            select(AreaRow)
+            .where(AreaRow.name.ilike(f"{escaped}%", escape="\\"))
+            .order_by(AreaRow.name.asc())
+            .limit(limit)
+        )
+        async with self._session_factory() as session:
+            rows = (await session.execute(stmt)).scalars().all()
+        return [_to_profile(row) for row in rows]

@@ -147,6 +147,33 @@ class StructuredClaim(BaseModel):
     geo: ResolvedGeo | None = None
 
 
+class CurationAnchor(BaseModel):
+    """The entity a curation request is pinned to, resolved before the LLM
+    runs (never by it). `place_id` is set for a venue anchor and None for an
+    area anchor; `geo` is the fallback geography for the prose's geo-scoped
+    claims either way — a venue's stored location, or the area's own key
+    parts. Slug-built geo is fine: `_slugify` is idempotent, so an already-
+    canonical slug keys identically to the display name it came from."""
+
+    model_config = ConfigDict(frozen=True)
+
+    place_id: str | None = None
+    name: str
+    geo: ResolvedGeo
+
+
+class WrittenClaim(BaseModel):
+    """A claim that produced a new row, paired with that row's id — what the
+    write path returns so a caller can reference (and later retract) exactly
+    what it just created. Dedup-collapsed resubmissions have no entry: their
+    row (and id) predates this write."""
+
+    model_config = ConfigDict(frozen=True)
+
+    id: str
+    claim: StructuredClaim
+
+
 class HarvestPlace(BaseModel):
     """A place identified during extraction, with its resolved geo, that the
     harvester reasons about. `place_id` is the catalog id used to key

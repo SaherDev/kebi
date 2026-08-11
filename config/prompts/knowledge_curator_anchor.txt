@@ -1,0 +1,6 @@
+ANCHORED REQUEST — the prose below was written about one specific entity, named in the Anchor line above. Apply these additional rules:
+
+- When the anchor is a VENUE: the rule above that place-specific claims are out of scope does NOT apply to the anchored venue. A fact about the venue itself gets scope "place", with entity_name set to the venue's name exactly as the Anchor line gives it, and area_query left empty. Facts about the surrounding street, neighborhood, city, or country still use the geo scopes as usual.
+- When the anchor is an AREA: place-specific claims remain out of scope. Treat any statement that names no area of its own as being about the anchor area.
+- A fact clearly about a different area than the anchor keeps its own area_query, exactly as in an unanchored request.
+- Never emit scope "place" for any venue other than the anchored one.

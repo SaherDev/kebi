@@ -490,6 +490,20 @@ class KnowledgeResearchConfig(BaseModel):
         return self
 
 
+class EntitySearchConfig(BaseModel):
+    """The curation anchor-chip typeahead (/v1/knowledge/entities).
+
+    `area_limit` caps how many area rows lead the result list — areas are
+    few and exact-ish; the rest of the page is places. The resolver cache
+    TTL governs how long a verified-or-miss geocode verdict for an unseen
+    area name is remembered; long on purpose, since "is X a real city in
+    country Y" barely changes and public Nominatim is rate-limited.
+    """
+
+    area_limit: int = 3
+    resolver_cache_ttl_seconds: int = 604800  # 7 days
+
+
 class KnowledgeConfig(BaseModel):
     """Knowledge-layer writer settings (ADR-120/121/122).
 
@@ -530,6 +544,7 @@ class KnowledgeConfig(BaseModel):
     candidate_notes_limit: int = 2
     area_notes_limit: int = 3
     research: KnowledgeResearchConfig = KnowledgeResearchConfig()
+    entity_search: EntitySearchConfig = EntitySearchConfig()
 
     @model_validator(mode="after")
     def _bounds(self) -> "KnowledgeConfig":
