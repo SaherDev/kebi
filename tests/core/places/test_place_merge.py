@@ -178,3 +178,37 @@ class TestMergePlace:
         merged = merge_place(existing, candidate)
         assert len(merged.tags) == 1
         assert merged.tags[0].value == "chill"
+
+    def test_legacy_location_upgrades_to_a_keyed_blob(self) -> None:
+        """A blob without country_code predates the component mapping and
+        cannot form a geo key — a candidate that carries the code replaces
+        it wholesale (ADR-163), which is the self-heal ADR-119 promised."""
+        old = datetime(2026, 1, 1, tzinfo=UTC)
+        new = datetime(2026, 4, 1, tzinfo=UTC)
+        legacy = LocationContext(lat=1.0, lng=2.0, country="Vietnam")
+        keyed = LocationContext(
+            lat=1.0,
+            lng=2.0,
+            country="Vietnam",
+            country_code="vn",
+            city="Đà Nẵng",
+            neighborhood="Ngũ Hành Sơn",
+        )
+        merged = merge_place(
+            _core(location=legacy, refreshed_at=old),
+            _core(location=keyed, refreshed_at=new),
+        )
+        assert merged.location == keyed
+        assert merged.refreshed_at == new
+
+    def test_keyed_location_stays_sticky_against_another_keyed_blob(self) -> None:
+        first = LocationContext(lat=1.0, lng=2.0, country_code="vn", city="Da Nang")
+        second = LocationContext(lat=1.0, lng=2.0, country_code="vn", city="Hue")
+        merged = merge_place(_core(location=first), _core(location=second))
+        assert merged.location == first
+
+    def test_legacy_location_survives_a_candidate_without_a_code(self) -> None:
+        legacy = LocationContext(lat=1.0, lng=2.0, country="Vietnam")
+        codeless = LocationContext(lat=3.0, lng=4.0)
+        merged = merge_place(_core(location=legacy), _core(location=codeless))
+        assert merged.location == legacy
