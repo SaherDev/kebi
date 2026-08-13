@@ -132,7 +132,10 @@ async def test_entities_resolve_each_link() -> None:
             "key": "id/badung/canggu",
             "name": "Canggu",
             "uri": _CANGGU_URI,
-            "icon": "🏄",
+            # Row-sourced (ADR-162): the resolver's per-turn pick no longer
+            # rides entities, and this service has no refresher wired — so
+            # the area ships icon-less and the client falls back.
+            "icon": None,
         },
     ]
 

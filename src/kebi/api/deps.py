@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from kebi.core.agent.tools.candidate_namer import CandidateNamerService
 from kebi.core.areas import AreaProfileService, AreaScreenService
 from kebi.core.chat.consult_quota import ConsultQuotaService
+from kebi.core.chat.entity_icons import EntityIconRefresher
 from kebi.core.chat.service import ChatService
 from kebi.core.config import AppConfig, ExtractionConfig, get_config, get_env
 from kebi.core.events.dispatcher import EventDispatcher
@@ -233,6 +234,18 @@ def get_area_repository() -> SQLAlchemyAreaRepository:
     in both the request path (area screen) and the background profiler.
     """
     return SQLAlchemyAreaRepository(_get_session_factory())
+
+
+def get_entity_icon_refresher() -> EntityIconRefresher:
+    """Row-sourced entity icons for chat answers (ADR-162).
+
+    Session-factory based on purpose: the SSE path calls it inside the
+    streaming generator, after the request-scoped session is gone.
+    """
+    return EntityIconRefresher(
+        session_factory=_get_session_factory(),
+        area_repo=get_area_repository(),
+    )
 
 
 def get_area_profile_service() -> AreaProfileService:
@@ -1361,6 +1374,7 @@ async def get_chat_service(
     taste_service: TasteModelService = Depends(get_taste_service),  # noqa: B008
     config: AppConfig = Depends(get_config),  # noqa: B008
     agent_graph: Any = Depends(get_agent_graph),  # noqa: B008
+    icon_refresher: EntityIconRefresher = Depends(get_entity_icon_refresher),  # noqa: B008
 ) -> ChatService:
     """FastAPI dependency for ChatService (ADR-052/073/075/078)."""
     return ChatService(
@@ -1369,4 +1383,5 @@ async def get_chat_service(
         taste_service=taste_service,
         config=config,
         agent_graph=agent_graph,
+        icon_refresher=icon_refresher,
     )

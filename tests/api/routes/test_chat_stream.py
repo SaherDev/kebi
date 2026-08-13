@@ -29,6 +29,9 @@ def _make_mock_service() -> MagicMock:
     svc.compose_taste = AsyncMock(return_value=("", []))
     svc._compose_memory_summary = AsyncMock(return_value="")
     svc._dispatcher = MagicMock(dispatch=AsyncMock())
+    # Pass-through: a service with no refresher ships entities as linkified
+    # (icons are row-sourced separately, ADR-162).
+    svc.refresh_entity_icons = AsyncMock(side_effect=lambda entities: entities)
     return svc
 
 

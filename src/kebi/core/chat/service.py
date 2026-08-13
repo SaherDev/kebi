@@ -28,6 +28,7 @@ from kebi.core.taste.regen import format_summary_for_agent
 from kebi.core.taste.schemas import SummaryLine
 
 if TYPE_CHECKING:
+    from kebi.core.chat.entity_icons import EntityIconRefresher
     from kebi.core.config import AppConfig
     from kebi.core.events.dispatcher import EventDispatcherProtocol
     from kebi.core.memory.service import UserMemoryService
@@ -85,12 +86,26 @@ class ChatService:
         taste_service: TasteModelService,
         config: AppConfig,
         agent_graph: Any,
+        icon_refresher: EntityIconRefresher | None = None,
     ) -> None:
         self._dispatcher = event_dispatcher
         self._memory = memory_service
         self._taste_service = taste_service
         self._config = config
         self._agent_graph = agent_graph
+        self._icon_refresher = icon_refresher
+
+    async def refresh_entity_icons(self, entities: list[Any]) -> list[Any]:
+        """Row-sourced icons for a turn's linked entities (see `entity_icons`).
+
+        Public because the SSE route shares it — both attach points must
+        apply the same icons or the two chat paths would disagree with each
+        other, not just with the screens. A service built without a
+        refresher (tests) ships entities as linkified.
+        """
+        if self._icon_refresher is None:
+            return entities
+        return await self._icon_refresher.refresh(entities)
 
     async def run(
         self, request: ChatRequest, *, user_id: str, taste_enabled: bool = False
@@ -219,6 +234,10 @@ class ChatService:
                     normalize_voice(message_text),
                     build_entity_index(tool_results, working_location),
                 )
+                # Icons come off the stored rows, not the turn (the chip
+                # must match the screen its tap opens) — one batch read
+                # over the few entities actually linked.
+                entities = await self.refresh_entity_icons(entities)
 
                 return ChatResponse(
                     type="agent",

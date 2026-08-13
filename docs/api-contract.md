@@ -273,7 +273,7 @@ to `POST /v1/extract` — the chat path never writes to `user_places`.
 | `key`  | `string`              | `places.id` for a venue; the slugged geo key for an area; the raw page URL for a web source |
 | `name` | `string`              | Canonical display name — may differ from the text the answer used ("Luigis" vs "Luigi's"). For `web`, the source domain ("fifa.com") |
 | `uri`  | `string`              | `kebi://{kind}/{key}`, pre-composed so the link handler never parses (a `web` URI carries the URL base64url-encoded, no padding) |
-| `icon` | `string \| null`      | Single emoji for the entity's identity (🍕, 🏄), drawn beside the name. A venue's comes off its catalog row (ADR-117); an area's is picked by the turn's location resolver (ADR-146); a web source's is always 🌐. **Nullable by design** — the client falls back to its own kind/category mapping |
+| `icon` | `string \| null`      | Single emoji for the entity's identity (🍕, 🏄), drawn beside the name. **Always the stored row's icon, re-read at answer time (ADR-162)** — a chip never contradicts the screen its tap opens. A venue's comes off its catalog row (ADR-117); an area's off its area row (profiler-picked, ADR-153); a web source's is always 🌐. **Nullable by design** — a row with no icon yet (or an area not yet profiled) ships `null` and the client falls back to its own kind/category mapping |
 
 `recommendation_id` is the turn's consult id — an identifier of the
 recommendation itself (tracing, evals), not save ceremony: no endpoint

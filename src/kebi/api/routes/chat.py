@@ -370,6 +370,9 @@ async def chat_stream(
                         normalize_voice(final_message),
                         build_entity_index(tool_results, working_location),
                     )
+                    # Same row-sourced icons as the JSON path — the two
+                    # chat paths must ship identical entities.
+                    entities = await service.refresh_entity_icons(entities)
                     yield _frame(
                         "message",
                         {

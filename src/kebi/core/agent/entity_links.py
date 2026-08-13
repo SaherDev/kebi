@@ -138,12 +138,13 @@ class ChatEntity(BaseModel):
     is the canonical display name, which may differ from the text the answer
     actually used ("Luigi's" in prose, "Luigi's Hot Pizza" here).
 
-    `icon` is the single emoji the client draws beside the name. A venue's
-    comes off its catalog row, where an LLM already picked it (ADR-117); an
-    area has no row, so its icon comes from the turn's location resolver,
-    which is already looking at that area (ADR-146). Nullable on both kinds by
-    design — a path with no model behind it leaves it unset and the client
-    falls back to its own mapping, exactly as it already does for venues.
+    `icon` is the single emoji the client draws beside the name — always the
+    one the entity's stored row carries, re-read at attach time by
+    `EntityIconRefresher` so a chip never contradicts the screen its tap
+    opens. Nullable by design: a row with no icon yet (or, for areas, no row
+    yet — the profiler creates it on first open, ADR-153) ships `None` and
+    the client falls back to its own mapping. A web entity's is a static
+    globe.
     """
 
     kind: EntityKind
@@ -309,9 +310,11 @@ def _working_location_entities(
     from the resolver — so it is seeded here. Without a country code there is
     no canonical key, and an unkeyed area is not linkable.
 
-    The resolver also picks each level's icon (ADR-146), so the entities it
-    seeds arrive drawable; areas from anywhere else borrow those icons by key
-    in `build_entity_index`.
+    Icons are deliberately NOT seeded from the resolver (amends ADR-146):
+    a chip and the screen its tap opens must agree, so every entity's icon
+    is re-read from its stored row at attach time (`EntityIconRefresher`).
+    A per-turn model pick the row never sees is exactly what made them
+    disagree.
 
     Defensive `isinstance`: the state slot can still hold the carry-forward
     sentinel string on a first turn (see `_carried_working_location`).
@@ -330,30 +333,11 @@ def _working_location_entities(
         pairs.append(
             (
                 neighborhood,
-                _area(
-                    build_geo_key(country_code, city, neighborhood),
-                    neighborhood,
-                    _icon_of(working_location, "neighborhood_icon"),
-                ),
+                _area(build_geo_key(country_code, city, neighborhood), neighborhood),
             )
         )
-    pairs.append(
-        (
-            city,
-            _area(
-                build_geo_key(country_code, city),
-                city,
-                _icon_of(working_location, "city_icon"),
-            ),
-        )
-    )
+    pairs.append((city, _area(build_geo_key(country_code, city), city)))
     return pairs
-
-
-def _icon_of(working_location: dict[str, Any], field: str) -> str | None:
-    """One icon field off the working-location state slot, if it is a string."""
-    value = working_location.get(field)
-    return value if isinstance(value, str) else None
 
 
 def build_entity_index(
@@ -381,23 +365,6 @@ def build_entity_index(
         elif tool == "web_search":
             pairs.extend(_web_entities(payload))
     pairs.extend(_working_location_entities(working_location))
-
-    # An area the research tool resolved is usually the very area the turn is
-    # working in, keyed identically — so it borrows the icon the resolver
-    # already picked instead of arriving as the one undrawable entity in the
-    # answer.
-    area_icons = {
-        entity.key: entity.icon
-        for _, entity in pairs
-        if entity.kind == "area" and entity.icon
-    }
-    if area_icons:
-        pairs = [
-            (alias, entity)
-            if entity.icon or entity.kind != "area" or entity.key not in area_icons
-            else (alias, entity.model_copy(update={"icon": area_icons[entity.key]}))
-            for alias, entity in pairs
-        ]
 
     # Spoken short forms, added only where exactly one place answers to them.
     # An ambiguous prefix ("Bank Mandiri…" vs "Bank BNI…") would send a tap to

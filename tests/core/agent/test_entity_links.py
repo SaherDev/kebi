@@ -175,34 +175,19 @@ class TestBuildEntityIndex:
         )
         assert dict(index)["Luigis"].icon is None
 
-    def test_areas_carry_the_icons_the_resolver_picked(self) -> None:
+    def test_area_entities_mint_icon_less_even_when_the_resolver_picked_one(
+        self,
+    ) -> None:
+        # Amends ADR-146: per-turn resolver picks never ride entities — a chip
+        # must match the screen its tap opens, so icons are re-read from the
+        # stored rows at attach time (EntityIconRefresher). The row is the
+        # only picker; here there is no row, so there is no icon.
         index = build_entity_index(
             [], {**_CANGGU, "city_icon": "🏝️", "neighborhood_icon": "🏄"}
         )
         by_alias = dict(index)
-        assert by_alias["Canggu"].icon == "🏄"
-        assert by_alias["Badung"].icon == "🏝️"
-
-    def test_an_area_the_resolver_gave_no_icon_stays_unset(self) -> None:
-        by_alias = dict(build_entity_index([], _CANGGU))
         assert by_alias["Canggu"].icon is None
-
-    def test_a_researched_area_borrows_the_resolved_icon_for_its_key(self) -> None:
-        # Research resolves the very area the turn works in — same key, so the
-        # icon the resolver picked applies rather than leaving one bare entity.
-        index = build_entity_index(
-            [
-                {
-                    "tool": "research",
-                    "payload": {
-                        "entity_name": "Canggu",
-                        "entity_key": "id/badung/canggu",
-                    },
-                }
-            ],
-            {**_CANGGU, "neighborhood_icon": "🏄"},
-        )
-        assert dict(index)["Canggu"].icon == "🏄"
+        assert by_alias["Badung"].icon is None
 
     def test_a_venue_wins_a_same_named_area(self) -> None:
         index = build_entity_index(

@@ -17,6 +17,16 @@ Format:
 
 ---
 
+## ADR-162: A chip's icon is the row's icon — nothing per-turn invents one
+
+**Date:** 2026-08-13\
+**Status:** accepted — amends ADR-146\
+**Context:** The icon on a chat entity chip routinely contradicted the icon on the screen its tap opens, and it was a contradiction by construction, not a glitch. A venue chip carried the icon snapshot riding the tool payload — stale the moment the place screen's first-open profiler picked one (ADR-152). An area chip carried the location resolver's per-turn pick (ADR-146) while the area screen shows the profiler's stored pick (ADR-153): two different models choosing icons for the same entity, with the per-turn pick never written anywhere. A user who taps "Sunset Club 📍" and lands on "🍷 Sunset Club" reads it as the app disagreeing with itself. The alternative of dropping icons from chat entirely was rejected: it removes the feature instead of the inconsistency, and the mismatch would survive anyway between a bare chip and a decorated screen.\
+**Decision:** One icon picker per entity — the profiler that dresses its row — and one source at render time: the stored row, re-read when the answer's entities are attached. The resolver's per-turn icon picks stop riding entities entirely; an entity whose row has no icon yet (or, for areas, no row yet, since the row is created by the first screen open) ships no icon and the client falls back, which is exactly what its screen does in the same state. The re-read is one batch lookup per kind over only the entities actually linked, applied identically on both chat paths, and it fails open — icons are decoration, and a dead lookup must never cost the answer.\
+**Consequences:** A chip and its screen can no longer disagree: either both show the row's icon or both fall back. The accepted residue is chips in old messages minted before an entity's row first got dressed — they keep the fallback, and later mentions self-heal. Areas mentioned before anyone opens their screen now ship icon-less where they used to carry the resolver's guess; that is honesty, not regression — the guess was the bug. The resolver still picks icons for its own output; nothing downstream of entities reads them anymore, so removing that pass later is a cost cut waiting, not a behavior change.
+
+---
+
 ## ADR-161: A cited source becomes a tappable entity — one vocabulary for everything chat can open
 
 **Date:** 2026-08-13\
