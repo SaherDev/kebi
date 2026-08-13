@@ -174,12 +174,22 @@ store, ADR-129: what to order, local tricks, fees, safety, timing).
 Tool payloads stay server-side (ADR-136). What the caller renders is
 the answer text with entity names already wrapped as markdown links to
 `kebi://{kind}/{entity_key}` URIs, plus a flat `entities` list
-resolving each link. Two kinds:
+resolving each link. Three kinds:
 
 | Kind    | URI                          | `entity_key`                              | Tap opens          |
 | ------- | ---------------------------- | ----------------------------------------- | ------------------ |
 | `venue` | `kebi://venue/{place id}`    | `places.id` — the id `GET /v1/places/{id}` and `POST /v1/user/places` take | The place screen   |
 | `area`  | `kebi://area/{geo key}`      | `{cc}[/{city}[/{neighborhood}]]`, slugged | A light area sheet |
+| `web`   | `kebi://web/{token}`         | The full page URL the turn's `web_search` read | The page, in a browser |
+
+A `web` entity appears only on turns where `web_search` actually fired
+(stored claims keep no URL — ADR-145 — so a claim-based answer never
+carries a citation link). The prose names the source domain ("per the
+schedule on fifa.com") and that domain mention is the wrapped text;
+`name` is the domain, `key` is the raw page URL, and the URI's token is
+**base64url (no padding) of the page URL** — no resolve endpoint
+exists; the client decodes the token locally and opens the URL. One
+entity per domain: the top-ranked page from that domain.
 
 Only entities actually retrieved this turn are ever linked, and only
 the first mention of each is wrapped — an unrecognised name stays
@@ -259,11 +269,11 @@ to `POST /v1/extract` — the chat path never writes to `user_places`.
 
 | Field  | Type                  | Notes                                                                                    |
 | ------ | --------------------- | ---------------------------------------------------------------------------------------- |
-| `kind` | `"venue" \| "area"`   | Which detail surface the tap opens                                                        |
-| `key`  | `string`              | `places.id` for a venue; the slugged geo key for an area                                  |
-| `name` | `string`              | Canonical display name — may differ from the text the answer used ("Luigis" vs "Luigi's") |
-| `uri`  | `string`              | `kebi://{kind}/{key}`, pre-composed so the link handler never parses                      |
-| `icon` | `string \| null`      | Single emoji for the entity's identity (🍕, 🏄), drawn beside the name. A venue's comes off its catalog row (ADR-117); an area's is picked by the turn's location resolver (ADR-146). **Nullable by design** on both kinds — the client falls back to its own kind/category mapping |
+| `kind` | `"venue" \| "area" \| "web"` | Which detail surface the tap opens. Unknown kinds must degrade to plain text, never crash — the vocabulary can grow |
+| `key`  | `string`              | `places.id` for a venue; the slugged geo key for an area; the raw page URL for a web source |
+| `name` | `string`              | Canonical display name — may differ from the text the answer used ("Luigis" vs "Luigi's"). For `web`, the source domain ("fifa.com") |
+| `uri`  | `string`              | `kebi://{kind}/{key}`, pre-composed so the link handler never parses (a `web` URI carries the URL base64url-encoded, no padding) |
+| `icon` | `string \| null`      | Single emoji for the entity's identity (🍕, 🏄), drawn beside the name. A venue's comes off its catalog row (ADR-117); an area's is picked by the turn's location resolver (ADR-146); a web source's is always 🌐. **Nullable by design** — the client falls back to its own kind/category mapping |
 
 `recommendation_id` is the turn's consult id — an identifier of the
 recommendation itself (tracing, evals), not save ceremony: no endpoint

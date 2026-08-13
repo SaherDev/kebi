@@ -5,17 +5,23 @@ display: no per-tool card payloads, no bespoke render shape per tool. A tool
 that lands next month changes what the agent *says*, never what the client
 *draws*.
 
-The link format is `kebi://{kind}/{id}` with exactly two kinds:
+The link format is `kebi://{kind}/{id}` with exactly three kinds:
 
     venue  →  kebi://venue/<place id>       (the catalog id)
     area   →  kebi://area/<encoded geo key> (the knowledge geo key, encoded)
+    web    →  kebi://web/<encoded page url> (a source the turn's web search read)
 
-Both ids are the ones those surfaces already use — a venue id is what
-`POST /v1/user/places` takes, an area id is what `GET /v1/areas/{id}`
+Venue and area ids are the ones those surfaces already use — a venue id is
+what `POST /v1/user/places` takes, an area id is what `GET /v1/areas/{id}`
 decodes — so a tap resolves against existing endpoints with no new identity
 scheme. An area's key is a slash path (`build_geo_key` output), so it rides
 the URI as one opaque segment via the shared codec (ADR-153); the entity's
-`key` field still carries it raw.
+`key` field still carries it raw. A web entity follows the same split: `key`
+is the raw page URL, the URI carries it encoded (`core/web/keys.py`), and
+the client decodes locally — nothing server-side resolves a web token.
+Because the index is built from this turn's tool payloads, a web link can
+only appear on a turn where `web_search` actually fired; stored claims keep
+no URL by design (ADR-145), so a claim-based answer never fakes a citation.
 
 Links are attached **deterministically, after** the agent writes its answer:
 the LLM writes plain prose naming places, and `linkify` wraps the names it
@@ -34,8 +40,9 @@ from kebi.core.areas.keys import encode_area_id
 from kebi.core.knowledge.schemas import build_geo_key
 from kebi.core.places._place_utils import display_place_name
 from kebi.core.places.models import normalize_icon
+from kebi.core.web.keys import encode_web_url
 
-EntityKind = Literal["venue", "area"]
+EntityKind = Literal["venue", "area", "web"]
 
 URI_SCHEME = "kebi"
 
@@ -156,6 +163,11 @@ def area_uri(geo_key: str) -> str:
     return f"{URI_SCHEME}://area/{encode_area_id(geo_key)}"
 
 
+def web_uri(url: str) -> str:
+    """`kebi://web/<encoded url>` — one opaque segment, decoded by the client."""
+    return f"{URI_SCHEME}://web/{encode_web_url(url)}"
+
+
 def _venue(place_id: str, name: str, icon: str | None = None) -> ChatEntity:
     return ChatEntity(
         kind="venue",
@@ -170,6 +182,17 @@ def _area(geo_key: str, name: str, icon: str | None = None) -> ChatEntity:
     key = geo_key.strip("/")
     return ChatEntity(
         kind="area", key=key, name=name, uri=area_uri(key), icon=normalize_icon(icon)
+    )
+
+
+# Every web source draws the same glyph — there is no per-source model pass to
+# pick one, and a globe reads as "leaves the app" at a glance.
+_WEB_ICON = "🌐"
+
+
+def _web(url: str, domain: str) -> ChatEntity:
+    return ChatEntity(
+        kind="web", key=url, name=domain, uri=web_uri(url), icon=_WEB_ICON
     )
 
 
@@ -242,6 +265,39 @@ def _research_entity(payload: dict[str, Any]) -> list[tuple[str, ChatEntity]]:
     if key.startswith(_PLACE_KEY_PREFIX):
         return [(name, _venue(key[len(_PLACE_KEY_PREFIX) :], name))]
     return [(name, _area(key, name))]
+
+
+def _web_entities(payload: dict[str, Any]) -> list[tuple[str, ChatEntity]]:
+    """`(alias, entity)` per source domain in a web-search payload.
+
+    The agent attributes in prose by domain ("per the schedule on fifa.com"),
+    so the domain is the alias. One entity per domain: findings arrive
+    provider-ranked, and the first page from a domain is the one the answer
+    leaned on, so its URL is the one the tap opens.
+    """
+    pairs: list[tuple[str, ChatEntity]] = []
+    seen_domains: set[str] = set()
+    for finding in payload.get("findings") or []:
+        if not isinstance(finding, dict):
+            continue
+        domain = finding.get("source")
+        url = finding.get("url")
+        if not isinstance(domain, str) or not domain:
+            continue
+        if not isinstance(url, str) or not url:
+            continue
+        folded = domain.casefold()
+        if folded in seen_domains:
+            continue
+        try:
+            entity = _web(url, domain)
+        except ValueError:
+            # A provider handing back a non-http URL is its bug, not a reason
+            # to drop the whole answer's links.
+            continue
+        seen_domains.add(folded)
+        pairs.append((domain, entity))
+    return pairs
 
 
 def _working_location_entities(
@@ -322,6 +378,8 @@ def build_entity_index(
             pairs.extend(_candidate_entities(payload))
         elif tool == "research":
             pairs.extend(_research_entity(payload))
+        elif tool == "web_search":
+            pairs.extend(_web_entities(payload))
     pairs.extend(_working_location_entities(working_location))
 
     # An area the research tool resolved is usually the very area the turn is

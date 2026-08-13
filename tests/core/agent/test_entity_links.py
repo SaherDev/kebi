@@ -16,6 +16,7 @@ from kebi.core.agent.entity_links import (
     turn_recommendation_id,
 )
 from kebi.core.areas.keys import encode_area_id
+from kebi.core.web.keys import encode_web_url
 
 # Area URIs carry the geo key encoded as one opaque segment (ADR-153); the
 # raw key stays on the entity's `key` field.
@@ -472,3 +473,90 @@ class TestShortFormsMustBeDistinctive:
         names = {e.name for _, e in self._index()}
         assert "After Rock" in names
         assert "After Rock, Bali" not in names
+
+
+def _web_result(findings: list[dict[str, Any]]) -> dict[str, Any]:
+    return {
+        "tool": "web_search",
+        "tool_call_id": "call-w1",
+        "payload": {"query": "world cup schedule", "findings": findings},
+    }
+
+
+def _finding(domain: str | None, url: str | None) -> dict[str, Any]:
+    return {"text": "some finding text", "source": domain, "age": "2d", "url": url}
+
+
+class TestWebEntities:
+    def test_web_findings_become_web_entities(self) -> None:
+        index = build_entity_index(
+            [_web_result([_finding("fifa.com", "https://fifa.com/schedule")])]
+        )
+        by_alias = dict(index)
+        entity = by_alias["fifa.com"]
+        assert entity.kind == "web"
+        assert entity.key == "https://fifa.com/schedule"
+        assert entity.uri == f"kebi://web/{encode_web_url('https://fifa.com/schedule')}"
+        assert entity.name == "fifa.com"
+        assert entity.icon == "🌐"
+
+    def test_one_entity_per_domain_first_page_wins(self) -> None:
+        # Findings arrive provider-ranked; the top page from a domain is the
+        # one the answer leaned on, so its URL is the one the tap opens.
+        index = build_entity_index(
+            [
+                _web_result(
+                    [
+                        _finding("fifa.com", "https://fifa.com/schedule"),
+                        _finding("fifa.com", "https://fifa.com/tickets"),
+                        _finding("bbc.com", "https://bbc.com/sport"),
+                    ]
+                )
+            ]
+        )
+        webs = [e for _, e in index if e.kind == "web"]
+        assert len(webs) == 2
+        assert dict(index)["fifa.com"].key == "https://fifa.com/schedule"
+        assert dict(index)["bbc.com"].key == "https://bbc.com/sport"
+
+    def test_findings_missing_domain_or_url_are_skipped(self) -> None:
+        index = build_entity_index(
+            [
+                _web_result(
+                    [
+                        _finding(None, "https://fifa.com/schedule"),
+                        _finding("bbc.com", None),
+                        _finding("mailto.example", "mailto:x@example.com"),
+                    ]
+                )
+            ]
+        )
+        assert index == []
+
+    def test_linkify_wraps_a_domain_mention(self) -> None:
+        index = build_entity_index(
+            [_web_result([_finding("fifa.com", "https://fifa.com/schedule")])]
+        )
+        text, entities = linkify(
+            "the group stage starts june 11, per the schedule on fifa.com.", index
+        )
+        uri = f"kebi://web/{encode_web_url('https://fifa.com/schedule')}"
+        assert f"[fifa.com]({uri})" in text
+        assert [e.kind for e in entities] == ["web"]
+
+    def test_uncited_source_contributes_no_entity_to_the_answer(self) -> None:
+        # Read-but-uncited pages stay invisible: linkify only surfaces what
+        # the prose names, so the entity list vouches for the citation.
+        index = build_entity_index(
+            [
+                _web_result(
+                    [
+                        _finding("fifa.com", "https://fifa.com/schedule"),
+                        _finding("bbc.com", "https://bbc.com/sport"),
+                    ]
+                )
+            ]
+        )
+        text, entities = linkify("the schedule on fifa.com says june 11.", index)
+        assert [e.name for e in entities] == ["fifa.com"]
+        assert "bbc.com" not in text

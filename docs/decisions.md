@@ -17,6 +17,16 @@ Format:
 
 ---
 
+## ADR-161: A cited source becomes a tappable entity — one vocabulary for everything chat can open
+
+**Date:** 2026-08-13\
+**Status:** accepted — extends ADR-136/145/153\
+**Context:** When the agent answers from the web (ADR-145), it attributes in prose — "per the schedule on fifa.com" — and that attribution is dead text: the render contract carries exactly two link kinds, venue and area, so a source the answer leans on cannot be tapped and verified. The gap matters most precisely where the web tool matters most: event dates, prices, entry rules — the answers kebi deliberately never stores and the user most wants to check. A bespoke sources sidecar (a separate field, a separate client renderer) was considered and rejected: everything chat surfaces is already an entity, and a second mechanism would be a second thing to version, render, and keep consistent.\
+**Decision:** The entity vocabulary grows a third kind: a web source, minted only from what this turn's web search actually read. The prose stays the prose — the agent keeps attributing by domain, and the linkifier wraps that domain mention exactly as it wraps a venue name. The entity's display name is the domain, its key is the page URL, and its URI carries the URL encoded as one opaque segment in the same style as area tokens — but with no resolve endpoint: the client decodes the token locally and opens the page. One entity per domain, carrying the top-ranked page from that domain. Stored claims keep no URL by design (ADR-145 stands), so a claim-based answer never carries a citation link — a source link is a live-turn fact, and only sources the answer names become tappable: the link vouches for what the prose actually leaned on. Clients must treat unknown entity kinds as plain text, which is what makes the vocabulary extensible without breaking anyone.\
+**Consequences:** Web-sourced answers become verifiable in one tap, at zero additional lookup cost — the data was already server-side at answer time. The render contract stays one mechanism: no new frames, no streaming changes, links still ride only the terminal message. Clients gain one decode rule (base64url, no padding) and one degradation rule (unknown kind → plain text); old clients render the domain as prose and lose nothing. Read-but-uncited sources remain visible only in the reasoning step's summary. The claims store remains citation-free — anyone tempted to "just persist the URL" is choosing to revisit ADR-145, not extend this one.
+
+---
+
 ## ADR-160: Curation gets an anchor — the entity comes from what was tapped, never from what the model guessed
 
 **Date:** 2026-08-11\

@@ -31,12 +31,14 @@ class WebFinding(BaseModel):
 
     text: str
     # Publisher domain. The agent attributes in prose ("per the schedule on
-    # fifa.com") rather than emitting a URL: the chat contract is text plus
-    # `kebi://` links only (ADR-136), so a bare http link has nowhere to go.
+    # fifa.com") rather than emitting a URL — the chat contract is text plus
+    # `kebi://` links only (ADR-136); the linkifier wraps the domain mention
+    # as a `kebi://web/{token}` entity after the answer is written.
     source: str | None = None
     age: str | None = None
-    # Kept server-side for the claim harvest's `source_ref`; never shown to
-    # the model, which cannot click it and would only spend tokens reading it.
+    # Kept server-side for the linkifier (a cited domain's entity carries the
+    # page URL, token-encoded); never shown to the model, which cannot click
+    # it and would only spend tokens reading it.
     url: str | None = None
 
 
