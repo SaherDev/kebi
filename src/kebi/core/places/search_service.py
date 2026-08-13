@@ -1,9 +1,11 @@
 """PlacesSearchService — DB → cache overlay → provider fallback.
 
-Reads only. All writes are delegated to PlaceUpsertService, which owns the
-merge policy and event emission. This service touches the cache directly
-because cache stores the live half (PlaceObject) which is shaped differently
-from the persisted PlaceCore.
+Reads, plus the enrichment writes a read discovers. All writes are delegated
+to PlaceUpsertService, which owns the merge policy and event emission — the
+cold path persisting what the provider returned, and `_adopt_icon_hint`
+letting an icon-less warm row learn the caller's icon. This service touches
+the cache directly because cache stores the live half (PlaceObject) which is
+shaped differently from the persisted PlaceCore.
 
 `find` returns search results by query; `get_by_ids` returns enriched places
 by namespaced provider_id. Stale DB rows (location wiped by the 30-day TTL
@@ -49,6 +51,7 @@ class PlacesSearchService:
         db_hits = await self._repo.find(query, limit)
         if not db_hits:
             return await self._external_fallback(query, limit)
+        db_hits = await self._adopt_icon_hint(db_hits, query.icon_hint)
 
         # get_by_ids hits cache first; only misses (incl. TTL-wiped stale
         # rows) go to the provider, with upsert + mset on the way back.
@@ -133,6 +136,41 @@ class PlacesSearchService:
                 continue
             result.append(obj.model_copy(update={"place_name": row.place_name}))
         return result
+
+    async def _adopt_icon_hint(
+        self, hits: list[PlaceCore], icon_hint: str | None
+    ) -> list[PlaceCore]:
+        """Let a warm row learn a caller-known icon it doesn't have (ADR-146).
+
+        The cold path stamps `icon_hint` onto provider-fresh results so it
+        rides the row's one normal upsert. A row that already existed never
+        got that chance: the hint was stamped on the response copy for
+        display and the row stayed NULL, so every later reader that lacks a
+        hint of its own — `find_known`, the library — drew it blank forever.
+
+        This is the one write on an otherwise read-only service, and it is
+        deliberately narrow: only rows with no icon at all, only when the
+        caller supplied one, once per row for its lifetime (the merge is
+        fill-only, so a real icon is never overwritten). Embedding is
+        skipped by hash, so the cost is a merge and an upsert.
+
+        Failures are swallowed. This is an enrichment on a read path; a
+        write problem must not cost the caller their search results.
+        """
+        if not icon_hint:
+            return hits
+        blank = [h for h in hits if not h.icon and h.provider_id]
+        if not blank:
+            return hits
+        try:
+            persisted = await self._upsert.upsert_and_embed(
+                [h.model_copy(update={"icon": icon_hint}) for h in blank]
+            )
+        except Exception:
+            logger.warning("icon_hint adoption failed", exc_info=True)
+            return hits
+        by_provider = {c.provider_id: c for c in persisted if c.provider_id}
+        return [by_provider.get(h.provider_id or "", h) for h in hits]
 
     async def _external_fallback(
         self, query: PlaceQuery, limit: int

@@ -39,11 +39,12 @@ except Exception:
 from kebi.api.deps import require_gateway_identity
 from kebi.api.errors import register_error_handlers
 from kebi.api.rate_limit import limiter
+from kebi.api.routes.areas import router as areas_router
 from kebi.api.routes.chat import router as chat_router
 from kebi.api.routes.extraction import router as extraction_router
 from kebi.api.routes.home import router as home_router
 from kebi.api.routes.knowledge import router as knowledge_router
-from kebi.api.routes.signal import router as signal_router
+from kebi.api.routes.places import router as places_router
 from kebi.api.routes.user import router as user_router
 
 # Agent checkpointer warmup (feature 028 M6). The compiled StateGraph is
@@ -65,7 +66,18 @@ if not get_env().GATEWAY_SHARED_SECRET:
     )
 
 _log_level = os.environ.get("LOG_LEVEL", "WARNING").upper()
-logging.root.setLevel(getattr(logging, _log_level, logging.WARNING))
+# `basicConfig`, not a bare `setLevel`: setting a level on a root logger that
+# has no handler does nothing useful, because records then fall through to
+# logging's `lastResort` handler, which emits WARNING and above regardless.
+# The effect was that every `logger.info` in the service was invisible even
+# with LOG_LEVEL=INFO — diagnostics that exist but cannot be read are worse
+# than none, since they look like the code did not run. `force=True` claims
+# the root handler back from uvicorn's own logging setup.
+logging.basicConfig(
+    level=getattr(logging, _log_level, logging.WARNING),
+    format="%(levelname)s:%(name)s:%(message)s",
+    force=True,
+)
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -263,11 +275,12 @@ async def health() -> dict[str, str]:
 # Mount the protected routes (ADR-052: /v1/chat handles conversational
 # traffic). Each is mounted under the same `/v1` prefix as the public
 # router — auth is enforced uniformly by the parent dependency.
+protected_router.include_router(areas_router, prefix="")
 protected_router.include_router(chat_router, prefix="")
 protected_router.include_router(extraction_router, prefix="")
 protected_router.include_router(home_router, prefix="")
 protected_router.include_router(knowledge_router, prefix="")
-protected_router.include_router(signal_router, prefix="")
+protected_router.include_router(places_router, prefix="")
 protected_router.include_router(user_router, prefix="")
 app.include_router(public_router)
 app.include_router(protected_router)

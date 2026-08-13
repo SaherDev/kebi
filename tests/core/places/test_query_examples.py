@@ -38,9 +38,7 @@ def test_example_is_valid_place_query(name: str, query: PlaceQuery) -> None:
 def test_geo_queries_have_radius(name: str, query: PlaceQuery) -> None:
     loc = query.location
     if loc and (loc.lat is not None or loc.lng is not None):
-        assert loc.radius_m is not None, (
-            f"{name}: location has lat/lng but no radius_m"
-        )
+        assert loc.radius_m is not None, f"{name}: location has lat/lng but no radius_m"
 
 
 @pytest.mark.parametrize("name,query", _ALL_EXAMPLES, ids=[n for n, _ in _ALL_EXAMPLES])
@@ -53,6 +51,7 @@ def test_tags_are_list_or_none(name: str, query: PlaceQuery) -> None:
 # ---------------------------------------------------------------------------
 # Spot-checks on a representative set
 # ---------------------------------------------------------------------------
+
 
 class TestSpotChecks:
     def test_find_thai_has_cuisine_tag(self) -> None:

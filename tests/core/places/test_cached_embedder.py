@@ -183,10 +183,7 @@ class TestKeyConstruction:
 
     def test_key_changes_with_input_type(self) -> None:
         cached, _, _ = _make_cached()
-        assert (
-            cached._key("italian", "query")
-            != cached._key("italian", "document")
-        )
+        assert cached._key("italian", "query") != cached._key("italian", "document")
 
     def test_key_changes_with_text(self) -> None:
         cached, _, _ = _make_cached()
@@ -195,19 +192,13 @@ class TestKeyConstruction:
     def test_key_strips_whitespace(self) -> None:
         cached, _, _ = _make_cached()
         # Trivial whitespace doesn't fragment the cache.
-        assert (
-            cached._key("italian", "query")
-            == cached._key("  italian  ", "query")
-        )
+        assert cached._key("italian", "query") == cached._key("  italian  ", "query")
 
     def test_key_does_not_lowercase(self) -> None:
         # We deliberately don't lowercase — preserves any case-sensitive
         # semantics in the embedder. "Italian" and "italian" hash distinct.
         cached, _, _ = _make_cached()
-        assert (
-            cached._key("Italian", "query")
-            != cached._key("italian", "query")
-        )
+        assert cached._key("Italian", "query") != cached._key("italian", "query")
 
 
 # ---------------------------------------------------------------------------

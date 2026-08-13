@@ -23,16 +23,12 @@ def _normalize(text: str) -> str:
 
 
 class UserIntentService:
-    def __init__(
-        self, repo: UserIntentRepository, config: UserIntentConfig
-    ) -> None:
+    def __init__(self, repo: UserIntentRepository, config: UserIntentConfig) -> None:
         self._repo = repo
         self._config = config
         self._stoplist = {_normalize(s) for s in config.stoplist}
 
-    async def record_intent(
-        self, user_id: str, text: str, *, surfaced: bool
-    ) -> None:
+    async def record_intent(self, user_id: str, text: str, *, surfaced: bool) -> None:
         """Persist `text` as a recalled intent if it passes the gates.
 
         Silently skips non-intent turns; this is best-effort background work

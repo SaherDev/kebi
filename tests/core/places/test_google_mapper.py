@@ -323,3 +323,116 @@ class TestAddressComponentFallback:
         assert obj.location.city == "Taito City"
         assert obj.location.neighborhood == "Asakusa"
         assert obj.location.country == "Japan"
+
+
+class TestDeepAdminLevelsAndHumanNames:
+    """ADR-163: where no sublocality exists, the deepest admin level that
+    names a human area wins the neighborhood slot — and unit words fold out
+    of the stored display names."""
+
+    @staticmethod
+    def _raw_with_components(components: list[dict[str, object]]) -> dict[str, object]:
+        return {
+            "id": "ChIJdeep",
+            "displayName": {"text": "Deep Admin Test"},
+            "location": {"latitude": 1.0, "longitude": 2.0},
+            "types": [],
+            "addressComponents": components,
+        }
+
+    def test_bali_shape_level_4_beats_the_regency(self) -> None:
+        """Real shape from google:ChIJ... (Old Man's, Canggu): Indonesia has
+        no locality; the village (level_4) is the human area, the regency
+        (level_2) the failure ADR-153 recorded."""
+        raw = self._raw_with_components(
+            [
+                {"longText": "Jalan Pantai Batu Bolong", "types": ["route"]},
+                {
+                    "longText": "Canggu",
+                    "types": ["administrative_area_level_4", "political"],
+                },
+                {
+                    "longText": "Kecamatan Kuta Utara",
+                    "types": ["administrative_area_level_3", "political"],
+                },
+                {
+                    "longText": "Kabupaten Badung",
+                    "types": ["administrative_area_level_2", "political"],
+                },
+                {
+                    "longText": "Bali",
+                    "types": ["administrative_area_level_1", "political"],
+                },
+                {
+                    "longText": "Indonesia",
+                    "shortText": "ID",
+                    "types": ["country", "political"],
+                },
+            ]
+        )
+        obj = map_place(raw, _NOW)
+
+        assert obj is not None and obj.location is not None
+        assert obj.location.city == "Bali"
+        assert obj.location.neighborhood == "Canggu"
+
+    def test_level_3_falls_back_when_no_level_4(self) -> None:
+        raw = self._raw_with_components(
+            [
+                {
+                    "longText": "Kecamatan Kuta Utara",
+                    "types": ["administrative_area_level_3", "political"],
+                },
+                {
+                    "longText": "Kabupaten Badung",
+                    "types": ["administrative_area_level_2", "political"],
+                },
+            ]
+        )
+        obj = map_place(raw, _NOW)
+
+        assert obj is not None and obj.location is not None
+        # level_3 wins over level_2, and its unit word ("Kecamatan") folds.
+        assert obj.location.neighborhood == "Kuta Utara"
+
+    def test_stored_display_names_are_the_human_names(self) -> None:
+        """Bangkok shape: the district's unit word strips from the stored
+        neighborhood so screens read "Bang Rak", not "Khet Bang Rak"."""
+        raw = self._raw_with_components(
+            [
+                {
+                    "longText": "Khet Bang Rak",
+                    "types": ["sublocality_level_1", "political"],
+                },
+                {
+                    "longText": "Krung Thep Maha Nakhon",
+                    "types": ["administrative_area_level_1", "political"],
+                },
+                {
+                    "longText": "Thailand",
+                    "shortText": "TH",
+                    "types": ["country", "political"],
+                },
+            ]
+        )
+        obj = map_place(raw, _NOW)
+
+        assert obj is not None and obj.location is not None
+        assert obj.location.neighborhood == "Bang Rak"
+        assert obj.location.city == "Krung Thep Maha Nakhon"
+
+    def test_compound_city_names_survive_the_strip(self) -> None:
+        raw = self._raw_with_components(
+            [
+                {"longText": "Kota Kinabalu", "types": ["locality", "political"]},
+                {
+                    "longText": "Malaysia",
+                    "shortText": "MY",
+                    "types": ["country", "political"],
+                },
+            ]
+        )
+        obj = map_place(raw, _NOW)
+
+        assert obj is not None and obj.location is not None
+        assert obj.location.city == "Kota Kinabalu"

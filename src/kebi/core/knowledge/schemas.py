@@ -17,7 +17,13 @@ from anyascii import anyascii
 from pydantic import BaseModel, ConfigDict
 
 EntityType = Literal["country", "city", "neighborhood", "place"]
-SourceType = Literal["shared_content", "curated_expert", "kebi_message", "user_message"]
+SourceType = Literal[
+    "shared_content",
+    "curated_expert",
+    "kebi_message",
+    "user_message",
+    "web_search",
+]
 ReviewStatus = Literal["pending", "approved", "rejected"]
 
 # Coarse, user-facing origin label for a surfaced claim (ADR-127). The raw
@@ -28,12 +34,18 @@ NOTE_SOURCE_LABELS: dict[SourceType, str] = {
     "curated_expert": "expert",
     "kebi_message": "kebi",
     "user_message": "kebi",
+    # Not "kebi" and not "community": a fact kebi read on a page is neither
+    # something a person shared nor something kebi worked out. Labelling it
+    # honestly is the point — the voice is allowed to be sure about a save
+    # and hedged about a schedule it looked up.
+    "web_search": "web",
 }
 
 
 def note_source_label(source_type: SourceType) -> str:
     """The coarse origin label for a claim's source_type."""
     return NOTE_SOURCE_LABELS.get(source_type, "community")
+
 
 _COUNTRY_CODE_RE = re.compile(r"^[a-z]{2}$")
 
@@ -135,6 +147,33 @@ class StructuredClaim(BaseModel):
     geo: ResolvedGeo | None = None
 
 
+class CurationAnchor(BaseModel):
+    """The entity a curation request is pinned to, resolved before the LLM
+    runs (never by it). `place_id` is set for a venue anchor and None for an
+    area anchor; `geo` is the fallback geography for the prose's geo-scoped
+    claims either way — a venue's stored location, or the area's own key
+    parts. Slug-built geo is fine: `_slugify` is idempotent, so an already-
+    canonical slug keys identically to the display name it came from."""
+
+    model_config = ConfigDict(frozen=True)
+
+    place_id: str | None = None
+    name: str
+    geo: ResolvedGeo
+
+
+class WrittenClaim(BaseModel):
+    """A claim that produced a new row, paired with that row's id — what the
+    write path returns so a caller can reference (and later retract) exactly
+    what it just created. Dedup-collapsed resubmissions have no entry: their
+    row (and id) predates this write."""
+
+    model_config = ConfigDict(frozen=True)
+
+    id: str
+    claim: StructuredClaim
+
+
 class HarvestPlace(BaseModel):
     """A place identified during extraction, with its resolved geo, that the
     harvester reasons about. `place_id` is the catalog id used to key
@@ -214,6 +253,162 @@ def build_place_key(place_id: str) -> str:
     return f"place:{place_id}"
 
 
+# Administrative-unit affixes folded out of area names before slugging and
+# stripped from stored display geo, so "Khet Bang Rak" and "Bang Rak" key and
+# read the same (ADR-163 — the neighborhood-level treatment ADR-153 asked
+# for). Leading affixes are the unit words Thai/Indonesian/Vietnamese
+# addresses prepend; trailing ones the English suffixes geocoders append.
+# "Kota" and "City" are deliberately absent: they are part of real proper
+# names ("Kota Kinabalu", "Ho Chi Minh City") — stripping them is the
+# compound-name trap ADR-160 warns about.
+_LEADING_ADMIN_UNITS: frozenset[str] = frozenset(
+    {
+        "khet",
+        "khwaeng",
+        "tambon",
+        "amphoe",
+        "chang-wat",
+        "changwat",
+        "kecamatan",
+        "kec",
+        "kabupaten",
+        "kab",
+        "kelurahan",
+        "thanh-pho",
+        "quan",
+        "huyen",
+        "phuong",
+        "thi-xa",
+    }
+)
+_TRAILING_ADMIN_UNITS: frozenset[str] = frozenset(
+    {"district", "regency", "subdistrict"}
+)
+# Trailing English suffixes strip only where they are Google's translation
+# of a local admin unit ("Ubud District", "Karangasem Regency") — in
+# English-speaking countries "District" is part of the colloquial name
+# itself ("Financial District", "Mission District") and must survive.
+_TRAILING_STRIP_COUNTRIES: frozenset[str] = frozenset(
+    {"id", "th", "vn", "la", "kh", "mm"}
+)
+
+
+def _strips_trailing(country_code: str | None) -> bool:
+    return (
+        country_code is not None
+        and country_code.strip().lower() in _TRAILING_STRIP_COUNTRIES
+    )
+
+
+# Areas the geocoder names by administrative village where people use one
+# colloquial name for the whole stretch — the neighborhood-level counterpart
+# of _CITY_ALIASES (ADR-163, the treatment ADR-153 asked for). Keyed by
+# (country_code, folded slug of the variant) → canonical slug. Same
+# maintenance cost and same accepted trade-off as the city table: a pair
+# nobody has added still splits silently.
+_AREA_ALIASES: dict[tuple[str, str], str] = {
+    # Canggu colloquially spans the Tibubeneng desa (Berawa) next door.
+    ("id", "tibubeneng"): "canggu",
+    # The Uluwatu area's venues sit in Pecatu village on Google's map.
+    ("id", "pecatu"): "uluwatu",
+}
+
+
+def canonical_area_slug(slug: str, country_code: str | None = None) -> str:
+    """Fold an already-slugged area name's admin-unit affixes away.
+
+    "khet-khlong-toei" → "khlong-toei"; "thanh-pho-hue" → "hue"; with a
+    trailing-strip country, "ko-samui-district" → "ko-samui". A slug that IS
+    the unit word alone is left as-is — stripping must never empty a key
+    part.
+    """
+    for token in sorted(_LEADING_ADMIN_UNITS, key=len, reverse=True):
+        prefix = f"{token}-"
+        if slug.startswith(prefix) and len(slug) > len(prefix):
+            slug = slug[len(prefix) :]
+            break
+    if _strips_trailing(country_code):
+        for token in _TRAILING_ADMIN_UNITS:
+            suffix = f"-{token}"
+            if slug.endswith(suffix) and len(slug) > len(suffix):
+                slug = slug.removesuffix(suffix)
+                break
+    if country_code is not None:
+        slug = _AREA_ALIASES.get((country_code.strip().lower(), slug), slug)
+    return slug
+
+
+def strip_admin_unit(name: str, country_code: str | None = None) -> str:
+    """Drop a leading/trailing administrative-unit word from a display name.
+
+    "Khet Bang Rak" → "Bang Rak"; "Thành phố Huế" → "Huế"; "Ubud District" →
+    "Ubud" (trailing only in countries where the suffix is a translation,
+    never where it's the name — "Financial District"). Matching
+    transliterates each word, so diacritic variants strip too; the surviving
+    words keep their original spelling. A name that is only the unit word
+    survives unchanged.
+    """
+    words = name.split()
+    stripped = list(words)
+    for n in (2, 1):
+        if len(stripped) > n and _slugify(" ".join(stripped[:n])) in (
+            _LEADING_ADMIN_UNITS
+        ):
+            stripped = stripped[n:]
+            break
+    if (
+        _strips_trailing(country_code)
+        and len(stripped) > 1
+        and _slugify(stripped[-1]) in _TRAILING_ADMIN_UNITS
+    ):
+        stripped = stripped[:-1]
+    return " ".join(stripped) if stripped != words else name
+
+
+# Cities the geocoder names inconsistently between calls — an English exonym
+# on one lookup, the local endonym on the next. `_slugify` cannot merge these:
+# "Bangkok" and "Krung Thep Maha Nakhon" are different words, not
+# transliterations of one another, so the slug is correctly different and the
+# claims split across two keys that no prefix scan will ever join (ADR-144).
+#
+# Keyed by (country_code, slug of the variant) → canonical slug. This is a
+# maintained list, which is a real cost: a pair nobody has added still splits
+# silently. It is the pragmatic half of the fix — keying cities by a stable
+# geocoder id would remove the maintenance entirely, and is the direction to
+# take when a claim volume justifies the migration.
+_CITY_ALIASES: dict[tuple[str, str], str] = {
+    ("th", "krung-thep-maha-nakhon"): "bangkok",
+    ("th", "krung-thep"): "bangkok",
+    ("id", "jakarta-raya"): "jakarta",
+    ("id", "daerah-khusus-ibukota-jakarta"): "jakarta",
+    ("vn", "thanh-pho-ho-chi-minh"): "ho-chi-minh-city",
+    ("vn", "sai-gon"): "ho-chi-minh-city",
+    ("vn", "ha-noi"): "hanoi",
+    ("vn", "da-nang"): "da-nang",
+    ("jp", "tokyo-to"): "tokyo",
+    ("kr", "seoul-teukbyeolsi"): "seoul",
+    ("cn", "beijing-shi"): "beijing",
+    ("ae", "dubayy"): "dubai",
+}
+
+
+def canonical_city_slug(country_code: str, city: str) -> str:
+    """The slug a city keys under, folding known name variants together.
+
+    Applied at the one place keys are built, so a claim written from a
+    geocode that said "Krung Thep Maha Nakhon" lands under the same key as
+    one that said "Bangkok". Admin-unit affixes fold before the second alias
+    lookup ("Thành phố Huế" → "hue") so official municipality styles cannot
+    split a city either. Unknown cities pass through unchanged.
+    """
+    cc = country_code.strip().lower()
+    slug = _slugify(city)
+    if (cc, slug) in _CITY_ALIASES:
+        return _CITY_ALIASES[(cc, slug)]
+    folded = canonical_area_slug(slug, cc)
+    return _CITY_ALIASES.get((cc, folded), folded)
+
+
 def build_geo_key(
     country: str, city: str | None = None, neighborhood: str | None = None
 ) -> str:
@@ -222,6 +417,11 @@ def build_geo_key(
     `country` must be an ISO-3166 alpha-2 code (e.g. "ae"). A neighborhood
     key requires a city; "all claims under Dubai" is a prefix scan on the
     city-level key this returns for a city alone.
+
+    The city component is canonicalised (ADR-144) so name variants for one
+    city cannot split its claims across keys a prefix scan will never join;
+    the neighborhood component folds admin-unit affixes the same way
+    (ADR-163) so "Khet Khlong Toei" and "Khlong Toei" key identically.
     """
     country_code = country.strip().lower()
     if not _COUNTRY_CODE_RE.match(country_code):
@@ -231,7 +431,7 @@ def build_geo_key(
 
     parts = [country_code]
     if city is not None:
-        parts.append(_slugify(city))
+        parts.append(canonical_city_slug(country_code, city))
     if neighborhood is not None:
-        parts.append(_slugify(neighborhood))
+        parts.append(canonical_area_slug(_slugify(neighborhood), country_code))
     return "/".join(parts)

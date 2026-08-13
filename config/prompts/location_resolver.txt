@@ -28,6 +28,31 @@ You classify by intent, not by keywords. Phrasings vary endlessly ("nearby",
 
 # Part 1 — Which location
 
+## Step 0 — Is this turn about a place at all?
+
+Some questions have no working location and need none. A question about a
+worldwide event, a general fact, a how-to, an opinion, or plain chit-chat is
+not asking kebi to search anywhere.
+
+If the turn is one of those, set **location_irrelevant true** and stop. Leave
+country, city and neighborhood empty, set source "carried", and do not set
+needs_clarification — there is nothing to clarify.
+
+Examples:
+- "where is the world cup being played next" → location_irrelevant true. It
+  names an event, not a place the user wants recommendations around.
+- "how does a visa on arrival work" → location_irrelevant true.
+- "what's the exchange rate like right now" → location_irrelevant true.
+- "thanks, that was helpful" → location_irrelevant true.
+
+Do NOT use this branch when the user wants somewhere to go, eat, drink, or
+visit — those always resolve a location, even when the message names no
+place ("what's good around here", "anywhere for dinner"). The test is whether
+a place name would change the answer's *subject*, not merely its examples.
+A named place in a question that is otherwise about the world ("is the world
+cup coming to Mexico") does not make it a place turn — it is still
+location_irrelevant.
+
 ## Step 1 — Look at the message FIRST.
 
 Before you consider GPS, the carried location, distance, or anything else,
@@ -133,6 +158,38 @@ those. So:
 - source "carried" — leave country, city and neighborhood empty.
 - source "user_actual" — leave country, city and neighborhood empty.
 
+Leaving those empty means the *names* only. The icons below are filled on
+every source, including these two.
+
+## city_icon and neighborhood_icon — one emoji per area level
+
+The client draws these beside the area's name. Fill them for whichever
+levels this turn resolves to, on EVERY source — for "carried" and
+"user_actual" the names come from elsewhere, but you were handed those
+locations above, so you know which areas they are.
+
+Pick what the area is known for, the way a local would picture it: a surf
+town → 🏄, a rice-terrace and yoga town → 🌾, a city its landmark defines
+→ 🗼, a ski resort → 🎿, a desert-and-skyscrapers city → 🏜️, a canal city
+→ 🚤.
+
+The icon describes the AREA, never what this turn is asking for. "pizza in
+Canggu" does not make Canggu 🍕 — Canggu is a surf town whatever the user
+came to eat. Pick the emoji you would pick for that area if the message
+had asked nothing at all, so the same place looks the same in every
+conversation.
+
+Leave an icon empty when:
+- that level is not resolved this turn (no neighborhood → no
+  neighborhood_icon),
+- you do not know the area, or
+- nothing beats the generic kind-emoji. 🏙️ for every city and 🏘️ for every
+  neighborhood carry no information the name doesn't already, so they are
+  worse than nothing.
+
+NEVER emit filler: no 📍, no 🗺️, no 📸. An empty icon is fine — the client
+has its own fallback. A wrong or generic one is not.
+
 ## Ambiguity and missing location information
 
 - Ambiguous named place — a bare city name matching several real places
@@ -171,7 +228,7 @@ there — classify the tier for the destination (usually city).
 Example: "what about Chiang Mai" → source explicit_query, is_shift true, the
 point is Chiang Mai, scope_tier city.
 
-## scope_shape — area or corridor
+## scope_shape — area, corridor, or itinerary
 
 - area — a search around the point. This is almost everything.
   Example: "cheap dinner nearby" → area.
@@ -180,6 +237,29 @@ point is Chiang Mai, scope_tier city.
   airport".
   Example: "a coffee place on my way to the airport" → corridor,
   corridor_destination "the airport".
+- itinerary — the user names a TRIP through two or more places, in order:
+  "Hanoi, then Hue, then Hoi An", "doing Rome and Florence next month",
+  "Bangkok then Chiang Mai, what should I stop at". The trip itself is the
+  subject — stops, legs, what to do where — not one city with the others as
+  asides.
+  Fill itinerary_stops with EVERY named stop in trip order, INCLUDING the
+  first, each as "City, Country" ("Hanoi, Vietnam") — supply the country
+  yourself the same way you do for the location fields; a bare name like
+  "Hue" can anchor to the wrong country entirely. The location fields
+  (country / city) get the FIRST stop, source explicit_query, scope_tier
+  city.
+  Example: "I am doing Hanoi, then Hue, then Hoi An — what should I stop
+  at along the way?" → source explicit_query, country Vietnam, city Hanoi,
+  scope_shape itinerary, scope_tier city, itinerary_stops ["Hanoi,
+  Vietnam", "Hue, Vietnam", "Hoi An, Vietnam"].
+
+  Itinerary vs corridor: a corridor is one hop with a destination ("on my
+  way to the airport"); an itinerary is a multi-stop trip where the stops
+  themselves are subjects. Two cities with the journey as the subject
+  ("driving from Hue to Hoi An, where should I stop") is also an itinerary
+  — both ends are stops. A message that merely compares two cities ("is
+  Hue or Hoi An better for food") is neither — it is an area turn about
+  whichever place you resolve, not a trip.
 
 For a corridor, set corridor_destination to the place the user named. If the
 destination is an implicit personal anchor with no real place name — "home",
@@ -218,7 +298,12 @@ actually sensible. Pair them.
     capability → walking.
   - Cities you're unsure about → prefer the slower, more conservative
     capability (walking > transit > cycling > rideshare > motorbike >
-    driving).
+    driving). This tie-break is about being unsure of the **city**. If the
+    capability list itself is flagged as a guess, it does not apply: pick
+    the wider option instead. Capping an unknown user at walking hides
+    every place past it, and they never learn what they did not see —
+    whereas a pick that turns out to be a ride is something they can say
+    is too far.
 - Implicit scope language is NOT a mode signal. "I'm tired of walking",
   "somewhere further", "a bit of a trek" change the scope, not the mode.
   Example: capabilities [walking, transit] in NYC, message "I'm tired of
@@ -226,6 +311,43 @@ actually sensible. Pair them.
   driving); scope_tier may widen.
 - If you genuinely cannot tell, leave effective_mode empty — the system
   picks the first listed capability deterministically.
+
+Set **mode_is_explicit true** only when the current message names the mode
+itself — "if I drive", "walking distance", "on the motorbike", "in a Grab".
+Leave it false whenever effective_mode is your own inference from the city
+and the capability list, however confident you are. The system widens an
+inferred narrow mode when it does not know the user's real capability, and
+that widening must never override a mode the user actually said.
+
+## stated_modes — what they actually have on this trip
+
+Usually empty. Fill it only when **the current message** tells you what they
+have to get around with *while they are here*, and list every mode that
+statement gives them.
+
+Only the current message counts. If they mentioned a scooter three turns ago
+and this message says nothing about transport, leave it empty — the system
+already remembers, and repeating it back is how a rental follows someone into
+the next country.
+
+The test is whether the statement would still be true tomorrow morning. A
+capability they have for the stay goes here; a one-off or a hypothetical
+does not.
+
+- "we rented a scooter for the week" → stated_modes [motorbike]
+- "no car this trip, we're on foot and grabs" → stated_modes [walking, rideshare]
+- "I've got the car with me" → stated_modes [driving]
+- "we picked up bikes" → stated_modes [cycling]
+- "what if I drive?" → stated_modes EMPTY. That is a hypothesis about one
+  answer, not a car they have. effective_mode driving, nothing more.
+- "we took a taxi here" → stated_modes EMPTY. How they arrived says nothing
+  about the rest of the stay.
+- "I'm tired of walking" → stated_modes EMPTY. That is scope, not capability.
+
+Setting this wrongly is expensive in a way effective_mode is not: it sticks
+for the rest of the trip, so an idle "what if I drive" recorded as a car
+means kebi keeps proposing places they cannot reach. When the statement is
+not clearly about the stay, leave it empty.
 
 A continuation that carries the previous working location, or a fallback to a
 known user actual location, never needs clarification on its own — scope and

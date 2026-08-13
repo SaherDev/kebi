@@ -104,9 +104,7 @@ class HomeService:
         self._redis = redis
         self._config = config
 
-    async def generate(
-        self, user_id: str, context: HomeContext
-    ) -> HomeSuggestion:
+    async def generate(self, user_id: str, context: HomeContext) -> HomeSuggestion:
         """Greeting + chips for the caller — cache-first, generate on miss.
 
         Never raises: any failure path returns the static fallback.
@@ -151,9 +149,7 @@ class HomeService:
         if context.lat is None or context.lng is None:
             return None, None
         try:
-            result = await self._geocoder.reverse(
-                lat=context.lat, lng=context.lng
-            )
+            result = await self._geocoder.reverse(lat=context.lat, lng=context.lng)
         except Exception:
             logger.warning("home reverse-geocode failed", exc_info=True)
             return None, None

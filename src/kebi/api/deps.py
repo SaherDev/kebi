@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import functools
+import logging
 import re
 import secrets
 from collections.abc import AsyncIterator
@@ -13,7 +15,9 @@ from fastapi import BackgroundTasks, Depends, Header, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from kebi.core.agent.tools.candidate_namer import CandidateNamerService
+from kebi.core.areas import AreaProfileService, AreaScreenService
 from kebi.core.chat.consult_quota import ConsultQuotaService
+from kebi.core.chat.entity_icons import EntityIconRefresher
 from kebi.core.chat.service import ChatService
 from kebi.core.config import AppConfig, ExtractionConfig, get_config, get_env
 from kebi.core.events.dispatcher import EventDispatcher
@@ -28,13 +32,17 @@ from kebi.core.extraction.extraction_pipeline import (
 from kebi.core.extraction.result_cache import ExtractionResultCache
 from kebi.core.extraction.service import ExtractionService
 from kebi.core.home import HomeService
-from kebi.core.knowledge.curation_service import KnowledgeCurationService
+from kebi.core.knowledge.candidate_notes_service import CandidateNotesService
+from kebi.core.knowledge.curation_service import (
+    CuratorClaimsService,
+    KnowledgeCurationService,
+)
 from kebi.core.knowledge.curator import KnowledgeCurator
+from kebi.core.knowledge.entity_search_service import EntitySearchService
 from kebi.core.knowledge.geo_resolve import EntityGeoResolver
 from kebi.core.knowledge.harvest_bucket import HarvestBucketReader, HarvestBucketWriter
 from kebi.core.knowledge.harvester import KnowledgeHarvester
-from kebi.core.knowledge.kebi_note import KebiNoteProducer
-from kebi.core.knowledge.kebi_note_service import KebiNoteService
+from kebi.core.knowledge.known_places_service import KnownPlacesService
 from kebi.core.knowledge.place_notes_service import PlaceNotesService
 from kebi.core.knowledge.producer import KnowledgeIngestion
 from kebi.core.knowledge.research_resolver import ResearchEntityResolver
@@ -42,6 +50,7 @@ from kebi.core.knowledge.research_service import (
     ResearchRankingWeights,
     ResearchService,
 )
+from kebi.core.knowledge.web_harvester import WebKnowledgeHarvester
 from kebi.core.knowledge.writer import KnowledgeWriter
 from kebi.core.memory.buffer import MessageBuffer
 from kebi.core.memory.extractor import MemoryExtractor
@@ -62,13 +71,15 @@ from kebi.core.places import (
     UserPlacesRepo,
     UserPlacesService,
 )
-from kebi.core.signal.service import SignalService
+from kebi.core.places.profile_service import PlaceProfileService
 from kebi.core.taste.debounce import regen_debouncer
 from kebi.core.taste.service import TasteModelService
 from kebi.core.user.intent_service import UserIntentService
 from kebi.core.user.service import UserDataDeletionService
+from kebi.core.web.service import WebKnowledgeService
 from kebi.db.repositories import (
     KnowledgeClaimRepository,
+    SQLAlchemyAreaRepository,
     SQLAlchemyKnowledgeClaimRepository,
 )
 from kebi.db.repositories.user_intent_repository import (
@@ -86,6 +97,15 @@ from kebi.providers.object_storage import (
     S3ObjectStorage,
 )
 from kebi.providers.redis_cache import RedisCacheBackend, get_redis_client
+from kebi.providers.weather import NullWeatherProvider, WeatherProvider
+from kebi.providers.web_search import (
+    BraveWebSearchProvider,
+    CachedWebSearchProvider,
+    NullWebSearchProvider,
+    WebSearchProvider,
+)
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Gateway service-to-service auth.
@@ -207,6 +227,59 @@ def get_cache_backend() -> CacheBackend:
     return RedisCacheBackend(client=get_redis_client(get_env().REDIS_URL))
 
 
+def get_area_repository() -> SQLAlchemyAreaRepository:
+    """FastAPI dependency providing the AreaRepository (ADR-153).
+
+    Uses session_factory — each method opens its own session, so it is safe
+    in both the request path (area screen) and the background profiler.
+    """
+    return SQLAlchemyAreaRepository(_get_session_factory())
+
+
+def get_entity_icon_refresher() -> EntityIconRefresher:
+    """Row-sourced entity icons for chat answers (ADR-162).
+
+    Session-factory based on purpose: the SSE path calls it inside the
+    streaming generator, after the request-scoped session is gone.
+    """
+    return EntityIconRefresher(
+        session_factory=_get_session_factory(),
+        area_repo=get_area_repository(),
+    )
+
+
+def get_area_profile_service() -> AreaProfileService:
+    """Build the area profiler (ADR-153) from process-wide providers.
+
+    Needs no request scope: it runs as a background task after the response,
+    so every collaborator opens its own session, and the shared Redis cache
+    backs its in-flight dedup lock.
+    """
+    cfg = get_config().areas
+    return AreaProfileService(
+        instructor_client=get_instructor_client("area_profiler"),
+        area_repo=get_area_repository(),
+        claim_repo=get_knowledge_claim_repository(),
+        cache=get_cache_backend(),
+        claims_input_limit=cfg.claims_input_limit,
+        notable_sub_areas_max=cfg.notable_sub_areas_max,
+    )
+
+
+def get_place_profile_service() -> PlaceProfileService:
+    """Build the place profiler (ADR-152) from process-wide providers.
+
+    Needs no request scope: it runs as a background task after the response,
+    so it takes the session *factory* (each run opens its own session) and
+    the shared Redis cache for its in-flight dedup lock.
+    """
+    return PlaceProfileService(
+        instructor_client=get_instructor_client("place_profiler"),
+        session_factory=_get_session_factory(),
+        cache=get_cache_backend(),
+    )
+
+
 def _build_message_buffer() -> MessageBuffer:
     """Construct a per-user message buffer backed by the shared Redis client.
 
@@ -283,13 +356,14 @@ async def get_event_dispatcher(
         ingestion=get_knowledge_ingestion(
             get_knowledge_writer(get_knowledge_claim_repository())
         ),
+        web_harvester=get_web_knowledge_harvester(),
+        profile_service=get_place_profile_service(),
+        area_profile_service=get_area_profile_service(),
     )
 
     dispatcher = EventDispatcher(background_tasks=background_tasks)
     for event_type in (
         "place_saved",
-        "recommendation_accepted",
-        "recommendation_rejected",
         "recommendation_saved",
     ):
         dispatcher.register_handler(event_type, handlers.on_taste_signal)
@@ -304,6 +378,18 @@ async def get_event_dispatcher(
     dispatcher.register_handler(
         "content_harvest_requested",
         handlers.on_content_harvest_requested,  # type: ignore[arg-type]
+    )
+    dispatcher.register_handler(
+        "web_findings_harvest_requested",
+        handlers.on_web_findings_harvest_requested,  # type: ignore[arg-type]
+    )
+    dispatcher.register_handler(
+        "place_profile_requested",
+        handlers.on_place_profile_requested,  # type: ignore[arg-type]
+    )
+    dispatcher.register_handler(
+        "area_profile_requested",
+        handlers.on_area_profile_requested,  # type: ignore[arg-type]
     )
 
     return dispatcher
@@ -433,18 +519,6 @@ def _get_deep_level() -> EnrichmentLevel:
 # PlaceUpsertService / UserPlacesService / UserPlacesRepo factories
 # (defined there) are already in scope when FastAPI resolves the
 # default-value Depends() at module load time.
-
-
-def get_signal_service(
-    event_dispatcher: EventDispatcher = Depends(get_event_dispatcher),  # noqa: B008
-) -> SignalService:
-    """FastAPI dependency providing SignalService (ADR-060, ADR-078).
-
-    Recommendation accept/reject signals are no longer DB-validated — the
-    recommendations table was dropped (ADR-078); the signal is trusted from
-    the product repo and dispatched as an event.
-    """
-    return SignalService(event_dispatcher=event_dispatcher)
 
 
 def get_agent_checkpointer(request: Request) -> Any:
@@ -694,6 +768,24 @@ def get_user_places_service(
     return UserPlacesService(user_places_repo=user_places_repo)
 
 
+def get_area_screen_service(
+    places_repo: PlacesRepo = Depends(get_places_repo),  # noqa: B008
+    user_places_repo: UserPlacesRepo = Depends(get_user_places_repo),  # noqa: B008
+) -> AreaScreenService:
+    """FastAPI dependency providing AreaScreenService (ADR-153).
+
+    Lives below the places deps so the default-value `Depends()` factories
+    exist at definition time. The places repos ride the request session; the
+    area repo opens its own sessions per method (it is shared with the
+    background profiler).
+    """
+    return AreaScreenService(
+        area_repo=get_area_repository(),
+        user_places_repo=user_places_repo,
+        places_repo=places_repo,
+    )
+
+
 # ---------------------------------------------------------------------------
 # places — hybrid search
 # ---------------------------------------------------------------------------
@@ -865,6 +957,67 @@ def get_knowledge_harvester() -> KnowledgeHarvester:
     )
 
 
+def get_web_knowledge_harvester() -> WebKnowledgeHarvester:
+    """FastAPI dependency providing the WebKnowledgeHarvester (ADR-145).
+
+    A `web_search` ClaimProducer, keyed and floored exactly like the other
+    two so a web-mined claim is stored, ranked, and labelled by the same
+    rules — just with the lowest trust floor in the set. Runs only on the
+    background event path, after the answer is already sent.
+    """
+    knowledge = get_config().knowledge
+    return WebKnowledgeHarvester(
+        get_instructor_client("web_harvester"),
+        get_geocoding_client(),
+        confidence_floor=knowledge.web_search_confidence_floor,
+        review_status=knowledge.web_search_review_status,
+    )
+
+
+@functools.cache
+def get_web_search_provider() -> WebSearchProvider:
+    """The process-wide web-search backend (ADR-145).
+
+    Brave when `BRAVE_API_KEY` is set, the null provider otherwise — the same
+    degrade-don't-fail shape as object storage and weather. Wrapped in the
+    Redis cache whenever a Redis URL is configured, which is what makes the
+    tool's permissive firing rule affordable: the cache key is the question,
+    not the user, so a question trending across users is paid for once.
+
+    Cached at process scope: the adapter holds only the shared HTTP client
+    and a key, and the Redis client manages its own pool.
+    """
+    env = get_env()
+    provider: WebSearchProvider
+    if env.BRAVE_API_KEY:
+        provider = BraveWebSearchProvider(
+            api_key=env.BRAVE_API_KEY,
+            base_url=get_config().providers.brave.base_url,
+            http_client=get_shared_http_client(),
+        )
+    else:
+        logger.info("web_search_provider_null: BRAVE_API_KEY unset")
+        provider = NullWebSearchProvider()
+    if not env.REDIS_URL:
+        return provider
+    return CachedWebSearchProvider(
+        provider,
+        get_redis_client(env.REDIS_URL),
+        ttl_seconds=get_config().agent.web_search.cache_ttl_seconds,
+    )
+
+
+def get_web_knowledge_service() -> WebKnowledgeService:
+    """FastAPI dependency providing WebKnowledgeService (ADR-145).
+
+    Safe to construct per request — the provider underneath is process-cached.
+    """
+    return WebKnowledgeService(
+        provider=get_web_search_provider(),
+        config=get_config().agent.web_search,
+    )
+
+
 def get_knowledge_curator() -> KnowledgeCurator:
     """FastAPI dependency providing the KnowledgeCurator (ADR-121/122).
 
@@ -883,40 +1036,55 @@ def get_knowledge_curator() -> KnowledgeCurator:
 
 def get_knowledge_curation_service(
     ingestion: KnowledgeIngestion = Depends(get_knowledge_ingestion),  # noqa: B008
+    places_repo: PlacesRepo = Depends(get_places_repo),  # noqa: B008
 ) -> KnowledgeCurationService:
-    """FastAPI dependency providing the KnowledgeCurationService (ADR-121)."""
+    """FastAPI dependency providing the KnowledgeCurationService (ADR-121).
+
+    Carries the places and area repositories for anchor resolution: a
+    request's `place_id`/`area_id` is turned into a verified `CurationAnchor`
+    before the curator's LLM ever runs.
+    """
     return KnowledgeCurationService(
         curator=get_knowledge_curator(),
         ingestion=ingestion,
+        places_repo=places_repo,
+        area_repo=get_area_repository(),
     )
 
 
-def get_kebi_note_producer() -> KebiNoteProducer:
-    """FastAPI dependency providing the KebiNoteProducer (ADR-127).
+def get_entity_search_service(
+    hybrid_search: HybridSearchService = Depends(  # noqa: B008
+        get_hybrid_search_service
+    ),
+) -> EntitySearchService:
+    """FastAPI dependency providing the EntitySearchService — the curation
+    anchor-chip typeahead (deterministic; no LLM).
 
-    A `kebi_message` ClaimProducer — turns a saved-recommendation reason into a
-    place-scoped claim. Trust floor and review status come from config, so
-    gating these notes later is a config change (no LLM, no geocoder).
+    The resolver cache degrades to None without a Redis URL (dev mode): the
+    endpoint still answers, each unseen-area lookup just pays its own
+    geocode.
     """
-    knowledge = get_config().knowledge
-    return KebiNoteProducer(
-        confidence_floor=knowledge.kebi_message_confidence_floor,
-        review_status=knowledge.kebi_message_review_status,
+    env = get_env()
+    cache = (
+        RedisCacheBackend(client=get_redis_client(env.REDIS_URL))
+        if env.REDIS_URL
+        else None
+    )
+    entity_search = get_config().knowledge.entity_search
+    return EntitySearchService(
+        area_repo=get_area_repository(),
+        hybrid_search=hybrid_search,
+        geo_resolver=EntityGeoResolver(get_geocoding_client()),
+        cache=cache,
+        cache_ttl_seconds=entity_search.resolver_cache_ttl_seconds,
+        area_limit=entity_search.area_limit,
     )
 
 
-def get_kebi_note_service(
-    ingestion: KnowledgeIngestion = Depends(get_knowledge_ingestion),  # noqa: B008
-) -> KebiNoteService:
-    """FastAPI dependency providing the KebiNoteService (ADR-127).
-
-    Records a saved-recommendation reason as a user-scoped `kebi_message`
-    claim, through the same source-agnostic ingestion seam the curator uses.
-    """
-    return KebiNoteService(
-        producer=get_kebi_note_producer(),
-        ingestion=ingestion,
-    )
+def get_curator_claims_service() -> CuratorClaimsService:
+    """FastAPI dependency providing the CuratorClaimsService — list/retract
+    over the caller's own curated claims, keyed by their source_ref."""
+    return CuratorClaimsService(repo=get_knowledge_claim_repository())
 
 
 def get_place_notes_service(
@@ -931,6 +1099,60 @@ def get_place_notes_service(
     how many notes surface on one place.
     """
     return PlaceNotesService(repo, limit=get_config().knowledge.place_notes_limit)
+
+
+def get_candidate_notes_service(
+    repo: KnowledgeClaimRepository = Depends(  # noqa: B008
+        get_knowledge_claim_repository
+    ),
+) -> CandidateNotesService:
+    """FastAPI dependency providing the CandidateNotesService (ADR-137).
+
+    The claims store read from the retrieval side: the place tools attach the
+    notes for their own candidates and for the turn's area, so insider
+    knowledge rides every recommendation answer rather than only the turns
+    that spend a `research` call.
+    """
+    cfg = get_config().knowledge
+    return CandidateNotesService(
+        repo,
+        per_place_limit=cfg.candidate_notes_limit,
+        area_limit=cfg.area_notes_limit,
+    )
+
+
+def get_weather_provider() -> WeatherProvider:
+    """FastAPI dependency providing the weather source (ADR-144).
+
+    Still null, deliberately. Weather *questions* are answered by the
+    `web_search` tool (ADR-145), which needs no weather dependency at all —
+    so a dedicated provider would buy only the ranking signal (preferring a
+    covered spot on a wet afternoon), and that is not worth a second external
+    dependency and a per-turn lookup yet. The seam stays so the decision
+    stays reversible.
+    """
+    return NullWeatherProvider()
+
+
+def get_known_places_service(
+    repo: KnowledgeClaimRepository = Depends(  # noqa: B008
+        get_knowledge_claim_repository
+    ),
+    places_repo: PlacesRepo = Depends(get_places_repo),  # noqa: B008
+) -> KnownPlacesService:
+    """FastAPI dependency providing the KnownPlacesService (ADR-138).
+
+    Claims-driven retrieval: the geofenced claims join names the places, then
+    the catalog read resolves them by id. Both are indexed reads — no LLM and
+    no place provider — which is what lets `find_known` lead a turn.
+    """
+    cfg = get_config().agent.find_known
+    return KnownPlacesService(
+        repo,
+        places_repo,
+        notes_per_place=cfg.notes_per_place,
+        scan_limit=cfg.scan_limit,
+    )
 
 
 def get_research_service(
@@ -1074,6 +1296,15 @@ def get_agent_graph(
         get_candidate_namer_service
     ),
     research_service: ResearchService = Depends(get_research_service),  # noqa: B008
+    candidate_notes: CandidateNotesService = Depends(  # noqa: B008
+        get_candidate_notes_service
+    ),
+    known_places: KnownPlacesService = Depends(  # noqa: B008
+        get_known_places_service
+    ),
+    web_knowledge: WebKnowledgeService = Depends(  # noqa: B008
+        get_web_knowledge_service
+    ),
 ) -> Any:
     """Build the agent StateGraph per-request.
 
@@ -1117,6 +1348,9 @@ def get_agent_graph(
             candidate_namer,
             places_search_factory,
             research_service,
+            candidate_notes=candidate_notes,
+            known_places=known_places,
+            web_knowledge=web_knowledge,
             discovery_enabled=identity.discovery_enabled,
         ),
         checkpointer,
@@ -1140,6 +1374,7 @@ async def get_chat_service(
     taste_service: TasteModelService = Depends(get_taste_service),  # noqa: B008
     config: AppConfig = Depends(get_config),  # noqa: B008
     agent_graph: Any = Depends(get_agent_graph),  # noqa: B008
+    icon_refresher: EntityIconRefresher = Depends(get_entity_icon_refresher),  # noqa: B008
 ) -> ChatService:
     """FastAPI dependency for ChatService (ADR-052/073/075/078)."""
     return ChatService(
@@ -1148,4 +1383,5 @@ async def get_chat_service(
         taste_service=taste_service,
         config=config,
         agent_graph=agent_graph,
+        icon_refresher=icon_refresher,
     )

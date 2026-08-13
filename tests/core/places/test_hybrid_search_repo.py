@@ -64,6 +64,7 @@ def _hit_row(
     place_name: str = "Test Place",
     categories: list[str] | None = None,
     tags: list[dict[str, Any]] | None = None,
+    icon: str | None = None,
     location: dict[str, Any] | None = None,
     aliases: list[dict[str, Any]] | None = None,
     visited: bool = False,
@@ -82,6 +83,7 @@ def _hit_row(
         "place_name_aliases": aliases,
         "categories": categories if categories is not None else ["restaurant"],
         "tags": tags,
+        "icon": icon,
         "location": location,
         "created_at": saved_at,
         "refreshed_at": None,
@@ -796,6 +798,18 @@ class TestHitPlaceShape:
         assert place.tags[0].value == "Italian"
         assert place.location is not None and place.location.city == "Tokyo"
         assert place.place_name_aliases[0].value == "Alt Name"
+
+    async def test_place_carries_its_icon(self) -> None:
+        """Every retrieved candidate feeds a chat answer's venue links, and
+        the client draws each link with the place's own emoji. This SELECT
+        names its place columns one by one; while `icon` was missing from
+        it, every suggested venue arrived icon-less and the chips fell back
+        to the generic pin."""
+        repo, _ = _make_repo([_hit_row(icon="🍜")])
+
+        results = await repo.search("u1", "ramen", _query_vector())
+
+        assert results[0].place.icon == "🍜"
 
     async def test_hit_carries_user_data_alongside_place(self) -> None:
         rows = [

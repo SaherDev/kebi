@@ -8,9 +8,7 @@ from kebi.core.config import ConfidenceConfig
 from kebi.core.extraction.candidate_mapper import (
     AttributedSearchResult,
     candidate_to_core,
-    llm_tags_to_place_tags,
     location_hint_from,
-    merge_tags,
     reconcile_picks,
 )
 from kebi.core.extraction.types import (
@@ -26,6 +24,10 @@ from kebi.core.places import (
     PlaceObject,
     PlaceTag,
     TagType,
+)
+from kebi.core.places.tag_merge import (
+    llm_tags_to_place_tags,
+    merge_tags,
 )
 
 

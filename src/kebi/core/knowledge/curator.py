@@ -1,14 +1,19 @@
 """Expert curator — the `curated_expert` knowledge writer (ADR-121).
 
-A travel expert writes prose; one LLM call structures it into geo-scoped
-claims, and each claim's area is resolved to a canonical `ResolvedGeo`
-through the same free geocoder the rest of the repo uses — so a curated
-claim keys identically to a harvested one and the two merge on the same
-entity. The resolved claims hand off to the shared `KnowledgeWriter`.
+A travel expert writes prose; one LLM call structures it into claims, and
+each claim's area is resolved to a canonical `ResolvedGeo` through the same
+free geocoder the rest of the repo uses — so a curated claim keys identically
+to a harvested one and the two merge on the same entity. The resolved claims
+hand off to the shared `KnowledgeWriter`.
 
-v1 is geo-scoped (country / city / neighborhood): the curator has no place
-to anchor a place-scoped claim to. Place-level curation would need resolving
-a named venue to a catalog id and is deliberately out of scope here.
+A request may carry a `CurationAnchor` — the entity the prose was written
+about, resolved by the caller before the LLM runs. A venue anchor is what
+makes `place` scope expressible here: the model marks a claim as being about
+the anchored venue and the anchor's catalog id becomes its `place_ref` — the
+model itself never sees or invents an id. The anchor's geo is also the
+fallback for geo-scoped claims whose area can't be geocoded from the prose.
+An unanchored request remains geo-only: a `place` claim with no venue anchor
+is dropped, never guessed at.
 """
 
 from __future__ import annotations
@@ -20,7 +25,9 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from kebi.core.agent._trace_context import traced_call
 from kebi.core.config import get_prompt
+from kebi.core.knowledge.geo_resolve import slugs_match
 from kebi.core.knowledge.schemas import (
+    CurationAnchor,
     ResolvedGeo,
     ReviewStatus,
     SourceType,
@@ -35,29 +42,16 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-class LocationHint(BaseModel):
-    """Optional anchor the expert supplies to disambiguate their prose.
-
-    Used as the fallback geo when a claim's area can't be geocoded.
-    `country_alpha2` is expected to be an ISO-3166 alpha-2 code; the writer
-    validates it and drops the claim if it isn't.
-    """
-
-    model_config = ConfigDict(extra="forbid")
-
-    country_alpha2: str | None = None
-    city: str | None = None
-    neighborhood: str | None = None
-
-
 class _CuratedClaim(BaseModel):
-    """One claim as the model emits it — area named for geocoding, not keyed."""
+    """One claim as the model emits it — area named for geocoding, not keyed.
+    `area_query` is empty for a claim about the anchored venue (there is
+    nothing to geocode; the anchor supplies the key)."""
 
     model_config = ConfigDict(extra="forbid")
 
-    scope: Literal["country", "city", "neighborhood"]
+    scope: Literal["place", "country", "city", "neighborhood"]
     entity_name: str
-    area_query: str
+    area_query: str = ""
     claim: str
     tags: list[str] = Field(default_factory=list)
     confidence: float
@@ -67,18 +61,37 @@ class _CuratorResponse(BaseModel):
     claims: list[_CuratedClaim] = Field(default_factory=list)
 
 
-def _hint_geo(hint: LocationHint | None) -> ResolvedGeo | None:
-    if hint is None or not hint.country_alpha2:
-        return None
-    return ResolvedGeo(
-        country_code=hint.country_alpha2.strip().lower(),
-        city=hint.city,
-        neighborhood=hint.neighborhood,
+def _names_anchor(raw: _CuratedClaim, anchor: CurationAnchor | None) -> bool:
+    """True when a geo claim is about the anchored entity (or a geo level the
+    anchor already sits in), so the anchor's verified geo keys it directly.
+    An empty area_query under an anchor means "here" — also the anchor."""
+    if anchor is None:
+        return False
+    if not raw.area_query.strip():
+        return True
+    geo = anchor.geo
+    return (
+        slugs_match(raw.entity_name, anchor.name)
+        or slugs_match(raw.entity_name, geo.neighborhood)
+        or slugs_match(raw.entity_name, geo.city)
     )
 
 
+def _render_anchor_line(anchor: CurationAnchor) -> str:
+    """The dynamic anchor context the static addendum prompt refers to."""
+    geo = anchor.geo
+    where = ", ".join(
+        part
+        for part in (geo.neighborhood, geo.city, geo.country_code)
+        if part and part != anchor.name
+    )
+    kind = "venue" if anchor.place_id else "area"
+    suffix = f" (in {where})" if where else ""
+    return f'Anchor: the {kind} "{anchor.name}"{suffix}.'
+
+
 class KnowledgeCurator:
-    """Structure expert prose into resolved geo-scoped claims.
+    """Structure expert prose into resolved claims.
 
     A `ClaimProducer` for the `curated_expert` source, self-describing its
     (higher) trust floor and review status.
@@ -102,7 +115,7 @@ class KnowledgeCurator:
     async def structure(
         self,
         text: str,
-        hint: LocationHint | None = None,
+        anchor: CurationAnchor | None = None,
         *,
         user_id: str | None = None,
     ) -> list[StructuredClaim]:
@@ -122,11 +135,7 @@ class KnowledgeCurator:
                     messages=[
                         {
                             "role": "system",
-                            # Same rendered vocabulary as the harvester —
-                            # one bounded tag list on every write path.
-                            "content": get_prompt("knowledge_curator")
-                            + "\n\n"
-                            + render_claim_tag_vocabulary(),
+                            "content": self._system_prompt(anchor),
                         },
                         {"role": "user", "content": text},
                     ],
@@ -135,18 +144,56 @@ class KnowledgeCurator:
                 logger.warning("knowledge curation failed: %s", exc, exc_info=True)
                 t.fail(exc)
                 return []
-            resolved = await self._resolve(cast(_CuratorResponse, response), hint)
+            resolved = await self._resolve(cast(_CuratorResponse, response), anchor)
             t.output = {"count": len(resolved)}
             return resolved
 
+    def _system_prompt(self, anchor: CurationAnchor | None) -> str:
+        parts = [get_prompt("knowledge_curator")]
+        if anchor is not None:
+            parts.append(
+                _render_anchor_line(anchor)
+                + "\n\n"
+                + get_prompt("knowledge_curator_anchor")
+            )
+        # Same rendered vocabulary as the harvester — one bounded tag list on
+        # every write path, appended last on all of them.
+        parts.append(render_claim_tag_vocabulary())
+        return "\n\n".join(parts)
+
     async def _resolve(
-        self, response: _CuratorResponse, hint: LocationHint | None
+        self, response: _CuratorResponse, anchor: CurationAnchor | None
     ) -> list[StructuredClaim]:
-        hint_geo = _hint_geo(hint)
+        anchor_geo = anchor.geo if anchor is not None else None
         cache: dict[str, ResolvedGeo | None] = {}
         resolved: list[StructuredClaim] = []
         for raw in response.claims:
-            geo = await self._resolve_area(raw.area_query, cache) or hint_geo
+            if raw.scope == "place":
+                # Only the anchored venue is a legal place target; the model
+                # never supplies the id (prompt rule, enforced here).
+                if anchor is None or anchor.place_id is None:
+                    logger.debug("curated_place_claim_dropped_no_venue_anchor")
+                    continue
+                resolved.append(
+                    StructuredClaim(
+                        scope="place",
+                        entity_name=anchor.name,
+                        claim=raw.claim,
+                        tags=raw.tags,
+                        confidence=raw.confidence,
+                        place_ref=anchor.place_id,
+                    )
+                )
+                continue
+            if _names_anchor(raw, anchor):
+                # The anchor supplies the key for claims about itself —
+                # re-geocoding the anchor's own name risks an incomplete or
+                # differently-keyed answer that would split the entity's
+                # claims (the harvester's own rule, ADR-126). Only a claim
+                # about a *different* area earns a geocode.
+                geo = anchor_geo
+            else:
+                geo = await self._resolve_area(raw.area_query, cache) or anchor_geo
             if geo is None:
                 continue
             resolved.append(

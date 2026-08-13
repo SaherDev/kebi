@@ -71,6 +71,17 @@ def test_normalize_empty_and_all_unknown() -> None:
     assert normalize_claim_tags(["quantum", "vibes"]) == []
 
 
+def test_normalize_accepts_type_prefixed_form() -> None:
+    # The prompt renders "- money: cash_only, ..." so models emit
+    # "money:cash_only" — the intent is unambiguous and must not be dropped
+    # (seen live: curated tags silently stored as [] before this).
+    assert normalize_claim_tags(
+        ["money:cash_only", "timing_trick:go_early", "transport: rideshare"]
+    ) == ["cash_only", "go_early", "rideshare"]
+    # An unknown prefix or an unknown value still drops.
+    assert normalize_claim_tags(["vibes:cash_only", "money:vibes"]) == []
+
+
 def test_render_lists_every_type_for_the_prompt() -> None:
     rendered = render_claim_tag_vocabulary()
     assert rendered.startswith("Allowed tag values")

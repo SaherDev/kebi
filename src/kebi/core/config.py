@@ -426,6 +426,27 @@ class HomeConfig(BaseModel):
         return self
 
 
+class AreasConfig(BaseModel):
+    """Area screen + profiler knobs (ADR-153).
+
+    `claims_input_limit` caps how many approved claims feed one profiling
+    call — highest-confidence first when it bites. `notable_sub_areas_max`
+    caps the profiler's "worth knowing" children stored on the row.
+    """
+
+    claims_input_limit: int = 30
+    notable_sub_areas_max: int = 6
+
+    @model_validator(mode="after")
+    def _bounds(self) -> "AreasConfig":
+        if self.claims_input_limit < 1 or self.notable_sub_areas_max < 1:
+            raise ValueError(
+                "areas.claims_input_limit / notable_sub_areas_max must be >= 1 "
+                f"(got {self.claims_input_limit}, {self.notable_sub_areas_max})"
+            )
+        return self
+
+
 class KnowledgeResearchConfig(BaseModel):
     """Research read-path knobs (the knowledge layer's agent-facing reader).
 
@@ -454,8 +475,7 @@ class KnowledgeResearchConfig(BaseModel):
         ):
             if not (0.0 <= value <= 1.0):
                 raise ValueError(
-                    f"knowledge.research.{name} must be in [0.0, 1.0] "
-                    f"(got {value})"
+                    f"knowledge.research.{name} must be in [0.0, 1.0] (got {value})"
                 )
         for name, value in (
             ("w_tag", self.w_tag),
@@ -468,6 +488,20 @@ class KnowledgeResearchConfig(BaseModel):
                     f"knowledge.research.{name} must be >= 0 (got {value})"
                 )
         return self
+
+
+class EntitySearchConfig(BaseModel):
+    """The curation anchor-chip typeahead (/v1/knowledge/entities).
+
+    `area_limit` caps how many area rows lead the result list — areas are
+    few and exact-ish; the rest of the page is places. The resolver cache
+    TTL governs how long a verified-or-miss geocode verdict for an unseen
+    area name is remembered; long on purpose, since "is X a real city in
+    country Y" barely changes and public Nominatim is rate-limited.
+    """
+
+    area_limit: int = 3
+    resolver_cache_ttl_seconds: int = 604800  # 7 days
 
 
 class KnowledgeConfig(BaseModel):
@@ -492,11 +526,25 @@ class KnowledgeConfig(BaseModel):
     # (strong): it is the user's own rationale, trusted for them but not global
     # expertise. `place_notes_limit` caps how many notes surface on one place.
     kebi_message_confidence_floor: float = 0.8
+    # Web-mined claims (ADR-145) floor lowest of all: a search snippet is one
+    # unreviewed page, weaker evidence than something a person cared enough
+    # to share. It still surfaces — trust is a ranking weight, not a gate —
+    # but it loses to a harvested or curated claim that disagrees.
+    web_search_confidence_floor: float = 0.25
     harvest_review_status: Literal["pending", "approved", "rejected"] = "approved"
+    web_search_review_status: Literal["pending", "approved", "rejected"] = "approved"
     curator_review_status: Literal["pending", "approved", "rejected"] = "approved"
     kebi_message_review_status: Literal["pending", "approved", "rejected"] = "approved"
     place_notes_limit: int = 6
+    # Insider notes attached to a place tool's result on the retrieval path
+    # (ADR-137). `candidate_notes_limit` is per candidate and stays small — a
+    # recommendation list of 10 places carries 10x this, and the notes are
+    # material for one line of prose each, not a dossier. `area_notes_limit`
+    # is per turn: neighborhood, city, and country claims pooled together.
+    candidate_notes_limit: int = 2
+    area_notes_limit: int = 3
     research: KnowledgeResearchConfig = KnowledgeResearchConfig()
+    entity_search: EntitySearchConfig = EntitySearchConfig()
 
     @model_validator(mode="after")
     def _bounds(self) -> "KnowledgeConfig":
@@ -509,6 +557,12 @@ class KnowledgeConfig(BaseModel):
                 raise ValueError(
                     f"knowledge.{name} must be in [0.0, 1.0] (got {value})"
                 )
+        for name, limit in (
+            ("candidate_notes_limit", self.candidate_notes_limit),
+            ("area_notes_limit", self.area_notes_limit),
+        ):
+            if limit < 0:
+                raise ValueError(f"knowledge.{name} must be >= 0 (got {limit})")
         if self.place_notes_limit < 1:
             raise ValueError(
                 "knowledge.place_notes_limit must be >= 1 "
@@ -560,6 +614,9 @@ class AppProvidersConfig(BaseModel):
     ollama: ProviderEndpointConfig = ProviderEndpointConfig(
         base_url="http://localhost:11434/v1"
     )
+    brave: ProviderEndpointConfig = ProviderEndpointConfig(
+        base_url="https://api.search.brave.com"
+    )
 
 
 class PromptConfig(BaseModel):
@@ -583,23 +640,61 @@ class ToolTimeoutsConfig(BaseModel):
 
     find_saved: int = 8
     suggest_places: int = 18
-    discover_places: int = 8
     research: int = 8
+    # find_known is two indexed reads, no LLM and no provider — the cheapest
+    # tool in the set (ADR-138).
+    find_known: int = 8
+    # One outbound HTTP call with its own 6s budget, plus cache lookup. Kept
+    # tight: a slow search must lose the nuance, not the turn (ADR-145).
+    web_search: int = 10
 
     @model_validator(mode="after")
     def _positive_integers(self) -> "ToolTimeoutsConfig":
-        if (
-            self.find_saved < 1
-            or self.suggest_places < 1
-            or self.discover_places < 1
-            or self.research < 1
-        ):
+        fields = {
+            "find_saved": self.find_saved,
+            "suggest_places": self.suggest_places,
+            "research": self.research,
+            "find_known": self.find_known,
+            "web_search": self.web_search,
+        }
+        bad = {k: v for k, v in fields.items() if v < 1}
+        if bad:
             raise ValueError(
-                "agent.tool_timeouts_seconds fields must be >= 1 "
-                f"(got find_saved={self.find_saved}, "
-                f"suggest_places={self.suggest_places}, "
-                f"discover_places={self.discover_places}, "
-                f"research={self.research})"
+                f"agent.tool_timeouts_seconds fields must be >= 1 (got {bad})"
+            )
+        return self
+
+
+class FindKnownConfig(BaseModel):
+    """Per-tool knobs for `find_known` (ADR-138).
+
+    `scan_limit` bounds the geofenced claims join — the ceiling on how many
+    claim rows one call ranks in memory, not how many places come back.
+    `notes_per_place` caps the facts carried per surfaced place: they are the
+    reason it surfaced, so this runs a little richer than the passive
+    `knowledge.candidate_notes_limit`.
+    """
+
+    default_limit: int = 5
+    max_limit: int = 15
+    notes_per_place: int = 3
+    scan_limit: int = 300
+
+    @model_validator(mode="after")
+    def _positive_integers(self) -> "FindKnownConfig":
+        fields = {
+            "default_limit": self.default_limit,
+            "max_limit": self.max_limit,
+            "notes_per_place": self.notes_per_place,
+            "scan_limit": self.scan_limit,
+        }
+        bad = {k: v for k, v in fields.items() if v < 1}
+        if bad:
+            raise ValueError(f"agent.find_known fields must be >= 1 (got {bad})")
+        if self.default_limit > self.max_limit:
+            raise ValueError(
+                "agent.find_known.default_limit must be <= max_limit "
+                f"(got {self.default_limit} > {self.max_limit})"
             )
         return self
 
@@ -680,30 +775,53 @@ class SuggestPlacesConfig(BaseModel):
         return self
 
 
-class DiscoverPlacesConfig(BaseModel):
-    """Per-tool knobs for `discover_places`.
+class WebSearchToolConfig(BaseModel):
+    """Per-tool knobs for `web_search` (ADR-145).
 
-    `default_limit` / `max_limit` mirror the other consult-family tools.
-    No `name_count` / `provider_concurrency` — the tool issues exactly
-    one `PlacesSearchService.find()` call (no fan-out, no namer).
+    `snippet_max_chars` is the important one. Findings compete for the
+    orchestrator's attention with the claims, and the claims are the part of
+    an answer that is ours — so a finding is capped at roughly a long sentence
+    and a half: enough to ground a date or a price, not enough to become the
+    answer.
+
+    `cache_ttl_seconds` is one day. The tool fires freely by design, so the
+    cache is what keeps that affordable; a day is short enough that a
+    schedule change washes out by tomorrow and long enough that a question
+    trending across users is paid for once.
+
+    `harvest_enabled` gates the write-back into the claims store. Config, not
+    code, so a bad harvest can be switched off without a deploy.
     """
 
-    default_limit: int = 10
-    max_limit: int = 25
+    default_limit: int = 5
+    max_limit: int = 8
+    snippet_max_chars: int = 320
+    cache_ttl_seconds: int = 86400
+    harvest_enabled: bool = True
 
     @model_validator(mode="after")
-    def _positive_integers(self) -> "DiscoverPlacesConfig":
+    def _positive_integers(self) -> "WebSearchToolConfig":
         if self.default_limit < 1 or self.max_limit < 1:
             raise ValueError(
-                "agent.discover_places.default_limit / max_limit must be >= 1 "
+                "agent.web_search.default_limit / max_limit must be >= 1 "
                 f"(got default_limit={self.default_limit}, "
                 f"max_limit={self.max_limit})"
             )
         if self.default_limit > self.max_limit:
             raise ValueError(
-                "agent.discover_places.default_limit must be <= max_limit "
-                f"(got default_limit={self.default_limit}, "
-                f"max_limit={self.max_limit})"
+                "agent.web_search.default_limit must be <= max_limit "
+                f"(got {self.default_limit} > {self.max_limit})"
+            )
+        if self.snippet_max_chars < 80:
+            raise ValueError(
+                "agent.web_search.snippet_max_chars must be >= 80 — below that "
+                "a finding is too short to ground a fact on "
+                f"(got {self.snippet_max_chars})"
+            )
+        if self.cache_ttl_seconds < 1:
+            raise ValueError(
+                "agent.web_search.cache_ttl_seconds must be >= 1 "
+                f"(got {self.cache_ttl_seconds})"
             )
         return self
 
@@ -737,6 +855,41 @@ class ResearchToolConfig(BaseModel):
         return self
 
 
+class ItineraryConfig(BaseModel):
+    """Knobs for multi-stop itinerary turns (ADR-148).
+
+    `max_stops` caps how many resolver-named stops the resolve node
+    geocodes — a runaway stop list costs one geocode each. `per_segment_limit`
+    is the per-stop / per-leg candidate cap the fan-out tools use, replacing
+    the single-search limit: an itinerary answer wants a few strong names per
+    segment, not one city's worth from each. `max_tool_calls` replaces the
+    flat per-turn tool budget on itinerary turns: a three-stop trip
+    legitimately spends more calls than a single-city question (retrieval,
+    per-stop suggestions, the guard's verification round), and the flat cap
+    was observed collapsing trip turns into the cap-hit fallback.
+    """
+
+    max_stops: int = 5
+    per_segment_limit: int = 4
+    max_tool_calls: int = 8
+
+    @model_validator(mode="after")
+    def _positive_integers(self) -> "ItineraryConfig":
+        if self.max_stops < 2 or self.per_segment_limit < 1:
+            raise ValueError(
+                "agent.itinerary.max_stops must be >= 2 and "
+                "per_segment_limit >= 1 "
+                f"(got max_stops={self.max_stops}, "
+                f"per_segment_limit={self.per_segment_limit})"
+            )
+        if self.max_tool_calls < 1:
+            raise ValueError(
+                "agent.itinerary.max_tool_calls must be >= 1 "
+                f"(got {self.max_tool_calls})"
+            )
+        return self
+
+
 class AgentConfig(BaseModel):
     """Typed configuration for the agent path (feature 027 M2, ADR-062).
 
@@ -757,9 +910,11 @@ class AgentConfig(BaseModel):
     checkpointer_ttl_seconds: int = 86400
     tool_timeouts_seconds: ToolTimeoutsConfig = ToolTimeoutsConfig()
     find_saved: FindSavedConfig = FindSavedConfig()
+    find_known: FindKnownConfig = FindKnownConfig()
     suggest_places: SuggestPlacesConfig = SuggestPlacesConfig()
-    discover_places: DiscoverPlacesConfig = DiscoverPlacesConfig()
     research: ResearchToolConfig = ResearchToolConfig()
+    web_search: WebSearchToolConfig = WebSearchToolConfig()
+    itinerary: ItineraryConfig = ItineraryConfig()
     prompt_caching_enabled: bool = True
 
     @model_validator(mode="after")
@@ -822,18 +977,28 @@ class MovementRadiusTiers(BaseModel):
 
 
 class MovementFallback(BaseModel):
-    """Neutral mobility capability applied when a `/v1/chat` request omits
-    `movement_profile` (ADR-085 / ADR-086).
+    """Mobility applied when nobody has told kebi how this user gets around
+    (ADR-085 / ADR-086, reversed by ADR-156).
 
-    Deliberately conservative: walking is listed first so the system's
-    deterministic mode pick — `available_modes[0]` when the resolver leaves
-    `effective_mode` empty — is walking rather than something that silently
-    widens every search radius. The resolver may still pick transit per turn
-    based on the working location and the message.
+    This used to lead with walking, on the reasoning that a conservative guess
+    was the safe one. It is not. Narrow-when-ignorant fails *invisibly*: a
+    driver capped at walking range never learns that the places beyond it were
+    removed, so there is nothing to correct and no signal anything went wrong.
+    Guessing wide fails visibly instead — a place turns out to be twenty
+    minutes away, the user says so, and the turn recovers.
+
+    `rideshare` leads because it is the one mode almost anyone has almost
+    anywhere: it assumes no licence, no vehicle, no fitness, and it reaches
+    whatever a car reaches. Walking and transit stay listed so the resolver can
+    still pick them when the message or the city calls for it.
+
+    This is a guess, not an answer, and the caller must keep saying so —
+    `_mobility_profile` reports it as unresolved, and the prompt is required
+    to flag distance in the prose rather than assert it silently.
     """
 
     reach: Reach = "normal"
-    available_modes: list[MovementMode] = ["walking", "transit"]
+    available_modes: list[MovementMode] = ["rideshare", "walking", "transit"]
 
 
 class MovementConfig(BaseModel):
@@ -861,6 +1026,10 @@ class MovementConfig(BaseModel):
         "sparse": 1.6,
     }
     fallback: MovementFallback = MovementFallback()
+    # Ceiling on the resolved radius (ADR-143). Tier, mode, and density
+    # multiply, so the wide end compounded into radii that covered an entire
+    # island; beyond this a search is no longer "near" anything.
+    max_radius_m: int = 60000
 
 
 class VoyagePricing(BaseModel):
@@ -946,6 +1115,7 @@ class AppConfig(BaseModel):
     taste_model: TasteModelConfig = TasteModelConfig()
     memory: MemoryConfig = MemoryConfig()
     home: HomeConfig = HomeConfig()
+    areas: AreasConfig = AreasConfig()
     user_intents: UserIntentConfig = UserIntentConfig()
     knowledge: KnowledgeConfig = KnowledgeConfig()
     agent: AgentConfig = AgentConfig()
@@ -973,7 +1143,9 @@ class AppConfig(BaseModel):
 _REQUIRED_PROMPT_SLOTS: dict[str, list[str]] = {
     "agent": [
         "{location_context}",
+        "{time_context}",
         "{movement_context}",
+        "{user_profile_context}",
         "{taste_profile_summary}",
         "{memory_summary}",
     ],
@@ -1092,6 +1264,11 @@ class EnvConfig(BaseSettings):
     GOOGLE_API_KEY: str | None = None
     GROQ_API_KEY: str | None = None
     APIFY_TOKEN: str | None = None
+    # Brave Search — gates the `web_search` tool's backend (ADR-145). Unset
+    # selects the null provider: the tool stays bound and callable, comes back
+    # empty, and the agent answers from what it knows instead of asserting a
+    # fact it could not check.
+    BRAVE_API_KEY: str | None = None
     LANGFUSE_PUBLIC_KEY: str | None = None
     LANGFUSE_SECRET_KEY: str | None = None
     LANGFUSE_HOST: str | None = None

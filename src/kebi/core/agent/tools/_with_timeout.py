@@ -43,7 +43,7 @@ logger = logging.getLogger(__name__)
 # The consult place tools speak ConsultResult (`candidates`); `research`
 # speaks ResearchResult (`notes`). A degraded payload must match the
 # tool's own shape so clients and tests never see a foreign field.
-_DEGRADED_EMPTY_FIELD = {"research": "notes"}
+_DEGRADED_EMPTY_FIELD = {"research": "notes", "web_search": "findings"}
 
 
 def tool_step_base_id(tool_name: str, state: AgentState) -> str:
@@ -138,6 +138,9 @@ async def with_timeout(
     only when this wrapper awaits it — keeping the `asyncio.wait_for`
     cancellation semantics intact.
     """
+    # One INFO line per tool execution — a tool that ran but surfaced
+    # nothing is otherwise indistinguishable from one that never ran.
+    logger.info("tool %s executing (call %s)", tool_name, tool_call_id)
     try:
         return await asyncio.wait_for(coro, timeout=seconds)
     except TimeoutError:

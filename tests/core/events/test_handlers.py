@@ -6,8 +6,6 @@ import pytest
 
 from kebi.core.events.events import (
     PlaceSaved,
-    RecommendationAccepted,
-    RecommendationRejected,
     RecommendationSaved,
     TurnCompleted,
 )
@@ -48,36 +46,12 @@ class TestOnTasteSignal:
         assert calls[0].kwargs["place_core_id"] == "p1"
         assert calls[1].kwargs["place_core_id"] == "p2"
 
-    async def test_recommendation_accepted(
-        self, handlers: EventHandlers, mock_taste_service: MagicMock
-    ) -> None:
-        event = RecommendationAccepted(
-            user_id="u1", recommendation_id="r1", place_core_id="p1"
-        )
-        await handlers.on_taste_signal(event)
-        mock_taste_service.handle_signal.assert_awaited_once_with(
-            user_id="u1", signal_type=InteractionType.ACCEPTED, place_core_id="p1"
-        )
-
-    async def test_recommendation_rejected(
-        self, handlers: EventHandlers, mock_taste_service: MagicMock
-    ) -> None:
-        event = RecommendationRejected(
-            user_id="u1", recommendation_id="r1", place_core_id="p1"
-        )
-        await handlers.on_taste_signal(event)
-        mock_taste_service.handle_signal.assert_awaited_once_with(
-            user_id="u1", signal_type=InteractionType.REJECTED, place_core_id="p1"
-        )
-
     async def test_recommendation_saved_maps_to_dedicated_type(
         self, handlers: EventHandlers, mock_taste_service: MagicMock
     ) -> None:
         """Saving a recommendation is its own stronger signal — it maps to
         SAVED_RECOMMENDATION, not the plain SAVE bucket."""
-        event = RecommendationSaved(
-            user_id="u1", recommendation_id="r1", place_core_id="p1"
-        )
+        event = RecommendationSaved(user_id="u1", place_core_id="p1")
         await handlers.on_taste_signal(event)
         mock_taste_service.handle_signal.assert_awaited_once_with(
             user_id="u1",
@@ -89,9 +63,7 @@ class TestOnTasteSignal:
         self, handlers: EventHandlers, mock_taste_service: MagicMock
     ) -> None:
         mock_taste_service.handle_signal = AsyncMock(side_effect=RuntimeError("boom"))
-        event = RecommendationAccepted(
-            user_id="u1", recommendation_id="r1", place_core_id="p1"
-        )
+        event = RecommendationSaved(user_id="u1", place_core_id="p1")
         await handlers.on_taste_signal(event)  # should not raise
 
 
@@ -192,3 +164,43 @@ class TestOnTurnCompleted:
         )
         await handlers.on_turn_completed(event)  # must not raise
         mock_intent_service.record_intent.assert_awaited_once()
+
+
+class TestOnPlaceProfileRequested:
+    """The profile handler is a thin, best-effort dispatch (ADR-152)."""
+
+    def _handlers(self, profile_service: MagicMock | None) -> EventHandlers:
+        return EventHandlers(
+            taste_service=MagicMock(),
+            memory_service=MagicMock(),
+            intent_service=MagicMock(),
+            tracer=MagicMock(capture_message=MagicMock(), flush=MagicMock()),
+            profile_service=profile_service,
+        )
+
+    async def test_delegates_to_the_profile_service(self) -> None:
+        from kebi.core.events.events import PlaceProfileRequested
+
+        service = MagicMock(profile_place=AsyncMock(return_value=None))
+        handlers = self._handlers(service)
+        await handlers.on_place_profile_requested(
+            PlaceProfileRequested(user_id="u1", place_id="p1")
+        )
+        service.profile_place.assert_awaited_once_with("p1")
+
+    async def test_no_service_wired_is_a_noop(self) -> None:
+        from kebi.core.events.events import PlaceProfileRequested
+
+        handlers = self._handlers(None)
+        await handlers.on_place_profile_requested(
+            PlaceProfileRequested(user_id="u1", place_id="p1")
+        )  # should not raise
+
+    async def test_a_service_failure_never_propagates(self) -> None:
+        from kebi.core.events.events import PlaceProfileRequested
+
+        service = MagicMock(profile_place=AsyncMock(side_effect=RuntimeError("boom")))
+        handlers = self._handlers(service)
+        await handlers.on_place_profile_requested(
+            PlaceProfileRequested(user_id="u1", place_id="p1")
+        )  # should not raise

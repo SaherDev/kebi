@@ -1,0 +1,36 @@
+{
+    "type": "agent",
+    "message": "nothing specific in my notes on tipping, but here's what's actually the case on the ground:\n\ntipping isn't mandatory in [bali](kebi://area/id/bali), but it's genuinely appreciated. most restaurants already add a 10% service charge to the bill, so check before you add more. if there's no service charge, rounding up or leaving 10-15% is normal and welcome.\n\nfor drivers, a 10,000-20,000 IDR tip after a longer trip is plenty. for spa and massage, tipping is pretty common since the staff are often on low base wages, 20,000-50,000 IDR is a good range depending on how long the session was. for your villa or hotel staff, leaving something at the end of your stay is a nice touch.\n\nstreet food and warungs, no expectation at all. the fancier the place, the more a tip lands well.",
+    "data": {
+        "reasoning_steps": [
+            {
+                "step": "agent.location_resolved",
+                "title": "found your location",
+                "summary": "around Bali, Indonesia",
+                "source": "agent",
+                "visibility": "user",
+                "timestamp": "2026-08-06T13:43:30.787158Z",
+                "duration_ms": 1633.7185419979505
+            },
+            {
+                "step": "research.summary",
+                "title": "dug into the local intel",
+                "summary": "found 2 insider notes on Bali",
+                "source": "agent",
+                "visibility": "user",
+                "timestamp": "2026-08-06T13:43:33.214559Z",
+                "duration_ms": 17.324041997198947
+            }
+        ],
+        "entities": [
+            {
+                "kind": "area",
+                "key": "id/bali",
+                "name": "Bali",
+                "uri": "kebi://area/id/bali"
+            }
+        ],
+        "recommendation_id": null
+    },
+    "tool_calls_used": 1
+}

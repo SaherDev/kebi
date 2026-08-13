@@ -56,9 +56,7 @@ class EmbeddingsRepo:
     # Reads
     # ------------------------------------------------------------------
 
-    async def get_by_place_ids(
-        self, place_ids: list[str]
-    ) -> dict[str, list[float]]:
+    async def get_by_place_ids(self, place_ids: list[str]) -> dict[str, list[float]]:
         """Return {place_id: vector} for the given place_ids. Missing → absent."""
         if not place_ids:
             return {}

@@ -1,0 +1,143 @@
+{
+  "name": "itinerary-hanoi-hue-hoi-an",
+  "captured_at": "2026-08-07 (entitlements on: taste + advanced model; ADR-150 guard active)",
+  "adr": "ADR-148",
+  "description": "Live /v1/chat answer for a multi-stop trip turn, captured as the quality target for itinerary answers. Seeded user: six saves along the route, a taste profile, and curated claims per place and city. What must hold: stop-by-stop structure in trip order, saves pinned to their city with insider notes spent, an on-the-way call-out for a city the user never named, the leg treated as part of the trip, and exactly one closing question (trip nights).",
+  "request": {
+    "message": "im doing hanoi, then hue, then hoi an — what should i stop at along the way?",
+    "local_time": "2026-08-07T10:30:00+07:00"
+  },
+  "seed": {
+    "saves": [
+      {
+        "place": "Railway Tuan Cafe (Train Street)",
+        "city": "Hanoi"
+      },
+      {
+        "place": "Quán Hạnh",
+        "city": "Hue"
+      },
+      {
+        "place": "Bếp Hên",
+        "city": "Da Nang"
+      },
+      {
+        "place": "Kalà Kalà Beach Club",
+        "city": "Da Nang"
+      },
+      {
+        "place": "Nữ Eatery",
+        "city": "Hoi An"
+      },
+      {
+        "place": "Roving Chill house",
+        "city": "Hoi An"
+      }
+    ],
+    "taste": [
+      "beach_club",
+      "specialty_coffee",
+      "photo_spot"
+    ],
+    "claims": "5 place claims + 4 area claims (curated_expert), see ADR-148 verification"
+  },
+  "response": {
+    "type": "agent",
+    "message": "good news, you've got saves spread across all three stops and a couple of strong ones on the legs between them. your list is actually pretty well balanced, so this is more about ordering and timing than filling gaps.\n\n---\n\nhanoi\n\nyou saved [Railway Tuan](kebi://venue/939ba8f5-e83b-4e64-9d3b-b1eeb00b096b) Cafe, the one on the street where the train runs through. the insider note on this one is specific: the 7pm train is the one worth being there for, and the cafes on the north section are looser about checking tickets. so time your evening around that, get there before 7, grab a coffee, and wait for it.\n\n---\n\nthe hue leg\n\nyou've got a save in Hue that's time-sensitive. [Quan Hanh](kebi://venue/a3c3ca18-4041-4188-ad8d-9cf52df669bb) is a traditional spot you saved manually, cash only, and the banh loc (their thing) runs out by early evening. go before 6 or you'll miss it. worth building your first evening in Hue around.\n\n---\n\nhue to hoi an, this leg is the best part of the drive\n\ntwo stops worth making on the way down.\n\n[Kala Kala Beach Club](kebi://venue/a5a27bb2-d0ec-4b33-81a9-cb3baa1b9dc4) is one you saved from a TikTok, it's on the coast, and the note says sunset is the slot. daybeds book out on weekends, so if you're passing through on a weekday, arriving around 4pm is the move. on a weekend you'd want to book ahead.\n\nalso on this leg: [Motorvina Da Nang](kebi://venue/4892f6da-ab37-4df0-b4a7-a2b7e244ca98), a scooter rental place in Da Nang. someone shared content on this one, they do one-way rentals specifically for riding the Hai Van Pass, which is the mountain road between Da Nang and Hue. if you're up for it, rent there and ride the pass rather than sitting in a bus or car. one of the better stretches of road in Vietnam.\n\nand [Bep Hen](kebi://venue/a853b835-5e9a-4169-a9ad-c4aa1c4175f4) is a Vietnamese restaurant you saved that sits on this leg too. closes between services, roughly 2 to 5pm, so plan for lunch or dinner, not a mid-afternoon drop-in.\n\n---\n\nhoi an\n\ntwo saves here. [Roving Chill House](kebi://venue/743de441-cdee-4166-80a5-576215e31bcc) is the one to anchor an evening around, cocktails, outdoor seating, reservable. the note says go before 10, rice paddy light and no tour groups yet, so earlier in the evening is the call.\n\n[Nu Eatery](kebi://venue/1965297d-4ab1-49a9-9084-723c9909d2ce) is your daytime spot, brunch and lunch, casual, outdoor. good for a slow morning.\n\n---\n\nthe one question that changes how I'd lay this out: how many nights are you spending in each city? that decides whether Hue is a full day or a pass-through, and whether you're hitting Kala Kala on a weekday (easy) or a weekend (book ahead).",
+    "data": {
+      "reasoning_steps": [
+        {
+          "step": "agent.location_resolved",
+          "title": "found your location",
+          "summary": "around Hanoi, Vietnam",
+          "source": "agent",
+          "visibility": "user",
+          "timestamp": "2026-08-07T00:26:06.791028Z",
+          "duration_ms": 5193.12916698982
+        },
+        {
+          "step": "find_known.summary",
+          "title": "checked what I know around here",
+          "summary": "1 spot — Motorvina Da Nang -…",
+          "source": "agent",
+          "visibility": "user",
+          "timestamp": "2026-08-07T00:26:08.900836Z",
+          "duration_ms": 55.518000008305535
+        },
+        {
+          "step": "find_saved.summary",
+          "title": "searched your saved spots",
+          "summary": "6 spots — RAILWAY TUAN CAFE, Quán Hạnh, +4 more",
+          "source": "agent",
+          "visibility": "user",
+          "timestamp": "2026-08-07T00:26:13.321513Z",
+          "duration_ms": 569.9883330089506
+        }
+      ],
+      "entities": [
+        {
+          "kind": "venue",
+          "key": "939ba8f5-e83b-4e64-9d3b-b1eeb00b096b",
+          "name": "Railway TUAN CAFE (The Original) )",
+          "uri": "kebi://venue/939ba8f5-e83b-4e64-9d3b-b1eeb00b096b",
+          "icon": null
+        },
+        {
+          "kind": "venue",
+          "key": "a3c3ca18-4041-4188-ad8d-9cf52df669bb",
+          "name": "Quán Hạnh",
+          "uri": "kebi://venue/a3c3ca18-4041-4188-ad8d-9cf52df669bb",
+          "icon": null
+        },
+        {
+          "kind": "venue",
+          "key": "a5a27bb2-d0ec-4b33-81a9-cb3baa1b9dc4",
+          "name": "Kalà Kalà Beach Club",
+          "uri": "kebi://venue/a5a27bb2-d0ec-4b33-81a9-cb3baa1b9dc4",
+          "icon": null
+        },
+        {
+          "kind": "venue",
+          "key": "4892f6da-ab37-4df0-b4a7-a2b7e244ca98",
+          "name": "Motorvina Da Nang",
+          "uri": "kebi://venue/4892f6da-ab37-4df0-b4a7-a2b7e244ca98",
+          "icon": "🛵"
+        },
+        {
+          "kind": "venue",
+          "key": "a853b835-5e9a-4169-a9ad-c4aa1c4175f4",
+          "name": "Bếp Hên",
+          "uri": "kebi://venue/a853b835-5e9a-4169-a9ad-c4aa1c4175f4",
+          "icon": null
+        },
+        {
+          "kind": "venue",
+          "key": "743de441-cdee-4166-80a5-576215e31bcc",
+          "name": "Roving Chill house",
+          "uri": "kebi://venue/743de441-cdee-4166-80a5-576215e31bcc",
+          "icon": null
+        },
+        {
+          "kind": "venue",
+          "key": "1965297d-4ab1-49a9-9084-723c9909d2ce",
+          "name": "Nữ Eatery",
+          "uri": "kebi://venue/1965297d-4ab1-49a9-9084-723c9909d2ce",
+          "icon": null
+        }
+      ],
+      "recommendation_id": "33312711-ceff-4eb3-9470-710695b929e5"
+    },
+    "tool_calls_used": 2
+  },
+  "known_gaps": [
+    "eval case from a later rerun: the model can mis-narrate geography against its own segment labels (placed Hai Van Pass on the Hanoi-Hue leg; filed a Hoi An save under Hanoi) — segment labels are correct in the payload, the prose contradicted them"
+  ],
+  "attribution_examples": [
+    "that's the one from your saves",
+    "is on your list here",
+    "the one from your tiktok",
+    "someone shared the intel that the 7pm train is the one worth waiting for",
+    "this leg is where your saves shine"
+  ],
+  "notes": "User-authored target answer exists in ADR-150 discussion; final capture matches it on take, per-save provenance, claim timing, leg-as-highlight, no memory prices, folded close."
+}

@@ -15,6 +15,7 @@ from .models import (
     PlaceObject,
     PlaceQuery,
     PlaceSource,
+    PlaceTag,
     SavedPlaceFilters,
     SavedPlaceView,
     UserPlace,
@@ -37,6 +38,10 @@ class PlacesRepoProtocol(Protocol):
     async def find(self, query: PlaceQuery, limit: int = 20) -> list[PlaceCore]: ...
 
     async def upsert_places(self, cores: list[PlaceCore]) -> list[PlaceCore]: ...
+
+    async def update_enrichment(
+        self, place_id: str, tags: list[PlaceTag], icon: str | None = None
+    ) -> PlaceCore | None: ...
 
     async def wipe_stale_locations(self, cutoff: datetime) -> list[PlaceCore]: ...
 

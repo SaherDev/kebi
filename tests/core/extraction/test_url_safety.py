@@ -26,14 +26,12 @@ from kebi.core.places import PlaceSource
 class TestSourceFromUrl:
     def test_tiktok_legit(self) -> None:
         assert (
-            source_from_url("https://www.tiktok.com/@x/video/123")
-            == PlaceSource.tiktok
+            source_from_url("https://www.tiktok.com/@x/video/123") == PlaceSource.tiktok
         )
 
     def test_tiktok_subdomain(self) -> None:
         assert (
-            source_from_url("https://m.tiktok.com/@x/video/123")
-            == PlaceSource.tiktok
+            source_from_url("https://m.tiktok.com/@x/video/123") == PlaceSource.tiktok
         )
 
     def test_tiktok_attacker_lookalike_rejected(self) -> None:
@@ -44,17 +42,14 @@ class TestSourceFromUrl:
     def test_query_string_lookalike_rejected(self) -> None:
         """`?u=tiktok.com` in a URL whose host is `attacker.example`
         must not match either."""
-        assert (
-            source_from_url("https://attacker.example/?u=tiktok.com") is None
-        )
+        assert source_from_url("https://attacker.example/?u=tiktok.com") is None
 
     def test_youtube_short_form(self) -> None:
         assert source_from_url("https://youtu.be/abc123") == PlaceSource.youtube
 
     def test_instagram(self) -> None:
         assert (
-            source_from_url("https://www.instagram.com/p/xyz/")
-            == PlaceSource.instagram
+            source_from_url("https://www.instagram.com/p/xyz/") == PlaceSource.instagram
         )
 
     def test_google_maps_shortlink(self) -> None:
@@ -149,9 +144,7 @@ class TestSafeGet:
         the non-redirect path against a synthetic response."""
         from kebi.core.extraction import url_safety
 
-        monkeypatch.setattr(
-            url_safety, "url_is_allowed", lambda *_a, **_kw: True
-        )
+        monkeypatch.setattr(url_safety, "url_is_allowed", lambda *_a, **_kw: True)
         client = AsyncMock()
         resp = MagicMock()
         resp.is_redirect = False

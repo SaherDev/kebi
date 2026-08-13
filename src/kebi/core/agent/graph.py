@@ -14,8 +14,10 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import random
 import re
 from collections.abc import Callable
+from datetime import datetime
 from typing import Any
 
 from langchain_core.messages import (
@@ -32,6 +34,7 @@ from langgraph.prebuilt import ToolNode
 from kebi.core.agent._trace_context import feature_span
 from kebi.core.agent.location import (
     CorridorTarget,
+    ItineraryAnchor,
     LocationResolution,
     WorkingLocation,
     density_class,
@@ -39,7 +42,7 @@ from kebi.core.agent.location import (
 )
 from kebi.core.agent.messages import extract_text_content
 from kebi.core.agent.reasoning import ReasoningStep
-from kebi.core.agent.state import AgentState
+from kebi.core.agent.state import TRIP_MOVEMENT_INHERIT, AgentState
 from kebi.core.agent.stream_emit import emit_step_active, emit_step_done
 from kebi.core.config import get_config
 from kebi.core.places.nominatim_geocoding_client import GeocodingError
@@ -141,6 +144,34 @@ def _structured_usage(result: Any) -> dict[str, int]:
 # returns empty content (a silent tool call, no preamble prose). Plain,
 # non-technical wording — this is a user-visible reasoning step.
 _DIRECT_RESPONSE_FALLBACK = "Let me look into that…"
+# Thinking-line summaries for terminal responses (ADR-157). A terminal
+# response's text is the answer itself — byte-identical to the message frame —
+# so it never rides the step; these neutral lines close the skeleton instead.
+_DIRECT_ANSWER_SUMMARY = "answered from what I already know"
+_ANSWER_AFTER_TOOLS_SUMMARY = "putting the answer together"
+
+# Titles for the thinking line. A turn with three identical bold "thinking"
+# rows reads like a machine logging; varying the action word is the same
+# trick Claude's rotating spinner verbs use — a curated list, picked
+# per step, lowercase per the step-title style. The first step of a turn
+# always gets plain "thinking" (the turn opens calmly); later steps draw
+# from the rest. The chosen title rides BOTH lifecycle frames of its step
+# (the client keys on `id` — the title must not change mid-step).
+_THINKING_TITLES: tuple[str, ...] = (
+    "thinking",
+    "mulling it over",
+    "connecting the dots",
+    "sizing it up",
+    "piecing it together",
+    "working it out",
+)
+
+
+def _thinking_title(steps_taken: int) -> str:
+    if steps_taken <= 0:
+        return _THINKING_TITLES[0]
+    return random.choice(_THINKING_TITLES[1:])
+
 
 # Node names are re-used by tests asserting graph structure.
 NODE_RESOLVE_LOCATION = "resolve_location"
@@ -149,6 +180,7 @@ NODE_TOOLS = "tools"
 NODE_FALLBACK = "fallback"
 NODE_FINALIZE = "finalize"
 NODE_SCRUB_TOOL_RESULTS = "scrub_tool_results"
+NODE_TRIP_GUARD = "trip_guard"
 
 # Fallback message shown to the user when the graph terminates early.
 _FALLBACK_MESSAGE = (
@@ -250,9 +282,12 @@ def _extract_place_names(results: list[Any]) -> list[str]:
             if isinstance(value, str):
                 nm = value
         if nm is None:
-            value = r.get("place_name")
-            if isinstance(value, str):
-                nm = value
+            # Lean agent view (ADR-139) names the field `name`.
+            for key in ("place_name", "name"):
+                value = r.get(key)
+                if isinstance(value, str):
+                    nm = value
+                    break
         if nm:
             names.append(nm)
     return names
@@ -284,6 +319,8 @@ def _summarize_tool_payload(msg: ToolMessage) -> str:
         return f"[{name}] earlier result elided ({len(raw)} chars)"
     if isinstance(data, dict):
         results = data.get("results")
+        if results is None and isinstance(data.get("candidates"), list):
+            results = data["candidates"]
         if isinstance(results, list):
             names = _extract_place_names(results)
             count = len(results)
@@ -358,6 +395,17 @@ def _render_location_context(state: AgentState) -> str:
             working.get("country"),
         ]
         place = ", ".join(p for p in parts if p)
+        itinerary = working.get("itinerary") or []
+        if working.get("scope_shape") == "itinerary" and len(itinerary) >= 2:
+            stops = ", then ".join(a.get("name", "") for a in itinerary)
+            return (
+                f"This turn is a multi-stop trip: {stops}. The working "
+                f"location anchors at the first stop ({place}), but the "
+                "place tools already search every stop AND the legs between "
+                "them — results come back labelled with the part of the trip "
+                "they belong to. Build the answer stop by stop, in trip "
+                "order."
+            )
         return (
             f"Working location for this turn: {place} "
             f"(lat={working.get('lat')}, lng={working.get('lng')}). "
@@ -379,6 +427,215 @@ def _render_location_context(state: AgentState) -> str:
     )
 
 
+_WEEKDAYS = (
+    "Monday",
+    "Tuesday",
+    "Wednesday",
+    "Thursday",
+    "Friday",
+    "Saturday",
+    "Sunday",
+)
+
+
+def parse_local_time(raw: str | None) -> datetime | None:
+    """Parse the client-supplied ISO-8601 local time, or None.
+
+    Never raises: a malformed clock from a client must degrade to "no time
+    known" (the agent then avoids schedule claims) rather than fail the turn.
+    """
+    if not raw:
+        return None
+    try:
+        return datetime.fromisoformat(raw.strip().replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        logger.warning("unparseable local_time from client: %r", raw)
+        return None
+
+
+def local_weekday(state: AgentState) -> str | None:
+    """The turn's day of week ("Monday"), or None when the clock is unknown."""
+    parsed = parse_local_time(state.get("local_time"))
+    return None if parsed is None else _WEEKDAYS[parsed.weekday()]
+
+
+# Hour bands from the places vocabulary (`TimeTag`), so a claim tagged
+# `evening` and a turn at 19:30 speak the same language. Ordered, and read as
+# half-open ranges; `all_day` is deliberately absent — it is a neutral value a
+# claim carries, never a time a turn is at.
+_DAYPARTS: tuple[tuple[int, int, str], ...] = (
+    (6, 11, "morning"),
+    (11, 12, "brunch"),
+    (12, 15, "lunch"),
+    (15, 18, "afternoon"),
+    (18, 21, "evening"),
+    (21, 24, "night"),
+    (0, 6, "late_night"),
+)
+
+
+def local_daypart(state: AgentState) -> str | None:
+    """Which part of the day it is for the user, in vocabulary terms.
+
+    This is what lets a "best at sunset" claim outrank a breakfast one at 17:00
+    without the orchestrator having to encode the hour into its query text.
+    None when the client sent no clock — the same absent-means-absent rule as
+    the weekday.
+    """
+    parsed = parse_local_time(state.get("local_time"))
+    if parsed is None:
+        return None
+    hour = parsed.hour
+    for start, end, name in _DAYPARTS:
+        if start <= hour < end:
+            return name
+    return None
+
+
+def local_season(state: AgentState) -> str | None:
+    """The calendar season where the user is, or None.
+
+    Northern/southern hemisphere is decided by the working location's latitude,
+    because a July claim about "summer terraces" is wrong advice in Bali. In
+    the tropics there is no meaningful calendar season — the useful axis is wet
+    versus dry, which varies by region and is not derivable from a date — so
+    this returns None there rather than asserting something false.
+    """
+    parsed = parse_local_time(state.get("local_time"))
+    working = state.get("working_location")
+    if parsed is None or not isinstance(working, dict):
+        return None
+    lat = working.get("lat")
+    if not isinstance(lat, int | float):
+        return None
+    if abs(lat) < 23.5:
+        return None
+    northern = [
+        "winter",
+        "winter",
+        "spring",
+        "spring",
+        "spring",
+        "summer",
+        "summer",
+        "summer",
+        "autumn",
+        "autumn",
+        "autumn",
+        "winter",
+    ]
+    season = northern[parsed.month - 1]
+    if lat >= 0:
+        return season
+    return {
+        "winter": "summer",
+        "spring": "autumn",
+        "summer": "winter",
+        "autumn": "spring",
+    }[season]
+
+
+def _render_time_context(state: AgentState) -> str:
+    """Render the `{time_context}` slot — what day and hour it is for the user.
+
+    Day of week is load-bearing for a scheduled answer (ADR-138): a claim
+    saying Monday is a venue's big night is only usable if the agent knows
+    today is Monday. The clock comes from the client, so it can be absent —
+    and when it is, the slot says so plainly, because an agent that assumes a
+    day will confidently answer for the wrong one.
+    """
+    parsed = parse_local_time(state.get("local_time"))
+    if parsed is None:
+        return (
+            "The user's local date and time are unknown this turn. Do not "
+            "assume what day or hour it is: if the answer turns on a schedule "
+            "(which night a place is good, whether something is open), ask "
+            "what day they mean or answer for the week rather than picking a "
+            "day yourself."
+        )
+    return (
+        f"For the user it is {_WEEKDAYS[parsed.weekday()]}, "
+        f"{parsed.strftime('%d %B %Y')}, {parsed.strftime('%H:%M')} local time. "
+        "Use this without being told: a place whose big night is today leads "
+        "the answer, one whose night is later in the week is a plan for that "
+        "day, and one that is closed or wrong for right now is a skip you say "
+        "out loud rather than a name you omit."
+    )
+
+
+def _render_user_profile_context(state: AgentState) -> str:
+    """Render the `{user_profile_context}` slot — the user's "about me" block.
+
+    Three fields, all optional, all arriving on the request (ADR-154). Two of
+    them are free text the user typed, so the block itself is wrapped
+    `trust="low"` and the instructions about how to weigh it sit outside the
+    wrapper, where the user cannot reach them.
+
+    The weighting is the point of this slot. `about` is a *prior*, not an
+    order: it is what the agent leans on before there is behavior to read,
+    and observed behavior overrides it the moment there is any. The single
+    exception is a stated restriction — dietary, religious, an allergy —
+    because that is a constraint the user is reporting rather than a taste
+    they are describing, and getting it wrong makes an answer unusable
+    rather than merely mediocre.
+    """
+    from kebi.core.prompt_safety import wrap_untrusted
+
+    profile = state.get("user_profile")
+    if not isinstance(profile, dict) or not profile:
+        return (
+            "The user has not filled in an about-me profile. You know them "
+            "only through their behavior — do not invent a name, a home "
+            "country, or a preference they never stated."
+        )
+
+    lines: list[str] = []
+    if call_me := profile.get("call_me"):
+        lines.append(f"Goes by: {call_me}")
+    if home_country := profile.get("home_country"):
+        lines.append(f"Home country (ISO 3166-1 alpha-2): {home_country}")
+    if about := profile.get("about"):
+        lines.append(f"In their own words: {about}")
+    if not lines:
+        return (
+            "The user has not filled in an about-me profile. You know them "
+            "only through their behavior — do not invent a name, a home "
+            "country, or a preference they never stated."
+        )
+
+    parts = [
+        wrap_untrusted("\n".join(lines), "user_profile"),
+    ]
+    if profile.get("call_me"):
+        parts.append(
+            "This is the name to address them by, under the naming rule in "
+            "the Voice section — used where a person would reach for it, "
+            "never on every reply."
+        )
+    parts += [
+        "Weigh this correctly. Anything they describe as a *preference* is "
+        "a starting point for a new user and nothing more — the taste "
+        "profile below is what they actually do, and where the two "
+        "disagree, behavior wins. Never justify a pick by quoting their "
+        "self-description back at them.",
+        "Anything they state as a *restriction* — a diet, a religious rule, "
+        "an allergy, something they do not drink — is not a preference and "
+        "does not decay. Treat it exactly like a memory-summary constraint: "
+        "a place that breaks it is not a place you name, and if you cannot "
+        "tell whether a place breaks it, say so rather than guessing.",
+    ]
+    if profile.get("home_country"):
+        parts.append(
+            "Their home country is the passport side of any entry question "
+            "— visas, permits, how long they may stay. Those rules change "
+            "and being wrong about one costs the user a flight, so look "
+            "them up with `web_search` every time and answer from what "
+            "came back. Never answer an entry question from memory, and "
+            "never let one harden into something kebi 'knows'."
+        )
+    return " ".join(parts)
+
+
 def _render_movement_context(state: AgentState) -> str:
     """Render the `{movement_context}` slot — the turn's resolved search scope.
 
@@ -387,7 +644,9 @@ def _render_movement_context(state: AgentState) -> str:
     fallback kept the radius math working — but the slot flags that so the
     agent asks / caveats rather than asserting a distance confidently.
     """
-    _am, _reach, is_fallback = _mobility_profile(state.get("movement_profile"))
+    _am, _reach, is_fallback = _mobility_profile(
+        state.get("movement_profile"), _trip_movement(state)
+    )
     working = state.get("working_location")
     # Same defensive coercion as `_render_location_context`: the gate
     # may skip the resolver and leave the inherit sentinel string in
@@ -416,11 +675,34 @@ def _render_movement_context(state: AgentState) -> str:
             f"The user is looking along the route toward {corridor.get('name')} "
             "— reason about places on the way, not a circle around one point."
         )
+    itinerary = working.get("itinerary") or []
+    if shape == "itinerary" and len(itinerary) >= 2:
+        parts.append(
+            "The user is travelling a multi-stop route — distances within "
+            "each stop scale to the mode above, but the stops themselves are "
+            "a journey, not a radius."
+        )
+    trip = _trip_movement(state)
+    if trip and trip.get("available_modes"):
+        modes = ", ".join(str(m) for m in trip["available_modes"])
+        parts.append(
+            f"They told you what they have on this trip: {modes}. That is "
+            "first-hand and current, so it beats any saved setting — do not "
+            "ask again, and do not name a place it cannot reach."
+        )
     if is_fallback:
         parts.append(
-            "This used a neutral fallback, not the user's own profile — if "
-            "distance is load-bearing, ask how they will get around rather "
-            "than asserting it."
+            "Nobody has told you how this user gets around, so the scope above "
+            "assumes they can take a ride. That is a guess, and it is "
+            "deliberately a generous one: it is better to surface a place that "
+            "turns out to be a drive than to silently drop everything past "
+            "walking range, which they would never know happened. Because it "
+            "is a guess you owe them the distance out loud — say which picks "
+            "are close and which need a ride, in a clause, not a disclaimer "
+            "('the first two are walkable, savaya is a twenty minute drive'). "
+            "If getting around is genuinely the thing that decides the answer, "
+            "that is a constraint, and a constraint outranks a preference for "
+            "your one question."
         )
     return " ".join(parts)
 
@@ -458,7 +740,9 @@ def _render_system_prompt(state: AgentState) -> tuple[str, str]:
     static_head, marker, dynamic_tail = template.partition(_DYNAMIC_CONTEXT_MARKER)
     slots = dict(
         location_context=_render_location_context(state),
+        time_context=_render_time_context(state),
         movement_context=_render_movement_context(state),
+        user_profile_context=_render_user_profile_context(state),
         taste_profile_summary=wrap_untrusted(
             state.get("taste_profile_summary"), "taste_profile"
         ),
@@ -477,18 +761,15 @@ def make_agent_node(llm: Any, tools: list[Any]) -> Any:
     `messages`, increments `steps_taken`, and emits one user-visible
     `agent.tool_decision` reasoning step per LLM call (feature 028 M5).
 
-    The persisted reasoning step's `summary` carries `AIMessage.content`
-    truncated to 200 chars. When `content` is empty (tool-call-only
-    response), a plain fallback summary is used. The SSE lifecycle frames
-    (via `stream_emit`) carry an `active` frame before the LLM call and a
-    `done` frame with the full, untruncated text after it.
-
-    Visibility is gated on tool calls (ADR-102): a response that carries
-    tool calls is intermediate narration the client shows; a response with
-    no tool calls IS the terminal answer, whose content is byte-identical
-    to the `message` frame, so the step is marked `debug` to keep it off
-    the user-visible trace (it still rides SSE for tracing). Otherwise the
-    thinking panel would render the whole answer, then the answer again.
+    Every LLM call emits one user-visible "thinking" step (ADR-157): the
+    `active` frame goes out before the call so the client shows a skeleton
+    while the orchestrator thinks, and the `done` frame's `summary` is the
+    model's own narration when the response carries tool calls — the text
+    the model wrote alongside them ("checking your saved spots in haifa").
+    A response with no tool calls IS the terminal answer, whose content is
+    byte-identical to the `message` frame — so its step closes with a
+    neutral summary instead of the answer text, and the persisted step
+    truncates to 200 chars either way.
     """
     bound = llm.bind_tools(tools, parallel_tool_calls=False)
 
@@ -544,18 +825,19 @@ def make_agent_node(llm: Any, tools: list[Any]) -> Any:
         # client can show a skeleton while the orchestrator thinks. The id is
         # keyed by `steps_taken` (read before the +1 write) so the matching
         # `done` frame below carries the same id across both branches.
-        # The orchestrator's own thinking is debug on BOTH frames (ADR-103):
-        # it's either between-tool monologue (the tool steps already narrate the
-        # work) or the terminal answer (identical to the message frame). Keeping
-        # the visibility identical across active+done is also required — the
-        # client keys on `id`, so a step that flips user→debug never resolves.
+        # `user` on BOTH frames (ADR-157, supersedes ADR-103 here): the
+        # thinking line is the trace's heartbeat — every turn shows at least
+        # one, and on a tool-call response its `done` summary is the model's
+        # own narration. Keeping the visibility identical across active+done
+        # is required — the client keys on `id`, so a step that flips
+        # user→debug never resolves.
         step_id = f"agent.tool_decision#{state.get('steps_taken', 0)}"
+        step_title = _thinking_title(state.get("steps_taken", 0))
         started = emit_step_active(
             step_id,
             "agent.tool_decision",
-            title="thinking",
+            title=step_title,
             source="agent",
-            visibility="debug",
         )
 
         try:
@@ -581,10 +863,12 @@ def make_agent_node(llm: Any, tools: list[Any]) -> Any:
             )
             step = ReasoningStep(
                 step="agent.tool_decision",
-                title="thinking",
-                summary="I hit a brief connection issue — give that another try.",
+                title=step_title,
+                summary="hit a brief connection issue",
                 source="agent",
-                visibility="debug",
+                # `user` to match the active frame — a flipped visibility
+                # strands the skeleton (see the active-frame comment above).
+                visibility="user",
                 duration_ms=0.0,
             )
             emit_step_done(step_id, step, started=started)
@@ -597,18 +881,28 @@ def make_agent_node(llm: Any, tools: list[Any]) -> Any:
 
         full_text = extract_text_content(getattr(ai_msg, "content", None)).strip()
 
-        summary_source = full_text if full_text else _DIRECT_RESPONSE_FALLBACK
+        # The thinking line the user sees (ADR-157). On a tool-call response
+        # the model's own text IS the narration ("checking your saved spots
+        # in haifa") — model-authored, so every trace reads differently. A
+        # terminal response's text is the answer itself, byte-identical to
+        # the message frame, so it never rides the step: a neutral line
+        # closes the skeleton instead, and which one depends on whether any
+        # work preceded it.
+        if getattr(ai_msg, "tool_calls", None):
+            summary_source = full_text if full_text else _DIRECT_RESPONSE_FALLBACK
+        elif state.get("steps_taken", 0) or state.get("tool_calls_used", 0):
+            summary_source = _ANSWER_AFTER_TOOLS_SUMMARY
+        else:
+            summary_source = _DIRECT_ANSWER_SUMMARY
 
-        # The streamed `done` frame keeps the full, untruncated text; the
-        # persisted step truncates to 200 chars so checkpointer history stays
-        # bounded. Debug-only (see the active frame above) — the client filters
-        # it, so the answer never duplicates and the thinking row never lingers.
+        # The persisted step truncates to 200 chars so checkpointer history
+        # stays bounded; narration lines are short so this rarely bites.
         done_step = ReasoningStep(
             step="agent.tool_decision",
-            title="thinking",
+            title=step_title,
             summary=summary_source,
             source="agent",
-            visibility="debug",
+            visibility="user",
             duration_ms=0.0,
         )
         emit_step_done(step_id, done_step, started=started)
@@ -635,6 +929,7 @@ def should_continue(state: AgentState) -> str:
       error_count     >= max_errors     → "fallback"
       steps_taken     >= max_steps      → "fallback"
       last message has tool_calls       → "tools"
+      trip guard fires (ADR-150)        → "trip_guard"
       otherwise                          → "end"
 
     The tool-call cap is checked first so the cap-hit case owns its
@@ -642,7 +937,7 @@ def should_continue(state: AgentState) -> str:
     "something went wrong" message that `max_errors` / `max_steps` use.
     """
     cfg = get_config().agent
-    if state.get("tool_calls_used", 0) >= cfg.max_tool_calls:
+    if state.get("tool_calls_used", 0) >= _effective_max_tool_calls(state):
         return NODE_FALLBACK
     if state.get("error_count", 0) >= cfg.max_errors:
         return NODE_FALLBACK
@@ -656,7 +951,259 @@ def should_continue(state: AgentState) -> str:
     tool_calls = getattr(last, "tool_calls", None)
     if tool_calls:
         return NODE_TOOLS
+    if _trip_guard_should_fire(state):
+        return NODE_TRIP_GUARD
     return "end"
+
+
+def _effective_max_tool_calls(state: AgentState) -> int:
+    """The turn's tool budget — trip-sized on an itinerary turn (ADR-150).
+
+    A three-stop trip legitimately spends more calls than a single-city
+    question: the retrieval pair, per-stop suggestions, and the guard's
+    verification round. The flat cap was observed collapsing exactly the
+    turns the itinerary machinery exists for into the cap-hit fallback.
+    """
+    cfg = get_config().agent
+    working = state.get("working_location")
+    if isinstance(working, dict) and working.get("scope_shape") == "itinerary":
+        return max(cfg.max_tool_calls, cfg.itinerary.max_tool_calls)
+    return cfg.max_tool_calls
+
+
+# --- Trip guard (ADR-150) ---------------------------------------------------
+
+# Prefix marking the guard's injected message. The first line carries the
+# targeted stop (`[trip guard] target: <stop>`), which is what bounds the
+# guard: each stop is targeted at most once per turn, so a stop whose
+# verification came back empty is not retried forever.
+_TRIP_GUARD_MARKER = "[trip guard]"
+
+
+def _trip_uncovered_stops(state: AgentState) -> list[str]:
+    """Stops of this turn's itinerary that no place-tool candidate covers.
+
+    Coverage is read off the candidates' own `segment` labels in the turn's
+    tool payloads — a stop nothing was retrieved for appears in no label. A
+    turn that is not an itinerary has no stops to cover.
+    """
+    working = state.get("working_location")
+    if not isinstance(working, dict) or working.get("scope_shape") != "itinerary":
+        return []
+    stops = [
+        name
+        for anchor in working.get("itinerary") or []
+        if isinstance(anchor, dict)
+        and isinstance(name := anchor.get("name"), str)
+        and name
+    ]
+    if len(stops) < 2:
+        return []
+    covered: set[str] = set()
+    for result in state.get("tool_payloads") or []:
+        payload = result.get("payload")
+        if not isinstance(payload, dict):
+            continue
+        for candidate in payload.get("candidates") or []:
+            if isinstance(candidate, dict) and candidate.get("segment"):
+                covered.add(candidate["segment"])
+    return [s for s in stops if s not in covered]
+
+
+def _trip_guard_targeted_stops(messages: list[BaseMessage]) -> set[str]:
+    """Stops the guard already targeted in the current turn.
+
+    Read back from the guard's own marker messages (first line
+    `[trip guard] target: <stop>`), scanning only after the turn's real
+    user message. This is the loop bound: a stop whose verification came
+    back empty stays uncovered but is never targeted twice.
+    """
+    targeted: set[str] = set()
+    for msg in reversed(messages):
+        text = extract_text_content(msg.content)
+        if text.startswith(_TRIP_GUARD_MARKER):
+            first_line = text.splitlines()[0]
+            stop = first_line.removeprefix(_TRIP_GUARD_MARKER).strip()
+            stop = stop.removeprefix("target:").strip()
+            if stop:
+                targeted.add(stop)
+        elif isinstance(msg, HumanMessage):
+            break
+    return targeted
+
+
+def _trip_guard_next_stop(state: AgentState) -> str | None:
+    """The next uncovered, not-yet-targeted stop, or None when done."""
+    uncovered = _trip_uncovered_stops(state)
+    if not uncovered:
+        return None
+    targeted = _trip_guard_targeted_stops(state.get("messages") or [])
+    for stop in uncovered:
+        if stop not in targeted:
+            return stop
+    return None
+
+
+# The polish mode's pseudo-target in the marker line — distinct from any
+# stop name, so the targeted-once bookkeeping covers both guard modes.
+_TRIP_POLISH_TARGET = "polish"
+
+
+def _trip_missing_saves(state: AgentState) -> list[str]:
+    """The user's retrieved saves that the draft answer never names.
+
+    Deterministic prose check: a save surfaced by retrieval is known by its
+    names and aliases, and a draft that contains none of them has silently
+    dropped a place the user owns — the single biggest observed variance in
+    trip answers (a saved Mount Fuji vanished between two otherwise-good
+    runs). Matching is case-folded substring over every known spelling, so
+    a mention via alias or display form counts.
+    """
+    working = state.get("working_location")
+    if not isinstance(working, dict) or working.get("scope_shape") != "itinerary":
+        return []
+    messages = state.get("messages") or []
+    if not messages:
+        return []
+    draft = extract_text_content(messages[-1].content).casefold()
+    if not draft:
+        return []
+
+    from kebi.core.places._place_utils import display_place_name
+
+    missing: list[str] = []
+    seen: set[str] = set()
+    for result in state.get("tool_payloads") or []:
+        payload = result.get("payload")
+        if not isinstance(payload, dict):
+            continue
+        for candidate in payload.get("candidates") or []:
+            if not isinstance(candidate, dict) or not candidate.get("user_data"):
+                continue
+            place = candidate.get("place") or {}
+            name = place.get("place_name")
+            if not isinstance(name, str) or not name or name in seen:
+                continue
+            seen.add(name)
+            spellings = {name, display_place_name(name)}
+            for alias in place.get("place_name_aliases") or []:
+                value = alias.get("value") if isinstance(alias, dict) else None
+                if isinstance(value, str) and value:
+                    spellings.add(value)
+            if not any(s.casefold() in draft for s in spellings if s):
+                missing.append(display_place_name(name))
+    return missing
+
+
+def _trip_guard_should_fire(state: AgentState) -> bool:
+    """Whether to intercept a final trip answer that skipped verification.
+
+    Prompt instruction alone proved ~partial, and the live failure that
+    motivated this turned out to be structural anyway: the orchestrator
+    was being told to call a tool its entitlement tier had not bound. The
+    guard makes the rule routing, not persuasion: a trip answer may not
+    finalize while a stop has zero retrieved candidates and budget remains.
+    One stop is targeted per firing (parallel injected Commands collide on
+    the plain payload channel), each stop at most once per turn — so the
+    worst case is one verification round per stop, then the answer stands.
+
+    The second mode is the polish pass: every stop covered, but the draft
+    silently dropped a save the user owns. That costs no tool call — one
+    text-only round naming the dropped saves — and runs at most once.
+    """
+    cfg = get_config().agent
+    if state.get("steps_taken", 0) >= cfg.max_steps - 1:
+        return False
+    targeted = _trip_guard_targeted_stops(state.get("messages") or [])
+    if _trip_guard_next_stop(state) is not None and state.get(
+        "tool_calls_used", 0
+    ) < _effective_max_tool_calls(state):
+        return True
+    return _TRIP_POLISH_TARGET not in targeted and bool(_trip_missing_saves(state))
+
+
+def trip_guard_node(state: AgentState) -> dict[str, Any]:
+    """Fetch verified picks for the uncovered stops, then have the model
+    rewrite (ADR-150).
+
+    Asking the model to make the call failed on both orchestrator tiers —
+    each preferred the honest-empty line over the tool. So the guard does
+    not ask: it appends its own `suggest_places` call per uncovered stop
+    (bounded by the remaining budget) and routes through the tool node. No
+    `names` are supplied, which is the tool's namer fallback (ADR-141): a
+    dedicated model names the picks, the provider verifies each one, and
+    the survivors come back tappable and persisted. The user's taste rides
+    the query, so what surfaces is taste-filtered general knowledge — the
+    defensible version of the model knowing things. The message text tells
+    the model what is happening and what its rewrite must do; the marker
+    doubles as the fired-once flag.
+    """
+    stop = _trip_guard_next_stop(state)
+    if stop is None or state.get("tool_calls_used", 0) >= _effective_max_tool_calls(
+        state
+    ):
+        return _trip_polish_update(state)
+    logger.info("trip guard fired: fetching verified picks for %s", stop)
+
+    # Taste LEADS the query, it doesn't trail it: "places worth a stop, for
+    # someone who likes X" returned the generic tourist canon with taste as
+    # an afterthought. Named first, the taste values are what the namer
+    # actually picks for — the coffee city surfaces its roaster, not only
+    # its castle.
+    taste = [
+        v.replace("_", " ") for v in (state.get("taste_values") or []) if v.strip()
+    ]
+    query = (
+        f"for {stop}: one standout spot for EACH of their tastes "
+        f"({', '.join(taste)}), plus the one or two sights genuinely worth "
+        "their time"
+        if taste
+        else f"the places actually worth a stop in {stop}"
+    )
+    tool_calls = [
+        {
+            "name": "suggest_places",
+            "args": {"query": query, "city": stop},
+            "id": f"trip_guard_{stop.lower().replace(' ', '_')}",
+        }
+    ]
+    text = (
+        f"{_TRIP_GUARD_MARKER} target: {stop}\n"
+        f"Your draft named nothing verified for {stop}. Fetching verified "
+        "picks now. Rewrite the FULL answer when they arrive: use only "
+        "verified candidates for that stop (taste said out loud), drop "
+        "every unverified name, and never mention this step."
+    )
+    return {"messages": [AIMessage(content=text, tool_calls=tool_calls)]}
+
+
+def _trip_polish_update(state: AgentState) -> dict[str, Any]:
+    """Text-only guard round: the draft dropped saves the user owns.
+
+    No tool call — the missing places are already retrieved and sitting in
+    the conversation's tool results; the model just failed to spend them.
+    The nudge names them and restates the trip-prose rules that land
+    intermittently, because this is the one deterministic hook the server
+    has into the draft's completeness.
+    """
+    missing = _trip_missing_saves(state)
+    logger.info("trip guard polish: draft omitted saves %s", missing)
+    names = ", ".join(missing) if missing else "(none)"
+    text = (
+        f"{_TRIP_GUARD_MARKER} target: {_TRIP_POLISH_TARGET}\n"
+        f"Your draft silently dropped saves the user owns: {names}. They "
+        "are already in your tool results. Rewrite the FULL answer: every "
+        "save earns its line (even a skip, with the reason), a taste-led "
+        'pick says "based on your taste", two same-kind saves get a '
+        "pick-one call with the reason, and the close folds the nights "
+        "question into an offer of the next piece of work. Never mention "
+        "this step."
+    )
+    # HumanMessage, not AIMessage: a text-only assistant message at the end
+    # of the conversation reads as prefill to the Anthropic API (400). The
+    # verification mode's AIMessage is fine because its tool calls are
+    # followed by tool results.
+    return {"messages": [HumanMessage(content=text)]}
 
 
 # --- Location resolution ---------------------------------------------------
@@ -822,30 +1369,72 @@ def _format_history_for_resolver(messages: list[BaseMessage]) -> str:
     return "\n".join(lines)
 
 
+def _trip_movement(state: AgentState) -> dict[str, Any] | None:
+    """Read `trip_movement` off state, coercing a stray sentinel to None.
+
+    Same defensive shape as `_carried_working_location`: on a brand-new
+    thread LangGraph stores the seeded sentinel as-is, so the raw string can
+    be the value the first time anything reads it.
+    """
+    trip = state.get("trip_movement")
+    return trip if isinstance(trip, dict) else None
+
+
 def _mobility_profile(
     profile: dict[str, Any] | None,
+    trip: dict[str, Any] | None = None,
 ) -> tuple[list[str], str, bool]:
     """Return ``(available_modes, reach, is_fallback)``.
 
-    A request without a `movement_profile` uses the config fallback — the
-    radius math stays functional, but `is_fallback` lets the agent prompt know
-    movement is unresolved (it should ask / caveat rather than assert).
+    Three sources, in falling order of authority (ADR-155):
+
+    1. `trip` — modes the user stated for the stay they are on right now.
+       Nothing outranks someone saying "we rented a scooter": it is both
+       current and first-hand.
+    2. `profile` — the per-request settings block, but only when a human
+       actually chose it (`source == "user"`).
+    3. the config fallback.
+
+    `is_fallback` is the honest-ignorance flag: true whenever nothing here
+    came from the user. It drives the prompt's ask-don't-assert branch, so
+    treating a seeded default as an answer silently disables the only
+    mechanism that would have surfaced the gap — which is exactly what a
+    settings row seeded with a neutral capability did in production. The
+    radius math stays functional either way; what changes is whether the
+    agent is entitled to sound certain about distance.
     """
-    if profile:
+    if trip and trip.get("available_modes"):
+        return (
+            [str(m) for m in trip["available_modes"]],
+            str(trip.get("reach") or (profile or {}).get("reach") or "normal"),
+            False,
+        )
+    if profile and profile.get("source") == "user":
         return (
             [str(m) for m in (profile.get("available_modes") or [])],
             str(profile.get("reach") or "normal"),
             False,
         )
+    # An unchosen profile's modes are deliberately ignored (ADR-156). They are
+    # a guess with no more standing than kebi's own, and the product seeds a
+    # narrow one — so honouring it would reinstate exactly the silent capping
+    # this is meant to end. kebi's fallback guesses wide on purpose and says
+    # so; two guesses are not better than one, and the wide one fails visibly.
     fb = get_config().movement.fallback
     return list(fb.available_modes), fb.reach, True
 
 
 def _render_mobility_profile(state: AgentState) -> str:
     """Render the `{mobility_profile}` slot for the resolver prompt."""
-    available, reach, is_fallback = _mobility_profile(state.get("movement_profile"))
+    available, reach, is_fallback = _mobility_profile(
+        state.get("movement_profile"), _trip_movement(state)
+    )
     note = (
-        " (the request carried no profile — these are neutral fallbacks)"
+        " NOTE: nobody has told us how this user gets around, so this list is "
+        "a guess, not their capability. Do not apply the conservative "
+        "tie-break here — when the capability set itself is unknown, pick the "
+        "wider option, because a search capped at walking silently hides "
+        "everything past it and the user never finds out."
         if is_fallback
         else ""
     )
@@ -937,6 +1526,25 @@ def _coerce_coord(value: Any) -> float | None:
     return None
 
 
+def _with_area_icons(
+    working: WorkingLocation, resolution: LocationResolution
+) -> WorkingLocation:
+    """Fill a carried location's missing area icons from this turn's resolution.
+
+    A carried location arrives with the icons its own turn resolved, and those
+    win — the same area keeps the same emoji for the whole conversation rather
+    than flickering as the model re-picks. This only covers the gap: a location
+    checkpointed before icons existed, or a turn whose resolution came back
+    without one.
+    """
+    filled: dict[str, str] = {}
+    if not working.city_icon and resolution.city_icon:
+        filled["city_icon"] = resolution.city_icon
+    if not working.neighborhood_icon and resolution.neighborhood_icon:
+        filled["neighborhood_icon"] = resolution.neighborhood_icon
+    return working.model_copy(update=filled) if filled else working
+
+
 async def _build_working_location(
     resolution: LocationResolution,
     user_location: dict[str, Any] | None,
@@ -964,7 +1572,9 @@ async def _build_working_location(
     if source == "carried":
         if prior_working_location:
             try:
-                return WorkingLocation(**prior_working_location)
+                return _with_area_icons(
+                    WorkingLocation(**prior_working_location), resolution
+                )
             except (TypeError, ValueError):
                 return None
         # Resolver said "carry" but there is nothing carried (e.g. first
@@ -990,6 +1600,8 @@ async def _build_working_location(
             lng=lng,
             density=density_class(rev.place_type),
             bbox=rev.bbox,
+            city_icon=resolution.city_icon,
+            neighborhood_icon=resolution.neighborhood_icon,
         )
 
     # explicit_query — a place the resolver named; geocode it.
@@ -1014,6 +1626,8 @@ async def _build_working_location(
         lng=geo.lng,
         density=density_class(geo.place_type),
         bbox=geo.bbox,
+        city_icon=resolution.city_icon,
+        neighborhood_icon=resolution.neighborhood_icon,
     )
 
 
@@ -1041,11 +1655,101 @@ async def _resolve_corridor(
     return CorridorTarget(name=name, lat=geo.lat, lng=geo.lng)
 
 
+async def _resolve_itinerary(
+    stops: list[str],
+    geocoding_client: Any,
+) -> list[ItineraryAnchor]:
+    """Geocode the resolver's ordered stop names into itinerary anchors.
+
+    Stops arrive as "City, Country" strings (the resolver prompt requires
+    the country so bare names like "Hue" can't mis-anchor — the same lesson
+    as ADR-126). A stop that fails to geocode is dropped with a log rather
+    than failing the turn: the trip is still answerable from the stops that
+    resolved, and the anchor label keeps only the city half so the agent
+    quotes "Hue", not "Hue, Vietnam". Capped at `agent.itinerary.max_stops`.
+    """
+    anchors: list[ItineraryAnchor] = []
+    for stop in stops[: get_config().agent.itinerary.max_stops]:
+        name = stop.strip()
+        if not name:
+            continue
+        try:
+            geo = await geocoding_client.search(query=name)
+        except GeocodingError:
+            geo = None
+        if geo is None:
+            logger.warning("itinerary stop failed to geocode, dropping: %r", name)
+            continue
+        anchors.append(
+            ItineraryAnchor(
+                name=name.split(",")[0].strip() or name,
+                lat=geo.lat,
+                lng=geo.lng,
+                city=geo.city,
+                country=geo.country,
+                country_code=geo.country_code,
+            )
+        )
+    return anchors
+
+
+def _next_trip_movement(
+    resolution: LocationResolution,
+    working: WorkingLocation,
+    carried: dict[str, Any] | None,
+    current_trip: dict[str, Any] | None = None,
+) -> Any:
+    """Decide this turn's `trip_movement` update (ADR-155).
+
+    Three outcomes, in order:
+
+    - The user stated what they have for the stay → record it, replacing
+      whatever the trip held before. Someone who says "the scooter's gone
+      back, we're walking now" is correcting the record, not adding to it.
+    - The working location moved to a different country → clear it. A new
+      country is a new trip, and last trip's rental is not this one's. Country
+      rather than city because moving Canggu → Ubud keeps the same scooter,
+      while Bali → Singapore does not.
+    - Otherwise → the inherit sentinel, so the trip's modes ride along.
+
+    Returns the sentinel rather than omitting the key so carry-forward is
+    something the code says out loud, the same reasoning as `LOCATION_INHERIT`.
+    """
+    stated = [str(m) for m in resolution.stated_modes]
+    prev_country = (carried or {}).get("country")
+    crossed = bool(
+        prev_country
+        and working.country
+        and str(prev_country).strip().casefold() != working.country.strip().casefold()
+    )
+    # An echo, not a statement. The resolver reads conversation history, so on
+    # the turn where someone says "we're in Singapore now" it will happily
+    # restate the scooter they mentioned in Bali — and a restatement arriving
+    # first would keep overriding the clear, which is how a rental follows its
+    # owner across a border. A genuinely new statement made while crossing
+    # ("we picked up a car here") names different modes, so it survives this.
+    if crossed and stated == (current_trip or {}).get("available_modes"):
+        stated = []
+    if stated:
+        logger.info("trip_movement set from stated modes: %s", stated)
+        return {"available_modes": stated}
+    if crossed:
+        logger.info(
+            "trip_movement cleared: country changed %s -> %s",
+            prev_country,
+            working.country,
+        )
+        return None
+    return TRIP_MOVEMENT_INHERIT
+
+
 async def _resolve_search_scope(
     working: WorkingLocation,
     resolution: LocationResolution,
     movement_profile: dict[str, Any] | None,
     geocoding_client: Any,
+    trip_movement: dict[str, Any] | None = None,
+    trip_just_cleared: bool = False,
 ) -> WorkingLocation | None:
     """Fold the resolved movement scope onto a working location (ADR-084 /
     ADR-085).
@@ -1056,9 +1760,46 @@ async def _resolve_search_scope(
     `None` only when the turn is a corridor whose destination cannot be
     resolved; the caller maps that to a clarification ask.
     """
-    available, reach, _is_fallback = _mobility_profile(movement_profile)
+    available, reach, is_unresolved = _mobility_profile(movement_profile, trip_movement)
     fallback_mode = available[0] if available else "transit"
     effective_mode = resolution.effective_mode or fallback_mode
+    # Guess wide when ignorant (ADR-156). The resolver's own tie-break prefers
+    # the slower mode when it is unsure, which is right when the *city* is the
+    # unknown and wrong when the user's capability is: capping someone at
+    # walking drops everything past it, and they never learn what they did not
+    # see. Told in the prompt, the resolver kept picking walking anyway, so the
+    # floor is enforced here instead. Only inferred modes are lifted — a mode
+    # the user actually said is not a guess and is left exactly as stated.
+    # A walkable-tier turn is already a statement that this one is on foot
+    # ("anywhere round the corner?"), so widening it would answer a different
+    # question than the one asked. The floor exists for turns where the scope
+    # is open and only the capability is missing.
+    if (
+        is_unresolved
+        and not resolution.mode_is_explicit
+        and resolution.scope_tier != "walkable"
+    ):
+        multipliers = get_config().movement.mode_multiplier
+        if multipliers.get(effective_mode, 1.0) < multipliers.get(fallback_mode, 1.0):
+            logger.info(
+                "widening inferred mode %s -> %s (movement unresolved)",
+                effective_mode,
+                fallback_mode,
+            )
+            effective_mode = fallback_mode
+    # A resolver-named mode normally outranks the capability list on purpose:
+    # the user knows about the rental this turn and the list does not. The one
+    # exception is the turn the trip's modes were just cleared, because the
+    # resolver reads conversation history and will keep naming the vehicle
+    # from the country they left. Without this the clear has no visible
+    # effect — the scooter stays in the radius all the way to Singapore.
+    if trip_just_cleared and available and effective_mode not in available:
+        logger.info(
+            "dropping stale effective_mode %s after trip reset; using %s",
+            effective_mode,
+            fallback_mode,
+        )
+        effective_mode = fallback_mode
 
     corridor: CorridorTarget | None = None
     if resolution.scope_shape == "corridor":
@@ -1067,6 +1808,24 @@ async def _resolve_search_scope(
         )
         if corridor is None:
             return None
+
+    # An itinerary that loses too many stops to geocoding degrades to a
+    # plain area turn around the primary anchor — a worse answer, never a
+    # failed one (ADR-148). The shape only survives with >= 2 real anchors,
+    # so downstream fan-out can rely on at least one leg existing.
+    scope_shape: str = resolution.scope_shape
+    itinerary: list[ItineraryAnchor] | None = None
+    if resolution.scope_shape == "itinerary":
+        anchors = await _resolve_itinerary(resolution.itinerary_stops, geocoding_client)
+        if len(anchors) >= 2:
+            itinerary = anchors
+        else:
+            logger.warning(
+                "itinerary resolved %d/%d stops; degrading to area scope",
+                len(anchors),
+                len(resolution.itinerary_stops),
+            )
+            scope_shape = "area"
 
     radius = resolve_radius(
         effective_mode,
@@ -1079,9 +1838,10 @@ async def _resolve_search_scope(
         update={
             "effective_mode": effective_mode,
             "scope_tier": resolution.scope_tier,
-            "scope_shape": resolution.scope_shape,
+            "scope_shape": scope_shape,
             "search_radius_m": radius,
             "corridor": corridor,
+            "itinerary": itinerary,
         }
     )
 
@@ -1102,7 +1862,10 @@ def _location_clarification_update(
         title="checking your location",
         summary=reason,
         source="agent",
-        visibility="user",
+        # `debug` like every location frame (ADR-157): the clarifying
+        # question reaches the user as the turn's answer; a step saying the
+        # same thing is pipeline noise.
+        visibility="debug",
         duration_ms=0.0,
     )
     emit_step_done(_LOCATION_STEP_ID, step, started=started)
@@ -1113,10 +1876,67 @@ def _location_clarification_update(
     }
 
 
-def _location_resolved_update(
-    state: AgentState, working: WorkingLocation, *, started: float | None = None
+def _location_not_needed_update(
+    state: AgentState, *, started: float | None = None
 ) -> dict[str, Any]:
-    """State update that records a fully resolved working location."""
+    """State update for a turn that is not about a place at all (ADR-145).
+
+    Distinct from a clarification, and the distinction matters: both leave
+    `working_location` empty, but a clarification *ends the turn* with a
+    question. Before web search existed that was harmless — every question
+    kebi could answer was about somewhere — but "where is the World Cup being
+    played" has no working location and needs none, and asking the user which
+    city they mean is a non-sequitur that burns the turn.
+
+    So the resolver gets to say "not applicable" explicitly rather than the
+    node inferring it from an empty result. The turn proceeds with no
+    location; every tool already treats that as a valid state.
+    """
+    step = ReasoningStep(
+        step="agent.location_not_needed",
+        title="checking your location",
+        summary="this one isn't about where you are",
+        source="agent",
+        # `debug`, not `user`: the client shows user-visible steps as the
+        # answer's narration, and "checking your location" on a World Cup
+        # question reads as confusion, not work.
+        visibility="debug",
+        duration_ms=0.0,
+    )
+    emit_step_done(_LOCATION_STEP_ID, step, started=started)
+    return {
+        "working_location": None,
+        "location_clarification": None,
+        "reasoning_steps": (state.get("reasoning_steps") or []) + [step],
+    }
+
+
+def _location_resolved_update(
+    state: AgentState,
+    working: WorkingLocation,
+    *,
+    trip_movement: Any = TRIP_MOVEMENT_INHERIT,
+    started: float | None = None,
+) -> dict[str, Any]:
+    """State update that records a fully resolved working location.
+
+    `trip_movement` rides along because the resolve node is the only place
+    that can decide it: it is the one node that knows both what the user just
+    said and which country the turn landed in (ADR-155).
+    """
+    # Scope is invisible in the trace otherwise: a corridor turn that silently
+    # degraded to an area search looks identical to a normal one, and the only
+    # symptom is an answer confidently naming places in the wrong direction.
+    logger.info(
+        "resolved scope: shape=%s tier=%s mode=%s radius=%.0fm corridor=%s "
+        "itinerary=%s",
+        working.scope_shape,
+        working.scope_tier,
+        working.effective_mode,
+        working.search_radius_m,
+        working.corridor.name if working.corridor else None,
+        [a.name for a in working.itinerary] if working.itinerary else None,
+    )
     parts = [working.neighborhood, working.city, working.country]
     place = ", ".join(p for p in parts if p)
     step = ReasoningStep(
@@ -1124,12 +1944,17 @@ def _location_resolved_update(
         title="found your location",
         summary=f"around {place}",
         source="agent",
-        visibility="user",
+        # `debug` (ADR-157): location resolution is eager background context,
+        # not reasoning the user watches. The agent mentions the place in its
+        # own narration when it matters; a fixed "found your location" step
+        # opening every trace made the pipeline the story.
+        visibility="debug",
         duration_ms=0.0,
     )
     emit_step_done(_LOCATION_STEP_ID, step, started=started)
     return {
         "working_location": working.model_dump(),
+        "trip_movement": trip_movement,
         "location_clarification": None,
         "reasoning_steps": (state.get("reasoning_steps") or []) + [step],
     }
@@ -1167,11 +1992,16 @@ def make_resolve_location_node(resolver_llm: Any, geocoding_client: Any) -> Any:
         # SSE lifecycle: announce location resolution before the resolver LLM
         # call. The matching `done` frame is emitted by the resolved/clarify
         # update helpers under the same id; `started` carries the timing token.
+        # `debug` on BOTH frames (ADR-157) — the client keys on `id`, so a
+        # step that flips user→debug never resolves and renders as a failed
+        # step. Location resolution is silent infrastructure now: it never
+        # narrates to the user, whichever way it ends.
         started = emit_step_active(
             _LOCATION_STEP_ID,
             "agent.location",
-            title="found your location",
+            title="checking your location",
             source="agent",
+            visibility="debug",
         )
 
         def _resolver_span() -> TracingSpan:
@@ -1212,6 +2042,11 @@ def make_resolve_location_node(resolver_llm: Any, geocoding_client: Any) -> Any:
             # treat the result as the parsed model directly.
             resolution = result
 
+        # Checked before the clarification branch: a question with no place in
+        # it must not be turned into "which city do you mean?" (ADR-145).
+        if resolution.location_irrelevant:
+            return _location_not_needed_update(state, started=started)
+
         if resolution.needs_clarification or resolution.is_ambiguous:
             reason = (
                 resolution.clarification_reason.strip()
@@ -1230,6 +2065,20 @@ def make_resolve_location_node(resolver_llm: Any, geocoding_client: Any) -> Any:
                 return _location_clarification_update(
                     state, _LOCATION_ASK_CONFIRM, started=started
                 )
+            # Trip modes are decided before the scope so the radius and the
+            # effective mode are computed against what the user actually has
+            # on this trip, not what their settings row guessed months ago.
+            trip_update = _next_trip_movement(
+                resolution,
+                working,
+                _carried_working_location(state),
+                _trip_movement(state),
+            )
+            trip_now = (
+                state.get("trip_movement")
+                if trip_update == TRIP_MOVEMENT_INHERIT
+                else trip_update
+            )
             # Fold in the movement scope (effective mode + tier → radius, and
             # for a corridor, the eagerly geocoded destination).
             working = await _resolve_search_scope(
@@ -1237,6 +2086,10 @@ def make_resolve_location_node(resolver_llm: Any, geocoding_client: Any) -> Any:
                 resolution,
                 state.get("movement_profile"),
                 geocoding_client,
+                trip_movement=trip_now if isinstance(trip_now, dict) else None,
+                # `None` (as opposed to the inherit sentinel) is exactly the
+                # "cleared this turn" signal — see `_next_trip_movement`.
+                trip_just_cleared=trip_update is None,
             )
         except GeocodingError as exc:
             logger.warning("resolve_location geocoding failed: %s", exc)
@@ -1248,7 +2101,9 @@ def make_resolve_location_node(resolver_llm: Any, geocoding_client: Any) -> Any:
             # The point resolved, but a corridor destination did not — ask
             # rather than silently degrading to an area search.
             return _location_clarification_update(state, _CORRIDOR_ASK, started=started)
-        return _location_resolved_update(state, working, started=started)
+        return _location_resolved_update(
+            state, working, trip_movement=trip_update, started=started
+        )
 
     return resolve_location_node
 
@@ -1410,17 +2265,23 @@ def finalize_node(state: AgentState) -> dict[str, Any]:
     human/agent pairs and no tool noise.
     """
     to_remove: list[str] = []
-    tool_results: list[dict[str, Any]] = []
+    # Tools write the untrimmed result to `tool_payloads` (ADR-139); the
+    # ToolMessage the model read is a lean projection and no longer carries
+    # the ids the linker and the signal path need. Parsing the messages is
+    # kept only as a fallback for a tool that has not been migrated.
+    tool_results: list[dict[str, Any]] = list(state.get("tool_payloads") or [])
+    seen_call_ids = {r.get("tool_call_id") for r in tool_results}
     for msg in state.get("messages") or []:
         msg_id = getattr(msg, "id", None)
         if isinstance(msg, ToolMessage):
-            tool_results.append(
-                {
-                    "tool": getattr(msg, "name", None),
-                    "tool_call_id": getattr(msg, "tool_call_id", None),
-                    "payload": _parse_tool_message_payload(msg),
-                }
-            )
+            if getattr(msg, "tool_call_id", None) not in seen_call_ids:
+                tool_results.append(
+                    {
+                        "tool": getattr(msg, "name", None),
+                        "tool_call_id": getattr(msg, "tool_call_id", None),
+                        "payload": _parse_tool_message_payload(msg),
+                    }
+                )
             if msg_id is not None:
                 to_remove.append(msg_id)
             continue
@@ -1445,7 +2306,9 @@ def scrub_tool_results_node(state: AgentState) -> dict[str, Any]:  # noqa: ARG00
     `finalize_node` populates `tool_results` so the response layer can
     surface the structured payloads, but those payloads must not bloat
     the per-thread checkpointer DB — only the human-readable
-    `reasoning_steps` summaries should persist as agent history.
+    `reasoning_steps` summaries should persist as agent history. The
+    server-side `tool_payloads` channel the tools wrote (ADR-139) is
+    cleared here for the same reason.
 
     This node runs as a separate superstep AFTER `finalize`. Callers
     that need the populated `tool_results` consume `astream(
@@ -1453,7 +2316,7 @@ def scrub_tool_results_node(state: AgentState) -> dict[str, Any]:  # noqa: ARG00
     `finalize` and this node; the final checkpointed state has
     `tool_results=[]`.
     """
-    return {"tool_results": []}
+    return {"tool_results": [], "tool_payloads": []}
 
 
 def build_graph(
@@ -1490,21 +2353,51 @@ def build_graph(
     graph.add_node(NODE_FALLBACK, fallback_node)
     graph.add_node(NODE_FINALIZE, finalize_node)
     graph.add_node(NODE_SCRUB_TOOL_RESULTS, scrub_tool_results_node)
+    graph.add_node(NODE_TRIP_GUARD, trip_guard_node)
     graph.set_conditional_entry_point(
         _needs_location_resolution,
         {"resolve": NODE_RESOLVE_LOCATION, "skip": NODE_AGENT},
     )
     graph.add_edge(NODE_RESOLVE_LOCATION, NODE_AGENT)
+
+    # The guard exists to inject a suggest_places call, so it only routes
+    # when that tool is actually bound. It is entitlement-gated (discovery
+    # tier), and injecting a call for an unbound tool produces a silent
+    # error ToolMessage — the failure that hid the guard's whole purpose
+    # in live testing (ADR-150).
+    has_suggest_places = any(getattr(t, "name", "") == "suggest_places" for t in tools)
+
+    def _route_from_agent(state: AgentState) -> str:
+        route = should_continue(state)
+        if route == NODE_TRIP_GUARD and not has_suggest_places:
+            return "end"
+        return route
+
     graph.add_conditional_edges(
         NODE_AGENT,
-        should_continue,
+        _route_from_agent,
         {
             NODE_TOOLS: NODE_TOOLS,
             NODE_FALLBACK: NODE_FALLBACK,
+            NODE_TRIP_GUARD: NODE_TRIP_GUARD,
             "end": NODE_FINALIZE,
         },
     )
     graph.add_edge(NODE_TOOLS, NODE_AGENT)
+
+    # Verification mode appends its own suggest_places call, so it routes
+    # through the tool node; the polish mode is text-only and goes straight
+    # back to the model for the rewrite.
+    def _route_from_guard(state: AgentState) -> str:
+        messages = state.get("messages") or []
+        last = messages[-1] if messages else None
+        return NODE_TOOLS if getattr(last, "tool_calls", None) else NODE_AGENT
+
+    graph.add_conditional_edges(
+        NODE_TRIP_GUARD,
+        _route_from_guard,
+        {NODE_TOOLS: NODE_TOOLS, NODE_AGENT: NODE_AGENT},
+    )
     graph.add_edge(NODE_FALLBACK, NODE_FINALIZE)
     graph.add_edge(NODE_FINALIZE, NODE_SCRUB_TOOL_RESULTS)
     graph.add_edge(NODE_SCRUB_TOOL_RESULTS, END)

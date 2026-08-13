@@ -1,0 +1,246 @@
+{
+  "name": "itinerary-kyoto-osaka-tokyo",
+  "captured_at": "2026-08-08 final (2048-token ceiling, per-taste guard query, leg-take rule)",
+  "adr": "ADR-148 / ADR-149",
+  "description": "Live /v1/chat answer for a Japan multi-stop trip, captured as the second itinerary quality target. Unlike the Vietnam target (seeded curated data), every save here came from real TikTok extractions, so the provenance attribution ('from a tiktok') is organic. What must hold: saves pinned per stop, tiktok provenance said out loud, a saved place inside a leg corridor called out as on-the-way (Mount Fuji on Osaka-Tokyo), honest gap for a city with no saves, one closing question.",
+  "request": {
+    "message": "im planning a trip to japan, visiting kyoto, then osaka, then tokyo. what should i stop at along the way?",
+    "local_time": "2026-08-07T19:30:00+07:00"
+  },
+  "seed": {
+    "saves": [
+      {
+        "place": "Mount Fuji",
+        "city": "Fujinomiya",
+        "source": "tiktok"
+      },
+      {
+        "place": "Shibuya Sky",
+        "city": "Tokyo",
+        "source": "tiktok"
+      },
+      {
+        "place": "teamLab Planets TOKYO DMM",
+        "city": "Tokyo",
+        "source": "tiktok"
+      },
+      {
+        "place": "Warner Bros. Studio Tour Tokyo",
+        "city": "Tokyo",
+        "source": "tiktok"
+      },
+      {
+        "place": "Universal Studios Japan",
+        "city": "Osaka",
+        "source": "tiktok"
+      },
+      {
+        "place": "teamLab Borderless",
+        "city": "Tokyo",
+        "source": "tiktok"
+      },
+      {
+        "place": "Meiji Jingu",
+        "city": "Tokyo",
+        "source": "tiktok"
+      },
+      {
+        "place": "Shinjuku Gyoen National Garden",
+        "city": "Tokyo",
+        "source": "tiktok"
+      }
+    ],
+    "taste": [
+      "beach_club",
+      "specialty_coffee",
+      "scenic_view"
+    ],
+    "claims": "none for Japan — claims store empty on this route"
+  },
+  "response": {
+    "type": "agent",
+    "message": "your saves are heaviest on tokyo, which is great, there's a lot to work through there. [kyoto](kebi://area/jp/kyoto) is where i'll fill the gaps, and [mount fuji](kebi://venue/67543868-5745-45bd-a5e9-4ab948480e30) sits right on the osaka-to-tokyo leg, which is the one to plan the whole route around. stop by stop:\n\n---\n\nkyoto\n\nnothing saved here yet, so this one's on me. four places worth your time:\n\n[Fushimi Inari Taisha](kebi://venue/798aea34-b234-4a06-b628-8d791d2396bf) is the one, thousands of torii gates winding up a mountain, exactly as striking in person as it looks on every video you've seen of japan. go before 8am, the crowds are brutal by mid-morning.\n\n[Kiyomizu-dera](kebi://venue/f8d8b1da-95bf-49fc-ade3-8433f3424185) is the other must. a wooden temple platform jutting out over a hillside with views over the city. the walk up through the old higashiyama lanes is half the experience.\n\n[Nishiki Market](kebi://venue/4137a972-fe01-4266-bbaf-3fb145d70659) is a narrow covered arcade packed with local food stalls, pickles, skewers, fresh tofu, grilled things on sticks. good for a lunch wander.\n\nand for a matcha stop, [Gion Tsujiri](kebi://venue/eb7ecfb8-40fa-4586-9f4e-beaaf3aa5d88) is the one people go out of their way for, high-quality green tea desserts, very kyoto, very worth it.\n\n---\n\nosaka\n\nyou saved [Universal Studios Japan](kebi://venue/e68f1787-c5f6-4ed6-81b1-e0296a02ecf9), which is right there in osaka. full-day commitment, so give it its own day, Nintendo World is the draw right now.\n\nbeyond that, [Dotonbori](kebi://venue/1b247b82-0663-4f4f-be22-875f5ccc0a9f) is the neon canal strip, best in the evening when everything lights up. [Kuromon Market](kebi://venue/e35b0bea-bc55-4afb-adb5-a9cb8391e1b1) is your daytime food stop, more raw seafood and fresh produce than nishiki. [Osaka Castle](kebi://venue/15a9d47a-0fb6-44ec-89ac-e7fb01492588) is good for a half-morning, more for the park and the views than the museum inside.\n\n---\n\non the way to tokyo, mount fuji\n\nyou saved Mount Fuji, and it sits right on this leg, which makes it the one to plan the whole route around. climbing season runs roughly july to early september so you're in the window. if you want to hike, you need a dedicated extra day, most people do the overnight climb to catch sunrise at the summit. if you just want to see it, the Kawaguchiko area gives you the classic lake reflection shot and works as a comfortable stop between osaka and tokyo.\n\n---\n\ntokyo\n\nyour saves here are stacked, so let me make the calls for you.\n\n[Meiji Jingu](kebi://venue/d4104468-7ac7-4674-8b91-a9b1b559fcfb) first, calm, forested shrine in the middle of harajuku, good for an early morning before the city wakes up.\n\n[Shinjuku Gyoen](kebi://venue/1cf8682b-9ba4-4cc1-8a07-651c8b8b7b37) for green space and quiet mid-city, you saved this one, and afternoon works perfectly. pair it with the meiji morning if you want a calm first day in tokyo.\n\n[Shibuya Sky](kebi://venue/1bd47f5c-8855-4ba9-98e6-d4c6ccf6427f) is the rooftop observation deck above shibuya crossing, you saved this one, and sunset is the slot to book. reserve it online ahead of time, it sells out fast.\n\nnow for the teamLab question: you saved both [teamLab Planets](kebi://venue/3546d397-b212-4cb4-866a-3a87cd06c485) and [teamLab Borderless](kebi://venue/ce8d6832-b63e-4b15-8d39-50133dabbe62). they're genuinely different experiences, Planets is more intimate and physical, you walk through the installations. Borderless is larger, more overwhelming, more of an all-day wander. if you only have time for one, i'd go Planets, it's the tighter experience and easier to fit into a day. but if you have a spare afternoon, Borderless is worth it on top.\n\nyou also saved [The Making of Harry Potter](kebi://venue/3d3d35f0-b134-4c2b-9dc0-e34ecef0576e), that one is actually out in toshimaen, a bit of a trek from central tokyo. worth it if you're a fan, but it needs its own half-day. if your tokyo time is tight, it's the one i'd move to a dedicated day or cut if something has to give.\n\n---\n\nthe whole shape of this trip comes down to how many nights you have at each stop, that decides whether kyoto gets two full days or a quick pass-through, and whether fuji is a hike or a view. how many nights are you working with, and want me to map out the days once you know?",
+    "data": {
+      "reasoning_steps": [
+        {
+          "step": "agent.location_resolved",
+          "title": "found your location",
+          "summary": "around Kyoto, Japan",
+          "source": "agent",
+          "visibility": "user",
+          "timestamp": "2026-08-07T06:58:52.883276Z",
+          "duration_ms": 4159.105874976376
+        },
+        {
+          "step": "find_known.summary",
+          "title": "checked what I know around here",
+          "summary": "7 spots — Universal Studios Japan, Shinjuku Gyoen National…, +5 more",
+          "source": "agent",
+          "visibility": "user",
+          "timestamp": "2026-08-07T06:58:56.235651Z",
+          "duration_ms": 58.470207994105294
+        },
+        {
+          "step": "find_saved.summary",
+          "title": "searched your saved spots",
+          "summary": "8 spots — Universal Studios Japan, teamLab Planets TOKYO DMM, +6 more",
+          "source": "agent",
+          "visibility": "user",
+          "timestamp": "2026-08-07T06:58:58.879233Z",
+          "duration_ms": 566.1122919991612
+        },
+        {
+          "step": "suggest_places.summary",
+          "title": "suggested a few spots",
+          "summary": "5 spots — Fushimi Inari Taisha, Arashiyama Bamboo Forest, +3 more",
+          "source": "agent",
+          "visibility": "user",
+          "timestamp": "2026-08-07T06:59:02.919311Z",
+          "duration_ms": 450.3917499969248
+        },
+        {
+          "step": "suggest_places.summary",
+          "title": "suggested a few spots",
+          "summary": "4 spots — Dotonbori, Osaka Castle, +2 more",
+          "source": "agent",
+          "visibility": "user",
+          "timestamp": "2026-08-07T06:59:06.275974Z",
+          "duration_ms": 252.81933398218825
+        },
+        {
+          "step": "suggest_places.summary",
+          "title": "suggested a few spots",
+          "summary": "5 spots — Gion Tsujiri - Kyoto…, Nishiki Market, +3 more",
+          "source": "agent",
+          "visibility": "user",
+          "timestamp": "2026-08-07T06:59:36.433490Z",
+          "duration_ms": 5856.493416999001
+        }
+      ],
+      "entities": [
+        {
+          "kind": "area",
+          "key": "jp/kyoto",
+          "name": "Kyoto",
+          "uri": "kebi://area/jp/kyoto",
+          "icon": null
+        },
+        {
+          "kind": "venue",
+          "key": "67543868-5745-45bd-a5e9-4ab948480e30",
+          "name": "Mount Fuji",
+          "uri": "kebi://venue/67543868-5745-45bd-a5e9-4ab948480e30",
+          "icon": null
+        },
+        {
+          "kind": "venue",
+          "key": "798aea34-b234-4a06-b628-8d791d2396bf",
+          "name": "Fushimi Inari Taisha",
+          "uri": "kebi://venue/798aea34-b234-4a06-b628-8d791d2396bf",
+          "icon": "⛩️"
+        },
+        {
+          "kind": "venue",
+          "key": "f8d8b1da-95bf-49fc-ade3-8433f3424185",
+          "name": "Kiyomizu-dera",
+          "uri": "kebi://venue/f8d8b1da-95bf-49fc-ade3-8433f3424185",
+          "icon": "🏯"
+        },
+        {
+          "kind": "venue",
+          "key": "4137a972-fe01-4266-bbaf-3fb145d70659",
+          "name": "Nishiki Market",
+          "uri": "kebi://venue/4137a972-fe01-4266-bbaf-3fb145d70659",
+          "icon": "🍣"
+        },
+        {
+          "kind": "venue",
+          "key": "eb7ecfb8-40fa-4586-9f4e-beaaf3aa5d88",
+          "name": "Gion Tsujiri",
+          "uri": "kebi://venue/eb7ecfb8-40fa-4586-9f4e-beaaf3aa5d88",
+          "icon": "🍵"
+        },
+        {
+          "kind": "venue",
+          "key": "e68f1787-c5f6-4ed6-81b1-e0296a02ecf9",
+          "name": "Universal Studios Japan",
+          "uri": "kebi://venue/e68f1787-c5f6-4ed6-81b1-e0296a02ecf9",
+          "icon": "🎡"
+        },
+        {
+          "kind": "venue",
+          "key": "1b247b82-0663-4f4f-be22-875f5ccc0a9f",
+          "name": "Dotonbori",
+          "uri": "kebi://venue/1b247b82-0663-4f4f-be22-875f5ccc0a9f",
+          "icon": null
+        },
+        {
+          "kind": "venue",
+          "key": "e35b0bea-bc55-4afb-adb5-a9cb8391e1b1",
+          "name": "Kuromon Market",
+          "uri": "kebi://venue/e35b0bea-bc55-4afb-adb5-a9cb8391e1b1",
+          "icon": null
+        },
+        {
+          "kind": "venue",
+          "key": "15a9d47a-0fb6-44ec-89ac-e7fb01492588",
+          "name": "Osaka Castle",
+          "uri": "kebi://venue/15a9d47a-0fb6-44ec-89ac-e7fb01492588",
+          "icon": null
+        },
+        {
+          "kind": "venue",
+          "key": "d4104468-7ac7-4674-8b91-a9b1b559fcfb",
+          "name": "Meiji Jingu",
+          "uri": "kebi://venue/d4104468-7ac7-4674-8b91-a9b1b559fcfb",
+          "icon": null
+        },
+        {
+          "kind": "venue",
+          "key": "1cf8682b-9ba4-4cc1-8a07-651c8b8b7b37",
+          "name": "Shinjuku Gyoen National Garden",
+          "uri": "kebi://venue/1cf8682b-9ba4-4cc1-8a07-651c8b8b7b37",
+          "icon": null
+        },
+        {
+          "kind": "venue",
+          "key": "1bd47f5c-8855-4ba9-98e6-d4c6ccf6427f",
+          "name": "Shibuya Sky",
+          "uri": "kebi://venue/1bd47f5c-8855-4ba9-98e6-d4c6ccf6427f",
+          "icon": "🏙️"
+        },
+        {
+          "kind": "venue",
+          "key": "3546d397-b212-4cb4-866a-3a87cd06c485",
+          "name": "teamLab Planets Tokyo DMM",
+          "uri": "kebi://venue/3546d397-b212-4cb4-866a-3a87cd06c485",
+          "icon": "🖼️"
+        },
+        {
+          "kind": "venue",
+          "key": "ce8d6832-b63e-4b15-8d39-50133dabbe62",
+          "name": "teamLab Borderless: MORI Building Digital ART Museum",
+          "uri": "kebi://venue/ce8d6832-b63e-4b15-8d39-50133dabbe62",
+          "icon": null
+        },
+        {
+          "kind": "venue",
+          "key": "3d3d35f0-b134-4c2b-9dc0-e34ecef0576e",
+          "name": "The Making of Harry Potter",
+          "uri": "kebi://venue/3d3d35f0-b134-4c2b-9dc0-e34ecef0576e",
+          "icon": "🦄"
+        }
+      ],
+      "recommendation_id": "c25758eb-3a82-46b4-81ee-579ad53bc0cd"
+    },
+    "tool_calls_used": 5
+  },
+  "attribution_examples": [
+    "you saved Universal Studios Japan from a tiktok, and that's the anchor here",
+    "you've got Mount Fuji saved, and that's genuinely on your way",
+    "you've got three saves here and they're all tiktok picks",
+    "you didn't save anything in kyoto yet"
+  ],
+  "known_gaps": [],
+  "notes": "All target rules in one live output: take names tokyo-heavy + kyoto gap + 'mount fuji sits right on the osaka-to-tokyo leg, which is the one to plan the whole route around'; kyoto 'this one's on me' with 4 verified picks incl. a taste-led tea pick (Gion Tsujiri); fuji gets its own leg section with the view-vs-climb decision; 'your saves here are stacked, so let me make the calls for you' + pick-one-teamlab ('i'd go Planets') + meiji/gyoen calm-day pairing + harry-potter cut-if-tight call; every save mentioned (polish restored 4); 16 verified entities, zero unverified names, zero memory prices; complete offer-shaped close. Both guard modes fired and the final answer absorbed both."
+}

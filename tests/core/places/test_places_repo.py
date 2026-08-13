@@ -53,6 +53,7 @@ def _minimal_row(
 # _row_to_core
 # ---------------------------------------------------------------------------
 
+
 class TestRowToCore:
     def test_minimal_row(self) -> None:
         row = _minimal_row()
@@ -106,6 +107,7 @@ class TestRowToCore:
 # _core_to_dict
 # ---------------------------------------------------------------------------
 
+
 class TestCoreToDict:
     def test_generates_id_when_none(self) -> None:
         core = PlaceCore(place_name="Test", provider_id="google:x")
@@ -158,6 +160,7 @@ class TestCoreToDict:
 # get_by_ids
 # ---------------------------------------------------------------------------
 
+
 class TestGetByIds:
     async def test_empty_input_returns_empty(self) -> None:
         repo, session = _make_repo()
@@ -177,6 +180,7 @@ class TestGetByIds:
 # get_by_provider_ids
 # ---------------------------------------------------------------------------
 
+
 class TestGetByProviderIds:
     async def test_empty_input_returns_empty(self) -> None:
         repo, session = _make_repo()
@@ -195,6 +199,7 @@ class TestGetByProviderIds:
 # ---------------------------------------------------------------------------
 # find — filter conditions
 # ---------------------------------------------------------------------------
+
 
 class TestFind:
     async def test_empty_query_executes(self) -> None:
@@ -243,9 +248,7 @@ class TestFind:
             )
         )
         stmt = session.execute.call_args.args[0]
-        compiled = str(
-            stmt.compile(compile_kwargs={"literal_binds": True})
-        ).lower()
+        compiled = str(stmt.compile(compile_kwargs={"literal_binds": True})).lower()
         # earthdistance/cube extension — NOT PostGIS ST_Distance.
         assert "earth_distance" in compiled
         assert "ll_to_earth" in compiled
@@ -258,9 +261,7 @@ class TestFind:
         repo, session = _make_repo([])
         await repo.find(PlaceQuery(sort_by="created_at", sort_desc=True))
         stmt = session.execute.call_args.args[0]
-        compiled = str(
-            stmt.compile(compile_kwargs={"literal_binds": True})
-        ).lower()
+        compiled = str(stmt.compile(compile_kwargs={"literal_binds": True})).lower()
         assert "earth_distance" not in compiled
         order_clause = compiled.split("order by", 1)[1]
         assert "created_at" in order_clause and " desc" in order_clause
@@ -313,6 +314,7 @@ class TestFind:
 # upsert_places — provider_id enforcement + write semantics
 # ---------------------------------------------------------------------------
 
+
 class TestUpsertPlaces:
     async def test_empty_input_returns_empty(self) -> None:
         repo, session = _make_repo()
@@ -335,9 +337,7 @@ class TestUpsertPlaces:
         row = _minimal_row("x", "google:x")
         repo, session = _make_repo([row])
 
-        await repo.upsert_places(
-            [PlaceCore(place_name="Test", provider_id="google:x")]
-        )
+        await repo.upsert_places([PlaceCore(place_name="Test", provider_id="google:x")])
 
         stmt = session.execute.call_args.args[0]
         compiled = str(

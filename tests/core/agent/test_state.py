@@ -24,6 +24,8 @@ def test_agent_state_typed_dict_shape() -> None:
         "working_location": None,
         "location_clarification": None,
         "movement_profile": None,
+        "trip_movement": None,
+        "user_profile": None,
         "reasoning_steps": [],
         "steps_taken": 0,
         "error_count": 0,
@@ -64,6 +66,8 @@ async def test_movement_profile_does_not_persist_across_turns() -> None:
         {
             "messages": [HumanMessage(content="two")],
             "movement_profile": None,
+            "trip_movement": None,
+            "user_profile": None,
         },
         config=config,
     )

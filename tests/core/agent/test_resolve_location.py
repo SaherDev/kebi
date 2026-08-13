@@ -326,7 +326,10 @@ async def test_llm_failure_fails_toward_clarification() -> None:
     assert update["location_clarification"]
 
 
-async def test_emits_user_visible_reasoning_step() -> None:
+async def test_resolved_step_is_debug_only() -> None:
+    """Location resolution is silent infrastructure (ADR-157): the step is
+    recorded for tracing but never shown to the user — the agent mentions
+    the place in its own narration when it matters."""
     resolution = LocationResolution(
         source="explicit_query", country="Japan", city="Tokyo", neighborhood="Shibuya"
     )
@@ -337,7 +340,7 @@ async def test_emits_user_visible_reasoning_step() -> None:
     steps = update["reasoning_steps"]
     assert len(steps) == 1
     assert steps[0].step == "agent.location_resolved"
-    assert steps[0].visibility == "user"
+    assert steps[0].visibility == "debug"
 
 
 # --- Movement / search scope (ADR-084) -------------------------------------
@@ -428,7 +431,13 @@ async def test_resolver_effective_mode_is_honored() -> None:
 async def test_no_resolver_mode_falls_back_to_first_capability() -> None:
     """When the resolver leaves effective_mode empty (no explicit signal —
     e.g. "tired of walking" is scope language, not a mode word), the system
-    falls back to the first listed capability (ADR-085)."""
+    falls back to the first listed capability (ADR-085).
+
+    "Listed" means the *chosen* profile's list. This one carries no `source`,
+    so it is an unchosen guess and ADR-156 ignores its modes in favour of
+    kebi's own deliberately wide fallback — the point being that a narrow
+    guess nobody made must not quietly cap the search.
+    """
     resolution = LocationResolution(
         source="explicit_query",
         country="Thailand",
@@ -449,7 +458,7 @@ async def test_no_resolver_mode_falls_back_to_first_capability() -> None:
         )
     )
     # First capability in the list wins as the deterministic fallback.
-    assert update["working_location"]["effective_mode"] == "transit"
+    assert update["working_location"]["effective_mode"] == "rideshare"
 
 
 async def test_no_profile_uses_config_fallback_first_capability() -> None:
@@ -555,3 +564,146 @@ async def test_density_from_geocoder_place_type_scales_the_radius() -> None:
         sparse["working_location"]["search_radius_m"]
         > dense["working_location"]["search_radius_m"]
     )
+
+
+class TestLocationIrrelevantTurns:
+    """A world question has no working location and needs none (ADR-145).
+
+    Before this branch existed, "where is the world cup being played" reached
+    the resolver, found nothing to carry and no GPS, and came back as a
+    clarification — which ends the turn with "which city do you mean?" before
+    any tool runs. Verified live: that is exactly what happened.
+    """
+
+    async def test_the_turn_proceeds_with_no_location(self) -> None:
+        node = make_resolve_location_node(
+            _resolver_llm(
+                LocationResolution(source="carried", location_irrelevant=True)
+            ),
+            _geocoder(),
+        )
+        update = await node(_state(message="where is the world cup being played"))
+        assert update["working_location"] is None
+        # The critical assertion: NOT a clarification, so the agent still runs.
+        assert update["location_clarification"] is None
+
+    async def test_it_does_not_narrate_confusion_to_the_user(self) -> None:
+        """ "checking your location" on a World Cup question reads as the
+        assistant being lost, not as work."""
+        node = make_resolve_location_node(
+            _resolver_llm(
+                LocationResolution(source="carried", location_irrelevant=True)
+            ),
+            _geocoder(),
+        )
+        update = await node(_state(message="how does a visa on arrival work"))
+        assert all(s.visibility != "user" for s in update["reasoning_steps"])
+
+    async def test_it_never_geocodes(self) -> None:
+        geocoder = _geocoder(forward=(1.0, 2.0))
+        node = make_resolve_location_node(
+            _resolver_llm(
+                LocationResolution(
+                    source="carried",
+                    country="United States",
+                    location_irrelevant=True,
+                )
+            ),
+            geocoder,
+        )
+        await node(_state(message="is the world cup coming to Mexico"))
+        geocoder.forward.assert_not_called()
+        geocoder.search.assert_not_called()
+
+    async def test_a_place_turn_with_nothing_to_carry_still_asks(self) -> None:
+        """The new branch must not swallow genuine "I don't know where you
+        mean" cases — that ask is still the right behaviour."""
+        node = make_resolve_location_node(
+            _resolver_llm(
+                LocationResolution(
+                    source="carried",
+                    needs_clarification=True,
+                    clarification_reason="which city?",
+                )
+            ),
+            _geocoder(),
+        )
+        update = await node(_state(message="anywhere good for dinner"))
+        assert update["location_clarification"] == "which city?"
+
+
+class TestAreaIcons:
+    """The resolver picks each area level's emoji (ADR-146) — an area has no
+    catalog row to carry one, and this is the model already looking at it."""
+
+    async def test_explicit_query_stamps_both_levels(self) -> None:
+        resolution = LocationResolution(
+            source="explicit_query",
+            country="Japan",
+            city="Tokyo",
+            neighborhood="Shibuya",
+            city_icon="🗼",
+            neighborhood_icon="🎌",
+        )
+        node = make_resolve_location_node(
+            _resolver_llm(resolution), _geocoder(forward=(35.66, 139.70))
+        )
+        wl = (await node(_state()))["working_location"]
+        assert wl["city_icon"] == "🗼"
+        assert wl["neighborhood_icon"] == "🎌"
+
+    async def test_user_actual_gets_icons_though_the_names_come_from_the_geocoder(
+        self,
+    ) -> None:
+        resolution = LocationResolution(source="user_actual", city_icon="🏙️")
+        node = make_resolve_location_node(
+            _resolver_llm(resolution),
+            _geocoder(reverse={"country": "Thailand", "city": "Bangkok"}),
+        )
+        wl = (
+            await node(
+                _state(
+                    message="what's good here",
+                    user_location={"lat": 13.7, "lng": 100.5},
+                )
+            )
+        )["working_location"]
+        assert wl["city"] == "Bangkok"
+        assert wl["city_icon"] == "🏙️"
+
+    async def test_a_carried_locations_own_icon_wins(self) -> None:
+        # Same area, same emoji for the whole conversation — it must not
+        # flicker as the model re-picks each turn.
+        resolution = LocationResolution(source="carried", city_icon="🌋")
+        prior = {
+            "country": "Japan",
+            "city": "Tokyo",
+            "lat": 35.66,
+            "lng": 139.70,
+            "city_icon": "🗼",
+        }
+        node = make_resolve_location_node(_resolver_llm(resolution), _geocoder())
+        wl = (await node(_state(message="and what else", working_location=prior)))[
+            "working_location"
+        ]
+        assert wl["city_icon"] == "🗼"
+
+    async def test_a_carried_location_with_no_icon_takes_this_turns(self) -> None:
+        # Locations checkpointed before icons existed still get drawn.
+        resolution = LocationResolution(source="carried", city_icon="🗼")
+        prior = {"country": "Japan", "city": "Tokyo", "lat": 35.66, "lng": 139.70}
+        node = make_resolve_location_node(_resolver_llm(resolution), _geocoder())
+        wl = (await node(_state(message="and what else", working_location=prior)))[
+            "working_location"
+        ]
+        assert wl["city_icon"] == "🗼"
+
+    async def test_a_junk_icon_from_the_model_is_dropped(self) -> None:
+        resolution = LocationResolution(
+            source="explicit_query", country="Japan", city="Tokyo", city_icon="tower"
+        )
+        node = make_resolve_location_node(
+            _resolver_llm(resolution), _geocoder(forward=(35.66, 139.70))
+        )
+        wl = (await node(_state()))["working_location"]
+        assert wl["city_icon"] is None

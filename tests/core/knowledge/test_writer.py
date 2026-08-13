@@ -29,7 +29,7 @@ class _FakeRepo:
         source_ref=None,
         user_id=None,
         review_status="approved",
-    ) -> bool:
+    ) -> str | None:
         dedup = (entity_key, claim, source_type, user_id)
         row = {
             "entity_type": entity_type,
@@ -45,9 +45,9 @@ class _FakeRepo:
         }
         self.saved.append(row)
         if dedup in self._seen:
-            return False
+            return None
         self._seen.add(dedup)
-        return True
+        return f"id-{len(self._seen)}"
 
 
 def _claim(scope, *, geo=_UAE, place_ref=None, tags=None, confidence=0.5, name="X"):
@@ -86,6 +86,14 @@ async def test_builds_place_and_geo_keys() -> None:
     keys = [r["entity_key"] for r in repo.saved]
     assert keys == ["place:p1", "ae", "ae/dubai", "ae/dubai/jumeirah"]
     assert len(written) == 4
+    # Each written claim carries the id its row was created with.
+    assert all(w.id for w in written)
+    assert [w.claim.scope for w in written] == [
+        "place",
+        "country",
+        "city",
+        "neighborhood",
+    ]
 
 
 async def test_drops_claim_with_no_country_code() -> None:
@@ -121,7 +129,7 @@ async def test_drops_accessibility_claim() -> None:
 async def test_tags_normalized_to_vocabulary_on_write() -> None:
     """Known tags stored in canonical form; off-vocab hallucinations dropped."""
     repo = _FakeRepo()
-    await _persist(
+    written = await _persist(
         repo,
         [
             _claim(
@@ -131,6 +139,8 @@ async def test_tags_normalized_to_vocabulary_on_write() -> None:
         ],
     )
     assert repo.saved[0]["tags"] == ["Thai", "cash_only", "go_early"]
+    # The returned claim echoes what was stored, not the raw emission.
+    assert written[0].claim.tags == ["Thai", "cash_only", "go_early"]
 
 
 async def test_accessibility_checked_on_raw_tags_before_normalization() -> None:

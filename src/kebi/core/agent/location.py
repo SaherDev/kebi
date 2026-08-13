@@ -25,7 +25,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
+
+from kebi.core.places.models import normalize_icon
 
 if TYPE_CHECKING:
     from kebi.core.config import MovementConfig
@@ -57,8 +59,10 @@ ScopeTier = Literal["walkable", "neighborhood", "city", "metro"]
 
 # The geometry of the search. `area` = a disc around the working point.
 # `corridor` = a route between the working point and a destination ("on my
-# way home").
-ScopeShape = Literal["area", "corridor"]
+# way home"). `itinerary` = an ordered multi-stop trip ("Hanoi, then Hue,
+# then Hoi An") — the working point anchors at the first stop and the full
+# stop list rides `WorkingLocation.itinerary` (ADR-148).
+ScopeShape = Literal["area", "corridor", "itinerary"]
 
 # How dense the working location is. "Near me" reaches further in a sparse
 # town than in a dense city — same tier, different metres (ADR-084). Derived
@@ -102,6 +106,29 @@ def density_class(place_type: str | None) -> DensityClass:
     return "medium"
 
 
+class ItineraryAnchor(BaseModel):
+    """One geocoded stop of a multi-stop trip (ADR-148).
+
+    `name` is the stop as the user said it ("Hue") — it is the label the
+    tools put on a segment and the agent quotes in prose, so it stays the
+    user's word, not the geocoder's canonical string. Coordinates are
+    derived by the resolve node, never transcribed by the resolver LLM —
+    the same rule as `CorridorTarget`. The area names + country code ride
+    along from the same geocode so per-stop area knowledge resolves to the
+    stop's own city, not the trip's first one (`build_geo_key` needs the
+    code; no code means that stop simply contributes no area notes).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    lat: float
+    lng: float
+    city: str | None = None
+    country: str | None = None
+    country_code: str | None = None
+
+
 class CorridorTarget(BaseModel):
     """An eagerly geocoded corridor destination ("on my way to <name>").
 
@@ -135,6 +162,20 @@ class WorkingLocation(BaseModel):
     # display name.
     country_code: str | None = None
 
+    # One emoji per area level, for the `kebi://area/...` links a chat answer
+    # carries (ADR-146). A venue's icon rides its catalog row; an area has no
+    # row, and the resolver is the one model that already knows which areas
+    # this turn is about — so it names them here rather than paying for a
+    # second call. Nullable like a venue's: unset means the client falls back
+    # to its own mapping.
+    city_icon: str | None = None
+    neighborhood_icon: str | None = None
+
+    @field_validator("city_icon", "neighborhood_icon")
+    @classmethod
+    def _normalize_icons(cls, v: str | None) -> str | None:
+        return normalize_icon(v)
+
     # Place density of this location, from the geocoder's place type — feeds
     # the radius so "near me" scales with how dense the area is (ADR-084).
     density: str = "medium"
@@ -150,6 +191,11 @@ class WorkingLocation(BaseModel):
     scope_shape: str = "area"
     search_radius_m: float = 0.0
     corridor: CorridorTarget | None = None
+    # Ordered stops of a multi-stop trip, set only when `scope_shape` is
+    # "itinerary" (ADR-148). The working point above anchors at the first
+    # stop; segment derivation (stop discs + leg corridors) lives in
+    # `tools/_scope.itinerary_segments`, not here.
+    itinerary: list[ItineraryAnchor] | None = None
 
 
 class LocationResolution(BaseModel):
@@ -176,17 +222,56 @@ class LocationResolution(BaseModel):
     country: str | None = None
     city: str | None = None
     neighborhood: str | None = None
+    # One emoji for the character of each area this turn resolves to — 🏄 for
+    # a surf town, 🗼 for a city its landmark defines (ADR-146). Emitted for
+    # every source, not just `explicit_query`: the resolver is handed the
+    # carried and actual locations too, so it can name the icon even on the
+    # turns where the *names* come from the geocoder.
+    city_icon: str | None = None
+    neighborhood_icon: str | None = None
+
+    @field_validator("city_icon", "neighborhood_icon")
+    @classmethod
+    def _normalize_icons(cls, v: str | None) -> str | None:
+        return normalize_icon(v)
+
     source: LocationSource
     is_shift: bool = False
     is_ambiguous: bool = False
     needs_clarification: bool = False
     clarification_reason: str = ""
+    # The turn is not about a place at all — a world-knowledge question, a
+    # general how-to, chit-chat (ADR-145). Distinct from `needs_clarification`
+    # even though both leave the location empty: clarification ends the turn
+    # with a question, and asking "which city?" about the World Cup is a
+    # non-sequitur that burns the turn. Explicit rather than inferred from an
+    # empty result, so "no location found" and "no location wanted" can never
+    # be confused.
+    location_irrelevant: bool = False
 
     # Search scope (ADR-084).
     scope_tier: ScopeTier = "city"
     scope_shape: ScopeShape = "area"
     effective_mode: MovementMode | None = None
+    # True when the *current message* named the mode ("if I drive", "walking
+    # distance"), false when `effective_mode` is the resolver's own inference
+    # (ADR-156). The distinction is load-bearing: when nobody has told kebi
+    # how the user gets around, an inferred narrow mode is overridden upward,
+    # because guessing narrow hides places silently — but a mode the user
+    # actually said is never overridden, because that is not a guess.
+    mode_is_explicit: bool = False
+    # Modes the user has said they actually have for this stay (ADR-155) —
+    # "we rented a scooter", "no car this trip, we're walking". Distinct from
+    # `effective_mode`, which is this turn's pick and dies with the turn: a
+    # stated capability outlives the turn and is cleared when the country
+    # changes. A hypothetical ("what if I drive") sets the mode, never this.
+    stated_modes: list[MovementMode] = []
     corridor_destination: str | None = None
+    # Ordered stops for `scope_shape == "itinerary"` (ADR-148), each as a
+    # geocodable "City, Country" string in trip order, first stop included.
+    # As with coordinates, the resolver only names them — the resolve node
+    # geocodes each into an `ItineraryAnchor` and drops the ones that fail.
+    itinerary_stops: list[str] = []
 
 
 def resolve_radius(
@@ -208,6 +293,16 @@ def resolve_radius(
     `compute_confidence`). The resolver LLM never emits this number; it
     classifies `tier`/`mode` and the metres come from config, mirroring
     ADR-083's rule that the resolver never transcribes coordinates.
+
+    The product is capped at `max_radius_m` (ADR-143). The three factors
+    compound, and at the wide end that produced radii no search should ever
+    have: metro (45 km) on a motorbike (×2.4) in a sparse area (×1.6) resolved
+    to 172.8 km — wider than Bali is long, so every "nearby" search covered the
+    whole island and a place an hour in the wrong direction ranked as if it
+    were on the way. The cap bounds every combination at once, including ones
+    a future tier or mode would introduce, rather than hand-tuning one cell of
+    the table. It applies only here: `anchor_to_corridor` widens a route search
+    beyond this deliberately, and that width is geometry rather than a guess.
     """
     try:
         idx = SCOPE_TIER_ORDER.index(tier)
@@ -217,4 +312,5 @@ def resolve_radius(
     base = getattr(cfg.radius_tiers, SCOPE_TIER_ORDER[idx])
     multiplier = cfg.mode_multiplier.get(mode, 1.0)
     density_factor = cfg.density_factor.get(density, 1.0)
-    return float(base) * float(multiplier) * float(density_factor)
+    radius = float(base) * float(multiplier) * float(density_factor)
+    return min(radius, float(cfg.max_radius_m))

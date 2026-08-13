@@ -24,6 +24,7 @@ location.
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Annotated, Any
 
@@ -36,6 +37,7 @@ from pydantic import Field
 from kebi.core.agent.reasoning import ReasoningStep
 from kebi.core.agent.state import AgentState
 from kebi.core.agent.stream_emit import emit_step_active, emit_step_done
+from kebi.core.agent.tools._agent_view import research_view
 from kebi.core.agent.tools._summaries import TITLES
 from kebi.core.agent.tools._with_timeout import tool_step_base_id, with_timeout
 from kebi.core.agent.tools._working_location import maybe_working_location
@@ -98,13 +100,21 @@ def _build_command(
 ) -> Command[Any]:
     """Pack the tool's result + reasoning steps into one Command."""
     tool_msg = ToolMessage(
-        content=result.model_dump_json(),
+        content=json.dumps(research_view(result)),
         tool_call_id=tool_call_id,
         name=_TOOL_NAME,
     )
     return Command(
         update={
             "messages": [tool_msg],
+            "tool_payloads": (state.get("tool_payloads") or [])
+            + [
+                {
+                    "tool": _TOOL_NAME,
+                    "tool_call_id": tool_call_id,
+                    "payload": result.model_dump(mode="json"),
+                }
+            ],
             "reasoning_steps": (state.get("reasoning_steps") or []) + steps,
             "tool_calls_used": state.get("tool_calls_used", 0) + 1,
         }

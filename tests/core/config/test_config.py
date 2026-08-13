@@ -125,11 +125,14 @@ class TestAgentPromptSlotValidation:
     ) -> None:
         prompts_dir = tmp_path / "config" / "prompts"
         prompts_dir.mkdir(parents=True)
-        # ADR-084 added {location_context} and {movement_context} to the
-        # agent prompt's required slots.
+        # ADR-084 added {location_context} and {movement_context}; ADR-138
+        # added {time_context} (day of week is load-bearing for a schedule);
+        # ADR-154 added {user_profile_context} (the about-me block).
         (prompts_dir / "agent.txt").write_text(
             "Location: {location_context}\n"
+            "Time: {time_context}\n"
             "Movement: {movement_context}\n"
+            "About me: {user_profile_context}\n"
             "Taste: {taste_profile_summary}\n"
             "Memory: {memory_summary}"
         )
@@ -144,6 +147,8 @@ class TestAgentPromptSlotValidation:
             assert "{taste_profile_summary}" in loaded["agent"].content
             assert "{memory_summary}" in loaded["agent"].content
             assert "{movement_context}" in loaded["agent"].content
+            assert "{time_context}" in loaded["agent"].content
+            assert "{user_profile_context}" in loaded["agent"].content
         finally:
             config_module.find_project_root = original  # type: ignore[assignment]
 

@@ -19,18 +19,19 @@ class TagType(str, Enum):
 
     cuisine = "cuisine"
     dietary = "dietary"
-    feature = "feature"           # observable physical/structural attributes
-    atmosphere = "atmosphere"     # vibe/mood — LLM-sourced
-    service = "service"           # operational capabilities
+    feature = "feature"  # observable physical/structural attributes
+    atmosphere = "atmosphere"  # vibe/mood — LLM-sourced
+    service = "service"  # operational capabilities
     price = "price"
     accessibility = "accessibility"
-    time = "time"                 # time-of-day suitability
-    season = "season"             # weather/season suitability
+    time = "time"  # time-of-day suitability
+    season = "season"  # weather/season suitability
 
 
 # ---------------------------------------------------------------------------
 # Cuisine
 # ---------------------------------------------------------------------------
+
 
 class CuisineTag(str, Enum):
     thai = "Thai"
@@ -58,6 +59,7 @@ class CuisineTag(str, Enum):
 # Dietary
 # ---------------------------------------------------------------------------
 
+
 class DietaryTag(str, Enum):
     vegan = "vegan"
     vegetarian = "vegetarian"
@@ -69,11 +71,12 @@ class DietaryTag(str, Enum):
 # Feature — observable, often Google-sourced
 # ---------------------------------------------------------------------------
 
+
 class FeatureTag(str, Enum):
     # seating / space
     outdoor_seating = "outdoor_seating"
     indoor = "indoor"
-    outdoor = "outdoor"               # majority-outdoor venue
+    outdoor = "outdoor"  # majority-outdoor venue
     rooftop = "rooftop"
     waterfront = "waterfront"
     garden = "garden"
@@ -88,16 +91,21 @@ class FeatureTag(str, Enum):
     kids_menu = "kids_menu"
     sports_viewing = "sports_viewing"
     live_music = "live_music"
+    # An activity the place is *for*, not a category of place: a surf break,
+    # the warung facing it, and the board rental all answer "where can I
+    # surf" without sharing a category (ADR-147).
+    surfing = "surfing"
 
     # practical
     parking = "parking"
-    open_late = "open_late"           # past midnight
+    open_late = "open_late"  # past midnight
     open_24h = "open_24h"
 
 
 # ---------------------------------------------------------------------------
 # Atmosphere — vibe/mood, LLM-sourced
 # ---------------------------------------------------------------------------
+
 
 class AtmosphereTag(str, Enum):
     cozy = "cozy"
@@ -126,6 +134,7 @@ class AtmosphereTag(str, Enum):
 # Service — operational capabilities, Google-sourced
 # ---------------------------------------------------------------------------
 
+
 class ServiceTag(str, Enum):
     dine_in = "dine_in"
     takeout = "takeout"
@@ -144,17 +153,19 @@ class ServiceTag(str, Enum):
 # Price — human-readable names, no dollar signs
 # ---------------------------------------------------------------------------
 
+
 class PriceTag(str, Enum):
     free = "free"
-    budget = "budget"               # $ — street food, fast casual
-    moderate = "moderate"           # $$ — casual dining
-    expensive = "expensive"         # $$$ — upscale
+    budget = "budget"  # $ — street food, fast casual
+    moderate = "moderate"  # $$ — casual dining
+    expensive = "expensive"  # $$$ — upscale
     very_expensive = "very_expensive"  # $$$$ — fine dining / luxury
 
 
 # ---------------------------------------------------------------------------
 # Accessibility — Google accessibilityOptions fields
 # ---------------------------------------------------------------------------
+
 
 class AccessibilityTag(str, Enum):
     wheelchair_parking = "wheelchair_parking"
@@ -167,28 +178,30 @@ class AccessibilityTag(str, Enum):
 # Time of day — when a place is best suited
 # ---------------------------------------------------------------------------
 
+
 class TimeTag(str, Enum):
-    morning = "morning"         # 6–11am: coffee, breakfast
-    brunch = "brunch"           # 10am–1pm
-    lunch = "lunch"             # 12–3pm
-    afternoon = "afternoon"     # 2–6pm: coffee, snacks, study
-    evening = "evening"         # 6–10pm: dinner, pre-drinks
-    night = "night"             # 9pm–midnight: bars, clubs
-    late_night = "late_night"   # midnight+: street food, 24h spots
-    all_day = "all_day"         # good any time of day
+    morning = "morning"  # 6–11am: coffee, breakfast
+    brunch = "brunch"  # 10am–1pm
+    lunch = "lunch"  # 12–3pm
+    afternoon = "afternoon"  # 2–6pm: coffee, snacks, study
+    evening = "evening"  # 6–10pm: dinner, pre-drinks
+    night = "night"  # 9pm–midnight: bars, clubs
+    late_night = "late_night"  # midnight+: street food, 24h spots
+    all_day = "all_day"  # good any time of day
 
 
 # ---------------------------------------------------------------------------
 # Season / weather — when conditions suit the place
 # ---------------------------------------------------------------------------
 
+
 class SeasonTag(str, Enum):
-    summer = "summer"           # hot/sunny — outdoor, cold drinks, shade
-    winter = "winter"           # cold — warmth, hot drinks, indoor
-    rainy = "rainy"             # wet weather — indoor, cozy, delivery
-    spring = "spring"           # mild — outdoor, light food
-    autumn = "autumn"           # mild — outdoor, comfort food
-    all_season = "all_season"   # works in any weather
+    summer = "summer"  # hot/sunny — outdoor, cold drinks, shade
+    winter = "winter"  # cold — warmth, hot drinks, indoor
+    rainy = "rainy"  # wet weather — indoor, cozy, delivery
+    spring = "spring"  # mild — outdoor, light food
+    autumn = "autumn"  # mild — outdoor, comfort food
+    all_season = "all_season"  # works in any weather
 
 
 # Union of all known tag value enums — or plain str for LLM / custom tags.

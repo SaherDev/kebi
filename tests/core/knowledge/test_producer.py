@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock
 from kebi.core.knowledge.curator import KnowledgeCurator
 from kebi.core.knowledge.harvester import KnowledgeHarvester
 from kebi.core.knowledge.producer import ClaimProducer, KnowledgeIngestion
-from kebi.core.knowledge.schemas import ResolvedGeo, StructuredClaim
+from kebi.core.knowledge.schemas import ResolvedGeo, StructuredClaim, WrittenClaim
 
 _CLAIM = StructuredClaim(
     scope="city",
@@ -16,6 +16,8 @@ _CLAIM = StructuredClaim(
     confidence=0.8,
     geo=ResolvedGeo(country_code="ae", city="Dubai"),
 )
+
+_WRITTEN = WrittenClaim(id="claim-1", claim=_CLAIM)
 
 
 def test_harvester_and_curator_are_claim_producers() -> None:
@@ -29,7 +31,7 @@ def test_harvester_and_curator_are_claim_producers() -> None:
 
 async def test_ingestion_stamps_producer_provenance() -> None:
     writer = AsyncMock()
-    writer.persist = AsyncMock(return_value=[_CLAIM])
+    writer.persist = AsyncMock(return_value=[_WRITTEN])
 
     # A minimal producer — any object exposing the three provenance fields.
     class _Producer:
@@ -41,7 +43,7 @@ async def test_ingestion_stamps_producer_provenance() -> None:
         _Producer(), [_CLAIM], source_ref="curator:user_x", user_id=None
     )
 
-    assert written == [_CLAIM]
+    assert written == [_WRITTEN]
     _, kwargs = writer.persist.call_args
     assert kwargs["source_type"] == "curated_expert"
     assert kwargs["confidence_floor"] == 0.9

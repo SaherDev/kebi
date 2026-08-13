@@ -40,25 +40,29 @@ class ContentHarvestRequested(DomainEvent):
     source_ref: str | None = None
 
 
-class RecommendationAccepted(DomainEvent):
-    """Event: User accepted a recommendation"""
+class WebFindingsHarvestRequested(DomainEvent):
+    """Event: a turn's web-search findings should be mined into claims.
 
-    event_type: str = "recommendation_accepted"
-    recommendation_id: str
-    place_core_id: str
+    Fired by ChatService when a turn actually ran `web_search` and got
+    something back. Unlike the content harvest this carries the findings
+    inline rather than a bucket pointer: they are a few hundred bytes that
+    already exist in memory, and a durable snapshot would be storing search
+    results permanently to mine them once.
 
+    Runs after the response is sent, so the user never waits on it (ADR-145).
+    `user_id` is for tracing only — claims mined here are global
+    (`user_id=NULL`), because a fact about an area is not personal.
+    """
 
-class RecommendationRejected(DomainEvent):
-    """Event: User rejected a recommendation"""
-
-    event_type: str = "recommendation_rejected"
-    recommendation_id: str
-    place_core_id: str
+    event_type: str = "web_findings_harvest_requested"
+    # A `WebSearchResult`, serialised. Kept as a dict so the events module
+    # stays free of core-domain imports, as every other event here does.
+    result: dict[str, Any]
 
 
 class RecommendationSaved(DomainEvent):
-    """Event: User saved a place kebi recommended (the consult card's "save
-    it" action).
+    """Event: User saved a place kebi surfaced (the place screen's "save"
+    action, ADR-151 — no recommendation attribution rides along anymore).
 
     A stronger positive than the passive `PlaceSaved` of a link-share import:
     it maps to its own taste interaction type (`saved_recommendation`) with a
@@ -67,8 +71,37 @@ class RecommendationSaved(DomainEvent):
     """
 
     event_type: str = "recommendation_saved"
-    recommendation_id: str
     place_core_id: str
+
+
+class PlaceProfileRequested(DomainEvent):
+    """Event: a thin catalog row was opened and should be profiled (ADR-152).
+
+    Fired by the place-detail route when the row carries no experiential
+    tags — i.e. it entered through the provider write-through and no LLM has
+    ever looked at it. The handler runs one identity-only profiling call and
+    persists the tags (and icon, if missing) onto the catalog row: global,
+    once per place, so the cost is bounded by places users actually open.
+    `user_id` is the opener, for tracing only — the enrichment is never
+    user-scoped.
+    """
+
+    event_type: str = "place_profile_requested"
+    place_id: str
+
+
+class AreaProfileRequested(DomainEvent):
+    """Event: an unprofiled area was opened and should be dressed (ADR-153).
+
+    Fired by the area route when the geo key has no row yet. The handler
+    runs one claims-plus-geography profiling call and persists the row:
+    global, once per area, so the cost is bounded by areas users actually
+    open. `user_id` is the opener, for tracing only — the profile is never
+    user-scoped.
+    """
+
+    event_type: str = "area_profile_requested"
+    geo_key: str
 
 
 class LibraryStateChanged(DomainEvent):

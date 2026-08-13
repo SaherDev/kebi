@@ -24,15 +24,11 @@ class TestSubtitleCheckEnricher:
         self,
         enricher: SubtitleCheckEnricher,
     ) -> None:
-        ctx = ExtractionContext(
-            url="https://youtube.com/watch?v=abc", user_id="u1"
-        )
+        ctx = ExtractionContext(url="https://youtube.com/watch?v=abc", user_id="u1")
         # _strip_vtt is called on the raw vtt; mock _download_subtitles
         # to return a vtt that strips to a non-empty transcript.
         raw_vtt = "WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nLoved Fuji Ramen tonight\n"
-        with patch.object(
-            enricher, "_download_subtitles", return_value=raw_vtt
-        ):
+        with patch.object(enricher, "_download_subtitles", return_value=raw_vtt):
             await enricher.enrich(ctx)
         assert ctx.transcript == "Loved Fuji Ramen tonight"
         assert len(ctx.text_evidence) == 1
@@ -72,9 +68,7 @@ class TestSubtitleCheckEnricher:
         self,
         enricher: SubtitleCheckEnricher,
     ) -> None:
-        ctx = ExtractionContext(
-            url="https://youtube.com/watch?v=abc", user_id="u1"
-        )
+        ctx = ExtractionContext(url="https://youtube.com/watch?v=abc", user_id="u1")
         with patch.object(enricher, "_download_subtitles", return_value=None):
             await enricher.enrich(ctx)
         assert ctx.transcript is None

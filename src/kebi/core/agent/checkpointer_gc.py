@@ -25,10 +25,7 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 
-_DELETE_SQL = (
-    "DELETE FROM checkpoints "
-    "WHERE checkpoint_id::text < %(cutoff)s"
-)
+_DELETE_SQL = "DELETE FROM checkpoints WHERE checkpoint_id::text < %(cutoff)s"
 
 # The checkpoint_id column is a ULID-style timestamp prefix that sorts
 # chronologically, so comparing on text is safe and uses the index.

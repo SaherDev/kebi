@@ -5,7 +5,12 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from kebi.api.schemas.chat import ChatRequest, ChatResponse, MovementProfile
+from kebi.api.schemas.chat import (
+    ChatRequest,
+    ChatResponse,
+    MovementProfile,
+    UserProfile,
+)
 
 
 def test_chat_response_accepts_all_valid_types() -> None:
@@ -110,3 +115,54 @@ def test_movement_profile_ignores_stray_default_mode_key() -> None:
     )
     assert profile.available_modes == ["walking", "transit"]
     assert not hasattr(profile, "default_mode")
+
+
+# --- UserProfile / about-me block (ADR-154) --------------------------------
+
+
+def test_chat_request_user_profile_defaults_to_none() -> None:
+    """A client that never sends a profile is a normal client, not an error."""
+    req = ChatRequest(message="where should I eat")
+
+    assert req.user_profile is None
+
+
+def test_user_profile_accepts_a_partial_fill() -> None:
+    """Every field is optional — a user who gave only a name is valid."""
+    profile = UserProfile(call_me="Saher")
+
+    assert profile.call_me == "Saher"
+    assert profile.home_country is None
+    assert profile.about is None
+
+
+def test_home_country_is_normalized_to_upper() -> None:
+    """`ae` and `AE` are one country, so they must be one stored value."""
+    assert UserProfile(home_country="ae").home_country == "AE"
+
+
+def test_home_country_rejects_names_and_alpha3() -> None:
+    """The field is alpha-2 because entry rules turn on an exact country."""
+    for bad in ("UAE", "United Arab Emirates", "A", "1E", ""):
+        with pytest.raises(ValidationError):
+            UserProfile(home_country=bad)
+
+
+def test_blank_text_fields_become_none() -> None:
+    """A cleared input arrives as "" and must not render as a stated fact."""
+    profile = UserProfile(call_me="   ", about="\n")
+
+    assert profile.call_me is None
+    assert profile.about is None
+
+
+def test_about_is_length_capped() -> None:
+    """`about` is prompt weight on every request, so it is bounded at the edge."""
+    with pytest.raises(ValidationError):
+        UserProfile(about="x" * 301)
+
+
+def test_call_me_is_length_capped() -> None:
+    """A display name, not a paragraph smuggled through a small field."""
+    with pytest.raises(ValidationError):
+        UserProfile(call_me="x" * 41)

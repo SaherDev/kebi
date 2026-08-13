@@ -99,38 +99,22 @@ class LibraryQuery(BaseModel):
 
 
 class SaveUserPlaceRequest(BaseModel):
-    """Body for POST /v1/user/places — the consult card's "save it" action.
+    """Body for POST /v1/user/places — the plain "save this place" action.
 
-    `place_core_id` is the catalog id of the recommended place; it already
-    exists in the catalog (it was just recommended), so the save just links it
-    to the caller. `recommendation_id` is the id kebi minted on the consult
-    result the place came from — it attributes the `saved_recommendation`
-    taste signal back to that recommendation. `reason` is the pick's rationale
-    the card is showing (the reason is not persisted server-side, so the client
-    supplies it); on create it is written to the knowledge layer as a
-    user-scoped `kebi_message` claim and surfaces in the Library's insider
-    notes (ADR-127) — it is **not** stored on the save as a note. `source` is
-    not accepted from the client — the route stamps `PlaceSource.kebi`.
-    `user_id` is intentionally absent (gateway identity, ADR-105).
-    `extra="forbid"` rejects unknown keys with a 422.
+    `place_core_id` is the catalog id off the place's `kebi://venue/{id}`
+    link; the place already exists in the catalog (kebi surfaced it), so the
+    save just links it to the caller. No turn context rides along — the
+    recommendation card and its `recommendation_id`/`reason` ceremony are gone
+    (ADR-151); reaching this endpoint at all is what marks the save as
+    kebi-recommended (the route stamps `PlaceSource.kebi` and emits the
+    strong taste signal). `user_id` is intentionally absent (gateway
+    identity, ADR-105). `extra="forbid"` rejects unknown keys with a 422.
     """
 
     model_config = ConfigDict(extra="forbid")
 
     place_core_id: str = Field(
-        ..., description="places.id of the recommended place to save"
-    )
-    recommendation_id: str = Field(
-        ..., description="id of the recommendation the place was saved from"
-    )
-    reason: str | None = Field(
-        None,
-        description=(
-            "The pick's rationale the card is showing. On create, stored as a "
-            "user-scoped kebi_message knowledge claim on the place (surfaces in "
-            "Library insider notes), not as a note on the save. A re-tap adds "
-            "nothing (claim-text dedup). Omit or null for no reason."
-        ),
+        ..., description="places.id of the place to save (the venue link's key)"
     )
 
 
@@ -236,11 +220,18 @@ class PlaceNoteView(BaseModel):
 
 
 class LibraryItem(BaseModel):
-    """One saved place on a Library page: the catalog place, the user's data,
-    and the insider notes tied to the place (ADR-127; empty when it has none)."""
+    """One place as the client renders it: the catalog place, the caller's
+    relationship to it, and the insider notes tied to it (ADR-127; empty when
+    it has none).
+
+    Doubles as the place-screen payload (`GET /v1/places/{place_id}`,
+    ADR-151): there `user_data` is null when the caller never saved the
+    place — same shape either way, so a venue tap and a library row open
+    the identical screen. On a Library page it is always present (every row
+    *is* a save)."""
 
     place: PlaceCore
-    user_data: LibraryUserData
+    user_data: LibraryUserData | None
     claims: list[PlaceNoteView] = Field(default_factory=list)
 
     @classmethod
@@ -250,6 +241,22 @@ class LibraryItem(BaseModel):
         return cls(
             place=view.place,
             user_data=LibraryUserData.from_user_place(view.user_data),
+            claims=[PlaceNoteView.from_note(n) for n in (notes or [])],
+        )
+
+    @classmethod
+    def from_place(
+        cls,
+        place: PlaceCore,
+        user_place: UserPlace | None,
+        notes: list[PlaceNote] | None = None,
+    ) -> LibraryItem:
+        """The place-screen shape: a catalog place with or without a save."""
+        return cls(
+            place=place,
+            user_data=(
+                LibraryUserData.from_user_place(user_place) if user_place else None
+            ),
             claims=[PlaceNoteView.from_note(n) for n in (notes or [])],
         )
 

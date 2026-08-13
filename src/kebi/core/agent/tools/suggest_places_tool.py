@@ -41,7 +41,6 @@ import asyncio
 import logging
 from typing import Annotated, Any
 
-from langchain_core.messages import ToolMessage
 from langchain_core.tools import BaseTool, InjectedToolCallId, tool
 from langgraph.prebuilt import InjectedState
 from langgraph.types import Command
@@ -52,11 +51,17 @@ from kebi.core.agent.location import WorkingLocation
 from kebi.core.agent.reasoning import ReasoningStep
 from kebi.core.agent.state import AgentState
 from kebi.core.agent.stream_emit import emit_step_active, emit_step_done
+from kebi.core.agent.tools._catalog_fallback import catalog_candidates
 from kebi.core.agent.tools._hard_constraints import (
     hard_constraints_satisfied,
     split_constraints,
 )
-from kebi.core.agent.tools._scope import clamp_to_walkable_for_utility
+from kebi.core.agent.tools._notes import attach_notes
+from kebi.core.agent.tools._packing import pack_consult_result
+from kebi.core.agent.tools._scope import (
+    anchor_to_corridor,
+    clamp_to_walkable_for_utility,
+)
 from kebi.core.agent.tools._search_args import (
     CATEGORIES_DESC,
     CITY_DESC,
@@ -65,6 +70,7 @@ from kebi.core.agent.tools._search_args import (
     NEIGHBORHOOD_DESC,
     QUERY_DESC,
     TAGS_DESC,
+    CategoryArg,
 )
 from kebi.core.agent.tools._summaries import (
     NEED_LOCATION,
@@ -85,6 +91,7 @@ from kebi.core.agent.tools.consult_models import ConsultCandidate, ConsultResult
 from kebi.core.config import get_config
 from kebi.core.extraction.candidate_mapper import normalize_query
 from kebi.core.extraction.extraction_pipeline import SearchServiceFactory
+from kebi.core.knowledge.candidate_notes_service import CandidateNotesService
 from kebi.core.places.models import (
     LocationContext,
     PlaceCategory,
@@ -95,6 +102,17 @@ from kebi.core.places.models import (
 )
 
 logger = logging.getLogger(__name__)
+
+_NAMES_DESC = (
+    "The specific, real, currently-operating places YOU are proposing, by "
+    "name — e.g. ['Sukiyabashi Jiro', 'Tsuta', 'Den']. This is where your own "
+    "knowledge of the world goes: name the places you would actually send this "
+    "user to, and each one is verified against the place provider before it "
+    "reaches the answer, so a name that has closed or never existed is "
+    "silently dropped rather than shown. Give more names than you need "
+    "(a few will not validate). Omit ONLY when you genuinely cannot name "
+    "anything for this area, in which case the catalog is swept instead."
+)
 
 _TOOL_NAME = "suggest_places"
 
@@ -124,6 +142,41 @@ def _location_label(working: WorkingLocation) -> str:
     return working.city
 
 
+def _anchor_to_itinerary_stop(
+    working: WorkingLocation, city_override: str | None
+) -> WorkingLocation:
+    """Re-anchor an itinerary turn's provider search onto one named stop.
+
+    On a multi-stop trip the agent suggests per stop, naming the stop in
+    `city` ("43 Factory" in Da Nang, not in the trip's first city) — and the
+    provider verification must be biased to THAT stop's disc, or a
+    mid-route name gets checked against the wrong city and dropped
+    (ADR-148). The override only re-anchors when it matches a resolved stop
+    (the agent picking geography freely would undo ADR-083); anything else
+    keeps the primary anchor, same as before. Everywhere outside an
+    itinerary the override stays a no-op.
+    """
+    anchors = working.itinerary or []
+    wanted = (city_override or "").strip().casefold()
+    if working.scope_shape != "itinerary" or not anchors or not wanted:
+        return working
+    for anchor in anchors:
+        if wanted in {anchor.name.casefold(), (anchor.city or "").casefold()}:
+            return working.model_copy(
+                update={
+                    "lat": anchor.lat,
+                    "lng": anchor.lng,
+                    "city": anchor.city or anchor.name,
+                    "country": anchor.country or working.country,
+                    "country_code": anchor.country_code,
+                    "neighborhood": None,
+                    "scope_shape": "area",
+                    "itinerary": None,
+                }
+            )
+    return working
+
+
 def _make_step(step_id: str, summary: str) -> ReasoningStep:
     """Build a debug-only internal narration step from this tool's namespace.
 
@@ -140,12 +193,14 @@ def _make_step(step_id: str, summary: str) -> ReasoningStep:
     )
 
 
-def _build_command(
+async def _build_command(
     *,
     state: AgentState,
     tool_call_id: str,
     result: ConsultResult,
     steps: list[ReasoningStep],
+    notes_service: CandidateNotesService | None = None,
+    working: WorkingLocation | None = None,
 ) -> Command[Any]:
     """Pack the tool's result + collected reasoning steps into one Command.
 
@@ -154,23 +209,30 @@ def _build_command(
     `messages` slot carries the JSON-encoded `ConsultResult` as the tool
     reply the agent will read on its next tick.
     """
-    tool_msg = ToolMessage(
-        content=result.model_dump_json(),
-        tool_call_id=tool_call_id,
-        name=_TOOL_NAME,
+    result = await attach_notes(
+        result,
+        notes_service=notes_service,
+        user_id=state["user_id"],
+        working=working,
     )
     return Command(
-        update={
-            "messages": [tool_msg],
-            "reasoning_steps": (state.get("reasoning_steps") or []) + steps,
-            "tool_calls_used": state.get("tool_calls_used", 0) + 1,
-        }
+        update=pack_consult_result(
+            state=state,
+            tool_name=_TOOL_NAME,
+            tool_call_id=tool_call_id,
+            result=result,
+            extra={
+                "reasoning_steps": (state.get("reasoning_steps") or []) + steps,
+                "tool_calls_used": state.get("tool_calls_used", 0) + 1,
+            },
+        )
     )
 
 
 def build_suggest_places_tool(
     namer: CandidateNamerService,
     places_search_factory: SearchServiceFactory,
+    notes_service: CandidateNotesService | None = None,
 ) -> BaseTool:
     """Factory — bind the request-scoped services into the tool.
 
@@ -191,9 +253,8 @@ def build_suggest_places_tool(
         query: Annotated[str, Field(description=QUERY_DESC)],
         tool_call_id: Annotated[str, InjectedToolCallId],
         state: Annotated[AgentState, InjectedState],
-        categories: Annotated[
-            list[PlaceCategory] | None, Field(description=CATEGORIES_DESC)
-        ] = None,
+        names: Annotated[list[str] | None, Field(description=_NAMES_DESC)] = None,
+        categories: Annotated[CategoryArg, Field(description=CATEGORIES_DESC)] = None,
         tags: Annotated[list[str] | None, Field(description=TAGS_DESC)] = None,
         neighborhood: Annotated[
             str | None, Field(description=NEIGHBORHOOD_DESC)
@@ -218,6 +279,8 @@ def build_suggest_places_tool(
             state=state,
             coro=_run_suggest_places(
                 namer=namer,
+                names=names,
+                notes_service=notes_service,
                 places_search_factory=places_search_factory,
                 state=state,
                 tool_call_id=tool_call_id,
@@ -239,6 +302,8 @@ def build_suggest_places_tool(
 async def _run_suggest_places(
     *,
     namer: CandidateNamerService,
+    names: list[str] | None = None,
+    notes_service: CandidateNotesService | None = None,
     places_search_factory: SearchServiceFactory,
     state: AgentState,
     tool_call_id: str,
@@ -256,6 +321,8 @@ async def _run_suggest_places(
     with set_tool(_TOOL_NAME):
         return await _run_suggest_places_impl(
             namer=namer,
+            names=names,
+            notes_service=notes_service,
             places_search_factory=places_search_factory,
             state=state,
             tool_call_id=tool_call_id,
@@ -274,6 +341,8 @@ async def _run_suggest_places(
 async def _run_suggest_places_impl(
     *,
     namer: CandidateNamerService,
+    names: list[str] | None = None,
+    notes_service: CandidateNotesService | None = None,
     places_search_factory: SearchServiceFactory,
     state: AgentState,
     tool_call_id: str,
@@ -281,7 +350,7 @@ async def _run_suggest_places_impl(
     categories: list[PlaceCategory] | None,
     tags: list[str] | None,
     neighborhood_override: str | None,  # noqa: ARG001 - reserved; see docstring
-    city_override: str | None,  # noqa: ARG001 - reserved; see docstring
+    city_override: str | None,
     country_override: str | None,  # noqa: ARG001 - reserved; see docstring
     limit: int,
     name_count: int,
@@ -290,9 +359,10 @@ async def _run_suggest_places_impl(
     """The agent-supplied area overrides (neighborhood / city / country)
     are accepted to keep the arg schema byte-identical to `find_saved`,
     but `suggest_places` enforces a strict lat/lng + radius anchor —
-    overrides without coordinates don't bypass that gate. They are
-    surfaced in reasoning steps when present and used by the prompt's
-    location block once the gate passes.
+    overrides without coordinates don't bypass that gate. The one active
+    override is `city` on an itinerary turn, where it re-anchors
+    verification to the named stop's own disc (ADR-148) — a resolved
+    stop's coordinates, so the strict-anchor rule still holds.
     """
     steps: list[ReasoningStep] = []
     user_id = state["user_id"]
@@ -336,9 +406,11 @@ async def _run_suggest_places_impl(
     working = maybe_working_location(state)
     if not is_anchored(working):
         _finish(NEED_LOCATION, kind="no_location")
-        return _build_command(
+        return await _build_command(
             state=state,
             tool_call_id=tool_call_id,
+            notes_service=notes_service,
+            working=working,
             result=ConsultResult(candidates=[], empty_reason="no_location"),
             steps=steps,
         )
@@ -347,27 +419,53 @@ async def _run_suggest_places_impl(
     # Utility errands ("ATM near me") are walked to — clamp to a walkable
     # radius so the namer scope and provider locationBias stay tight and the
     # nearest branch wins, not a prominent one across town.
+    # Route turns search the whole way, not a circle around the start
+    # (ADR-137); the utility clamp is a no-op on those. On an itinerary, an
+    # agent-named stop city re-anchors verification to that stop's disc
+    # (ADR-148).
+    working = anchor_to_corridor(working)
+    working = _anchor_to_itinerary_stop(working, city_override)
     working = clamp_to_walkable_for_utility(working, categories, get_config().movement)
     location_label = _location_label(working)
     _trace("locate", f"looking around {location_label}")
 
-    namer_result = await namer.generate(
-        intent=query,
-        working=working,
-        categories=categories,
-        tags=tags,
-        taste_summary=state.get("taste_profile_summary") or "",
-        count=name_count,
-        user_id=user_id,
-    )
-    proposed: list[CandidateName] = namer_result.candidates
+    # The orchestrator's own world knowledge names the candidates (ADR-141).
+    # It is a stronger model than the namer and already holds this knowledge,
+    # so asking a second one to reproduce it was paying twice for a worse
+    # answer. The namer survives only for the case where the orchestrator
+    # named nothing at all.
+    if names:
+        proposed = [
+            CandidateName(name=n.strip(), reason="proposed by the orchestrator")
+            for n in names
+            if n.strip()
+        ]
+        _trace("propose", f"checking {len(proposed)} spots i had in mind")
+    else:
+        proposed = await _namer_fallback(
+            namer=namer,
+            state=state,
+            query=query,
+            categories=categories,
+            tags=tags,
+            working=working,
+            name_count=name_count,
+            user_id=user_id,
+        )
     if not proposed:
-        _finish("nothing specific came to mind here", kind="namer_empty")
-        return _build_command(
+        return await _fall_through_to_catalog(
             state=state,
             tool_call_id=tool_call_id,
-            result=ConsultResult(candidates=[], empty_reason="no_match"),
+            notes_service=notes_service,
+            places_search_factory=places_search_factory,
+            working=working,
+            query=query,
+            categories=categories,
+            tags=tags,
+            limit=limit,
             steps=steps,
+            finish=_finish,
+            kind="namer_empty",
         )
 
     preview = ", ".join(c.name for c in proposed[:2])
@@ -382,12 +480,19 @@ async def _run_suggest_places_impl(
         concurrency=concurrency,
     )
     if not validated:
-        _finish("none of those turned up near you", kind="no_provider_hits")
-        return _build_command(
+        return await _fall_through_to_catalog(
             state=state,
             tool_call_id=tool_call_id,
-            result=ConsultResult(candidates=[], empty_reason="no_match"),
+            notes_service=notes_service,
+            places_search_factory=places_search_factory,
+            working=working,
+            query=query,
+            categories=categories,
+            tags=tags,
+            limit=limit,
             steps=steps,
+            finish=_finish,
+            kind="no_provider_hits",
         )
 
     # Safety values (dietary/accessibility) exclude; other tag values are
@@ -403,12 +508,19 @@ async def _run_suggest_places_impl(
     dropped = len(validated) - len(filtered)
 
     if not filtered:
-        _finish(NONE_FIT, kind="constraints_drop")
-        return _build_command(
+        return await _fall_through_to_catalog(
             state=state,
             tool_call_id=tool_call_id,
-            result=ConsultResult(candidates=[], empty_reason="no_match"),
+            notes_service=notes_service,
+            places_search_factory=places_search_factory,
+            working=working,
+            query=query,
+            categories=categories,
+            tags=tags,
+            limit=limit,
             steps=steps,
+            finish=_finish,
+            kind="constraints_drop",
         )
 
     final = filtered[:limit]
@@ -426,10 +538,91 @@ async def _run_suggest_places_impl(
         for place, reason in final
     ]
 
-    return _build_command(
+    return await _build_command(
         state=state,
         tool_call_id=tool_call_id,
+        notes_service=notes_service,
+        working=working,
         result=ConsultResult(candidates=candidates, empty_reason=None),
+        steps=steps,
+    )
+
+
+async def _namer_fallback(
+    *,
+    namer: CandidateNamerService,
+    state: AgentState,
+    query: str,
+    categories: list[PlaceCategory] | None,
+    tags: list[str] | None,
+    working: WorkingLocation,
+    name_count: int,
+    user_id: str,
+) -> list[CandidateName]:
+    """Ask the namer model when the orchestrator proposed no names (ADR-141).
+
+    Kept as a floor rather than deleted: an orchestrator that knows nothing
+    about a place should not silently return an empty list when a cheap model
+    with a location-specific prompt might still surface the obvious local
+    chain — which is exactly the errand case ("the pharmacy people use here").
+    """
+    result = await namer.generate(
+        intent=query,
+        working=working,
+        categories=categories,
+        tags=tags,
+        taste_summary=state.get("taste_profile_summary") or "",
+        count=name_count,
+        user_id=user_id,
+    )
+    return list(result.candidates)
+
+
+async def _fall_through_to_catalog(
+    *,
+    state: AgentState,
+    tool_call_id: str,
+    notes_service: CandidateNotesService | None,
+    places_search_factory: SearchServiceFactory,
+    working: WorkingLocation,
+    query: str,
+    categories: list[PlaceCategory] | None,
+    tags: list[str] | None,
+    limit: int,
+    steps: list[ReasoningStep],
+    finish: Any,
+    kind: str,
+) -> Command[Any]:
+    """Nothing was named or validated, so return what the catalog has (ADR-140).
+
+    This ran as a separate `discover_places` tool the model had to remember to
+    call. Making it automatic removes a routing decision and, more importantly,
+    removes the failure mode where the model forgot and invented a tip instead.
+    The user-visible step still narrates the outcome, not the mechanism.
+    """
+    candidates = await catalog_candidates(
+        places_search_factory=places_search_factory,
+        working=working,
+        query=query,
+        categories=categories,
+        tags=tags,
+        limit=limit,
+    )
+    if candidates:
+        finish(found_summary([c.place.place_name for c in candidates]))
+    elif kind == "constraints_drop":
+        finish(NONE_FIT, kind=kind)
+    else:
+        finish("nothing nearby matched that", kind=kind)
+    return await _build_command(
+        state=state,
+        tool_call_id=tool_call_id,
+        notes_service=notes_service,
+        working=working,
+        result=ConsultResult(
+            candidates=candidates,
+            empty_reason=None if candidates else "no_match",
+        ),
         steps=steps,
     )
 
@@ -531,9 +724,10 @@ async def _validate_candidates(
         seen_ids.add(dedup_key)
         icon = normalize_icon(candidate.icon)
         if core.icon is None and icon is not None:
-            # Warm-path row (pre-dated this turn) — the icon_hint only
-            # persists on the cold-path write-through, so stamp the
-            # response copy for display; the DB row keeps NULL.
+            # The search service adopts the hint onto an icon-less warm row
+            # (ADR-146), so this normally already came back filled. Stamping
+            # the response copy covers the case where that write failed —
+            # the answer still draws, and the row learns it next time.
             core = core.model_copy(update={"icon": icon})
         results.append((core, candidate.reason))
     return results

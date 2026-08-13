@@ -21,6 +21,10 @@ providers:
     base_url: https://api.groq.com
   ollama:
     base_url: http://localhost:11434/v1
+  # Web search backing the `web_search` tool (ADR-145). Selected only when
+  # BRAVE_API_KEY is set; otherwise the null provider is used.
+  brave:
+    base_url: https://api.search.brave.com
 
 models:
   # Speech-to-text for the audio track of submitted videos (e.g. TikTok/Reels).
@@ -64,6 +68,34 @@ models:
     max_tokens: 1024
     temperature: 0
 
+  # Place profiler (ADR-152) — experiential tags for a thin catalog row from
+  # venue identity alone, fired in the background on the place screen's first
+  # open. One call per unique place ever; gpt-4o-mini, off the critical path.
+  place_profiler:
+    provider: openai
+    model: gpt-4o-mini
+    max_tokens: 512
+    temperature: 0
+
+  # Area profiler (ADR-153) — an area's global profile (summary, chips,
+  # breadcrumb names, notable children) from its claims + geography
+  # knowledge, fired in the background on the area screen's first open.
+  # One call per unique area ever; off the critical path.
+  area_profiler:
+    provider: openai
+    model: gpt-4o-mini
+    max_tokens: 800
+    temperature: 0
+
+  # Mines durable area facts out of a turn's web-search findings (ADR-145).
+  # Runs after the answer is already sent, so latency does not matter and
+  # cheap does: same tier as the other knowledge writers.
+  web_harvester:
+    provider: openai
+    model: gpt-4o-mini
+    max_tokens: 800
+    temperature: 0
+
   # Embedding model for semantic search over saved places (pgvector) and for
   # the FTS+vector RRF recall pipeline. 1024-dim per ADR-040.
   embedder:
@@ -94,15 +126,18 @@ models:
   orchestrator:
     default: claude-haiku
     advanced: claude-sonnet
+    # 2048, not 1024: a multi-stop trip answer walks five sections and was
+    # observed truncating mid-close at 1024. Single-city answers stay short
+    # by prompt; the ceiling only needs to clear the long-answer shape.
     claude-sonnet:
       provider: anthropic
       model: claude-sonnet-4-6
-      max_tokens: 1024
+      max_tokens: 2048
       temperature: 0.7
     claude-haiku:
       provider: anthropic
       model: claude-haiku-4-5-20251001
-      max_tokens: 1024
+      max_tokens: 2048
       temperature: 0.7
     gpt-4o-mini:
       provider: openai
@@ -307,11 +342,15 @@ prompts:
   agent: agent.txt
   place_resolver: place_resolver.txt
   place_classifier: place_classifier.txt
+  place_profiler: place_profiler.txt
+  area_profiler: area_profiler.txt
   location_resolver: location_resolver.txt
   candidate_namer: candidate_namer.txt
   home_suggester: home_suggester.txt
   knowledge_harvester: knowledge_harvester.txt
   knowledge_curator: knowledge_curator.txt
+  knowledge_curator_anchor: knowledge_curator_anchor.txt
+  web_harvester: web_harvester.txt
 
 # ---------------------------------------------------------------------------
 # Knowledge layer (ADR-120/121) — provenance-weighted confidence floors.
@@ -324,6 +363,13 @@ knowledge:
   # The saved-recommendation reason, written as a user-scoped `kebi_message`
   # claim on save (ADR-127) — floored between harvested and curated.
   kebi_message_confidence_floor: 0.8
+  # Web-mined claims (ADR-145). The lowest floor in the set on purpose: a
+  # search snippet is one unreviewed page, weaker evidence than something a
+  # person cared enough to share. It still surfaces — the ranker weighs
+  # trust, it does not gate on it — but it loses to a harvested or curated
+  # claim that says otherwise.
+  web_search_confidence_floor: 0.25
+  web_search_review_status: approved
   # Review gate (ADR-122). The state a fresh claim from each source lands in.
   # Both `approved` today — the product trusts every writer. When review turns
   # on, set e.g. `harvest_review_status: pending` here (config, not code) and
@@ -334,6 +380,11 @@ knowledge:
   kebi_message_review_status: approved
   # Max insider notes surfaced on one place in the Library read (ADR-127).
   place_notes_limit: 6
+  # Insider notes attached to place-tool results on the retrieval path so a
+  # recommendation turn carries what kebi knows without spending a `research`
+  # call (ADR-137). Per candidate, and per turn for the area pool.
+  candidate_notes_limit: 2
+  area_notes_limit: 3
   # Research read path — the knowledge layer's agent-facing reader.
   # `entity_confidence_min` is the resolve-vs-clarify threshold (exact
   # working-location match resolves at 1.0, verified geocode at 0.8; below
@@ -349,6 +400,13 @@ knowledge:
     w_trust: 0.2
     w_prox: 0.1
     topic_relevance_floor: 0.05
+  # Curation anchor-chip typeahead (/v1/knowledge/entities). Areas lead the
+  # result list (few, exact-ish); the resolver cache remembers a verified or
+  # missed geocode of an unseen area name so typeahead traffic can't hammer
+  # the rate-limited public Nominatim instance.
+  entity_search:
+    area_limit: 3
+    resolver_cache_ttl_seconds: 604800
 
 # ---------------------------------------------------------------------------
 # Agent Configuration (feature 027 M2, ADR-062)
@@ -397,20 +455,31 @@ agent:
     # provider lookups (bounded by a semaphore inside the tool). The budget
     # covers both phases — pad over find_saved's pure-DB timeout.
     suggest_places: 18
-    # discover_places makes exactly one PlacesSearchService.find() call (DB
-    # first, then Google fallback when empty). Same pure-DB / single-provider
-    # budget as find_saved.
-    discover_places: 8
     # research reads the claims store by indexed entity key (no LLM, no
     # provider); at most one free Nominatim geocode when the asked-about
     # area isn't the working location. Same budget as the pure-DB tools.
     research: 8
+    find_known: 8
+    # web_search is one outbound HTTP call (its own 6s budget) plus a Redis
+    # cache lookup. Kept tight — a slow search must cost the answer its
+    # freshness, never the turn.
+    web_search: 10
   # find_saved-specific knobs. `default_limit` is what the tool uses when
   # the agent omits the `limit` arg. `max_limit` caps any agent-supplied
   # value so the LLM cannot ask for an unbounded result set.
   find_saved:
     default_limit: 10
     max_limit: 25
+  # find_known — claims-driven retrieval (ADR-138). Two indexed reads, no
+  # LLM and no provider, so it leads a recommendation turn. `scan_limit`
+  # bounds the geofenced claims join; `notes_per_place` runs richer than the
+  # passive attach limit because here the facts ARE the reason the place
+  # surfaced.
+  find_known:
+    default_limit: 5
+    max_limit: 15
+    notes_per_place: 3
+    scan_limit: 300
   # suggest_places — knobs for the candidate-naming + provider-validation
   # flow. `default_limit` / `max_limit` cap what the agent can ask back
   # (same role as in `find_saved`). `name_count` is how many candidate
@@ -423,12 +492,6 @@ agent:
     max_limit: 15
     name_count: 8
     provider_concurrency: 5
-  # discover_places — provider-driven nearby search (no LLM, no saved-collection
-  # lookup). Wider defaults than suggest_places since results come straight from
-  # the provider's ranked list, not a small LLM-named shortlist.
-  discover_places:
-    default_limit: 10
-    max_limit: 25
   # research — insider notes from the knowledge layer. `default_limit` /
   # `max_limit` cap the agent-supplied `limit`; `notes_limit` is the
   # service's own hard cap per call. Kept tight: the notes feed one prose
@@ -437,6 +500,40 @@ agent:
     default_limit: 6
     max_limit: 10
     notes_limit: 10
+  # web_search — the outside world (ADR-145). Backed by Brave when
+  # BRAVE_API_KEY is set, the null provider otherwise (tool stays callable,
+  # returns empty, agent answers from what it knows).
+  #
+  # `snippet_max_chars` caps one finding at roughly a long sentence and a
+  # half: enough to ground a date or a price, not enough to crowd out the
+  # claims, which are the part of an answer that is ours.
+  #
+  # The tool fires whenever the agent judges the question needs the outside
+  # world — no "only when the corpus is thin" gate — so `cache_ttl_seconds`
+  # is what makes that affordable. One day: short enough that a schedule
+  # change washes out by tomorrow, long enough that a question trending
+  # across users is paid for once. Results are not user-scoped, so the cache
+  # key is the question, shared by everyone.
+  #
+  # `harvest_enabled` gates the write-back into the claims store, so a bad
+  # harvest is switched off by config rather than a deploy.
+  web_search:
+    default_limit: 5
+    max_limit: 8
+    snippet_max_chars: 320
+    cache_ttl_seconds: 86400
+    harvest_enabled: true
+  # Multi-stop itinerary turns (ADR-148). `max_stops` caps how many
+  # resolver-named stops get geocoded (one forward geocode each);
+  # `per_segment_limit` is the per-stop / per-leg candidate cap the fan-out
+  # tools use in place of their single-search limit — an itinerary answer
+  # wants a few strong names per segment, not one city's worth from each.
+  itinerary:
+    max_stops: 5
+    per_segment_limit: 4
+    # Trip turns get their own tool budget: retrieval + per-stop suggestions
+    # + the ADR-150 verification round don't fit the flat 5-call cap.
+    max_tool_calls: 8
 
 # ---------------------------------------------------------------------------
 # Movement / search-scope (ADR-084)
@@ -445,9 +542,13 @@ agent:
 # mode_multiplier[mode] × density_factor[density]. reach shifts the tier ±1
 # (compact -1, far +1); density comes from the geocoder's place type so
 # "near me" scales with how dense the area is.
-# `fallback` is the neutral mobility capability used when a /v1/chat
-# request omits movement_profile (ADR-086) — walking listed first so the
-# deterministic fallback mode is walking (most conservative radius).
+# `fallback` is the mobility used when nobody has told kebi how this user
+# gets around (ADR-086, reversed by ADR-156). It used to lead with walking,
+# on the reasoning that the conservative guess was the safe one. It is not:
+# narrowing when ignorant fails invisibly, because a driver capped at walking
+# range never learns the places past it were dropped. Rideshare leads now —
+# the one mode almost anyone has almost anywhere, assuming no licence, no
+# vehicle and no fitness — so an unknown user is guessed wide and told so.
 # ---------------------------------------------------------------------------
 movement:
   radius_tiers:        # base metres per scope tier, before mode/reach scaling
@@ -466,9 +567,15 @@ movement:
     dense: 0.7
     medium: 1.0
     sparse: 1.6
-  fallback:            # used when the request carries no movement_profile
+  # Ceiling on the resolved radius (ADR-143). The three factors above
+  # multiply, and at the wide end that compounded past any useful search:
+  # metro x motorbike x sparse resolved to 172.8 km, wider than Bali is long.
+  # A corridor search may exceed this — that width is route geometry, not a
+  # guess (see anchor_to_corridor).
+  max_radius_m: 60000
+  fallback:            # used whenever movement is unresolved, not just absent
     reach: normal
-    available_modes: [walking, transit]
+    available_modes: [rideshare, walking, transit]
 
 # ---------------------------------------------------------------------------
 # Taste Model Configuration
@@ -526,6 +633,19 @@ home:
   # enforces these bounds; the fallback emits exactly chip_min generic chips.
   chip_min: 3
   chip_max: 4
+
+# ---------------------------------------------------------------------------
+# Area screen + profiler (ADR-153)
+# An area's row is generated once, on its first open, by the area_profiler
+# role — from the approved claims under its geo-key prefix plus the model's
+# own geography knowledge.
+# ---------------------------------------------------------------------------
+areas:
+  # Cap on approved claims fed into one profiling call (highest-confidence
+  # first when it bites).
+  claims_input_limit: 30
+  # Cap on "worth knowing" child areas stored on the row.
+  notable_sub_areas_max: 6
 
 # ---------------------------------------------------------------------------
 # User intents — the "what you wanted" recall list (ADR-110)

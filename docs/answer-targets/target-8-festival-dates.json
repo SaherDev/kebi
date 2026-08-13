@@ -1,0 +1,40 @@
+{
+  "question": "im a festival guy, any raves or big parties coming up in bali i should plan around?",
+  "tool_calls_used": 1,
+  "response": {
+    "type": "agent",
+    "message": "looking at the calendar, you've got some solid ones to plan around. the closest is Zamna Festival at Savaya on 17 October, that's a proper techno and house focused day event in Pecatu, so it's an afternoon into sunset move rather than a late night thing. october is also when [Bali](kebi://area/id/bali) picks up energy-wise, so that weekend is going to be busy.\n\nthen Balispirit in late April 2026 is the bigger one to mark, that's a full three-day festival (23-25 April) with yoga, dance, live music and afterparties, proper community vibe. it books out and accommodation gets tight that week, so if that speaks to you it's worth planning way ahead.\n\nbetween now and october though, august and september are actually quieter on the festival front, which means less crowds but also less of that electric energy you're after. the trade-off is you get better tables, better prices, easier bookings if you're doing club nights instead.\n\nare you thinking you want to catch one of these proper festivals, or are you looking more for the regular club nights and rave vibes that run through the week? that changes where i'd send you tonight and what i'd have you save for later.",
+    "data": {
+      "reasoning_steps": [
+        {
+          "step": "agent.location_resolved",
+          "title": "found your location",
+          "summary": "around Bali, Indonesia",
+          "source": "agent",
+          "visibility": "user",
+          "timestamp": "2026-08-06T14:18:05.792543Z",
+          "duration_ms": 2772.493917000247
+        },
+        {
+          "step": "web_search.summary",
+          "title": "looked it up",
+          "summary": "read 5 sources — balispiritfestival.com, thebeatbali.com, hanginggardensofbal",
+          "source": "agent",
+          "visibility": "user",
+          "timestamp": "2026-08-06T14:18:08.452478Z",
+          "duration_ms": 1330.4438749910332
+        }
+      ],
+      "entities": [
+        {
+          "kind": "area",
+          "key": "id/bali",
+          "name": "Bali",
+          "uri": "kebi://area/id/bali"
+        }
+      ],
+      "recommendation_id": null
+    },
+    "tool_calls_used": 1
+  }
+}

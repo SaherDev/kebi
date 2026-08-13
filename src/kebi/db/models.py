@@ -134,6 +134,11 @@ class KnowledgeSourceType(PyEnum):
     CURATED_EXPERT = "curated_expert"
     KEBI_MESSAGE = "kebi_message"
     USER_MESSAGE = "user_message"
+    # Mined from a web-search finding during a turn (ADR-145). Its own value,
+    # not folded into shared_content, because trust and staleness differ: a
+    # search snippet is one unreviewed page, and dating a claim's origin is
+    # what lets a future sweep expire the ones about schedules and prices.
+    WEB_SEARCH = "web_search"
 
 
 class KnowledgeReviewStatus(PyEnum):
@@ -180,6 +185,14 @@ class KnowledgeClaim(Base):
             postgresql_where=text("user_id IS NOT NULL"),
         ),
         Index("ix_knowledge_claims_review_status", "review_status"),
+        # Author lookups: a curated claim is global (user_id NULL) and its
+        # author lives only in source_ref ("curator:{user_id}"), so "my
+        # claims" and author-only delete both filter here.
+        Index(
+            "ix_knowledge_claims_source_ref",
+            "source_ref",
+            postgresql_where=text("source_ref IS NOT NULL"),
+        ),
     )
 
     id: Mapped[str] = mapped_column(
@@ -267,5 +280,44 @@ class UserMemory(Base):
     source: Mapped[str] = mapped_column(String, nullable=False)
     confidence: Mapped[float] = mapped_column(Float, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
+class Area(Base):
+    """One row per profiled geo entity — the area screen's global half (ADR-153).
+
+    Keyed by the canonical geo key (`build_geo_key` output: `id`, `id/bali`,
+    `id/bali/canggu`), the same identity claims already use, so an area's
+    claims, links, and screen all resolve through one key. The row exists
+    only once the profiler has dressed the area: presence *is* the
+    "already profiled" signal, exactly as experiential tags are for places
+    (ADR-152). Everything here is user-independent — Jumeirah is Jumeirah
+    for everyone; the personal half of the screen is computed per request
+    and never stored.
+    """
+
+    __tablename__ = "areas"
+
+    geo_key: Mapped[str] = mapped_column(String, primary_key=True)
+    name: Mapped[str] = mapped_column(String, nullable=False)
+    # Display label ("region", "neighbourhood"), not the key's structural
+    # position — Bali sits in the city slot but is not a city.
+    level: Mapped[str] = mapped_column(String, nullable=False)
+    icon: Mapped[str | None] = mapped_column(String, nullable=True)
+    summary: Mapped[str] = mapped_column(Text, nullable=False)
+    # [{icon, text}] chips, ancestor display names, and
+    # [{geo_key, name, icon, hook}] children — shapes owned by
+    # `core.areas.models`.
+    best_for: Mapped[list] = mapped_column(  # type: ignore[type-arg]
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
+    breadcrumb: Mapped[list] = mapped_column(  # type: ignore[type-arg]
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
+    notable_sub_areas: Mapped[list] = mapped_column(  # type: ignore[type-arg]
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
+    profiled_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

@@ -112,9 +112,7 @@ class TestRedisPlacesCacheDeleteMany:
         redis_mock.delete = AsyncMock(return_value=2)
         cache = _make_cache(redis_mock)
         await cache.delete_many(["google:a", "google:b"])
-        redis_mock.delete.assert_awaited_once_with(
-            "place:google:a", "place:google:b"
-        )
+        redis_mock.delete.assert_awaited_once_with("place:google:a", "place:google:b")
 
     async def test_redis_error_is_swallowed(self, redis_mock: MagicMock) -> None:
         redis_mock.delete = AsyncMock(side_effect=Exception("Redis down"))

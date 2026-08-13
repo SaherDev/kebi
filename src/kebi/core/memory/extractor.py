@@ -28,7 +28,7 @@ _SYSTEM_PROMPT = (
     "Extract only declarative user facts: first-person statements about the "
     "user's own preferences, needs, or characteristics. "
     'Examples: "I use a wheelchair", "I\'m vegetarian", "I hate seafood". '
-    "NEVER extract place attributes — phrasing like \"this place is "
+    'NEVER extract place attributes — phrasing like "this place is '
     'wheelchair-friendly" or "the cafe has good wifi" must NOT be included. '
     "If no personal facts are present, return an empty list. "
     'All facts must have source="stated".'
@@ -80,7 +80,8 @@ class MemoryExtractor:
                 )
                 return []
             facts = [
-                fact for fact in cast(_FactsResponse, response).facts
+                fact
+                for fact in cast(_FactsResponse, response).facts
                 if fact.source == "stated"
             ]
             t.output = {"count": len(facts)}

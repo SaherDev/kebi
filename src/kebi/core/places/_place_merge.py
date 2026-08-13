@@ -18,18 +18,30 @@ Policies (per-column):
                             candidate must never clear a real icon; and
                             first-wins keeps the icon stable across
                             repeated extractions of the same venue.
-    location                sticky whole-blob — first non-NULL wins.
+    location                sticky whole-blob — first non-NULL wins, EXCEPT a
+                            legacy blob missing `country_code` yields to a
+                            candidate that has one. Pre-ADR-119 rows carry
+                            only {lat,lng,address,country}; whole-blob
+                            stickiness silently discarded every fresh fetch
+                            that could have completed them, so the self-heal
+                            ADR-119 promised never fired (ADR-163).
     id, provider_id         existing wins (identity is fixed once set).
     created_at              existing wins.
-    refreshed_at            bumped only when the candidate brought a location
-                            and existing had none (i.e. cold→warm transition).
+    refreshed_at            bumped only when the candidate's location was
+                            taken (cold→warm transition or legacy upgrade).
 """
 
 from __future__ import annotations
 
 from typing import TypeVar
 
-from .models import PlaceCategory, PlaceCore, PlaceNameAlias, PlaceTag
+from .models import (
+    LocationContext,
+    PlaceCategory,
+    PlaceCore,
+    PlaceNameAlias,
+    PlaceTag,
+)
 
 T = TypeVar("T", PlaceTag, PlaceNameAlias)
 
@@ -43,25 +55,46 @@ def merge_place(existing: PlaceCore | None, candidate: PlaceCore) -> PlaceCore:
     if existing is None:
         return candidate
 
+    location = _merge_location(existing.location, candidate.location)
     return existing.model_copy(
         update={
             "place_name": existing.place_name or candidate.place_name,
             "place_name_aliases": _dedup_by_value(
                 existing.place_name_aliases, candidate.place_name_aliases
             ),
-            "categories": _merge_categories(
-                existing.categories, candidate.categories
-            ),
+            "categories": _merge_categories(existing.categories, candidate.categories),
             "tags": _dedup_by_value(existing.tags, candidate.tags),
             "icon": existing.icon or candidate.icon,
-            "location": existing.location or candidate.location,
+            "location": location,
             "refreshed_at": (
                 candidate.refreshed_at
-                if existing.location is None and candidate.location is not None
+                if location is not existing.location
                 else existing.refreshed_at
             ),
         }
     )
+
+
+def _merge_location(
+    existing: LocationContext | None, candidate: LocationContext | None
+) -> LocationContext | None:
+    """Sticky whole-blob, except a legacy blob upgrades to a complete one.
+
+    A blob without `country_code` predates the component mapping and cannot
+    form a geo key — its place is invisible on every area screen. A candidate
+    that carries the code is strictly better information about the same
+    coordinates, so it replaces the blob wholesale; between two keyed blobs
+    the existing one stays sticky as before.
+    """
+    if existing is None:
+        return candidate
+    if (
+        candidate is not None
+        and existing.country_code is None
+        and candidate.country_code is not None
+    ):
+        return candidate
+    return existing
 
 
 def _merge_categories(
