@@ -8,7 +8,9 @@ from kebi.core.knowledge.schemas import (
     _CITY_ALIASES,
     build_geo_key,
     build_place_key,
+    canonical_area_slug,
     canonical_city_slug,
+    strip_admin_unit,
 )
 
 
@@ -83,10 +85,12 @@ class TestCanonicalCitySlug:
 
     def test_a_neighborhood_inherits_the_canonical_parent(self) -> None:
         # This is the case that actually broke: the neighborhood claim sat
-        # under a different city key than the city's own claims.
+        # under a different city key than the city's own claims. The unit
+        # word folds too (ADR-163), so "Khet Khlong Toei" and "Khlong Toei"
+        # cannot split the district.
         assert (
             build_geo_key("th", "Krung Thep Maha Nakhon", "Khet Khlong Toei")
-            == "th/bangkok/khet-khlong-toei"
+            == "th/bangkok/khlong-toei"
         )
 
     def test_an_unknown_city_passes_through_unchanged(self) -> None:
@@ -109,3 +113,62 @@ class TestCanonicalCitySlug:
         and one hop lands on a key that folds again."""
         for (country_code, _variant), canonical in _CITY_ALIASES.items():
             assert canonical_city_slug(country_code, canonical) == canonical
+
+
+class TestAdminUnitFolding:
+    """Admin-unit affixes fold out of area names and slugs (ADR-163), so an
+    official municipality style and the human name key — and read — the same."""
+
+    def test_leading_unit_word_folds_in_the_slug(self) -> None:
+        assert canonical_area_slug("khet-khlong-toei") == "khlong-toei"
+        assert canonical_area_slug("kabupaten-badung") == "badung"
+        assert canonical_area_slug("thanh-pho-hue") == "hue"
+
+    def test_trailing_unit_word_folds_only_where_it_is_a_translation(self) -> None:
+        assert canonical_area_slug("ubud-district", "id") == "ubud"
+        assert canonical_area_slug("badung-regency", "id") == "badung"
+        # In English-speaking countries "District" IS the colloquial name.
+        assert canonical_area_slug("financial-district", "us") == "financial-district"
+        assert canonical_area_slug("ubud-district") == "ubud-district"
+
+    def test_a_bare_unit_word_never_empties_the_slug(self) -> None:
+        assert canonical_area_slug("khet", "th") == "khet"
+        assert canonical_area_slug("district", "id") == "district"
+
+    def test_display_name_strips_but_keeps_original_spelling(self) -> None:
+        assert strip_admin_unit("Khet Bang Rak", "th") == "Bang Rak"
+        assert strip_admin_unit("Thành phố Huế", "vn") == "Huế"
+        assert strip_admin_unit("Kec. Kuta Utara", "id") == "Kuta Utara"
+        assert strip_admin_unit("Ko Samui District", "th") == "Ko Samui"
+
+    def test_compound_proper_names_are_never_stripped(self) -> None:
+        # "Kota"/"City" are parts of real names — the ADR-160 compound trap;
+        # a US "District" neighborhood keeps its suffix the same way.
+        assert strip_admin_unit("Kota Kinabalu", "my") == "Kota Kinabalu"
+        assert strip_admin_unit("Ho Chi Minh City", "vn") == "Ho Chi Minh City"
+        assert strip_admin_unit("Financial District", "us") == "Financial District"
+        assert strip_admin_unit("Canggu", "id") == "Canggu"
+
+    def test_neighborhood_key_folds_the_unit_word(self) -> None:
+        assert build_geo_key("id", "Bali", "Kabupaten Badung") == "id/bali/badung"
+        assert (
+            build_geo_key("th", "Bangkok", "Khet Bang Rak")
+            == build_geo_key("th", "Krung Thep Maha Nakhon", "Bang Rak")
+            == "th/bangkok/bang-rak"
+        )
+
+    def test_city_key_folds_the_municipality_style(self) -> None:
+        assert build_geo_key("vn", "Thành phố Huế") == build_geo_key("vn", "Hue")
+
+    def test_alias_lookup_on_the_raw_slug_wins_over_folding(self) -> None:
+        # "Thành phố Hồ Chí Minh" has an explicit alias whose target would
+        # not survive naive folding — the raw-slug alias must win.
+        assert canonical_city_slug("vn", "Thành phố Hồ Chí Minh") == "ho-chi-minh-city"
+
+    def test_village_level_aliases_fold_to_the_colloquial_area(self) -> None:
+        # Google's village admin splits colloquial areas; the alias table
+        # folds them like _CITY_ALIASES folds exonyms (ADR-144/163).
+        assert build_geo_key("id", "Bali", "Tibubeneng") == "id/bali/canggu"
+        assert build_geo_key("id", "Bali", "Pecatu") == "id/bali/uluwatu"
+        # Alias scope is the country — no cross-country rewrites.
+        assert build_geo_key("vn", "Hue", "Pecatu") == "vn/hue/pecatu"

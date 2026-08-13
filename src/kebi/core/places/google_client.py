@@ -268,10 +268,16 @@ class GooglePlacesClient:
             },
         ) as t:
             try:
+                # English pinned on every call (same rule as the Nominatim
+                # client's accept-language): without it Google localizes
+                # names per region ("نخلة جميرا" vs "Palm Jumeirah"), and a
+                # locale-dependent display geo splits canonical keys and
+                # screens between fetches (ADR-163).
                 response = await self._http.request(
                     method,
                     f"{_PLACES_API_BASE}{path}",
-                    json=body,
+                    json={**body, "languageCode": "en"} if body is not None else None,
+                    params={"languageCode": "en"} if method == "GET" else None,
                     headers={
                         "X-Goog-Api-Key": self._api_key,
                         "X-Goog-FieldMask": field_mask,

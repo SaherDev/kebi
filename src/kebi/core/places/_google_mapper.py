@@ -11,6 +11,8 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
+from kebi.core.knowledge.schemas import strip_admin_unit
+
 from .models import (
     LocationContext,
     PlaceCategory,
@@ -243,6 +245,12 @@ _GOOGLE_TYPE_TO_DIETARY: dict[str, list[DietaryTag]] = {
 # postal_town covers UK addresses. Accepted edge: where level_1 is a
 # state/province (US, AU) it becomes city only when Google supplies no
 # locality/postal_town at all — rare for venues, and better than null.
+#
+# Neighborhood ranks deepest-human-unit first (ADR-163): where no sublocality
+# exists Google can still carry the colloquial area as admin level 4 or 3
+# (Bali: level_4 "Canggu", level_3 "Kec. Kuta Utara", level_2 "Kabupaten
+# Badung") — level_2 is the last resort, not the first admin fallback, so a
+# save in Canggu stops storing its regency.
 _ADDR_COMPONENT_TO_FIELD: dict[str, tuple[str, int]] = {
     "locality": ("city", 0),
     "postal_town": ("city", 1),
@@ -252,7 +260,9 @@ _ADDR_COMPONENT_TO_FIELD: dict[str, tuple[str, int]] = {
     # Japanese district names (Asakusa, Toyosu) arrive as level_2; the
     # levels below that are chōme/block numbers and stay unmapped.
     "sublocality_level_2": ("neighborhood", 2),
-    "administrative_area_level_2": ("neighborhood", 3),
+    "administrative_area_level_4": ("neighborhood", 3),
+    "administrative_area_level_3": ("neighborhood", 4),
+    "administrative_area_level_2": ("neighborhood", 5),
     "country": ("country", 0),
 }
 
@@ -322,6 +332,7 @@ def map_place(
     raw_loc = raw.get("location") or {}
     components = raw.get("addressComponents") or []
     addr = _map_address_components(components)
+    country_code = _country_code(components)
 
     return PlaceObject(
         provider_id=f"{GOOGLE_PROVIDER_PREFIX}{raw_id}",
@@ -332,13 +343,21 @@ def map_place(
             lat=raw_loc.get("latitude"),
             lng=raw_loc.get("longitude"),
             address=raw.get("formattedAddress"),
-            city=addr.get("city"),
-            neighborhood=addr.get("neighborhood"),
+            # Stored display geo is the human name — the unit word ("Khet",
+            # "Thành phố", trailing "District") folds away here so screens
+            # read it verbatim and slugs agree across write paths (ADR-163).
+            city=_human_area_name(addr.get("city"), country_code),
+            neighborhood=_human_area_name(addr.get("neighborhood"), country_code),
             country=addr.get("country"),
-            country_code=_country_code(components),
+            country_code=country_code,
         ),
         cached_at=now,
     )
+
+
+def _human_area_name(value: str | None, country_code: str | None) -> str | None:
+    """Strip the admin-unit affix from a mapped city/neighborhood, or None."""
+    return strip_admin_unit(value, country_code) if value else value
 
 
 def _country_code(components: list[dict[str, Any]]) -> str | None:
