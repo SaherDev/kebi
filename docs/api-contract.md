@@ -526,6 +526,7 @@ a caller can only ever read **their own** library.
 
 ```
 GET /v1/user/library
+GET /v1/user/library?q=cang
 GET /v1/user/library?category=cafe&visited=false&source=tiktok&limit=20
 GET /v1/user/library?sort=name&limit=20
 GET /v1/user/library?sort=name&limit=20&cursor=<next_cursor-from-prior-response>
@@ -533,6 +534,7 @@ GET /v1/user/library?sort=name&limit=20&cursor=<next_cursor-from-prior-response>
 
 | Param          | Type                                | Notes                                                                                                            |
 | -------------- | ----------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `q`            | `string` (≤200 chars)               | Free-text search over the **whole** library (ADR-164). See below                                                 |
 | `category`     | repeated `PlaceCategory`            | OR across repeats. `?category=cafe&category=bar`                                                                 |
 | `tag`          | repeated `string`                   | Tag **value**; AND across repeats (every value must be present)                                                  |
 | `city`         | `string`                            | Case-insensitive match on `place.location.city`                                                                  |
@@ -547,7 +549,19 @@ GET /v1/user/library?sort=name&limit=20&cursor=<next_cursor-from-prior-response>
 | `limit`        | `int` (1–100, default 50)           | Max places per page. Out-of-range → 422                                                                          |
 | `cursor`       | `string`                            | Opaque cursor from a prior response's `next_cursor`. Omit for the first page. Malformed or sort-mismatched → 400 |
 
-Filters combine with **AND**. Default order is newest-first (`saved_at`
+**`q` — searching the library (ADR-164).** Matches, case-insensitively and
+as a **substring**, against the place's name, its alternative names, its
+city and neighbourhood, its tag values and its categories. Substring rather
+than word-matching because the client searches as the user types: `cang`
+must already find Canggu. It is a **predicate, not a relevance query** — it
+narrows the rows and never reorders them, so `sort` and `cursor` behave
+exactly as they do without it. A blank or whitespace-only `q` means *no
+search*, not *no results*. It searches the **entire** library, not the
+pages the client has loaded — filtering client-side is what makes a saved
+place three pages down report as "no results".
+
+Filters combine with **AND** — `q` narrows an already-filtered view rather
+than replacing it. Default order is newest-first (`saved_at`
 descending); `sort=name` switches to case-insensitive alphabetical. A
 `cursor` is bound to the `sort` it was issued under — replaying it under a
 different `sort` is a **400**, so flipping the toggle restarts paging from
@@ -589,7 +603,8 @@ the first page (drop the `cursor`). Keep `sort` fixed across a paging run.
     }
   ],
   "next_cursor": "eyJ0cyI6…",
-  "total": 42
+  "total": 42,
+  "filtered_total": 3
 }
 ```
 
@@ -598,6 +613,7 @@ the first page (drop the `cursor`). Keep `sort` fixed across a paging run.
 | `places` | `SavedPlaceView[]` | `{ place: PlaceCore, user_data: UserPlace, claims: PlaceNote[] }`. `place` is the complete place shape — live rating/hours don't exist anywhere in the contract (ADR-118). `user_data` is this user's relationship to the place |
 | `next_cursor` | `string \| null` | Opaque keyset cursor. Pass it back as `?cursor=` for the next page. **`null` on the last page** |
 | `total` | `integer` | The caller's **grand total** of saved places — the whole stash, **independent of the request's filters and pagination** (drives the screen's hero count). Same on every page |
+| `filtered_total` | `integer` | How many saves match this request's `q` + filters, **across the whole library** — the `3` in "3 of 84". Server-side by necessity: with keyset paging a client cannot count matches it was never sent (ADR-164). Equals `total` when nothing is narrowing |
 
 `claims` (`PlaceNote[]`, ADR-127) are the **insider notes** tied to the place
 from the knowledge layer — the payoff surface. Each: `id` (the claim's stable
@@ -1248,7 +1264,7 @@ All protected calls additionally send the `X-Gateway-Token` + `X-Gateway-User-Id
 | GET /v1/home                | Home greeting + suggestion chips           | — (optional `lat`/`lng`/`city`/`local_time`/`weather` query) | HomeResponse (`greeting`, `chips: { text }[]`); fail-open, always `200`                                                                      |
 | GET /v1/user/intents        | "What you wanted" recall list              | — (optional `limit`/`cursor` query params)                   | IntentsResponse (`intents: { id, text, created_at }[]`, `next_cursor`)                                                                       |
 | POST /v1/extract            | Canonical extraction (save a place)        | raw_input                                                    | ExtractPlaceResponse                                                                                                                         |
-| GET /v1/user/library        | Browse the user's saved places (Library)   | — (optional filter + `sort` + `limit`/`cursor` query params) | LibraryResponse (`places: SavedPlaceView[]`, `next_cursor`, `total`)                                                                         |
+| GET /v1/user/library        | Browse + search the user's saved places (Library) | — (optional `q` + filter + `sort` + `limit`/`cursor` query params) | LibraryResponse (`places: SavedPlaceView[]`, `next_cursor`, `total`, `filtered_total`)                                          |
 | GET /v1/places/{id}         | Open any surfaced place (the place screen) | — (path param only)                                          | LibraryItem (`place`, `user_data` — null when unsaved, `claims`); `404` if uncatalogued                                                      |
 | GET /v1/areas/{id}          | Open any linked area (the area screen)     | — (path param only; id = encoded geo key)                    | AreaScreenResponse (profile + breadcrumb + `saved_count` + one body section: saved drill-down or worth-knowing); `404` if the id is no token |
 | POST /v1/user/places        | Save a surfaced place (plain save)         | place_core_id                                                | LibraryUserData (created user-state, `201`; `404` if uncatalogued); emits the `saved_recommendation` taste signal                            |

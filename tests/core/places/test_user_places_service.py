@@ -59,10 +59,13 @@ class TestBrowse:
         repo = MagicMock(
             browse=AsyncMock(return_value=[]),
             count_by_user=AsyncMock(return_value=0),
+            count_filtered=AsyncMock(return_value=0),
         )
         svc = UserPlacesService(user_places_repo=repo)
 
-        page, next_cursor, total = await svc.browse("u1", SavedPlaceFilters(), limit=10)
+        page, next_cursor, total, _ = await svc.browse(
+            "u1", SavedPlaceFilters(), limit=10
+        )
 
         assert page == []
         assert next_cursor is None
@@ -76,10 +79,13 @@ class TestBrowse:
         repo = MagicMock(
             browse=AsyncMock(return_value=[_view("u1", "p1")]),
             count_by_user=AsyncMock(return_value=1),
+            count_filtered=AsyncMock(return_value=1),
         )
         svc = UserPlacesService(user_places_repo=repo)
 
-        page, next_cursor, total = await svc.browse("u1", SavedPlaceFilters(), limit=10)
+        page, next_cursor, total, _ = await svc.browse(
+            "u1", SavedPlaceFilters(), limit=10
+        )
 
         assert len(page) == 1
         assert next_cursor is None
@@ -97,10 +103,13 @@ class TestBrowse:
                 ]
             ),
             count_by_user=AsyncMock(return_value=3),
+            count_filtered=AsyncMock(return_value=3),
         )
         svc = UserPlacesService(user_places_repo=repo)
 
-        page, next_cursor, total = await svc.browse("u1", SavedPlaceFilters(), limit=2)
+        page, next_cursor, total, _ = await svc.browse(
+            "u1", SavedPlaceFilters(), limit=2
+        )
 
         assert [v.place.id for v in page] == ["p1", "p2"]  # trimmed to limit
         assert next_cursor is not None
@@ -116,10 +125,13 @@ class TestBrowse:
         repo = MagicMock(
             browse=AsyncMock(return_value=[_view("u1", "p1")]),
             count_by_user=AsyncMock(return_value=42),
+            count_filtered=AsyncMock(return_value=42),
         )
         svc = UserPlacesService(user_places_repo=repo)
 
-        _, _, total = await svc.browse("u1", SavedPlaceFilters(visited=True), limit=10)
+        _, _, total, _ = await svc.browse(
+            "u1", SavedPlaceFilters(visited=True), limit=10
+        )
 
         assert total == 42
         repo.count_by_user.assert_awaited_once_with("u1")
@@ -128,6 +140,7 @@ class TestBrowse:
         repo = MagicMock(
             browse=AsyncMock(return_value=[]),
             count_by_user=AsyncMock(return_value=0),
+            count_filtered=AsyncMock(return_value=0),
         )
         svc = UserPlacesService(user_places_repo=repo)
         t = _now()
@@ -144,6 +157,7 @@ class TestBrowse:
         repo = MagicMock(
             browse=AsyncMock(return_value=[]),
             count_by_user=AsyncMock(return_value=0),
+            count_filtered=AsyncMock(return_value=0),
         )
         svc = UserPlacesService(user_places_repo=repo)
 
@@ -155,6 +169,7 @@ class TestBrowse:
         repo = MagicMock(
             browse=AsyncMock(return_value=[]),
             count_by_user=AsyncMock(return_value=0),
+            count_filtered=AsyncMock(return_value=0),
         )
         svc = UserPlacesService(user_places_repo=repo)
 
@@ -170,10 +185,11 @@ class TestBrowse:
         repo = MagicMock(
             browse=AsyncMock(return_value=[_view("u1", "p1", t), _view("u1", "p2", t)]),
             count_by_user=AsyncMock(return_value=2),
+            count_filtered=AsyncMock(return_value=2),
         )
         svc = UserPlacesService(user_places_repo=repo)
 
-        _, next_cursor, _ = await svc.browse(
+        _, next_cursor, _, _ = await svc.browse(
             "u1", SavedPlaceFilters(), limit=1, sort=LibrarySort.name
         )
 
@@ -181,6 +197,48 @@ class TestBrowse:
         decoded = LibraryCursor.decode(next_cursor)
         assert decoded.sort is LibrarySort.name
         assert decoded.anchor == "place p1"  # _core() names places "Place {pid}"
+
+
+class TestFilteredTotal:
+    """`filtered_total` is the whole matching set, not the page.
+
+    The bug this endpoint exists to remove is a count derived from loaded
+    pages, so the number must come from the repo's own count of everything
+    matching — independent of `limit`, the cursor, and how many rows the page
+    happened to hold.
+    """
+
+    async def test_counts_whole_match_set_not_the_page(self) -> None:
+        filters = SavedPlaceFilters(query="sushi")
+        repo = MagicMock(
+            browse=AsyncMock(return_value=[_view("u1", "p1"), _view("u1", "p2")]),
+            count_by_user=AsyncMock(return_value=84),
+            count_filtered=AsyncMock(return_value=9),
+        )
+        svc = UserPlacesService(user_places_repo=repo)
+
+        page, _, total, filtered_total = await svc.browse("u1", filters, limit=1)
+
+        assert len(page) == 1  # one row on the page...
+        assert filtered_total == 9  # ...but nine matches in the library
+        assert total == 84
+        repo.count_filtered.assert_awaited_once_with("u1", filters)
+
+    async def test_search_predicate_reaches_the_repo_unchanged(self) -> None:
+        """The needle must survive to the repo — a search dropped on the way
+        silently degrades to "browse everything", which reads as broken
+        search rather than a missing filter."""
+        repo = MagicMock(
+            browse=AsyncMock(return_value=[]),
+            count_by_user=AsyncMock(return_value=3),
+            count_filtered=AsyncMock(return_value=0),
+        )
+        svc = UserPlacesService(user_places_repo=repo)
+
+        await svc.browse("u1", SavedPlaceFilters(query="cang"), limit=10)
+
+        args, _ = repo.browse.call_args
+        assert args[1].query == "cang"
 
 
 class TestUpdateStatus:
@@ -444,6 +502,7 @@ class TestSaveLimit:
         repo = MagicMock(
             get_by_user_and_place=AsyncMock(return_value=None),
             count_by_user=AsyncMock(return_value=9999),
+            count_filtered=AsyncMock(return_value=9999),
             save_user_places=AsyncMock(side_effect=lambda rows: rows),
         )
         svc = UserPlacesService(user_places_repo=repo)
@@ -457,6 +516,7 @@ class TestSaveLimit:
         repo = MagicMock(
             get_by_user_and_place=AsyncMock(return_value=None),
             count_by_user=AsyncMock(return_value=9),
+            count_filtered=AsyncMock(return_value=9),
             save_user_places=AsyncMock(side_effect=lambda rows: rows),
         )
         svc = UserPlacesService(user_places_repo=repo)
@@ -470,6 +530,7 @@ class TestSaveLimit:
         repo = MagicMock(
             get_by_user_and_place=AsyncMock(return_value=None),
             count_by_user=AsyncMock(return_value=10),
+            count_filtered=AsyncMock(return_value=10),
             save_user_places=AsyncMock(),
         )
         svc = UserPlacesService(user_places_repo=repo)
@@ -488,6 +549,7 @@ class TestSaveLimit:
         repo = MagicMock(
             get_by_user_and_place=AsyncMock(return_value=existing),
             count_by_user=AsyncMock(return_value=10),
+            count_filtered=AsyncMock(return_value=10),
             save_user_places=AsyncMock(),
         )
         svc = UserPlacesService(user_places_repo=repo)
@@ -502,6 +564,7 @@ class TestSaveLimit:
         repo = MagicMock(
             get_existing_place_ids=AsyncMock(return_value=set()),
             count_by_user=AsyncMock(return_value=9),
+            count_filtered=AsyncMock(return_value=9),
             save_user_places=AsyncMock(side_effect=lambda rows: rows),
         )
         svc = UserPlacesService(user_places_repo=repo)

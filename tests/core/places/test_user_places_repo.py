@@ -193,6 +193,119 @@ async def test_browse_applies_place_and_user_filters() -> None:
 
 
 @pytest.mark.asyncio
+async def test_browse_query_searches_every_field_a_person_might_type() -> None:
+    """One needle, six places to match it. A field missing here is a saved
+    place the user cannot find by a word that is visibly on its card."""
+    session = MagicMock()
+    session.execute = AsyncMock(return_value=[])
+    repo = UserPlacesRepo(session=session)
+
+    await repo.browse("u1", SavedPlaceFilters(query="cang"), limit=20)
+
+    sql = _compiled(session)
+    assert "places.place_name ILIKE" in sql
+    assert "jsonb_path_query_array(places.place_name_aliases" in sql
+    assert sql.count("(places.location ->> ") == 2  # city + neighbourhood
+    assert "jsonb_path_query_array(places.tags" in sql
+    assert "array_to_string(places.categories" in sql
+    assert sql.count(" OR ") >= 5  # one OR-group, not six ANDed predicates
+
+
+@pytest.mark.asyncio
+async def test_browse_query_matches_mid_word_for_typeahead() -> None:
+    """Substring, not full-text: the client searches as the user types, so
+    `cang` must already match Canggu before `canggu` is finished."""
+    session = MagicMock()
+    session.execute = AsyncMock(return_value=[])
+    repo = UserPlacesRepo(session=session)
+
+    await repo.browse("u1", SavedPlaceFilters(query="cang"), limit=20)
+
+    params = session.execute.await_args.args[0].compile().params
+    assert "%cang%" in params.values()
+    assert "to_tsquery" not in _compiled(session)
+
+
+@pytest.mark.asyncio
+async def test_browse_query_escapes_like_wildcards() -> None:
+    """A needle of wildcards must be literal text, not a catastrophic
+    backtracking pattern (the reason `escape_like` exists)."""
+    session = MagicMock()
+    session.execute = AsyncMock(return_value=[])
+    repo = UserPlacesRepo(session=session)
+
+    await repo.browse("u1", SavedPlaceFilters(query="%_%_%"), limit=20)
+
+    params = session.execute.await_args.args[0].compile().params
+    assert r"%\%\_\%\_\%%" in params.values()
+
+
+@pytest.mark.asyncio
+async def test_browse_blank_query_is_no_search_not_no_results() -> None:
+    """Whitespace must not become `ILIKE '%   %'` and empty the library."""
+    session = MagicMock()
+    session.execute = AsyncMock(return_value=[])
+    repo = UserPlacesRepo(session=session)
+
+    await repo.browse("u1", SavedPlaceFilters(query="   "), limit=20)
+
+    assert "ILIKE" not in _compiled(session)
+
+
+@pytest.mark.asyncio
+async def test_browse_query_does_not_reorder_rows() -> None:
+    """A predicate, not a relevance ranking — the keyset cursor depends on
+    the order being identical with and without a search."""
+    session = MagicMock()
+    session.execute = AsyncMock(return_value=[])
+    repo = UserPlacesRepo(session=session)
+
+    def _order_by(sql: str) -> str:
+        # Everything between ORDER BY and LIMIT; the LIMIT bind param is named
+        # by position, so it differs purely because a search binds more values.
+        return sql.split("ORDER BY")[1].split("LIMIT")[0]
+
+    await repo.browse("u1", SavedPlaceFilters(), limit=20)
+    plain = _order_by(_compiled(session))
+    await repo.browse("u1", SavedPlaceFilters(query="sushi"), limit=20)
+    searched = _order_by(_compiled(session))
+
+    assert plain == searched
+
+
+@pytest.mark.asyncio
+async def test_count_filtered_counts_the_join_under_the_same_predicate() -> None:
+    session = MagicMock()
+    result = MagicMock(scalar_one=MagicMock(return_value=9))
+    session.execute = AsyncMock(return_value=result)
+    repo = UserPlacesRepo(session=session)
+
+    total = await repo.count_filtered("u1", SavedPlaceFilters(query="sushi"))
+
+    sql = _compiled(session)
+    assert total == 9
+    assert "count(" in sql
+    assert "JOIN user_places" in sql  # same join browse pages over
+    assert "ILIKE" in sql
+    assert "LIMIT" not in sql  # the whole match set, never a page
+
+
+@pytest.mark.asyncio
+async def test_count_filtered_without_a_predicate_reuses_the_plain_count() -> None:
+    """Nothing narrowing means filtered_total *is* total — one aggregate, not
+    two, and no chance of the two disagreeing."""
+    session = MagicMock()
+    result = MagicMock(scalar_one=MagicMock(return_value=84))
+    session.execute = AsyncMock(return_value=result)
+    repo = UserPlacesRepo(session=session)
+
+    total = await repo.count_filtered("u1", SavedPlaceFilters(query="  "))
+
+    assert total == 84
+    assert "JOIN" not in _compiled(session)  # took the count_by_user path
+
+
+@pytest.mark.asyncio
 async def test_browse_maps_rows_to_saved_place_views() -> None:
     t = datetime(2026, 6, 9, 8, 0, tzinfo=UTC)
     session = MagicMock()

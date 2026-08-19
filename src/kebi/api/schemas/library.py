@@ -43,6 +43,18 @@ class LibraryQuery(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     # ---- filters (mapped to SavedPlaceFilters) ----
+    q: str | None = Field(
+        None,
+        max_length=200,
+        description=(
+            "Free-text search across the whole library: place name, "
+            "alternative names, city, neighbourhood, tags and categories. "
+            "Case-insensitive substring, so it matches mid-typing (`cang` "
+            "finds Canggu). ANDed with every other filter. Narrows the rows "
+            "only — it never reorders them, so `sort` and `cursor` behave "
+            "exactly as they do without it."
+        ),
+    )
     category: list[PlaceCategory] | None = Field(
         None, description="Filter by place category (OR across repeats)."
     )
@@ -85,6 +97,7 @@ class LibraryQuery(BaseModel):
     def to_filters(self) -> SavedPlaceFilters:
         """Map the filter params to the domain filter (paging excluded)."""
         return SavedPlaceFilters(
+            query=self.q,
             categories=self.category,
             tags=self.tag,
             city=self.city,
@@ -281,6 +294,16 @@ class LibraryResponse(BaseModel):
             "size regardless of any page or filter applied to this response."
         ),
     )
+    filtered_total: int = Field(
+        ...,
+        description=(
+            "How many saves match `q` and the filters, across the whole "
+            "library — the left-hand side of `3 of 84`. Counted server-side "
+            "because a client cannot count matches it was never sent: with "
+            "keyset paging, anything beyond the loaded pages is invisible to "
+            "it. Equal to `total` when nothing is narrowing."
+        ),
+    )
 
     @classmethod
     def from_page(
@@ -288,6 +311,7 @@ class LibraryResponse(BaseModel):
         views: list[SavedPlaceView],
         next_cursor: str | None,
         total: int,
+        filtered_total: int,
         notes_by_place: dict[str, list[PlaceNote]] | None = None,
     ) -> LibraryResponse:
         notes = notes_by_place or {}
@@ -298,4 +322,5 @@ class LibraryResponse(BaseModel):
             ],
             next_cursor=next_cursor,
             total=total,
+            filtered_total=filtered_total,
         )

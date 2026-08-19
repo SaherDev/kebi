@@ -191,6 +191,39 @@ class UserPlacesRepo:
         result = await self._session.execute(stmt)
         return result.scalar_one()
 
+    async def count_filtered(self, user_id: str, filters: SavedPlaceFilters) -> int:
+        """How many saves match `filters` across the whole library.
+
+        The counterpart to `count_by_user`: that one is the unfiltered hero
+        number, this one is "3 of 84"'s left-hand side. Same predicate and
+        same join as `browse` — deliberately, because a count that disagrees
+        with the rows it describes is worse than no count. The join means a
+        save whose catalog row is missing is excluded here exactly as it is
+        from `browse`, so the number can never exceed what paging can reach.
+
+        Ignores the cursor: this counts the whole result set, not a page.
+
+        When the predicate narrows nothing — no search, no filters — this is
+        the unfiltered total by definition, so it delegates rather than
+        issuing a second aggregate for the same answer. Asking
+        `build_filter_conditions` whether it produced any SQL keeps that
+        judgement in one place: a filter that builds no condition (an empty
+        category list, a whitespace-only needle) is correctly a no-op here
+        too, with no second list of "what counts as set" to drift.
+        """
+        filter_conditions = build_filter_conditions(filters)
+        if not filter_conditions:
+            return await self.count_by_user(user_id)
+
+        conditions = [_up.user_id == user_id, *filter_conditions]
+        stmt = (
+            select(func.count())
+            .select_from(_PlacesTable.join(_UserPlacesTable, _up.place_id == _p.id))
+            .where(and_(*conditions))
+        )
+        result = await self._session.execute(stmt)
+        return result.scalar_one()
+
     async def update_fields(
         self, user_place_id: str, user_id: str, changes: UserPlaceStatusUpdate
     ) -> UserPlace | None:

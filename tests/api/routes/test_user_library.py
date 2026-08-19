@@ -62,7 +62,7 @@ def _view(pid: str) -> SavedPlaceView:
 @pytest.fixture
 def svc() -> AsyncMock:
     service = AsyncMock(spec=UserPlacesService)
-    service.browse = AsyncMock(return_value=([_view("p1")], "next-tok", 1))
+    service.browse = AsyncMock(return_value=([_view("p1")], "next-tok", 1, 1))
     return service
 
 
@@ -172,14 +172,74 @@ def test_filters_and_paging_passed_through(svc: AsyncMock) -> None:
     assert kwargs["cursor"] == "abc"
 
 
+def test_q_reaches_the_service_as_the_search_predicate(svc: AsyncMock) -> None:
+    client = _make_app(svc)
+
+    resp = client.get("/v1/user/library", params={"q": "cang"})
+
+    assert resp.status_code == 200
+    assert svc.browse.await_args.args[1].query == "cang"
+
+
+def test_q_combines_with_other_filters(svc: AsyncMock) -> None:
+    """ANDed, not replacing: searching inside an already-filtered view must
+    narrow it further rather than reset it."""
+    client = _make_app(svc)
+
+    resp = client.get(
+        "/v1/user/library", params={"q": "sushi", "category": "cafe", "visited": "true"}
+    )
+
+    assert resp.status_code == 200
+    filters = svc.browse.await_args.args[1]
+    assert filters.query == "sushi"
+    assert filters.categories == [PlaceCategory.cafe]
+    assert filters.visited is True
+
+
+def test_filtered_total_is_the_whole_match_set_not_the_page(svc: AsyncMock) -> None:
+    """`3 of 84` — the 3 counts every match in the library, not the rows on
+    this page. A client cannot compute this itself, which is the point."""
+    svc.browse = AsyncMock(return_value=([_view("p1")], "next-tok", 84, 3))
+    client = _make_app(svc)
+
+    body = client.get("/v1/user/library", params={"q": "sushi"}).json()
+
+    assert len(body["places"]) == 1
+    assert body["filtered_total"] == 3
+    assert body["total"] == 84
+
+
+def test_no_search_makes_the_two_counts_agree(svc: AsyncMock) -> None:
+    svc.browse = AsyncMock(return_value=([_view("p1")], None, 84, 84))
+    client = _make_app(svc)
+
+    body = client.get("/v1/user/library").json()
+
+    assert body["filtered_total"] == body["total"] == 84
+
+
+def test_q_over_length_cap_rejected_422(svc: AsyncMock) -> None:
+    client = _make_app(svc)
+
+    resp = client.get("/v1/user/library", params={"q": "x" * 201})
+
+    assert resp.status_code == 422
+
+
 def test_empty_library_returns_empty_state(svc: AsyncMock) -> None:
-    svc.browse = AsyncMock(return_value=([], None, 0))
+    svc.browse = AsyncMock(return_value=([], None, 0, 0))
     client = _make_app(svc)
 
     resp = client.get("/v1/user/library")
 
     assert resp.status_code == 200
-    assert resp.json() == {"places": [], "next_cursor": None, "total": 0}
+    assert resp.json() == {
+        "places": [],
+        "next_cursor": None,
+        "total": 0,
+        "filtered_total": 0,
+    }
 
 
 def test_unknown_query_param_rejected_422(svc: AsyncMock) -> None:

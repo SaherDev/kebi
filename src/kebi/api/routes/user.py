@@ -50,10 +50,19 @@ async def get_user_library(
 
     Returns one filtered page of the user's saved places (`user_places ⋈
     places`) plus an opaque `next_cursor` for the next page (`null` on the
-    last page) and `total`, the unfiltered grand total of the caller's saves
-    (the screen's hero count, the same on every page). An empty library
-    returns `{"places": [], "next_cursor": null, "total": 0}` — the
+    last page), `total`, the unfiltered grand total of the caller's saves
+    (the screen's hero count, the same on every page), and `filtered_total`,
+    how many saves match this request's `q`/filters across the whole library.
+    An empty library returns an empty list with both counts at 0 — the
     empty-state UI is the product's concern.
+
+    `q` is free-text search over the *whole* library — place name, aliases,
+    city, neighbourhood, tags, categories — as a case-insensitive substring,
+    so it matches while the user is still typing. It is a predicate, not a
+    relevance query: rows are narrowed, never reordered, so `sort` and
+    `cursor` are unaffected. Both counts are server-side by necessity —
+    filtering client-side over loaded pages makes a saved place three pages
+    down report as "no results", which is the failure this exists to remove.
 
     `sort` is the screen's recent ↔ A–Z toggle: `recent` (newest-saved
     first, default) or `name` (case-insensitive A–Z). A `cursor` is bound to
@@ -75,7 +84,7 @@ async def get_user_library(
     only ever read their own library. A malformed or sort-mismatched
     `cursor` surfaces as a 400 via the shared `ValueError` handler.
     """
-    places, next_cursor, total = await service.browse(
+    places, next_cursor, total, filtered_total = await service.browse(
         identity.user_id,
         params.to_filters(),
         params.limit,
@@ -83,7 +92,9 @@ async def get_user_library(
         sort=params.sort,
     )
     notes_by_place = await notes_service.notes_for_saves(places, identity.user_id)
-    return LibraryResponse.from_page(places, next_cursor, total, notes_by_place)
+    return LibraryResponse.from_page(
+        places, next_cursor, total, filtered_total, notes_by_place
+    )
 
 
 @router.get("/user/intents", response_model=IntentsResponse)
