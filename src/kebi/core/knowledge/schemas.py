@@ -311,6 +311,13 @@ _AREA_ALIASES: dict[tuple[str, str], str] = {
     ("id", "tibubeneng"): "canggu",
     # The Uluwatu area's venues sit in Pecatu village on Google's map.
     ("id", "pecatu"): "uluwatu",
+    # Gili Indah is the desa covering all three Gilis; Google names a place
+    # by it on some rows and by the island on others, splitting one island
+    # across two areas. Folded to the island people actually say. Accepted
+    # imprecision, the same kind Tibubeneng→Canggu carries: a save on Gili
+    # Air or Gili Meno that Google names only by the desa reads as Gili
+    # Trawangan, and only coordinates could tell them apart.
+    ("id", "gili-indah"): "gili-trawangan",
     # Endonym/exonym pair Google returns in both slots — as the area of a
     # save in Boom, and as the city of one in Antwerp itself. Folded here
     # rather than in _CITY_ALIASES because only this table reaches the
