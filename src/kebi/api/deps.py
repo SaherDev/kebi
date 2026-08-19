@@ -62,7 +62,6 @@ from kebi.core.places import (
     CachedEmbedder,
     EmbeddingService,
     EmbeddingsRepo,
-    GoogleAreaGeocoder,
     GooglePlacesClient,
     HybridSearchRepo,
     HybridSearchService,
@@ -597,20 +596,6 @@ def get_google_places_client() -> GooglePlacesClient:
     )
 
 
-def get_area_geocoder() -> GoogleAreaGeocoder:
-    """FastAPI dependency providing GoogleAreaGeocoder (place writes).
-
-    Answers "which area contains this point", which is the question a place's
-    stored area key needs — its own address record answers "how is this venue
-    addressed", and two venues in one area disagree about that.
-    """
-    return GoogleAreaGeocoder(
-        api_key=get_env().GOOGLE_API_KEY or "",
-        http=get_shared_http_client(),
-        cache=get_cache_backend(),
-    )
-
-
 def get_geocoding_client() -> NominatimGeocodingClient:
     """FastAPI dependency providing NominatimGeocodingClient (OSM geocoding).
 
@@ -676,14 +661,9 @@ def get_place_upsert_service(
     embedding_service: EmbeddingService = Depends(  # noqa: B008
         get_embedding_service
     ),
-    area_geocoder: GoogleAreaGeocoder = Depends(get_area_geocoder),  # noqa: B008
 ) -> PlaceUpsertService:
     """FastAPI dependency providing PlaceUpsertService (places)."""
-    return PlaceUpsertService(
-        repo=repo,
-        embedding_service=embedding_service,
-        area_geocoder=area_geocoder,
-    )
+    return PlaceUpsertService(repo=repo, embedding_service=embedding_service)
 
 
 def get_places_search_service(
