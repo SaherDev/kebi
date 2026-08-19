@@ -17,6 +17,16 @@ Format:
 
 ---
 
+## ADR-168: Where a place is, the provider can answer; what the area is called, it cannot
+
+**Date:** 2026-08-19\
+**Status:** accepted — narrows ADR-163; supersedes its hand-maintained folds as the answer to *identity*, not to naming\
+**Context:** One island held three saves and rendered as three areas of one place each. The cause was not our ranking of the provider's address components — the ranking picked the right level — but the components themselves: three venues a few hundred metres apart came back with identical component *types* and conflicting values at the same administrative level, two named by the desa and one by the island. The prior remedy was to hand-list the pair, which had already been done twice before and only ever fixes the areas someone noticed were wrong; the next island splits silently, and the list cannot be completed because the world is not enumerable. Reverse-geocoding the coordinate turned out to answer consistently where the address record did not: the three venues resolve to one area carrying one provider id, because "what contains this point" is a question with one answer while "how is this venue addressed" is not.\
+**Decision:** A place's area is resolved from where the place is, at the single gateway every place write already passes through. But the resolution is used to *fill*, never to *rename* — because the same experiment that proved the geocoder consistent also proved it inhuman: adopting its names wholesale renamed Canggu to Tibubeneng, Seminyak to Kerobokan Kelod, and Sơn Trà to Thọ Quang, since it answers with the administrative village in every case, and its language pinning is unreliable besides. So identity and naming are separated and only identity is taken from the provider. A row missing an area entirely — the case that strands a save off every area screen — gains one; a row that already names its area keeps that name. Resolution is cached on a rounded coordinate, since boundaries do not move and one neighbourhood's saves share an answer, and it degrades per place: an unresolved coordinate keeps the geography it arrived with.\
+**Consequences:** Saves stop being stranded for want of a locality the address record omitted, without any list of places to maintain, and the fill applies to areas nobody has seen before — the property the hand tables could never have. What this does *not* do is retire those tables: the colloquial name of an area is not something the provider holds, so folding a village into the area people say it is still runs on the maintained list, with its known cost. The deliberate gap this leaves is the real one to close next — an area's stable identity should be the provider's id for it, with the human name resolved once per area and stored, which is what would let the tables go. Costs accepted: one geocoding call per unseen neighbourhood, on a separate SKU from place lookups; and a fill that is only as good as the coordinate, so a place whose coordinate is wrong now gains a confidently wrong area rather than none.
+
+---
+
 ## ADR-167: A video post kebi cannot watch or hear extracts nothing, and says so as if the link were bad
 
 **Date:** 2026-08-19\
