@@ -205,10 +205,13 @@ async def test_browse_query_searches_every_field_a_person_might_type() -> None:
     sql = _compiled(session)
     assert "places.place_name ILIKE" in sql
     assert "jsonb_path_query_array(places.place_name_aliases" in sql
-    assert sql.count("(places.location ->> ") == 2  # city + neighbourhood
+    # city + neighbourhood + country: a library spanning a trip gets searched
+    # by country ("thailand"), and omitting it returns nothing while the saves
+    # sit there — the exact failure this endpoint exists to remove.
+    assert sql.count("(places.location ->> ") == 3
     assert "jsonb_path_query_array(places.tags" in sql
     assert "array_to_string(places.categories" in sql
-    assert sql.count(" OR ") >= 5  # one OR-group, not six ANDed predicates
+    assert sql.count(" OR ") >= 6  # one OR-group, not seven ANDed predicates
 
 
 @pytest.mark.asyncio

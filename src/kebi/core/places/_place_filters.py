@@ -135,6 +135,13 @@ def _free_text_condition(needle: str) -> ColumnElement[bool]:
         _jsonb_values_ilike(_p.place_name_aliases, pattern),
         _p.location["city"].astext.ilike(pattern, escape="\\"),
         _p.location["neighborhood"].astext.ilike(pattern, escape="\\"),
+        # Country too: "thailand" is a thing people type into a library that
+        # spans a trip, and without this it returns nothing while 131 Thai
+        # saves sit there. Matched on the display name, which the provider
+        # gives in English, rather than the two-letter code — nobody searches
+        # "th", and matching a bare code would make every needle containing
+        # those two letters drag a country in.
+        _p.location["country"].astext.ilike(pattern, escape="\\"),
         _jsonb_values_ilike(_p.tags, pattern),
         func.array_to_string(_p.categories, " ").ilike(pattern, escape="\\"),
     )

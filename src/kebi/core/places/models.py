@@ -464,7 +464,7 @@ class SavedPlaceFilters(PlaceCatalogFilters):
 
     # ---- place catalog filters --------------------------------------
     # Free-text needle, matched case-insensitively as a substring across a
-    # place's name, aliases, city/neighborhood, tags and categories (OR
+    # place's name, aliases, city/neighborhood/country, tags, categories (OR
     # within the group, AND with every other filter). A *predicate*, not a
     # relevance query: it narrows the row set and never reorders it, so the
     # library stays the browse ADR-104 defined and its keyset cursor keeps

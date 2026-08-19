@@ -80,7 +80,7 @@ async def get_user_library(
     empty-state UI is the product's concern.
 
     `q` is free-text search over the *whole* library — place name, aliases,
-    city, neighbourhood, tags, categories — as a case-insensitive substring,
+    city, neighbourhood, country, tags, categories — a case-insensitive substring,
     so it matches while the user is still typing. It is a predicate, not a
     relevance query: rows are narrowed, never reordered, so `sort` and
     `cursor` are unaffected. Both counts are server-side by necessity —

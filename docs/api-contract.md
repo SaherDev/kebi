@@ -553,7 +553,7 @@ GET /v1/user/library?sort=name&limit=20&cursor=<next_cursor-from-prior-response>
 
 **`q` — searching the library (ADR-164).** Matches, case-insensitively and
 as a **substring**, against the place's name, its alternative names, its
-city and neighbourhood, its tag values and its categories. Substring rather
+city, neighbourhood and country, its tag values and its categories. Substring rather
 than word-matching because the client searches as the user types: `cang`
 must already find Canggu. It is a **predicate, not a relevance query** — it
 narrows the rows and never reorders them, so `sort` and `cursor` behave

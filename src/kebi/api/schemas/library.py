@@ -51,7 +51,8 @@ class LibraryQuery(BaseModel):
         max_length=200,
         description=(
             "Free-text search across the whole library: place name, "
-            "alternative names, city, neighbourhood, tags and categories. "
+            "alternative names, city, neighbourhood, country, tags and "
+            "categories. "
             "Case-insensitive substring, so it matches mid-typing (`cang` "
             "finds Canggu). ANDed with every other filter. Narrows the rows "
             "only — it never reorders them, so `sort` and `cursor` behave "
