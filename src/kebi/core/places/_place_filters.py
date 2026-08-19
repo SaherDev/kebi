@@ -33,6 +33,8 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, TSVECTOR
 
+from kebi.core.knowledge.schemas import _slugify
+
 from ._place_utils import escape_like
 from .models import (
     LocationContext,
@@ -119,9 +121,10 @@ def _jsonb_values_ilike(col: Any, pattern: str) -> ColumnElement[bool]:
 def _free_text_condition(needle: str) -> ColumnElement[bool]:
     """The `query` filter: one OR-group over everything a person might type.
 
-    Name, alternative names, the place's area words, its tags and its
-    categories — matched as a case-insensitive substring so the predicate
-    holds mid-word while the user is still typing. Deliberately *not* the
+    Name, alternative names, the place's area words (as stored *and* as the
+    library names them), its country, tags and categories — matched as a
+    case-insensitive substring so the predicate holds mid-word while the
+    user is still typing. Deliberately *not* the
     `search_vector` FTS index: `websearch_to_tsquery` matches whole lexemes,
     so "cang" would find nothing until "canggu" is fully typed.
 
@@ -130,21 +133,33 @@ def _free_text_condition(needle: str) -> ColumnElement[bool]:
     is over one person's library, never the catalog.
     """
     pattern = f"%{escape_like(needle)}%"
-    return or_(
+
+    # The area as the *library* names it, not as the provider spelled it.
+    # A section heading is derived from `geo_key`, and the key is a folded,
+    # transliterated form of the raw location — so a place under the
+    # "Bangkok" heading may store "Krung Thep Maha Nakhon", and one under
+    # "Canggu" may store "Tibubeneng". Matching only the display strings
+    # meant search denied places its own headings were promising: "no
+    # matches for bangkok" directly above a Bangkok section holding ten.
+    # The needle is slugified the same way the key was built, so "hoi an"
+    # and "Hội An" both reach `hoi-an`, and the country prefix is stripped
+    # so a two-letter needle cannot drag in a whole country.
+    conditions = [
         _p.place_name.ilike(pattern, escape="\\"),
         _jsonb_values_ilike(_p.place_name_aliases, pattern),
         _p.location["city"].astext.ilike(pattern, escape="\\"),
         _p.location["neighborhood"].astext.ilike(pattern, escape="\\"),
-        # Country too: "thailand" is a thing people type into a library that
-        # spans a trip, and without this it returns nothing while 131 Thai
-        # saves sit there. Matched on the display name, which the provider
-        # gives in English, rather than the two-letter code — nobody searches
-        # "th", and matching a bare code would make every needle containing
-        # those two letters drag a country in.
         _p.location["country"].astext.ilike(pattern, escape="\\"),
         _jsonb_values_ilike(_p.tags, pattern),
         func.array_to_string(_p.categories, " ").ilike(pattern, escape="\\"),
-    )
+    ]
+    if slug := _slugify(needle):
+        conditions.append(
+            func.regexp_replace(_p.geo_key, "^[a-z]{2}/", "").ilike(
+                f"%{escape_like(slug)}%", escape="\\"
+            )
+        )
+    return or_(*conditions)
 
 
 def build_filter_conditions(

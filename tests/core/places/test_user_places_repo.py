@@ -211,7 +211,30 @@ async def test_browse_query_searches_every_field_a_person_might_type() -> None:
     assert sql.count("(places.location ->> ") == 3
     assert "jsonb_path_query_array(places.tags" in sql
     assert "array_to_string(places.categories" in sql
-    assert sql.count(" OR ") >= 6  # one OR-group, not seven ANDed predicates
+    # ...and the area as the *library* names it. A section heading comes from
+    # geo_key, so without this, search denies places its own headings promise:
+    # "no matches for bangkok" above a Bangkok section holding ten.
+    assert "regexp_replace(places.geo_key" in sql
+    assert sql.count(" OR ") >= 7  # one OR-group, not eight ANDed predicates
+
+
+@pytest.mark.asyncio
+async def test_browse_query_matches_the_area_name_the_heading_shows() -> None:
+    """`bangkok` must find places whose stored city is "Krung Thep Maha
+    Nakhon" — the key folds to th/bangkok, and the heading says Bangkok."""
+    session = MagicMock()
+    session.execute = AsyncMock(return_value=[])
+    repo = UserPlacesRepo(session=session)
+
+    await repo.browse("u1", SavedPlaceFilters(query="Hoi An"), limit=20)
+
+    params = session.execute.await_args.args[0].compile().params
+    # The needle is slugified the same way the key was built, so a typed
+    # space or a diacritic still reaches the hyphenated key segment.
+    assert "%hoi-an%" in params.values()
+    # The country prefix is stripped, so a two-letter needle can't drag in
+    # a whole country via `id/` or `th/`.
+    assert "^[a-z]{2}/" in params.values()
 
 
 @pytest.mark.asyncio
