@@ -311,6 +311,12 @@ _AREA_ALIASES: dict[tuple[str, str], str] = {
     ("id", "tibubeneng"): "canggu",
     # The Uluwatu area's venues sit in Pecatu village on Google's map.
     ("id", "pecatu"): "uluwatu",
+    # Endonym/exonym pair Google returns in both slots — as the area of a
+    # save in Boom, and as the city of one in Antwerp itself. Folded here
+    # rather than in _CITY_ALIASES because only this table reaches the
+    # neighborhood segment, and canonical_city_slug folds through here on
+    # its way to the city lookup, so one entry canonicalises both.
+    ("be", "antwerpen"): "antwerp",
 }
 
 
@@ -381,6 +387,11 @@ _CITY_ALIASES: dict[tuple[str, str], str] = {
     ("th", "krung-thep"): "bangkok",
     ("id", "jakarta-raya"): "jakarta",
     ("id", "daerah-khusus-ibukota-jakarta"): "jakarta",
+    # Locality-less provinces Google names in Indonesian on one fetch and in
+    # English on the next; the English form is canonical so the two Nusa
+    # Tenggaras key alike. Both directions observed live on saved places.
+    ("id", "nusa-tenggara-barat"): "west-nusa-tenggara",
+    ("id", "nusa-tenggara-timur"): "east-nusa-tenggara",
     ("vn", "thanh-pho-ho-chi-minh"): "ho-chi-minh-city",
     ("vn", "sai-gon"): "ho-chi-minh-city",
     ("vn", "ha-noi"): "hanoi",

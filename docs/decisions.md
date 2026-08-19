@@ -17,6 +17,16 @@ Format:
 
 ---
 
+## ADR-166: A leaked transaction must expire on its own, and a language the geocoder won't translate still keys one way
+
+**Date:** 2026-08-19\
+**Status:** accepted — operational hardening for ADR-163/165\
+**Context:** Deploying the stored area key wedged production. A connection had been sitting idle inside an open transaction for four days — the shape a request that is cancelled mid-read leaves behind — holding a read lock on the catalog. The migration's table alteration queued behind it, and because the lock queue is first-in-first-out, every subsequent reader queued behind the alteration: one abandoned session took the catalog down for everything, and the migration eventually died waiting and rolled back, leaving no trace of why the deploy had simply stopped. Nothing in the system had an opinion about how long a transaction may stay idle, so the only bound was how long the client stayed connected. Separately, once the deploy completed, the live data showed the language-splitting ADR-163 set out to end had survived it: a re-fetch pinned to English does not help where the provider has no English rendering to give, and one area was keyed under both its local and its English name — as a city on one save and as a neighborhood on another, since which slot a name lands in depends on how the provider models the region.\
+**Decision:** Bound the idle transaction at the connection rather than trusting callers to close cleanly — the database expires what the application forgot, so a leak costs one reaped connection instead of a table-wide outage. This is a backstop, not the fix for whatever leaks; it is chosen because the failure it prevents is total and its own cost is nil. For the name splits, extend the same hand-maintained folding the prior decisions established, with one refinement: a name that can appear at either level is folded by the table that reaches both levels, so a single entry cannot canonicalise one slot and leave the other split. The English form stays canonical, keeping sibling regions keyed alike.\
+**Consequences:** A cancelled request can no longer escalate into an outage, and a migration that waits on a lock now fails against a bounded queue rather than an unbounded one. The leak itself is still unfixed and still worth finding — this decision only caps its blast radius. The folding tables grow by the usual increment and carry the usual cost: a variant nobody has added still splits silently, and this incident is evidence that pinning the fetch language does not remove the need for them, since the provider answers in the local language when it has nothing else. Keying by a stable provider area id remains the direction that retires the tables entirely.
+
+---
+
 ## ADR-165: A saved place carries the area it is in — stored once, so the library can be read by place
 
 **Date:** 2026-08-19\

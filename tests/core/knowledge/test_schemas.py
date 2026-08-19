@@ -172,3 +172,28 @@ class TestAdminUnitFolding:
         assert build_geo_key("id", "Bali", "Pecatu") == "id/bali/uluwatu"
         # Alias scope is the country — no cross-country rewrites.
         assert build_geo_key("vn", "Hue", "Pecatu") == "vn/hue/pecatu"
+
+    def test_locality_less_provinces_key_in_english(self) -> None:
+        # Google returns these provinces in Indonesian on one fetch and in
+        # English on the next; both spellings were live on saved places and
+        # split one area across two screens.
+        assert (
+            build_geo_key("id", "Nusa Tenggara Barat", "Gili Indah")
+            == build_geo_key("id", "West Nusa Tenggara", "Gili Indah")
+            == "id/west-nusa-tenggara/gili-indah"
+        )
+        assert (
+            build_geo_key("id", "Nusa Tenggara Timur")
+            == build_geo_key("id", "East Nusa Tenggara")
+            == "id/east-nusa-tenggara"
+        )
+
+    def test_an_endonym_folds_in_both_key_slots(self) -> None:
+        # "Antwerpen" arrived as a neighborhood on one save and as a city on
+        # another; a table that reached only one slot would leave the split.
+        assert (
+            build_geo_key("be", "Boom", "Antwerpen")
+            == build_geo_key("be", "Boom", "Antwerp")
+            == "be/boom/antwerp"
+        )
+        assert build_geo_key("be", "Antwerpen", "Antwerpen") == "be/antwerp/antwerp"
