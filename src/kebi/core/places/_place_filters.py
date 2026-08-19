@@ -13,6 +13,7 @@ home for that shared surface so the logic is written once:
 from __future__ import annotations
 
 import json
+from typing import Any
 
 from sqlalchemy import (
     Boolean,
@@ -27,6 +28,8 @@ from sqlalchemy import (
     Text,
     cast,
     func,
+    literal_column,
+    or_,
 )
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, TSVECTOR
 
@@ -60,6 +63,8 @@ _PlacesTable = Table(
     Column("location", JSONB),
     Column("created_at", DateTime(timezone=True)),
     Column("refreshed_at", DateTime(timezone=True)),
+    # Derived on write from `location` — see `geo_key_for_location`.
+    Column("geo_key", String),
     Column("search_vector", TSVECTOR),
 )
 _p = _PlacesTable.c
@@ -90,6 +95,57 @@ assert "value" in PlaceTag.model_fields, (
     "PlaceTag.value field renamed — update tag JSONB containment below"
 )
 
+# The free-text needle reads both JSONB arrays through the jsonpath `$[*].value`,
+# which hardcodes the same field name on both models. A rename would silently
+# stop matching tags or aliases — fail at import instead.
+assert "value" in PlaceNameAlias.model_fields, (
+    "PlaceNameAlias.value field renamed — update the `$[*].value` path below"
+)
+
+
+def _jsonb_values_ilike(col: Any, pattern: str) -> ColumnElement[bool]:
+    """Match a needle against the `value` of every object in a JSONB array.
+
+    `jsonb_path_query_array` projects just the values (`["cafe", "brunch"]`)
+    before the ILIKE, so the match cannot land on a key name or a provenance
+    field — searching "google" must not return every place whose tags happen
+    to be Google-sourced. NULL columns yield NULL and simply don't match.
+    """
+    return cast(
+        func.jsonb_path_query_array(col, literal_column("'$[*].value'")), Text
+    ).ilike(pattern, escape="\\")
+
+
+def _free_text_condition(needle: str) -> ColumnElement[bool]:
+    """The `query` filter: one OR-group over everything a person might type.
+
+    Name, alternative names, the place's area words, its tags and its
+    categories — matched as a case-insensitive substring so the predicate
+    holds mid-word while the user is still typing. Deliberately *not* the
+    `search_vector` FTS index: `websearch_to_tsquery` matches whole lexemes,
+    so "cang" would find nothing until "canggu" is fully typed.
+
+    Unindexed by nature (a leading wildcard can't use a b-tree), which is
+    affordable only because every caller ANDs this with `user_id` — the scan
+    is over one person's library, never the catalog.
+    """
+    pattern = f"%{escape_like(needle)}%"
+    return or_(
+        _p.place_name.ilike(pattern, escape="\\"),
+        _jsonb_values_ilike(_p.place_name_aliases, pattern),
+        _p.location["city"].astext.ilike(pattern, escape="\\"),
+        _p.location["neighborhood"].astext.ilike(pattern, escape="\\"),
+        # Country too: "thailand" is a thing people type into a library that
+        # spans a trip, and without this it returns nothing while 131 Thai
+        # saves sit there. Matched on the display name, which the provider
+        # gives in English, rather than the two-letter code — nobody searches
+        # "th", and matching a bare code would make every needle containing
+        # those two letters drag a country in.
+        _p.location["country"].astext.ilike(pattern, escape="\\"),
+        _jsonb_values_ilike(_p.tags, pattern),
+        func.array_to_string(_p.categories, " ").ilike(pattern, escape="\\"),
+    )
+
 
 def build_filter_conditions(
     filters: SavedPlaceFilters,
@@ -103,6 +159,10 @@ def build_filter_conditions(
     conditions: list[ColumnElement[bool]] = []
 
     # ---- place catalog ----
+    # A blank or whitespace-only needle is "no search", not "match nothing".
+    if filters.query and filters.query.strip():
+        conditions.append(_free_text_condition(filters.query.strip()))
+
     if filters.categories:
         # Array overlap (OR semantics): a place matches if its categories
         # share any element with the filter set. Cast as ARRAY(Text) — the
@@ -119,6 +179,19 @@ def build_filter_conditions(
             conditions.append(
                 _p.tags.op("@>")(cast(json.dumps([{"value": tag_val}]), JSONB))
             )
+
+    if filters.area:
+        # Prefix, not equality: an area contains its children, so `id/bali`
+        # must return the saves keyed `id/bali/canggu`. The `/` guard stops
+        # `id/bal` matching `id/bali` — a key segment is whole or it is a
+        # different area.
+        key = filters.area.strip("/")
+        conditions.append(
+            or_(
+                _p.geo_key == key,
+                _p.geo_key.like(f"{escape_like(key)}/%", escape="\\"),
+            )
+        )
 
     if filters.city:
         conditions.append(

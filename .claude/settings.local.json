@@ -105,7 +105,14 @@
       "Bash(git restore *)",
       "Bash(git rev-list *)",
       "Bash(gh pr *)",
-      "Bash(echo \"exit: $?\")"
+      "Bash(echo \"exit: $?\")",
+      "Bash(grep -v \"working_location\\\\|LocationContext\\(\\\\?$\")",
+      "Bash(git log *)",
+      "Read(//Users/saher/dev/repos/kebi-dev/kebi-config/secrets/**)",
+      "Bash(DATABASE_URL='postgresql://postgres:GudGzBygfOyftGPrJmohCvEgoyAEmAtu@nozomi.proxy.rlwy.net:46857/railway' poetry run *)",
+      "Bash(DATABASE_URL='postgresql://postgres:GudGzBygfOyftGPrJmohCvEgoyAEmAtu@nozomi.proxy.rlwy.net:46857/railway' REDIS_URL='redis://default:TqVAGiQWkQAwBFziqtlbgYRTsUBlnrQg@junction.proxy.rlwy.net:23587' poetry run python scripts/backfill_place_geo.py --apply)",
+      "Bash(sort -u -t: -k2)",
+      "Bash(brew services *)"
     ]
   }
 }

@@ -6,7 +6,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
 from kebi.api.deps import (
     GatewayIdentity,
+    get_area_handle_builder,
     get_event_dispatcher,
+    get_library_areas_service,
     get_place_notes_service,
     get_user_data_deletion_service,
     get_user_intent_service,
@@ -16,16 +18,21 @@ from kebi.api.deps import (
 from kebi.api.rate_limit import limiter
 from kebi.api.schemas.intents import IntentsQuery, IntentsResponse
 from kebi.api.schemas.library import (
+    LibraryAreasResponse,
     LibraryQuery,
     LibraryResponse,
     LibraryUserData,
     SaveUserPlaceRequest,
     UserPlaceStatusPatch,
 )
+from kebi.core.areas.handles import AreaHandleBuilder
+from kebi.core.areas.keys import geo_key_for_location
+from kebi.core.areas.library_areas_service import LibraryAreasService
 from kebi.core.events.dispatcher import EventDispatcher
 from kebi.core.events.events import LibraryStateChanged, RecommendationSaved
 from kebi.core.knowledge.place_notes_service import PlaceNotesService
 from kebi.core.places import (
+    PlaceCore,
     PlaceNotFoundError,
     PlaceSource,
     SaveLimitExceededError,
@@ -37,6 +44,21 @@ from kebi.core.user.service import DataScope, UserDataDeletionService
 router = APIRouter()
 
 
+def _area_key_of(place: PlaceCore) -> str | None:
+    """The area key for a place row, or None when it has no area.
+
+    Recomputed from the row's location rather than read off the stored
+    column, so a response handle is always current with the folding rules —
+    even in the window between a fold-table change and the re-derivation
+    that repoints the stored keys (ADR-165). The stored key is what SQL
+    filters and groups on; this is what the row is decorated with.
+    """
+    loc = place.location
+    if loc is None:
+        return None
+    return geo_key_for_location(loc.country_code, loc.city, loc.neighborhood)
+
+
 @router.get("/user/library", response_model=LibraryResponse)
 @limiter.limit("60/minute")
 async def get_user_library(
@@ -45,15 +67,25 @@ async def get_user_library(
     params: Annotated[LibraryQuery, Query()],
     service: UserPlacesService = Depends(get_user_places_service),  # noqa: B008
     notes_service: PlaceNotesService = Depends(get_place_notes_service),  # noqa: B008
+    handles: AreaHandleBuilder = Depends(get_area_handle_builder),  # noqa: B008
 ) -> LibraryResponse:
     """Browse the caller's saved places (the Library screen).
 
     Returns one filtered page of the user's saved places (`user_places ⋈
     places`) plus an opaque `next_cursor` for the next page (`null` on the
-    last page) and `total`, the unfiltered grand total of the caller's saves
-    (the screen's hero count, the same on every page). An empty library
-    returns `{"places": [], "next_cursor": null, "total": 0}` — the
+    last page), `total`, the unfiltered grand total of the caller's saves
+    (the screen's hero count, the same on every page), and `filtered_total`,
+    how many saves match this request's `q`/filters across the whole library.
+    An empty library returns an empty list with both counts at 0 — the
     empty-state UI is the product's concern.
+
+    `q` is free-text search over the *whole* library — place name, aliases,
+    city, neighbourhood, country, tags, categories — a case-insensitive substring,
+    so it matches while the user is still typing. It is a predicate, not a
+    relevance query: rows are narrowed, never reordered, so `sort` and
+    `cursor` are unaffected. Both counts are server-side by necessity —
+    filtering client-side over loaded pages makes a saved place three pages
+    down report as "no results", which is the failure this exists to remove.
 
     `sort` is the screen's recent ↔ A–Z toggle: `recent` (newest-saved
     first, default) or `name` (case-insensitive A–Z). A `cursor` is bound to
@@ -75,7 +107,7 @@ async def get_user_library(
     only ever read their own library. A malformed or sort-mismatched
     `cursor` surfaces as a 400 via the shared `ValueError` handler.
     """
-    places, next_cursor, total = await service.browse(
+    places, next_cursor, total, filtered_total = await service.browse(
         identity.user_id,
         params.to_filters(),
         params.limit,
@@ -83,7 +115,46 @@ async def get_user_library(
         sort=params.sort,
     )
     notes_by_place = await notes_service.notes_for_saves(places, identity.user_id)
-    return LibraryResponse.from_page(places, next_cursor, total, notes_by_place)
+    areas_by_key = await handles.for_keys(
+        [k for v in places if (k := _area_key_of(v.place)) is not None]
+    )
+    return LibraryResponse.from_page(
+        places, next_cursor, total, filtered_total, notes_by_place, areas_by_key
+    )
+
+
+@router.get("/user/library/areas", response_model=LibraryAreasResponse)
+@limiter.limit("60/minute")
+async def get_user_library_areas(
+    request: Request,
+    identity: Annotated[GatewayIdentity, Depends(require_gateway_identity)],
+    service: LibraryAreasService = Depends(get_library_areas_service),  # noqa: B008
+) -> LibraryAreasResponse:
+    """Every area the caller has saves in, with an exact count each (ADR-165).
+
+    The Library screen groups saves by area, and grouping needs what a paged
+    read cannot give: the complete set of areas, and a count that means the
+    whole library rather than the pages loaded so far. A page-derived count
+    reads "Canggu (4)" when the real answer is 11, on first paint, which is
+    the same failure `q` removed for search (ADR-164).
+
+    Each entry carries the area as something tappable — `key`, `name`,
+    `uri`, `icon`, and its `parent` — built by the same builder that
+    decorates library rows, so a heading and the rows under it can never
+    disagree about an area's name.
+
+    `count` is the **exact-key** total: nested areas are separate entries and
+    are not folded in. A client wanting one rolled-up heading sums the
+    entries sharing a `parent` and opens it with `?area=<parent key>`, which
+    matches by prefix. Rolling up is layout; both answers stay available.
+
+    Deliberately **unfiltered** — it ignores `q` and every browse filter,
+    because it is the at-rest index: one that narrowed while someone typed
+    would shift under them. Ordering carries no meaning and is not part of
+    the contract. Areas whose geography is coarser than a city are absent
+    entirely; naming that bucket is the client's call.
+    """
+    return LibraryAreasResponse.from_areas(await service.list_areas(identity.user_id))
 
 
 @router.get("/user/intents", response_model=IntentsResponse)

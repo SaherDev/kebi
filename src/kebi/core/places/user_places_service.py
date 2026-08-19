@@ -220,9 +220,9 @@ class UserPlacesService:
         limit: int,
         cursor: str | None = None,
         sort: LibrarySort = LibrarySort.recent,
-    ) -> tuple[list[SavedPlaceView], str | None, int]:
-        """One filtered, keyset-paged page of the user's saved places, plus the
-        unfiltered grand total of the caller's saves.
+    ) -> tuple[list[SavedPlaceView], str | None, int, int]:
+        """One filtered, keyset-paged page of the user's saved places, plus two
+        counts: the unfiltered grand total, and how many match the filters.
 
         `sort` selects the order (recent ↔ A–Z) and is carried into the keyset
         anchor: the opaque `cursor` token is owned end-to-end here — this is
@@ -240,13 +240,19 @@ class UserPlacesService:
 
         `total` is the whole library size — independent of the page's filters
         and cursor — and drives the screen's hero count, so it is the same on
-        every page.
+        every page. `filtered_total` is the same shape of answer for the
+        *narrowed* set: how many saves match, across the whole library rather
+        than this page. Both are whole-library numbers on purpose — a count
+        derived from loaded pages is the bug this endpoint exists to remove,
+        since a client cannot count what it was never sent. With nothing
+        narrowing, the two are equal.
         """
         anchor = LibraryCursor.decode(cursor) if cursor else None
         rows = await self._user_places_repo.browse(
             user_id, filters, limit=limit + 1, cursor=anchor, sort=sort
         )
         total = await self._user_places_repo.count_by_user(user_id)
+        filtered_total = await self._user_places_repo.count_filtered(user_id, filters)
         has_more = len(rows) > limit
         page = rows[:limit]
         next_cursor = (
@@ -254,7 +260,7 @@ class UserPlacesService:
             if has_more and page
             else None
         )
-        return page, next_cursor, total
+        return page, next_cursor, total, filtered_total
 
     async def update_status(
         self, user_place_id: str, user_id: str, changes: UserPlaceStatusUpdate

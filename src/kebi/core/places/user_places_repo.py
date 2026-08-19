@@ -191,6 +191,66 @@ class UserPlacesRepo:
         result = await self._session.execute(stmt)
         return result.scalar_one()
 
+    async def area_distribution(self, user_id: str) -> list[tuple[str, int]]:
+        """Every area the user holds saves in, with an exact count each.
+
+        Deliberately unfiltered and unpaged: this is the library's at-rest
+        index, so it answers for the whole library regardless of what the
+        current view is narrowed to. A count computed from loaded pages is
+        the same lie search told before ADR-164 — "Canggu (4)" meaning
+        "4 so far" — and it is worse here because it appears on first paint.
+
+        Groups on the stored key rather than the location strings, so a
+        heading counts exactly the saves that its area screen would show.
+        Saves with no key (geography coarser than a city) are absent rather
+        than bucketed: naming that group is the client's call, not ours.
+
+        Ordered biggest-first for a stable, useful default, but the order is
+        not part of any contract — callers sort for their own screen.
+        """
+        stmt = (
+            select(_p.geo_key, func.count().label("n"))
+            .select_from(_PlacesTable.join(_UserPlacesTable, _up.place_id == _p.id))
+            .where(and_(_up.user_id == user_id, _p.geo_key.isnot(None)))
+            .group_by(_p.geo_key)
+            .order_by(func.count().desc(), _p.geo_key.asc())
+        )
+        result = await self._session.execute(stmt)
+        return [(row.geo_key, row.n) for row in result]
+
+    async def count_filtered(self, user_id: str, filters: SavedPlaceFilters) -> int:
+        """How many saves match `filters` across the whole library.
+
+        The counterpart to `count_by_user`: that one is the unfiltered hero
+        number, this one is "3 of 84"'s left-hand side. Same predicate and
+        same join as `browse` — deliberately, because a count that disagrees
+        with the rows it describes is worse than no count. The join means a
+        save whose catalog row is missing is excluded here exactly as it is
+        from `browse`, so the number can never exceed what paging can reach.
+
+        Ignores the cursor: this counts the whole result set, not a page.
+
+        When the predicate narrows nothing — no search, no filters — this is
+        the unfiltered total by definition, so it delegates rather than
+        issuing a second aggregate for the same answer. Asking
+        `build_filter_conditions` whether it produced any SQL keeps that
+        judgement in one place: a filter that builds no condition (an empty
+        category list, a whitespace-only needle) is correctly a no-op here
+        too, with no second list of "what counts as set" to drift.
+        """
+        filter_conditions = build_filter_conditions(filters)
+        if not filter_conditions:
+            return await self.count_by_user(user_id)
+
+        conditions = [_up.user_id == user_id, *filter_conditions]
+        stmt = (
+            select(func.count())
+            .select_from(_PlacesTable.join(_UserPlacesTable, _up.place_id == _p.id))
+            .where(and_(*conditions))
+        )
+        result = await self._session.execute(stmt)
+        return result.scalar_one()
+
     async def update_fields(
         self, user_place_id: str, user_id: str, changes: UserPlaceStatusUpdate
     ) -> UserPlace | None:
