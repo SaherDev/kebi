@@ -3,7 +3,6 @@
 Public surface: models, protocols, concrete implementations, services.
 """
 
-from .area_geocoder import GoogleAreaGeocoder
 from .cache import RedisPlacesCache
 from .cached_embedder import CachedEmbedder
 from .embedding_service import EmbeddingService
@@ -125,7 +124,6 @@ __all__ = [
     "PlacesRepo",
     "UserPlacesRepo",
     "RedisPlacesCache",
-    "GoogleAreaGeocoder",
     "GooglePlacesClient",
     "NominatimGeocodingClient",
     # services
