@@ -20,7 +20,23 @@ def _get_engine() -> AsyncEngine:
         # Ensure asyncpg driver is used
         if url.startswith("postgresql://"):
             url = url.replace("postgresql://", "postgresql+asyncpg://", 1)
-        _engine = create_async_engine(url, echo=False)
+        # A session that escapes its `async with` — a cancelled request is the
+        # usual way — leaves a connection idle inside an open transaction,
+        # holding AccessShareLock on whatever it read. The next migration's
+        # ALTER TABLE then queues behind it forever, and because the lock queue
+        # is FIFO every subsequent reader queues behind the ALTER: one leaked
+        # session takes the table down. Observed in production on `places`,
+        # where the holder had been idle four days. The server-side timeout is
+        # the backstop that turns that outage into a reaped connection; no
+        # legitimate query here holds a transaction open for a minute.
+        _engine = create_async_engine(
+            url,
+            echo=False,
+            pool_pre_ping=True,
+            connect_args={
+                "server_settings": {"idle_in_transaction_session_timeout": "60000"}
+            },
+        )
     return _engine
 
 

@@ -85,7 +85,8 @@ class VisionFramesEnricher:
             logger.warning(
                 "VisionFramesEnricher: ffmpeg binary not found on PATH — "
                 "vision frame extraction will be skipped. "
-                "Install via: brew install ffmpeg (local) or add to nixpacks.toml (Railway)."
+                "Install via: brew install ffmpeg (local) or deploy.aptPackages "
+                "in railpack.json (Railway — the builder railway.toml selects)."
             )
 
     async def enrich(self, context: ExtractionContext) -> None:

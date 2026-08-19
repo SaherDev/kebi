@@ -17,6 +17,26 @@ Format:
 
 ---
 
+## ADR-167: A video post kebi cannot watch or hear extracts nothing, and says so as if the link were bad
+
+**Date:** 2026-08-19\
+**Status:** accepted\
+**Context:** Saving a video post had been failing for every video, not for particular links. The extraction endpoint answered success every time — it had genuinely done everything it could — and returned no places, which the client can only render as "couldn't save that, try again", so a retry re-ran the same doomed work. The cause was that the two enrichers which actually watch and listen to a video both shell out to a media tool that was never installed in the deployed image, while working on every developer's machine, where it is installed for unrelated reasons. What remained was the caption alone, and a travel video usually names its place on screen or out loud rather than in the caption. The stale advice in the code's own warning pointed at a builder this service stopped using, which is how it survived unnoticed: the message named a file nobody would find missing.\
+**Decision:** External binaries the runtime shells out to are part of the deployment contract and are declared in the image build, next to the builder the service actually uses — not assumed present because a laptop has them. Where a subprocess invokes a tool that ships inside the application's own environment, it is invoked through that environment explicitly rather than through a search path, since the deploy starts the app by absolute path and a child's path is not something the app controls. An enricher that cannot run still degrades quietly, which stays correct: partial understanding beats a failed save.\
+**Consequences:** Video posts can be watched and heard again, so the caption stops being the only signal. The deeper reporting gap is untouched and worth its own decision: an extraction that succeeds having understood nothing is indistinguishable, at the contract, from one that understood the post and found no place — the client cannot tell "I could not read this" from "there is no place here", and says the wrong one. A missing binary now degrades a video post to caption-only rather than announcing itself, so the warning log stays the only signal that capability is absent.
+
+---
+
+## ADR-166: A leaked transaction must expire on its own, and a language the geocoder won't translate still keys one way
+
+**Date:** 2026-08-19\
+**Status:** accepted — operational hardening for ADR-163/165\
+**Context:** Deploying the stored area key wedged production. A connection had been sitting idle inside an open transaction for four days — the shape a request that is cancelled mid-read leaves behind — holding a read lock on the catalog. The migration's table alteration queued behind it, and because the lock queue is first-in-first-out, every subsequent reader queued behind the alteration: one abandoned session took the catalog down for everything, and the migration eventually died waiting and rolled back, leaving no trace of why the deploy had simply stopped. Nothing in the system had an opinion about how long a transaction may stay idle, so the only bound was how long the client stayed connected. Separately, once the deploy completed, the live data showed the language-splitting ADR-163 set out to end had survived it: a re-fetch pinned to English does not help where the provider has no English rendering to give, and one area was keyed under both its local and its English name — as a city on one save and as a neighborhood on another, since which slot a name lands in depends on how the provider models the region.\
+**Decision:** Bound the idle transaction at the connection rather than trusting callers to close cleanly — the database expires what the application forgot, so a leak costs one reaped connection instead of a table-wide outage. This is a backstop, not the fix for whatever leaks; it is chosen because the failure it prevents is total and its own cost is nil. For the name splits, extend the same hand-maintained folding the prior decisions established, with one refinement: a name that can appear at either level is folded by the table that reaches both levels, so a single entry cannot canonicalise one slot and leave the other split. The English form stays canonical, keeping sibling regions keyed alike.\
+**Consequences:** A cancelled request can no longer escalate into an outage, and a migration that waits on a lock now fails against a bounded queue rather than an unbounded one. The leak itself is still unfixed and still worth finding — this decision only caps its blast radius. The folding tables grow by the usual increment and carry the usual cost: a variant nobody has added still splits silently, and this incident is evidence that pinning the fetch language does not remove the need for them, since the provider answers in the local language when it has nothing else. Keying by a stable provider area id remains the direction that retires the tables entirely.
+
+---
+
 ## ADR-165: A saved place carries the area it is in — stored once, so the library can be read by place
 
 **Date:** 2026-08-19\
