@@ -173,14 +173,25 @@ class TestAdminUnitFolding:
         # Alias scope is the country — no cross-country rewrites.
         assert build_geo_key("vn", "Hue", "Pecatu") == "vn/hue/pecatu"
 
+    def test_a_desa_folds_to_the_island_people_name(self) -> None:
+        # Google named one island's saves by its desa on some rows and by the
+        # island on others, splitting one area three ways once the province
+        # spelling is folded too.
+        assert (
+            build_geo_key("id", "West Nusa Tenggara", "Gili Indah")
+            == build_geo_key("id", "Nusa Tenggara Barat", "Gili Trawangan")
+            == build_geo_key("id", "Nusa Tenggara Barat", "Gili Indah")
+            == "id/west-nusa-tenggara/gili-trawangan"
+        )
+
     def test_locality_less_provinces_key_in_english(self) -> None:
         # Google returns these provinces in Indonesian on one fetch and in
         # English on the next; both spellings were live on saved places and
         # split one area across two screens.
         assert (
-            build_geo_key("id", "Nusa Tenggara Barat", "Gili Indah")
-            == build_geo_key("id", "West Nusa Tenggara", "Gili Indah")
-            == "id/west-nusa-tenggara/gili-indah"
+            build_geo_key("id", "Nusa Tenggara Barat", "Sengkol")
+            == build_geo_key("id", "West Nusa Tenggara", "Sengkol")
+            == "id/west-nusa-tenggara/sengkol"
         )
         assert (
             build_geo_key("id", "Nusa Tenggara Timur")
