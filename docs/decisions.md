@@ -17,6 +17,16 @@ Format:
 
 ---
 
+## ADR-167: A video post kebi cannot watch or hear extracts nothing, and says so as if the link were bad
+
+**Date:** 2026-08-19\
+**Status:** accepted\
+**Context:** Saving a video post had been failing for every video, not for particular links. The extraction endpoint answered success every time — it had genuinely done everything it could — and returned no places, which the client can only render as "couldn't save that, try again", so a retry re-ran the same doomed work. The cause was that the two enrichers which actually watch and listen to a video both shell out to a media tool that was never installed in the deployed image, while working on every developer's machine, where it is installed for unrelated reasons. What remained was the caption alone, and a travel video usually names its place on screen or out loud rather than in the caption. The stale advice in the code's own warning pointed at a builder this service stopped using, which is how it survived unnoticed: the message named a file nobody would find missing.\
+**Decision:** External binaries the runtime shells out to are part of the deployment contract and are declared in the image build, next to the builder the service actually uses — not assumed present because a laptop has them. Where a subprocess invokes a tool that ships inside the application's own environment, it is invoked through that environment explicitly rather than through a search path, since the deploy starts the app by absolute path and a child's path is not something the app controls. An enricher that cannot run still degrades quietly, which stays correct: partial understanding beats a failed save.\
+**Consequences:** Video posts can be watched and heard again, so the caption stops being the only signal. The deeper reporting gap is untouched and worth its own decision: an extraction that succeeds having understood nothing is indistinguishable, at the contract, from one that understood the post and found no place — the client cannot tell "I could not read this" from "there is no place here", and says the wrong one. A missing binary now degrades a video post to caption-only rather than announcing itself, so the warning log stays the only signal that capability is absent.
+
+---
+
 ## ADR-166: A leaked transaction must expire on its own, and a language the geocoder won't translate still keys one way
 
 **Date:** 2026-08-19\
