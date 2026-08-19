@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import subprocess
+import sys
 
 from kebi.core.agent._trace_context import traced_call
 from kebi.core.config import ExtractionWhisperConfig, get_config
@@ -171,7 +172,11 @@ class WhisperAudioEnricher:
             # TikTok often serves only muxed mp4 (no audio-only stream);
             # ffmpeg (-x below) extracts the audio track from the muxed
             # container regardless.
-            ["yt-dlp", "--get-url", "-f", "ba/b", url],
+            # Invoked as a module through this interpreter, never as a bare
+            # `yt-dlp` — the deploy starts uvicorn via the venv's python
+            # directly, so the venv's bin/ is not guaranteed on a subprocess
+            # PATH. Same form the vision enricher already uses.
+            [sys.executable, "-m", "yt_dlp", "--get-url", "-f", "ba/b", url],
             capture_output=True,
             text=True,
             check=True,
@@ -181,7 +186,9 @@ class WhisperAudioEnricher:
     def _download_audio_bytes(self, url: str) -> bytes:
         result = subprocess.run(
             [
-                "yt-dlp",
+                sys.executable,
+                "-m",
+                "yt_dlp",
                 "-f",
                 "ba/b",  # audio-only, else muxed (see _get_cdn_url note)
                 "-x",
