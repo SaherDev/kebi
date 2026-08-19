@@ -176,9 +176,7 @@ async def test_a_country_key_anchors_the_subject_against_child_heavy_claims(
 ) -> None:
     # Claims under a country prefix are dominated by its loudest child; the
     # call must pin the subject or the model profiles the child instead.
-    svc, extract, _ = _service(
-        _FakeAreaRepo(), _FakeCache(), _response(), monkeypatch
-    )
+    svc, extract, _ = _service(_FakeAreaRepo(), _FakeCache(), _response(), monkeypatch)
 
     await svc.profile_area("id")
 

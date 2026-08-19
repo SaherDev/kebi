@@ -17,8 +17,11 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from kebi.core.areas.handles import AreaHandle
+from kebi.core.areas.keys import geo_key_for_location, is_geo_key
+from kebi.core.areas.library_areas_service import AreaWithCount
 from kebi.core.knowledge.schemas import PlaceNote, note_source_label
 from kebi.core.places import (
     LibrarySort,
@@ -43,6 +46,27 @@ class LibraryQuery(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     # ---- filters (mapped to SavedPlaceFilters) ----
+    q: str | None = Field(
+        None,
+        max_length=200,
+        description=(
+            "Free-text search across the whole library: place name, "
+            "alternative names, city, neighbourhood, country, tags and "
+            "categories. "
+            "Case-insensitive substring, so it matches mid-typing (`cang` "
+            "finds Canggu). ANDed with every other filter. Narrows the rows "
+            "only — it never reorders them, so `sort` and `cursor` behave "
+            "exactly as they do without it."
+        ),
+    )
+    area: str | None = Field(
+        None,
+        description=(
+            "Filter to one area by its geo key (`id/bali/canggu`), as carried "
+            "on each row's `area.key`. Matches by prefix, so `id/bali` returns "
+            "the Canggu and Ubud saves too. A malformed key is a 422."
+        ),
+    )
     category: list[PlaceCategory] | None = Field(
         None, description="Filter by place category (OR across repeats)."
     )
@@ -82,9 +106,24 @@ class LibraryQuery(BaseModel):
         ),
     )
 
+    @field_validator("area")
+    @classmethod
+    def _validate_area_key(cls, v: str | None) -> str | None:
+        """Reject a key the grammar doesn't recognise.
+
+        Rejected loudly rather than matched loosely: a typo'd key silently
+        matching nothing looks identical to "you have no saves here", which
+        is exactly the empty-that-means-broken this whole task removes.
+        """
+        if v is not None and not is_geo_key(v):
+            raise ValueError(f"not a geo key: {v!r}")
+        return v
+
     def to_filters(self) -> SavedPlaceFilters:
         """Map the filter params to the domain filter (paging excluded)."""
         return SavedPlaceFilters(
+            query=self.q,
+            area=self.area,
             categories=self.category,
             tags=self.tag,
             city=self.city,
@@ -95,6 +134,86 @@ class LibraryQuery(BaseModel):
             approved=self.approved,
             saved_after=self.saved_after,
             saved_before=self.saved_before,
+        )
+
+
+def _area_for(place: PlaceCore, areas: dict[str, AreaHandle]) -> AreaHandle | None:
+    """The handle for a place row, keyed by the same derivation the builder
+    was fed. A place with no area (geography coarser than a city) is absent
+    from the map and correctly yields None."""
+    loc = place.location
+    if loc is None:
+        return None
+    key = geo_key_for_location(loc.country_code, loc.city, loc.neighborhood)
+    return areas.get(key) if key else None
+
+
+class AreaRefView(BaseModel):
+    """An area as something the client can open (ADR-165).
+
+    `uri` is composed server-side and handed over whole: the geo key is
+    slash-hierarchical (`id/bali/canggu`) and travels through a codec before
+    it can sit in a path, so a client that rebuilt the link from `key` would
+    be reimplementing an encoding it cannot see. `icon` is nullable and the
+    client keeps its own fallback, exactly as on a place row (ADR-146).
+    """
+
+    key: str
+    name: str
+    uri: str
+    icon: str | None = None
+
+
+class AreaHandleView(AreaRefView):
+    """An area plus its parent, so the client can roll a level up.
+
+    `parent` is null at city level — a country is not an area anyone
+    navigates to.
+    """
+
+    parent: AreaRefView | None = None
+
+    @classmethod
+    def from_handle(cls, handle: AreaHandle) -> AreaHandleView:
+        return cls.model_validate(handle, from_attributes=True)
+
+
+class LibraryAreaItem(BaseModel):
+    """One area in the library's area index, with an exact save count."""
+
+    area: AreaHandleView
+    count: int = Field(
+        ...,
+        description=(
+            "Saves keyed to **exactly** this area, counted across the whole "
+            "library rather than the loaded pages. Nested areas are their own "
+            "entries and are *not* folded in — this is the leaf histogram, so "
+            "a client that wants a rolled-up 'Bali' heading sums the entries "
+            "sharing that `parent` and opens it with `?area=id/bali`, which "
+            "*does* match by prefix. Rolling up is a layout decision, and "
+            "pre-summing here would make one of the two answers unavailable."
+        ),
+    )
+
+
+class LibraryAreasResponse(BaseModel):
+    """Every area the caller has saves in (ADR-165).
+
+    Complete, unpaged, and **unfiltered** — it ignores `q` and every filter
+    on the browse endpoint, because it is the library's at-rest index: an
+    index that narrowed while someone typed would shift under them. Ordering
+    carries no meaning and is not part of the contract; sort for the screen.
+    """
+
+    areas: list[LibraryAreaItem] = Field(default_factory=list)
+
+    @classmethod
+    def from_areas(cls, areas: list[AreaWithCount]) -> LibraryAreasResponse:
+        return cls(
+            areas=[
+                LibraryAreaItem(area=AreaHandleView.from_handle(a.area), count=a.count)
+                for a in areas
+            ]
         )
 
 
@@ -233,15 +352,31 @@ class LibraryItem(BaseModel):
     place: PlaceCore
     user_data: LibraryUserData | None
     claims: list[PlaceNoteView] = Field(default_factory=list)
+    area: AreaHandleView | None = Field(
+        None,
+        description=(
+            "The area this place sits in, as something tappable (ADR-165). "
+            "Sibling of `place` rather than a field inside `place.location` "
+            "because the URI and icon are wire and areas-table concerns, not "
+            "properties of the stored location. `null` when the place's "
+            "geography is coarser than a city — that is a data-completeness "
+            "gap, not an unprofiled area: an area with no profile row still "
+            "gets a working handle, since its screen renders unprofiled too."
+        ),
+    )
 
     @classmethod
     def from_view(
-        cls, view: SavedPlaceView, notes: list[PlaceNote] | None = None
+        cls,
+        view: SavedPlaceView,
+        notes: list[PlaceNote] | None = None,
+        area: AreaHandle | None = None,
     ) -> LibraryItem:
         return cls(
             place=view.place,
             user_data=LibraryUserData.from_user_place(view.user_data),
             claims=[PlaceNoteView.from_note(n) for n in (notes or [])],
+            area=AreaHandleView.from_handle(area) if area else None,
         )
 
     @classmethod
@@ -250,6 +385,7 @@ class LibraryItem(BaseModel):
         place: PlaceCore,
         user_place: UserPlace | None,
         notes: list[PlaceNote] | None = None,
+        area: AreaHandle | None = None,
     ) -> LibraryItem:
         """The place-screen shape: a catalog place with or without a save."""
         return cls(
@@ -258,6 +394,7 @@ class LibraryItem(BaseModel):
                 LibraryUserData.from_user_place(user_place) if user_place else None
             ),
             claims=[PlaceNoteView.from_note(n) for n in (notes or [])],
+            area=AreaHandleView.from_handle(area) if area else None,
         )
 
 
@@ -281,6 +418,16 @@ class LibraryResponse(BaseModel):
             "size regardless of any page or filter applied to this response."
         ),
     )
+    filtered_total: int = Field(
+        ...,
+        description=(
+            "How many saves match `q` and the filters, across the whole "
+            "library — the left-hand side of `3 of 84`. Counted server-side "
+            "because a client cannot count matches it was never sent: with "
+            "keyset paging, anything beyond the loaded pages is invisible to "
+            "it. Equal to `total` when nothing is narrowing."
+        ),
+    )
 
     @classmethod
     def from_page(
@@ -288,14 +435,22 @@ class LibraryResponse(BaseModel):
         views: list[SavedPlaceView],
         next_cursor: str | None,
         total: int,
+        filtered_total: int,
         notes_by_place: dict[str, list[PlaceNote]] | None = None,
+        areas_by_key: dict[str, AreaHandle] | None = None,
     ) -> LibraryResponse:
         notes = notes_by_place or {}
+        areas = areas_by_key or {}
         return cls(
             places=[
-                LibraryItem.from_view(v, notes.get(v.place.id) if v.place.id else None)
+                LibraryItem.from_view(
+                    v,
+                    notes.get(v.place.id) if v.place.id else None,
+                    _area_for(v.place, areas),
+                )
                 for v in views
             ],
             next_cursor=next_cursor,
             total=total,
+            filtered_total=filtered_total,
         )

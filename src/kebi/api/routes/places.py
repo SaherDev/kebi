@@ -14,6 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from kebi.api.deps import (
     GatewayIdentity,
+    get_area_handle_builder,
     get_event_dispatcher,
     get_place_notes_service,
     get_places_repo,
@@ -22,6 +23,8 @@ from kebi.api.deps import (
 )
 from kebi.api.rate_limit import limiter
 from kebi.api.schemas.library import LibraryItem
+from kebi.core.areas.handles import AreaHandleBuilder
+from kebi.core.areas.keys import geo_key_for_location
 from kebi.core.events.dispatcher import EventDispatcher
 from kebi.core.events.events import PlaceProfileRequested
 from kebi.core.knowledge.place_notes_service import PlaceNotesService
@@ -42,6 +45,7 @@ async def get_place(
     user_places: UserPlacesService = Depends(get_user_places_service),  # noqa: B008
     notes_service: PlaceNotesService = Depends(get_place_notes_service),  # noqa: B008
     event_dispatcher: EventDispatcher = Depends(get_event_dispatcher),  # noqa: B008
+    handles: AreaHandleBuilder = Depends(get_area_handle_builder),  # noqa: B008
 ) -> LibraryItem:
     """One catalog place as the client renders it, saved or not.
 
@@ -81,4 +85,10 @@ async def get_place(
         identity.user_id,
         save_ref=save.source_ref if save else None,
     )
-    return LibraryItem.from_place(cores[0], save, notes)
+    area_key = geo_key_for_location(
+        cores[0].location.country_code if cores[0].location else None,
+        cores[0].location.city if cores[0].location else None,
+        cores[0].location.neighborhood if cores[0].location else None,
+    )
+    area = (await handles.for_keys([area_key])).get(area_key) if area_key else None
+    return LibraryItem.from_place(cores[0], save, notes, area)

@@ -249,8 +249,7 @@ class TestLinkify:
         )
         text, entities = linkify("Luigis is the Monday move in Canggu", index)
         assert text == (
-            "[Luigis](kebi://venue/p1) is the Monday move in "
-            f"[Canggu]({_CANGGU_URI})"
+            f"[Luigis](kebi://venue/p1) is the Monday move in [Canggu]({_CANGGU_URI})"
         )
         assert [e.kind for e in entities] == ["venue", "area"]
 

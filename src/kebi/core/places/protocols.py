@@ -64,6 +64,10 @@ class UserPlacesRepoProtocol(Protocol):
 
     async def count_by_user(self, user_id: str) -> int: ...
 
+    async def count_filtered(self, user_id: str, filters: SavedPlaceFilters) -> int: ...
+
+    async def area_distribution(self, user_id: str) -> list[tuple[str, int]]: ...
+
     async def update_fields(
         self, user_place_id: str, user_id: str, changes: UserPlaceStatusUpdate
     ) -> UserPlace | None: ...
@@ -139,7 +143,7 @@ class UserPlacesServiceProtocol(Protocol):
         limit: int,
         cursor: str | None = None,
         sort: LibrarySort = LibrarySort.recent,
-    ) -> tuple[list[SavedPlaceView], str | None, int]: ...
+    ) -> tuple[list[SavedPlaceView], str | None, int, int]: ...
 
     async def save_one(
         self,

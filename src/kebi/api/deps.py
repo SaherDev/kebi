@@ -16,6 +16,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from kebi.core.agent.tools.candidate_namer import CandidateNamerService
 from kebi.core.areas import AreaProfileService, AreaScreenService
+from kebi.core.areas.handles import AreaHandleBuilder
+from kebi.core.areas.library_areas_service import LibraryAreasService
 from kebi.core.chat.consult_quota import ConsultQuotaService
 from kebi.core.chat.entity_icons import EntityIconRefresher
 from kebi.core.chat.service import ChatService
@@ -766,6 +768,26 @@ def get_user_places_service(
 ) -> UserPlacesService:
     """FastAPI dependency providing UserPlacesService (places)."""
     return UserPlacesService(user_places_repo=user_places_repo)
+
+
+def get_area_handle_builder() -> AreaHandleBuilder:
+    """Routable area identities for library rows and the place screen (ADR-165).
+
+    Session-factory based like the area repo it wraps: the same builder mints
+    the handle on a row and the one on a library-area heading, which is what
+    guarantees the two can never disagree about an area's name.
+    """
+    return AreaHandleBuilder(area_repo=get_area_repository())
+
+
+def get_library_areas_service(
+    user_places_repo: UserPlacesRepo = Depends(get_user_places_repo),  # noqa: B008
+) -> LibraryAreasService:
+    """The library's area index (ADR-165) — grouped counts + handles."""
+    return LibraryAreasService(
+        user_places_repo=user_places_repo,
+        handle_builder=get_area_handle_builder(),
+    )
 
 
 def get_area_screen_service(

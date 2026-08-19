@@ -27,6 +27,8 @@ from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from kebi.core.areas.keys import geo_key_for_location
+
 from ._place_utils import escape_like
 from .models import (
     LocationContext,
@@ -55,6 +57,8 @@ _PlacesTable = Table(
     Column("location", JSONB),
     Column("created_at", DateTime(timezone=True)),
     Column("refreshed_at", DateTime(timezone=True)),
+    # Derived on write from `location` — see `geo_key_for_location`.
+    Column("geo_key", String),
 )
 _t = _PlacesTable.c
 
@@ -250,6 +254,7 @@ class PlacesRepo:
                 "tags": excl.tags,
                 "icon": excl.icon,
                 "location": excl.location,
+                "geo_key": excl.geo_key,
                 "refreshed_at": excl.refreshed_at,
             },
         ).returning(*_PlacesTable.c)
@@ -338,6 +343,15 @@ def _core_to_dict(core: PlaceCore, now: datetime) -> dict[str, object]:
         "tags": [t.model_dump() for t in core.tags] or None,
         "icon": core.icon,
         "location": loc.model_dump(exclude_none=True) if loc else None,
+        # Derived here, never accepted from the caller: the key must always
+        # agree with the location it was computed from, and a writer that
+        # could set one independently is a writer that can disagree with the
+        # area screen about which area contains this place (ADR-165).
+        "geo_key": (
+            geo_key_for_location(loc.country_code, loc.city, loc.neighborhood)
+            if loc
+            else None
+        ),
         "created_at": core.created_at or now,
         "refreshed_at": core.refreshed_at
         or (now if loc and loc.lat is not None else None),

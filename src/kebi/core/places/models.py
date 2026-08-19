@@ -463,6 +463,22 @@ class SavedPlaceFilters(PlaceCatalogFilters):
     """
 
     # ---- place catalog filters --------------------------------------
+    # Free-text needle, matched case-insensitively as a substring across a
+    # place's name, aliases, city/neighborhood/country, tags, categories (OR
+    # within the group, AND with every other filter). A *predicate*, not a
+    # relevance query: it narrows the row set and never reorders it, so the
+    # library stays the browse ADR-104 defined and its keyset cursor keeps
+    # working. Substring rather than full-text because the client searches
+    # as the user types — "cang" must find Canggu, which `to_tsquery` won't.
+    query: str | None = None
+
+    # Canonical geo key (`id/bali/canggu`) — matched by prefix, so an area
+    # includes everything under it and `id/bali` returns the Canggu saves too.
+    # Filters on the *stored* key rather than the location strings `city`
+    # filters on, which is what makes it agree with the area screen: one save
+    # belongs to exactly one area, decided once at write time (ADR-165).
+    area: str | None = None
+
     city: str | None = None  # ILIKE
     neighborhood: str | None = None  # ILIKE
     country: str | None = None  # exact
