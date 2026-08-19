@@ -274,6 +274,60 @@ async def test_browse_query_does_not_reorder_rows() -> None:
 
 
 @pytest.mark.asyncio
+async def test_area_filter_matches_the_area_and_everything_under_it() -> None:
+    """Prefix, not equality — `id/bali` must return the Canggu saves, or a
+    rolled-up heading opens to a screen missing most of its rows."""
+    session = MagicMock()
+    session.execute = AsyncMock(return_value=[])
+    repo = UserPlacesRepo(session=session)
+
+    await repo.browse("u1", SavedPlaceFilters(area="id/bali"), limit=20)
+
+    sql = _compiled(session)
+    assert "places.geo_key = " in sql
+    assert "places.geo_key LIKE " in sql
+    params = session.execute.await_args.args[0].compile().params
+    assert "id/bali/%" in params.values()
+
+
+@pytest.mark.asyncio
+async def test_area_filter_groups_on_the_stored_key_not_the_location() -> None:
+    """The stored key is the one the area screen groups by. Matching on
+    `location->>'city'` instead would put a save in a heading whose screen
+    does not contain it."""
+    session = MagicMock()
+    session.execute = AsyncMock(return_value=[])
+    repo = UserPlacesRepo(session=session)
+
+    await repo.browse("u1", SavedPlaceFilters(area="id/bali/canggu"), limit=20)
+
+    sql = _compiled(session)
+    assert "geo_key" in sql
+    assert "location ->> " not in sql
+
+
+@pytest.mark.asyncio
+async def test_area_distribution_groups_and_counts_over_the_whole_library() -> None:
+    session = MagicMock()
+    session.execute = AsyncMock(
+        return_value=[
+            MagicMock(geo_key="id/bali/canggu", n=11),
+            MagicMock(geo_key="th/bangkok", n=4),
+        ]
+    )
+    repo = UserPlacesRepo(session=session)
+
+    dist = await repo.area_distribution("u1")
+
+    assert dist == [("id/bali/canggu", 11), ("th/bangkok", 4)]
+    sql = _compiled(session)
+    assert "GROUP BY places.geo_key" in sql
+    assert "count(" in sql
+    assert "LIMIT" not in sql  # never a page
+    assert "geo_key IS NOT NULL" in sql  # keyless saves aren't an area
+
+
+@pytest.mark.asyncio
 async def test_count_filtered_counts_the_join_under_the_same_predicate() -> None:
     session = MagicMock()
     result = MagicMock(scalar_one=MagicMock(return_value=9))

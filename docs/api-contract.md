@@ -80,6 +80,7 @@ keyed by the verified `X-Gateway-User-Id`.
 | GET /v1/home                | 30 / minute |
 | GET /v1/user/intents        | 60 / minute |
 | GET /v1/user/library        | 60 / minute |
+| GET /v1/user/library/areas  | 60 / minute |
 | POST /v1/user/places        | 60 / minute |
 | POST /v1/knowledge/curate   | 30 / minute |
 | GET /v1/knowledge/claims    | 60 / minute |
@@ -535,6 +536,7 @@ GET /v1/user/library?sort=name&limit=20&cursor=<next_cursor-from-prior-response>
 | Param          | Type                                | Notes                                                                                                            |
 | -------------- | ----------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
 | `q`            | `string` (≤200 chars)               | Free-text search over the **whole** library (ADR-164). See below                                                 |
+| `area`         | `string` (geo key)                  | One area by key (`id/bali/canggu`), matched by **prefix** so `id/bali` includes its neighbourhoods. Malformed → 422 (ADR-165) |
 | `category`     | repeated `PlaceCategory`            | OR across repeats. `?category=cafe&category=bar`                                                                 |
 | `tag`          | repeated `string`                   | Tag **value**; AND across repeats (every value must be present)                                                  |
 | `city`         | `string`                            | Case-insensitive match on `place.location.city`                                                                  |
@@ -561,7 +563,7 @@ pages the client has loaded — filtering client-side is what makes a saved
 place three pages down report as "no results".
 
 Filters combine with **AND** — `q` narrows an already-filtered view rather
-than replacing it. Default order is newest-first (`saved_at`
+than replacing it, and `?area=` + `q` compose (search *within* an area). Default order is newest-first (`saved_at`
 descending); `sort=name` switches to case-insensitive alphabetical. A
 `cursor` is bound to the `sort` it was issued under — replaying it under a
 different `sort` is a **400**, so flipping the toggle restarts paging from
@@ -607,6 +609,34 @@ the first page (drop the `cursor`). Keep `sort` fixed across a paging run.
   "filtered_total": 3
 }
 ```
+
+Each item also carries `area` — the area the place sits in, as something
+tappable (ADR-165):
+
+```json
+{
+  "place": { "…": "PlaceCore" },
+  "user_data": { "…": "UserPlace" },
+  "claims": [],
+  "area": {
+    "key": "id/bali/canggu",
+    "name": "Canggu",
+    "uri": "kebi://area/aWQvYmFsaS9jYW5nZ3U",
+    "icon": "🏄",
+    "parent": { "key": "id/bali", "name": "Bali", "uri": "kebi://area/aWQvYmFsaQ", "icon": null }
+  }
+}
+```
+
+`area` is a **sibling of `place`**, not a field inside `place.location`: the
+`uri` is a wire concern and the `icon` comes from the areas table, neither of
+which is a property of the stored location. `uri` is pre-composed — the geo
+key is slash-hierarchical and passes through a codec, so clients must never
+rebuild it from `key`. `area` is `null` when the place's geography is coarser
+than a city; that is a data-completeness gap (the client's "elsewhere"
+bucket), **not** an unprofiled area — an area with no profile row still gets a
+working handle, because its screen renders unprofiled too. The same `area`
+field appears on `GET /v1/places/{id}`.
 
 | Field    | Type               | Notes                                                                                                                                                                                                                           |
 | -------- | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -672,8 +702,8 @@ GET /v1/places/c0ffee00-1111-2222-3333-444455556666
 ```
 
 **Response (200):** a `LibraryItem` — the **same** `{ place, user_data,
-claims }` shape as one entry of the library response, so a venue tap and a
-library row open the identical screen. The one difference: **`user_data` is
+claims, area }` shape as one entry of the library response, so a venue tap and
+a library row open the identical screen. The one difference: **`user_data` is
 `null` when the caller never saved this place** — that null is the screen's
 "offer save" signal (`POST /v1/user/places` with this same id). `claims`
 are the place's insider notes (ADR-127): global approved claims plus the
@@ -697,9 +727,21 @@ all simply global.
       "agree_count": 0,
       "disagree_count": 0
     }
-  ]
+  ],
+  "area": {
+    "key": "id/bali/canggu",
+    "name": "Canggu",
+    "uri": "kebi://area/aWQvYmFsaS9jYW5nZ3U",
+    "icon": "🏄",
+    "parent": { "key": "id/bali", "name": "Bali", "uri": "kebi://area/aWQvYmFsaQ", "icon": null }
+  }
 }
 ```
+
+`area` is the area this place sits in, as something tappable (ADR-165) — the
+same field and same shape a library row carries, minted by the same builder,
+so the two can never disagree about an area's name. `null` when the place's
+geography is coarser than a city.
 
 > **Lazy enrichment (ADR-152):** a place that entered the catalog through
 > the suggestion path opens thin (no experiential tags) the first time —
@@ -933,6 +975,61 @@ DELETE /v1/user/places/{user_place_id}
 | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `204` | The caller's save was removed                                                                                                                                                   |
 | `404` | No such save **or** it belongs to another user (`detail: saved_place_not_found`) — indistinguishable, so it leaks nothing. A repeat delete of the same id therefore returns 404 |
+
+---
+
+## GET /v1/user/library/areas
+
+Which areas the caller's saves fall into, with an exact count each (ADR-165).
+The Library screen groups saves by area, and grouping needs what a paged read
+cannot give: the complete set of areas, and counts that mean the whole library
+rather than the pages loaded so far.
+
+**Request:** identity headers only — no query params.
+
+```
+GET /v1/user/library/areas
+```
+
+**Response (200):** `LibraryAreasResponse`
+
+```json
+{
+  "areas": [
+    {
+      "area": {
+        "key": "id/bali/canggu",
+        "name": "Canggu",
+        "uri": "kebi://area/aWQvYmFsaS9jYW5nZ3U",
+        "icon": "🏄",
+        "parent": { "key": "id/bali", "name": "Bali", "uri": "kebi://area/aWQvYmFsaQ", "icon": null }
+      },
+      "count": 11
+    }
+  ]
+}
+```
+
+| Field   | Type            | Notes                                                                                                                      |
+| ------- | --------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `area`  | `AreaHandle`    | Same shape as the `area` on a library row, from the same builder — a heading and its rows can never disagree on a name      |
+| `count` | `integer`       | Saves keyed to **exactly** this area, across the whole library. Nested areas are separate entries and are *not* folded in   |
+
+This is **data, not a screen**. Complete and unpaged, with no rollup, no
+pinning and no truncation, and **the order carries no meaning** — sort for
+whatever the screen needs. It is also always **unfiltered**: it ignores `q`
+and every browse filter, because it is the at-rest index and one that narrowed
+while someone typed would shift the sections under them. While a search is
+active, its counts and the visible rows describe different sets — render the
+results flat with `filtered_total` rather than as sections with at-rest counts.
+
+Counts are exact-key while `?area=` matches by **prefix**, and that asymmetry
+is deliberate: a client wanting one rolled-up "Bali" heading sums the entries
+sharing that `parent` and opens it with `?area=id/bali`, which returns the
+nested rows. Pre-summing here would make the leaf histogram unavailable.
+
+Areas whose geography is coarser than a city are absent entirely — naming that
+bucket ("elsewhere") is the client's call.
 
 ---
 
@@ -1264,7 +1361,8 @@ All protected calls additionally send the `X-Gateway-Token` + `X-Gateway-User-Id
 | GET /v1/home                | Home greeting + suggestion chips           | — (optional `lat`/`lng`/`city`/`local_time`/`weather` query) | HomeResponse (`greeting`, `chips: { text }[]`); fail-open, always `200`                                                                      |
 | GET /v1/user/intents        | "What you wanted" recall list              | — (optional `limit`/`cursor` query params)                   | IntentsResponse (`intents: { id, text, created_at }[]`, `next_cursor`)                                                                       |
 | POST /v1/extract            | Canonical extraction (save a place)        | raw_input                                                    | ExtractPlaceResponse                                                                                                                         |
-| GET /v1/user/library        | Browse + search the user's saved places (Library) | — (optional `q` + filter + `sort` + `limit`/`cursor` query params) | LibraryResponse (`places: SavedPlaceView[]`, `next_cursor`, `total`, `filtered_total`)                                          |
+| GET /v1/user/library        | Browse + search the user's saved places (Library) | — (optional `q` + `area` + filter + `sort` + `limit`/`cursor` query params) | LibraryResponse (`places: SavedPlaceView[]`, `next_cursor`, `total`, `filtered_total`)                                |
+| GET /v1/user/library/areas  | Which areas the user's saves fall into     | — (identity only)                                            | LibraryAreasResponse (`areas: { area: AreaHandle, count }[]`) — complete, unpaged, unfiltered                                                |
 | GET /v1/places/{id}         | Open any surfaced place (the place screen) | — (path param only)                                          | LibraryItem (`place`, `user_data` — null when unsaved, `claims`); `404` if uncatalogued                                                      |
 | GET /v1/areas/{id}          | Open any linked area (the area screen)     | — (path param only; id = encoded geo key)                    | AreaScreenResponse (profile + breadcrumb + `saved_count` + one body section: saved drill-down or worth-knowing); `404` if the id is no token |
 | POST /v1/user/places        | Save a surfaced place (plain save)         | place_core_id                                                | LibraryUserData (created user-state, `201`; `404` if uncatalogued); emits the `saved_recommendation` taste signal                            |

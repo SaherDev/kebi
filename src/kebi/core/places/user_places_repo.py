@@ -191,6 +191,33 @@ class UserPlacesRepo:
         result = await self._session.execute(stmt)
         return result.scalar_one()
 
+    async def area_distribution(self, user_id: str) -> list[tuple[str, int]]:
+        """Every area the user holds saves in, with an exact count each.
+
+        Deliberately unfiltered and unpaged: this is the library's at-rest
+        index, so it answers for the whole library regardless of what the
+        current view is narrowed to. A count computed from loaded pages is
+        the same lie search told before ADR-164 — "Canggu (4)" meaning
+        "4 so far" — and it is worse here because it appears on first paint.
+
+        Groups on the stored key rather than the location strings, so a
+        heading counts exactly the saves that its area screen would show.
+        Saves with no key (geography coarser than a city) are absent rather
+        than bucketed: naming that group is the client's call, not ours.
+
+        Ordered biggest-first for a stable, useful default, but the order is
+        not part of any contract — callers sort for their own screen.
+        """
+        stmt = (
+            select(_p.geo_key, func.count().label("n"))
+            .select_from(_PlacesTable.join(_UserPlacesTable, _up.place_id == _p.id))
+            .where(and_(_up.user_id == user_id, _p.geo_key.isnot(None)))
+            .group_by(_p.geo_key)
+            .order_by(func.count().desc(), _p.geo_key.asc())
+        )
+        result = await self._session.execute(stmt)
+        return [(row.geo_key, row.n) for row in result]
+
     async def count_filtered(self, user_id: str, filters: SavedPlaceFilters) -> int:
         """How many saves match `filters` across the whole library.
 

@@ -19,6 +19,8 @@ import base64
 import binascii
 import re
 
+from kebi.core.knowledge.schemas import build_geo_key
+
 # The grammar `build_geo_key` guarantees: ISO alpha-2 country, then up to two
 # lowercase hyphen-slug segments (city, neighborhood). Enforced on both
 # encode (never mint a token for a malformed key) and decode (never hand a
@@ -53,6 +55,46 @@ def decode_area_id(token: str) -> str:
     if not _GEO_KEY_RE.match(key):
         raise ValueError(f"not an area id: {token!r}")
     return key
+
+
+def is_geo_key(value: str) -> bool:
+    """Whether a string is a well-formed geo key.
+
+    The public form of the grammar this module already enforces on encode and
+    decode. Callers that accept a key straight off the wire (an `?area=`
+    filter, say) validate here rather than re-deriving the pattern.
+    """
+    return bool(_GEO_KEY_RE.match(value.strip("/")))
+
+
+def geo_key_for_location(
+    country_code: str | None, city: str | None, neighborhood: str | None
+) -> str | None:
+    """The area key a place's stored geography resolves to, or None.
+
+    The single derivation every consumer shares — the column written on
+    upsert, the handle on an API row, and the grouping behind the library's
+    area list. One function so a saved place, its area screen, and the claims
+    written about it can never disagree about which area contains it.
+
+    `None` when the geography is coarser than a city: a country-level key
+    ("everything in Indonesia") is not an area anyone navigates to, and
+    treating it as one would file unrelated saves together under a heading
+    that means nothing. That is the whole rule behind the client's
+    `elsewhere` bucket.
+
+    Note this reads `country_code` (ISO alpha-2), never the display country —
+    older rows carry no code and correctly yield None until a re-fetch heals
+    them (ADR-163).
+    """
+    if not country_code or not city:
+        return None
+    try:
+        return build_geo_key(country_code, city, neighborhood or None)
+    except ValueError:
+        # A country code the grammar rejects — treat as no area rather than
+        # failing a read that is only ever decorating a row.
+        return None
 
 
 def parent_keys(geo_key: str) -> list[str]:

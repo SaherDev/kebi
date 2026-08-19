@@ -63,6 +63,8 @@ _PlacesTable = Table(
     Column("location", JSONB),
     Column("created_at", DateTime(timezone=True)),
     Column("refreshed_at", DateTime(timezone=True)),
+    # Derived on write from `location` — see `geo_key_for_location`.
+    Column("geo_key", String),
     Column("search_vector", TSVECTOR),
 )
 _p = _PlacesTable.c
@@ -170,6 +172,19 @@ def build_filter_conditions(
             conditions.append(
                 _p.tags.op("@>")(cast(json.dumps([{"value": tag_val}]), JSONB))
             )
+
+    if filters.area:
+        # Prefix, not equality: an area contains its children, so `id/bali`
+        # must return the saves keyed `id/bali/canggu`. The `/` guard stops
+        # `id/bal` matching `id/bali` — a key segment is whole or it is a
+        # different area.
+        key = filters.area.strip("/")
+        conditions.append(
+            or_(
+                _p.geo_key == key,
+                _p.geo_key.like(f"{escape_like(key)}/%", escape="\\"),
+            )
+        )
 
     if filters.city:
         conditions.append(
