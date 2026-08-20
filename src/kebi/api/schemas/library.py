@@ -158,6 +158,9 @@ class AreaRefView(BaseModel):
     name: str
     uri: str
     icon: str | None = None
+    # ISO-3166 alpha-2 of the area's country — carried so a client can group
+    # by country without parsing the opaque key (ADR-169).
+    country_code: str
 
 
 class AreaHandleView(AreaRefView):

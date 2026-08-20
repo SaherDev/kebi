@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 
 from .keys import encode_area_id, parent_keys
 from .models import AreaProfile
@@ -34,12 +34,29 @@ if TYPE_CHECKING:
 
 
 class AreaRef(BaseModel):
-    """An area as something to open: identity, label, destination."""
+    """An area as something to open: identity, label, destination.
+
+    `country_code` exists so clients never have to parse the opaque key —
+    grouping a library by home country is a client concern, and the key's
+    segments are contractually not theirs to read (ADR-169).
+    """
 
     key: str
     name: str
     uri: str
     icon: str | None = None
+    country_code: str = ""
+
+    @model_validator(mode="after")
+    def _derive_country_code(self) -> AreaRef:
+        # Derived, never supplied: the head segment of every geo key is the
+        # ISO alpha-2 code by construction, and deriving here means no
+        # constructor can ship a ref whose code disagrees with its key.
+        if not self.country_code:
+            object.__setattr__(
+                self, "country_code", self.key.strip("/").split("/", 1)[0]
+            )
+        return self
 
 
 class AreaHandle(AreaRef):

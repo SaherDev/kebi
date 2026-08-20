@@ -623,14 +623,17 @@ tappable (ADR-165):
     "name": "Canggu",
     "uri": "kebi://area/aWQvQ2hJSm9R…",
     "icon": "🏄",
-    "parent": { "key": "id/ChIJoQ8Q…", "name": "Bali", "uri": "kebi://area/aWQvQ2hJSm9…", "icon": null }
+    "country_code": "id",
+    "parent": { "key": "id/ChIJoQ8Q…", "name": "Bali", "uri": "kebi://area/aWQvQ2hJSm9…", "icon": null, "country_code": "id" }
   }
 }
 ```
 
 `area` is a **sibling of `place`**, not a field inside `place.location`: the
 `uri` is a wire concern and the `icon` comes from the areas table, neither of
-which is a property of the stored location. `uri` is pre-composed — the geo
+which is a property of the stored location. `country_code` (ISO alpha-2, on
+every handle and parent) exists so a client can group or sort areas by
+country without ever parsing the opaque `key`. `uri` is pre-composed — the geo
 key is slash-hierarchical and passes through a codec, so clients must never
 rebuild it from `key`. `area` is `null` when the place's geography is coarser
 than a city; that is a data-completeness gap (the client's "elsewhere"
@@ -733,7 +736,8 @@ all simply global.
     "name": "Canggu",
     "uri": "kebi://area/aWQvQ2hJSm9R…",
     "icon": "🏄",
-    "parent": { "key": "id/ChIJoQ8Q…", "name": "Bali", "uri": "kebi://area/aWQvQ2hJSm9…", "icon": null }
+    "country_code": "id",
+    "parent": { "key": "id/ChIJoQ8Q…", "name": "Bali", "uri": "kebi://area/aWQvQ2hJSm9…", "icon": null, "country_code": "id" }
   }
 }
 ```
@@ -1010,7 +1014,8 @@ GET /v1/user/library/areas
         "name": "Canggu",
         "uri": "kebi://area/aWQvQ2hJSm9R…",
         "icon": "🏄",
-        "parent": { "key": "id/ChIJoQ8Q…", "name": "Bali", "uri": "kebi://area/aWQvQ2hJSm9…", "icon": null }
+        "country_code": "id",
+        "parent": { "key": "id/ChIJoQ8Q…", "name": "Bali", "uri": "kebi://area/aWQvQ2hJSm9…", "icon": null, "country_code": "id" }
       },
       "count": 11
     }
@@ -1038,6 +1043,13 @@ nested rows. Pre-summing here would make the leaf histogram unavailable.
 
 Areas whose geography is coarser than a city are absent entirely — naming that
 bucket ("elsewhere") is the client's call.
+
+**Country naming is client-side, by design.** City-level handles carry
+`parent: null` (a country is not an area anyone navigates to from here), and
+this index ships no country handles — a client folding thin cities up to a
+country heading names it from `country_code` via its own locale data. kebi
+does not plan to ship country handles on this index; if that ever changes it
+will be an additive field, never a reshape.
 
 ---
 

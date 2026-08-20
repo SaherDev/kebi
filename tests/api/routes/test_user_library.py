@@ -400,11 +400,13 @@ def test_area_index_returns_handles_with_exact_counts(svc: AsyncMock) -> None:
                     "name": "Canggu",
                     "uri": "kebi://area/abc",
                     "icon": "🏄",
+                    "country_code": "id",
                     "parent": {
                         "key": _BALI.geo_key,
                         "name": "Bali",
                         "uri": "kebi://area/def",
                         "icon": None,
+                        "country_code": "id",
                     },
                 },
                 "count": 11,
