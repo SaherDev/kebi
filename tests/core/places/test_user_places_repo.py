@@ -103,6 +103,35 @@ async def test_browse_selects_the_icon_column() -> None:
 
 
 @pytest.mark.asyncio
+async def test_browse_selects_the_geo_key_column() -> None:
+    """Same failure as `icon`, one column over: every library row came back
+    with `geo_key: null` while `GET /v1/user/library/areas` — grouping on
+    that same column — saw all 29 areas. A null key serializes to a null
+    `area`, the client files the row under "elsewhere", and every real
+    area section renders empty and is dropped."""
+    session = MagicMock()
+    session.execute = AsyncMock(return_value=[])
+    repo = UserPlacesRepo(session=session)
+
+    await repo.browse("u1", SavedPlaceFilters(), limit=20)
+
+    assert "places.geo_key" in _compiled(session)
+
+
+@pytest.mark.asyncio
+async def test_browse_hydrates_geo_key_onto_the_place() -> None:
+    saved_at = datetime.now(UTC)
+    mapping = _row_mapping("p1", "u1", saved_at) | {"geo_key": "th/bangkok/thonglor"}
+    session = MagicMock()
+    session.execute = AsyncMock(return_value=[_FakeRow(mapping)])
+    repo = UserPlacesRepo(session=session)
+
+    rows = await repo.browse("u1", SavedPlaceFilters(), limit=20)
+
+    assert rows[0].place.geo_key == "th/bangkok/thonglor"
+
+
+@pytest.mark.asyncio
 async def test_browse_cursor_adds_keyset_predicate() -> None:
     session = MagicMock()
     session.execute = AsyncMock(return_value=[])
