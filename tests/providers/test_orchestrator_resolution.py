@@ -8,8 +8,15 @@ from kebi.core.config import (
     AppConfig,
     _load_prompts,
     _resolve_orchestrator,
+    expand_profile,
     load_yaml_config,
 )
+
+
+def _expand(option: dict) -> dict:
+    """Resolve a profile-referencing option to its full dict (ADR-176)."""
+    profiles = load_yaml_config("app.yaml").get("model_profiles") or {}
+    return expand_profile(option, profiles, "test")
 
 
 def _raw_config() -> dict:
@@ -32,7 +39,7 @@ def _raw_models_with_orch(orch: dict) -> dict:
 def test_agent_model_unset_resolves_to_default() -> None:
     """AGENT_MODEL=None → orchestrator gets the option named by `default`."""
     orch = _orch_block()
-    expected = orch[orch["default"]]
+    expected = _expand(orch[orch["default"]])
 
     resolved = _resolve_orchestrator(_raw_models_with_orch(orch), agent_model=None)
 
@@ -48,7 +55,7 @@ def test_agent_model_valid_resolves_to_chosen_option() -> None:
     # selector keys (`default`, `advanced`) and the option `default` names.
     reserved = {"default", "advanced", orch["default"]}
     non_default = next(k for k in orch if k not in reserved)
-    expected = orch[non_default]
+    expected = _expand(orch[non_default])
 
     resolved = _resolve_orchestrator(
         _raw_models_with_orch(orch), agent_model=non_default
@@ -63,7 +70,7 @@ def test_agent_model_invalid_warns_and_falls_back_to_default(
 ) -> None:
     """Unknown AGENT_MODEL → warning logged, default option chosen."""
     orch = _orch_block()
-    expected = orch[orch["default"]]
+    expected = _expand(orch[orch["default"]])
 
     with caplog.at_level(logging.WARNING, logger="kebi.core.config"):
         resolved = _resolve_orchestrator(
@@ -95,7 +102,7 @@ def test_appconfig_validator_resolves_default_without_env() -> None:
     cfg = AppConfig(**raw)
 
     orch = _orch_block()
-    expected = orch[orch["default"]]
+    expected = _expand(orch[orch["default"]])
 
     assert cfg.models["orchestrator"].provider == expected["provider"]
     assert cfg.models["orchestrator"].model == expected["model"]
@@ -106,14 +113,14 @@ def test_advanced_key_emits_orchestrator_advanced_role() -> None:
     from the same option list — no duplicate model definition."""
     orch = _orch_block()
     orch["advanced"] = "claude-sonnet"
-    expected = orch["claude-sonnet"]
+    expected = _expand(orch["claude-sonnet"])
 
     resolved = _resolve_orchestrator(_raw_models_with_orch(orch), agent_model=None)
 
     assert resolved["orchestrator_advanced"]["provider"] == expected["provider"]
     assert resolved["orchestrator_advanced"]["model"] == expected["model"]
     # The standard role still resolves independently to `default`.
-    assert resolved["orchestrator"]["model"] == orch[orch["default"]]["model"]
+    assert resolved["orchestrator"]["model"] == _expand(orch[orch["default"]])["model"]
 
 
 def test_advanced_is_not_treated_as_a_model_option() -> None:

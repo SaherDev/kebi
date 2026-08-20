@@ -33,20 +33,105 @@ providers:
   openrouter:
     base_url: https://openrouter.ai/api/v1
 
+# ---------------------------------------------------------------------------
+# Model profiles (ADR-176) — shared base definitions referenced by role
+# options via `profile: <name>`. The mini-workhorse GROUP (harvesters,
+# profilers, taste, memory, namer, home) moves to a new model by editing
+# ONE profile here; per-role KEBI_MODEL_<ROLE> overrides still switch a
+# single role for a trial. Role/option keys override profile keys
+# (max_tokens, temperature, timeouts stay per-role).
+# ---------------------------------------------------------------------------
+model_profiles:
+  mini-workhorse:
+    provider: openai
+    model: gpt-4o-mini
+    max_retries: 2
+    timeout_seconds: 30
+  luna-workhorse:
+    provider: openai
+    model: gpt-5.6-luna
+    max_retries: 2
+    timeout_seconds: 30
+    # Required "none": Luna rejects function tools at any other effort on
+    # the chat-completions API (found live in the first bakeoff).
+    reasoning_effort: none
+  # The strong group — roles that deliberately pay for gpt-4o (extractor,
+  # area_registry, and any future role where mini measurably missed).
+  gpt4o-strong:
+    provider: openai
+    model: gpt-4o
+    max_retries: 2
+    timeout_seconds: 30
+  # The realtime Claude group — per-turn classification/orchestration on
+  # Haiku 4.5 (location_resolver, orchestrator default). Timeouts differ
+  # per role, so they stay on the option.
+  haiku-fast:
+    provider: anthropic
+    model: claude-haiku-4-5-20251001
+    max_retries: 2
+  # Advanced-tier orchestrator (ADR-068 `advanced` selector).
+  sonnet-strong:
+    provider: anthropic
+    model: claude-sonnet-4-6
+    max_retries: 2
+  # Non-chat providers — profiled for uniformity: provider+model appear
+  # ONLY in this section, never inline under models:.
+  whisper-transcribe:
+    provider: groq
+    model: whisper-large-v3-turbo
+    max_retries: 2
+  voyage-embed:
+    provider: voyage
+    model: voyage-4-lite
+  # --- Benchmark candidates (ADR-173/175) — inactive until an option
+  # referencing them is selected via KEBI_MODEL_<ROLE>. ---
+  sonnet-5:
+    provider: anthropic
+    model: claude-sonnet-5
+    max_retries: 2
+  gpt-terra:
+    provider: openai
+    model: gpt-5.6-terra
+    max_retries: 2
+    timeout_seconds: 60
+  gemini-flash:
+    provider: openrouter
+    model: google/gemini-3.7-flash
+    max_retries: 2
+    timeout_seconds: 30
+  qwen-flash:
+    provider: openrouter
+    model: qwen/qwen3.5-flash
+    max_retries: 2
+    timeout_seconds: 30
+  qwen-plus:
+    provider: openrouter
+    model: qwen/qwen3.5-plus
+    max_retries: 2
+    timeout_seconds: 30
+  deepseek-flash:
+    provider: openrouter
+    model: deepseek/deepseek-v4-flash
+    max_retries: 2
+    timeout_seconds: 30
+  minimax-m3:
+    provider: openrouter
+    model: minimax/minimax-m3
+    max_retries: 2
+    timeout_seconds: 60
+
 models:
   # Speech-to-text for the audio track of submitted videos (e.g. TikTok/Reels).
   # Output feeds the SPEECH source in the extraction confidence pipeline.
   transcriber:
-    provider: groq
-    model: whisper-large-v3-turbo
+    profile: whisper-transcribe
     max_tokens: 0
     temperature: 0
 
   # Vision model that reads sampled video frames to pull on-screen place names,
   # signage, and OCR'd text. Feeds the OCR / vision_frames extraction sources.
   vision_frames:
-    provider: openai
-    model: gpt-4o-mini
+    profile: mini-workhorse
     max_tokens: 512
     temperature: 0
 
@@ -59,31 +144,23 @@ models:
   extractor:
     default: gpt-4o
     gpt-4o:
-      provider: openai
-      model: gpt-4o
+      profile: gpt4o-strong
       max_tokens: 512
       temperature: 0
     luna:
-      provider: openai
-      model: gpt-5.6-luna
+      profile: luna-workhorse
       max_tokens: 512
       temperature: 0
-      # Required "none": Luna rejects function tools at any other effort
-      # on the chat-completions API (found live in the first bakeoff).
-      reasoning_effort: none
     gemini-flash:
-      provider: openrouter
-      model: google/gemini-3.7-flash
+      profile: gemini-flash
       max_tokens: 512
       temperature: 0
     qwen-plus:
-      provider: openrouter
-      model: qwen/qwen3.5-plus
+      profile: qwen-plus
       max_tokens: 512
       temperature: 0
     deepseek-flash:
-      provider: openrouter
-      model: deepseek/deepseek-v4-flash
+      profile: deepseek-flash
       max_tokens: 512
       temperature: 0
   # Offline swap: add an ollama option (model: gemma4:e2b, requires: ollama serve)
@@ -94,34 +171,54 @@ models:
   # background second pass over a saved share, the curator structures an
   # expert's prose. gpt-4o-mini — cheap, off the critical path.
   knowledge_harvester:
-    provider: openai
-    model: gpt-4o-mini
-    max_tokens: 1024
-    temperature: 0
+    default: gpt-4o-mini
+    gpt-4o-mini:
+      profile: mini-workhorse
+      max_tokens: 1024
+      temperature: 0
+    luna:
+      profile: luna-workhorse
+      max_tokens: 1024
+      temperature: 0
   knowledge_curator:
-    provider: openai
-    model: gpt-4o-mini
-    max_tokens: 1024
-    temperature: 0
+    default: gpt-4o-mini
+    gpt-4o-mini:
+      profile: mini-workhorse
+      max_tokens: 1024
+      temperature: 0
+    luna:
+      profile: luna-workhorse
+      max_tokens: 1024
+      temperature: 0
 
   # Place profiler (ADR-152) — experiential tags for a thin catalog row from
   # venue identity alone, fired in the background on the place screen's first
   # open. One call per unique place ever; gpt-4o-mini, off the critical path.
   place_profiler:
-    provider: openai
-    model: gpt-4o-mini
-    max_tokens: 512
-    temperature: 0
+    default: gpt-4o-mini
+    gpt-4o-mini:
+      profile: mini-workhorse
+      max_tokens: 512
+      temperature: 0
+    luna:
+      profile: luna-workhorse
+      max_tokens: 512
+      temperature: 0
 
   # Area profiler (ADR-153) — an area's global profile (summary, chips,
   # breadcrumb names, notable children) from its claims + geography
   # knowledge, fired in the background on the area screen's first open.
   # One call per unique area ever; off the critical path.
   area_profiler:
-    provider: openai
-    model: gpt-4o-mini
-    max_tokens: 800
-    temperature: 0
+    default: gpt-4o-mini
+    gpt-4o-mini:
+      profile: mini-workhorse
+      max_tokens: 800
+      temperature: 0
+    luna:
+      profile: luna-workhorse
+      max_tokens: 800
+      temperature: 0
 
   # Geo registry colloquial layer — once per newly minted area, records what
   # people call the unit, the bigger colloquial area it belongs to, and the
@@ -132,25 +229,34 @@ models:
   # once per unique area EVER — the knowledge gap costs a wrong screen, the
   # model gap costs fractions of a cent.
   area_registry:
-    provider: openai
-    model: gpt-4o
-    max_tokens: 400
-    temperature: 0
+    default: gpt-4o
+    gpt-4o:
+      profile: gpt4o-strong
+      max_tokens: 400
+      temperature: 0
+    luna:
+      profile: luna-workhorse
+      max_tokens: 400
+      temperature: 0
 
   # Mines durable area facts out of a turn's web-search findings (ADR-145).
   # Runs after the answer is already sent, so latency does not matter and
   # cheap does: same tier as the other knowledge writers.
   web_harvester:
-    provider: openai
-    model: gpt-4o-mini
-    max_tokens: 800
-    temperature: 0
+    default: gpt-4o-mini
+    gpt-4o-mini:
+      profile: mini-workhorse
+      max_tokens: 800
+      temperature: 0
+    luna:
+      profile: luna-workhorse
+      max_tokens: 800
+      temperature: 0
 
   # Embedding model for semantic search over saved places (pgvector) and for
   # the FTS+vector RRF recall pipeline. 1024-dim per ADR-040.
   embedder:
-    provider: voyage
-    model: voyage-4-lite
+    profile: voyage-embed
     dimensions: 1024
 
   # LangGraph agent brain — drives the recall/consult tool loop behind
@@ -180,59 +286,67 @@ models:
     # observed truncating mid-close at 1024. Single-city answers stay short
     # by prompt; the ceiling only needs to clear the long-answer shape.
     claude-sonnet:
-      provider: anthropic
-      model: claude-sonnet-4-6
+      profile: sonnet-strong
       max_tokens: 2048
       temperature: 0.7
+      timeout_seconds: 60
     claude-haiku:
-      provider: anthropic
-      model: claude-haiku-4-5-20251001
+      profile: haiku-fast
       max_tokens: 2048
       temperature: 0.7
+      timeout_seconds: 60
     gpt-4o-mini:
-      provider: openai
-      model: gpt-4o-mini
+      profile: mini-workhorse
       max_tokens: 1024
       temperature: 0.7
+      timeout_seconds: 60
     # Benchmark-round-1 candidates (ADR-173) — inactive until selected via
     # KEBI_MODEL_ORCHESTRATOR (or AGENT_MODEL, its ADR-068 alias).
     claude-sonnet-5:
-      provider: anthropic
-      model: claude-sonnet-5
+      profile: sonnet-5
       max_tokens: 2048
       temperature: 0.7
+      timeout_seconds: 60
     gemini-flash:
-      provider: openrouter
-      model: google/gemini-3.7-flash
+      profile: gemini-flash
       max_tokens: 2048
       temperature: 0.7
+      timeout_seconds: 60
     gpt-terra:
-      provider: openai
-      model: gpt-5.6-terra
+      profile: gpt-terra
       max_tokens: 2048
       temperature: 0.7
     minimax-m3:
-      provider: openrouter
-      model: minimax/minimax-m3
+      profile: minimax-m3
       max_tokens: 2048
       temperature: 0.7
 
   # Rewrites the user's taste_profile_summary from accumulated signals.
   # Triggered by debounced signal events and by chip_confirm.
   taste_regen:
-    provider: openai
-    model: gpt-4o-mini
-    max_tokens: 512
-    temperature: 0.3
+    default: gpt-4o-mini
+    gpt-4o-mini:
+      profile: mini-workhorse
+      max_tokens: 512
+      temperature: 0.3
+    luna:
+      profile: luna-workhorse
+      max_tokens: 512
+      temperature: 0.3
 
   # Personal-fact extraction from a batch of recent user messages.
   # Triggered every Nth user turn (memory.extraction.debounce_messages).
   # Output feeds UserMemoryService.save_facts → user_memories.
   memory_extractor:
-    provider: openai
-    model: gpt-4o-mini
-    max_tokens: 256
-    temperature: 0
+    default: gpt-4o-mini
+    gpt-4o-mini:
+      profile: mini-workhorse
+      max_tokens: 256
+      temperature: 0
+    luna:
+      profile: luna-workhorse
+      max_tokens: 256
+      temperature: 0
 
   # Resolves the working location at the start of every agent turn that
   # passes the location gate (core/agent/graph.py resolve_location node).
@@ -246,26 +360,25 @@ models:
   location_resolver:
     default: claude-haiku
     claude-haiku:
-      provider: anthropic
-      model: claude-haiku-4-5-20251001
+      profile: haiku-fast
       max_tokens: 512
       temperature: 0
+      timeout_seconds: 20
     gemini-flash:
-      provider: openrouter
-      model: google/gemini-3.7-flash
+      profile: gemini-flash
       max_tokens: 512
       temperature: 0
+      timeout_seconds: 20
     luna:
-      provider: openai
-      model: gpt-5.6-luna
+      profile: luna-workhorse
       max_tokens: 512
       temperature: 0
-      reasoning_effort: none
+      timeout_seconds: 20
     qwen-flash:
-      provider: openrouter
-      model: qwen/qwen3.5-flash
+      profile: qwen-flash
       max_tokens: 512
       temperature: 0
+      timeout_seconds: 20
 
   # Proposes well-known place names that fit the user's intent, scoped to
   # the turn's working location and movement capabilities. Output feeds
@@ -273,10 +386,17 @@ models:
   # against the place provider. Cheap structured-output role — model
   # knowledge of local landmarks matters more than reasoning depth.
   candidate_namer:
-    provider: openai
-    model: gpt-4o-mini
-    max_tokens: 700
-    temperature: 0.3
+    default: gpt-4o-mini
+    gpt-4o-mini:
+      profile: mini-workhorse
+      max_tokens: 700
+      temperature: 0.3
+      timeout_seconds: 20
+    luna:
+      profile: luna-workhorse
+      max_tokens: 700
+      temperature: 0.3
+      timeout_seconds: 20
 
   # Generates the home screen's context-aware greeting + suggestion chips
   # from the user's taste signal and the client-supplied local context
@@ -284,10 +404,17 @@ models:
   # is Redis-cached per coarse context bucket (ADR-111). Higher temperature
   # for greeting variety; cheap structured-output role.
   home_suggester:
-    provider: openai
-    model: gpt-4o-mini
-    max_tokens: 300
-    temperature: 0.8
+    default: gpt-4o-mini
+    gpt-4o-mini:
+      profile: mini-workhorse
+      max_tokens: 300
+      temperature: 0.8
+      timeout_seconds: 15
+    luna:
+      profile: luna-workhorse
+      max_tokens: 300
+      temperature: 0.8
+      timeout_seconds: 15
 
 # ---------------------------------------------------------------------------
 # Extraction pipeline — confidence weights and decision thresholds

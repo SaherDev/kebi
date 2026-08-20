@@ -17,6 +17,16 @@ Format:
 
 ---
 
+## ADR-176: A model's name is written once — shared profiles, and roles only reference them
+
+**Date:** 2026-08-20\
+**Status:** accepted — completes ADR-173's centralisation\
+**Context:** After ADR-173, every role could carry named model options — but each option still spelled out its own provider, model, and limits. The same model appeared inline a dozen times: ten background roles each declaring the cheap workhorse, two hot roles each declaring the realtime Claude, the strong extractor tier declared twice. The roles form natural groups — a cheap-workhorse group, a deliberately-stronger group, a realtime group — and the owner's actual operation is usually on the group ("move everything on the workhorse to the new model"), which under inline declarations meant editing a dozen blocks and hoping none was missed. The first bakeoff had already shown why scattered declarations bite: a provider quirk (a reasoning dial one model requires for tool calls) had to be stamped on every copy of that model's declaration.\
+**Decision:** A model is defined exactly once, in a profiles catalog: provider, model name, retry budget, default timeout, and any provider quirk live on the profile. Role blocks and their options only *reference* a profile and add what is genuinely per-role — token ceiling, temperature, a tighter timeout. This is uniform across all seventeen roles, chat and non-chat alike, and enforced by tests: no provider or model name may appear anywhere under the roles section, every profile reference must exist, and every profile must be referenced (no dead catalog entries). Moving a group is now editing one profile; moving one role for a trial is still one env variable — the two operations compose instead of competing. The bakeoff reads through the same profile expansion, so candidates are staged as catalog entries once and referenced from any role that should try them.\
+**Consequences:** The config now reads as an inventory — one screen says which models kebi uses at all, and each role says only which of them it uses and how hard. A group-level upgrade (the eventual mini-fleet swap the benchmark round points at) is a one-line edit verified by a test that asserts the whole group moves together and nothing outside it does. The cost is one hop of indirection when reading a single role's block, and profile edits now carry group-wide blast radius by design — which is exactly the point, and why single-role trials stay on env overrides rather than profile edits. Boot resolution is unchanged on the wire: the runtime config still holds flat per-role blocks, so no consumer code knows profiles exist.
+
+---
+
 ## ADR-175: Model choices are measured, not vibed — a committed bakeoff harness with golden sets
 
 **Date:** 2026-08-20\

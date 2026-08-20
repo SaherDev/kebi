@@ -33,7 +33,13 @@ from pydantic import BaseModel, Field
 
 from kebi.core.agent._trace_context import traced_call
 from kebi.core.agent.location import LocationResolution
-from kebi.core.config import LLMRoleConfig, get_config, get_env, load_yaml_config
+from kebi.core.config import (
+    LLMRoleConfig,
+    expand_profile,
+    get_config,
+    get_env,
+    load_yaml_config,
+)
 from kebi.core.extraction.enrichers.llm_resolver import _ResolverResponse
 from kebi.eval.golden import GoldenCase, GoldenSuite, load_suite
 from kebi.providers.llm import InstructorClient
@@ -200,7 +206,9 @@ def resolve_options(role: str, names: list[str]) -> dict[str, LLMRoleConfig]:
     the unresolved block so inactive candidates stay reachable. `current`
     aliases the block's `default`.
     """
-    block = load_yaml_config("app.yaml")["models"].get(role)
+    raw = load_yaml_config("app.yaml")
+    profiles = raw.get("model_profiles") or {}
+    block = raw["models"].get(role)
     if not isinstance(block, dict):
         raise ValueError(f"models.{role} not found in app.yaml")
     if "default" not in block:
@@ -211,7 +219,9 @@ def resolve_options(role: str, names: list[str]) -> dict[str, LLMRoleConfig]:
         if key not in block or key in ("default", "advanced"):
             options = [k for k in block if k not in ("default", "advanced")]
             raise ValueError(f"models.{role} has no option {key!r}; have {options}")
-        resolved[name] = LLMRoleConfig(**block[key])
+        resolved[name] = LLMRoleConfig(
+            **expand_profile(block[key], profiles, f"models.{role}.{key}")
+        )
     return resolved
 
 
