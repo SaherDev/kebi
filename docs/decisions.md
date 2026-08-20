@@ -17,6 +17,16 @@ Format:
 
 ---
 
+## ADR-170: The library's index counts every heading, the arealess one included
+
+**Date:** 2026-08-20\
+**Status:** accepted — completes ADR-165's area index\
+**Context:** The library's area index gave a heading an exact count for every area a user has saves in, and deliberately said nothing about the saves that belong to no area at all — the ones whose geography is coarser than a city, which carry no key, no name and no screen. Naming that bucket was left to the client, correctly; counting it was left there too, which was the mistake. A client has only one way to derive that number: the library's grand total minus the sum of the index. That subtraction is right only once the whole library has been paged in, and the fallback while it hasn't — counting the arealess rows that happen to be loaded — understates it. So one heading on the screen showed a number that could be wrong, sitting beside headings whose counts were exact, and the failure looked identical to a correct count. That is the same page-derived lie ADR-164 removed for search and ADR-165 removed for areas, surviving in the one bucket neither covered.\
+**Decision:** The index reports the arealess remainder as its own count, additive to the existing entries and changing none of them. It is explicitly not an area and does not become one: a country-level key was rejected as an area by ADR-165 because a country is not somewhere anyone navigates to, and inventing one here to make the arithmetic close would put a heading on screen that opens nothing. The split stays where it was drawn — kebi counts the bucket, the client names it. The count is computed in the same single grouped read as the rest of the index, with every save landing in exactly one bucket, so the entries and the remainder sum to the user's library total by construction rather than by convention. A save whose catalog row has gone missing, or whose key is blank, falls in the remainder rather than vanishing from both sides, since a number that silently omits rows is the problem this decision removes.\
+**Consequences:** Every heading the library can render now carries a number kebi served, so the section list is correct on first paint regardless of how much of the library has been paged in, and the client's subtraction and its loaded-row fallback are deleted rather than corrected. The addition is purely additive on the wire — an existing client that ignores the field behaves exactly as before, which matters because the two repos deploy independently. The remainder still has no key and no destination: tapping its heading can only filter locally, and shrinking it is a data-completeness question (a save resolves to an area or it does not) that this decision does not touch. The invariant that the index sums to the library total is now something clients may rely on, which means any future bucket must be reported here too rather than left implicit.
+
+---
+
 ## ADR-169: Geo identity is a minted registry of provider ids — names are data, and no place on Earth is hardcoded
 
 **Date:** 2026-08-20\

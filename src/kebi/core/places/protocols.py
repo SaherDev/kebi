@@ -8,6 +8,7 @@ from typing import Protocol
 
 from ._cursor import LibraryCursor
 from .models import (
+    AreaDistribution,
     HybridSearchFilters,
     HybridSearchHit,
     LibrarySort,
@@ -66,7 +67,7 @@ class UserPlacesRepoProtocol(Protocol):
 
     async def count_filtered(self, user_id: str, filters: SavedPlaceFilters) -> int: ...
 
-    async def area_distribution(self, user_id: str) -> list[tuple[str, int]]: ...
+    async def area_distribution(self, user_id: str) -> AreaDistribution: ...
 
     async def update_fields(
         self, user_place_id: str, user_id: str, changes: UserPlaceStatusUpdate
