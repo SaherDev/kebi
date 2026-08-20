@@ -1,0 +1,107 @@
+# Seed golden set for the orchestrator routing-strength test (ADR-175).
+# Each case pins one rule from agent.txt's Routing section: expected is the
+# FIRST move (tool name or "answer" for a direct reply); `args_contain`
+# checks substrings across the first response's tool-call args (hard
+# constraints, brand searches). first_action may list several acceptable
+# tools where the prompt genuinely allows more than one lead.
+cases:
+  - id: saved-only-intent
+    note: '"my saves" intent → find_saved alone'
+    input:
+      message: "what did i save in tokyo?"
+      location_context: "Working location: Tokyo, Japan (city scope)."
+    expected:
+      first_action: find_saved
+
+  - id: recommendation-leads-with-find-known
+    note: recommendation turn → lead with find_known (free, carries the why)
+    input:
+      message: "best rooftop bar for tonight?"
+      location_context: "Working location: Bangkok, Thailand (city scope)."
+      time_context: "Local time: Friday 19:40."
+    expected:
+      first_action: find_known
+
+  - id: tell-me-about-is-research
+    note: '"tell me about X" is research, not recommendation'
+    input:
+      message: "tell me about da nang"
+      location_context: "Working location: Da Nang, Vietnam (city scope)."
+    expected:
+      first_action: research
+
+  - id: insider-knowledge-country-scope
+    note: how-do-i questions are research, scoped to the country in play
+    input:
+      message: "how do people pay at street stalls here?"
+      location_context: "Working location: Vietnam (country scope)."
+    expected:
+      first_action: research
+
+  - id: event-dates-are-searched
+    note: dates/schedules move — zeroth split sends this to web_search
+    input:
+      message: "when is the lantern festival in hoi an?"
+      location_context: "Working location: Hoi An, Vietnam (city scope)."
+    expected:
+      first_action: web_search
+
+  - id: current-conditions-are-searched
+    note: road/weather/open-right-now facts are never answered from memory
+    input:
+      message: "is the mountain road to pai open right now?"
+      location_context: "Working location: Chiang Mai, Thailand (city scope)."
+    expected:
+      first_action: web_search
+
+  - id: practical-errand-skips-saves
+    note: nobody saves pharmacies — suggest_places alone
+    input:
+      message: "i need a pharmacy near me"
+      location_context: "Working location: Canggu, Bali, Indonesia (neighborhood scope)."
+    expected:
+      first_action: suggest_places
+
+  - id: explicit-not-my-saves
+    note: user excluded their saves; fresh picks (knowledge lead also valid)
+    input:
+      message: "not from my saves — surprise me with somewhere new for dinner"
+      location_context: "Working location: Lisbon, Portugal (city scope)."
+    expected:
+      first_action: [suggest_places, find_known]
+
+  - id: dietary-constraint-rides-every-call
+    note: memory says vegan → tags carry vegan on the place tools, silently
+    input:
+      message: "find me a good dinner spot for tonight"
+      location_context: "Working location: Berlin, Germany (city scope)."
+      memory_summary: "The user is vegan. They prefer quiet places over lively ones."
+    expected:
+      first_action: [find_known, find_saved, suggest_places]
+      args_contain: [vegan]
+
+  - id: order-advice-is-research
+    note: what-to-order at a named venue is knowledge, not a place search
+    input:
+      message: "what should i order at ichiran?"
+      location_context: "Working location: Tokyo, Japan (city scope)."
+    expected:
+      first_action: research
+
+  - id: thanks-needs-no-tool
+    note: a social close gets prose, not a tool call
+    input:
+      message: "perfect, thanks — that first one sounds great!"
+      location_context: "Working location: Tokyo, Japan (city scope)."
+    expected:
+      first_action: answer
+
+  - id: trip-turn-checks-saves-and-knowledge
+    note: multi-stop trip → find_known/find_saved lead, never per-city research
+    input:
+      message: "driving osaka to tokyo over a few days — what should we stop at?"
+      location_context: >-
+        Working location: multi-stop trip Osaka → Tokyo, Japan (itinerary
+        scope; stops: Osaka, Kyoto, Nagoya, Hakone, Tokyo).
+    expected:
+      first_action: [find_known, find_saved]

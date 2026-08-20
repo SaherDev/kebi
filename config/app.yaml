@@ -91,6 +91,10 @@ model_profiles:
     provider: anthropic
     model: claude-sonnet-5
     max_retries: 2
+    # Sonnet 5 rejects `temperature` (400 "deprecated for this model") —
+    # found by the orchestrator bakeoff. Clients omit the param; the
+    # role-level temperature value is ignored for this family.
+    supports_temperature: false
   gpt-terra:
     provider: openai
     model: gpt-5.6-terra

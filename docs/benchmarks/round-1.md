@@ -37,11 +37,37 @@ uncached number: ADR-174's cache split cut live per-turn cost ~65%.
 
 Pending options: gemini-flash, qwen-flash (OpenRouter).
 
-## orchestrator
+## orchestrator — routing-strength test (added 2026-08-21, ADR-180)
 
-Not benchmarked this round — needs the bound tool loop + LLM judge; its
-adapter is built when its swap round starts (last, per plan). ADR-100's
-acceptance gates remain the production quality bar.
+First move on 12 routing cases: correct tool (or direct answer) + hard
+constraints carried in args. Tools bound with real schemas, nothing
+executes; multi-step loop quality and prose voice are NOT measured yet.
+
+| option | model | quality | pass | p50 ms | p95 ms | $/1k cases |
+|---|---|---|---|---|---|---|
+| sonnet-5 | claude-sonnet-5 (no temp) | 1.000 | 100% | 7746 | 11883 | 36.68 |
+| sonnet-strong | claude-sonnet-4-6 | 1.000 | 100% | 3109 | 6555 | 41.41 |
+| luna-workhorse | gpt-5.6-luna | 1.000 | 100% | 2547 | 11299 | 2.10 |
+| current | claude-haiku-4-5 | 0.917 | 92% | 1584 | 2875 | 13.83 |
+
+**Reads:**
+- **The harness caught a prod-breaking quirk:** Sonnet 5 rejects the
+  `temperature` parameter (400) — the ADR-177 advanced-tier swap would
+  have failed every advanced consult on deploy. Now a profile flag
+  (`supports_temperature: false`); clients omit the param.
+- **Haiku's one miss is the worst kind:** the vegan hard-constraint case
+  (constraint dropped from tool args) — precisely ADR-100's adherence
+  gate, and consistent with the project's "prompt rules guarding real
+  cost need code backstops" history. One case is weak evidence; expand
+  the hard-constraint cases from real traces before acting.
+- Luna's perfect routing at $2/1k is intriguing but unproven where it
+  matters for this role (multi-step tool loops, answer voice) — do not
+  swap the orchestrator on a routing test alone.
+- Sonnet 5's p50 is ~5x Haiku's — fine for the advanced tier, a real
+  cost for the default tier's every-turn latency.
+
+**This also unblocks the agent.txt trim**: `bakeoff --role orchestrator
+--prompt <trimmed>` is now the parity gate ADR-174 required.
 
 ## Background mini-roles (pricing-only review)
 
