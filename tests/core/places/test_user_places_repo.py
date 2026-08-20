@@ -103,6 +103,35 @@ async def test_browse_selects_the_icon_column() -> None:
 
 
 @pytest.mark.asyncio
+async def test_browse_selects_the_geo_key_column() -> None:
+    """Same failure as `icon`, one column over: every library row came back
+    with `geo_key: null` while `GET /v1/user/library/areas` — grouping on
+    that same column — saw all 29 areas. A null key serializes to a null
+    `area`, the client files the row under "elsewhere", and every real
+    area section renders empty and is dropped."""
+    session = MagicMock()
+    session.execute = AsyncMock(return_value=[])
+    repo = UserPlacesRepo(session=session)
+
+    await repo.browse("u1", SavedPlaceFilters(), limit=20)
+
+    assert "places.geo_key" in _compiled(session)
+
+
+@pytest.mark.asyncio
+async def test_browse_hydrates_geo_key_onto_the_place() -> None:
+    saved_at = datetime.now(UTC)
+    mapping = _row_mapping("p1", "u1", saved_at) | {"geo_key": "th/bangkok/thonglor"}
+    session = MagicMock()
+    session.execute = AsyncMock(return_value=[_FakeRow(mapping)])
+    repo = UserPlacesRepo(session=session)
+
+    rows = await repo.browse("u1", SavedPlaceFilters(), limit=20)
+
+    assert rows[0].place.geo_key == "th/bangkok/thonglor"
+
+
+@pytest.mark.asyncio
 async def test_browse_cursor_adds_keyset_predicate() -> None:
     session = MagicMock()
     session.execute = AsyncMock(return_value=[])
@@ -348,18 +377,24 @@ async def test_area_distribution_groups_and_counts_over_the_whole_library() -> N
         return_value=[
             MagicMock(geo_key="id/bali/canggu", n=11),
             MagicMock(geo_key="th/bangkok", n=4),
+            MagicMock(geo_key=None, n=3),
         ]
     )
     repo = UserPlacesRepo(session=session)
 
     dist = await repo.area_distribution("u1")
 
-    assert dist == [("id/bali/canggu", 11), ("th/bangkok", 4)]
+    assert dist.areas == [("id/bali/canggu", 11), ("th/bangkok", 4)]
+    # Keyless saves aren't an area, but they are counted — the client's
+    # "elsewhere" heading needs a served number, not a derived one.
+    assert dist.unassigned == 3
     sql = _compiled(session)
-    assert "GROUP BY places.geo_key" in sql
+    assert "GROUP BY nullif(places.geo_key" in sql  # blank key == no key
     assert "count(" in sql
     assert "LIMIT" not in sql  # never a page
-    assert "geo_key IS NOT NULL" in sql  # keyless saves aren't an area
+    # Outer-joined from user_places: every save lands in exactly one bucket,
+    # so the areas and the remainder sum to the caller's library total.
+    assert "LEFT OUTER JOIN places" in sql
 
 
 @pytest.mark.asyncio

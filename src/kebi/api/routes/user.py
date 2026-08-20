@@ -146,10 +146,17 @@ async def get_user_library_areas(
     Deliberately **unfiltered** — it ignores `q` and every browse filter,
     because it is the at-rest index: one that narrowed while someone typed
     would shift under them. Ordering carries no meaning and is not part of
-    the contract. Areas whose geography is coarser than a city are absent
-    entirely; naming that bucket is the client's call.
+    the contract.
+
+    Saves whose geography is coarser than a city are still no area — they
+    have no key, no name and no screen, so they appear under no entry. They
+    are *counted* in `unassigned_count`, because that heading is the one the
+    client would otherwise derive as `total` minus this distribution, which
+    is wrong on screen until the whole library is paged in. Naming the
+    bucket stays the client's call. Additive: `sum(areas[].count) +
+    unassigned_count` is the library's `total`.
     """
-    return LibraryAreasResponse.from_areas(await service.list_areas(identity.user_id))
+    return LibraryAreasResponse.from_index(await service.list_areas(identity.user_id))
 
 
 @router.get("/user/intents", response_model=IntentsResponse)

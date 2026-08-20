@@ -20,7 +20,7 @@ from kebi.api.deps import (
 from kebi.api.errors import register_error_handlers
 from kebi.api.routes.user import router as user_router
 from kebi.core.areas.handles import AreaHandle, AreaHandleBuilder, AreaRef
-from kebi.core.areas.library_areas_service import AreaWithCount
+from kebi.core.areas.library_areas_service import AreaWithCount, LibraryAreaIndex
 from kebi.core.knowledge.schemas import PlaceNote
 from kebi.core.places import (
     LocationContext,
@@ -59,7 +59,8 @@ def _make_app(
         geo_registry=FakeGeoRegistry(_BALI, _CANGGU),
     )
     app.dependency_overrides[get_library_areas_service] = lambda: (
-        areas_service or AsyncMock(list_areas=AsyncMock(return_value=[]))
+        areas_service
+        or AsyncMock(list_areas=AsyncMock(return_value=LibraryAreaIndex()))
     )
     app.dependency_overrides[require_gateway_identity] = lambda: GatewayIdentity(
         user_id=_TEST_USER_ID
@@ -372,20 +373,23 @@ def test_malformed_area_key_rejected_422(svc: AsyncMock) -> None:
 def test_area_index_returns_handles_with_exact_counts(svc: AsyncMock) -> None:
     areas_service = AsyncMock(
         list_areas=AsyncMock(
-            return_value=[
-                AreaWithCount(
-                    area=AreaHandle(
-                        key=_CANGGU.geo_key,
-                        name="Canggu",
-                        uri="kebi://area/abc",
-                        icon="🏄",
-                        parent=AreaRef(
-                            key=_BALI.geo_key, name="Bali", uri="kebi://area/def"
+            return_value=LibraryAreaIndex(
+                areas=[
+                    AreaWithCount(
+                        area=AreaHandle(
+                            key=_CANGGU.geo_key,
+                            name="Canggu",
+                            uri="kebi://area/abc",
+                            icon="🏄",
+                            parent=AreaRef(
+                                key=_BALI.geo_key, name="Bali", uri="kebi://area/def"
+                            ),
                         ),
-                    ),
-                    count=11,
-                )
-            ]
+                        count=11,
+                    )
+                ],
+                unassigned=3,
+            )
         )
     )
     client = _make_app(svc, areas_service=areas_service)
@@ -411,15 +415,31 @@ def test_area_index_returns_handles_with_exact_counts(svc: AsyncMock) -> None:
                 },
                 "count": 11,
             }
-        ]
+        ],
+        "unassigned_count": 3,
     }
     areas_service.list_areas.assert_awaited_once_with(_TEST_USER_ID)
+
+
+def test_elsewhere_count_is_served_not_derived(svc: AsyncMock) -> None:
+    """The client's "elsewhere" heading gets a number from kebi. Derived as
+    `total` minus the distribution it is wrong until the whole library is
+    paged in; served, it is right on first paint."""
+    areas_service = AsyncMock(
+        list_areas=AsyncMock(return_value=LibraryAreaIndex(areas=[], unassigned=7))
+    )
+    client = _make_app(svc, areas_service=areas_service)
+
+    assert client.get("/v1/user/library/areas").json() == {
+        "areas": [],
+        "unassigned_count": 7,
+    }
 
 
 def test_area_index_ignores_search_and_filters(svc: AsyncMock) -> None:
     """The at-rest index: an index that narrowed while someone typed would
     shift the section list under them."""
-    areas_service = AsyncMock(list_areas=AsyncMock(return_value=[]))
+    areas_service = AsyncMock(list_areas=AsyncMock(return_value=LibraryAreaIndex()))
     client = _make_app(svc, areas_service=areas_service)
 
     resp = client.get("/v1/user/library/areas", params={"q": "sushi"})
@@ -432,4 +452,7 @@ def test_area_index_ignores_search_and_filters(svc: AsyncMock) -> None:
 def test_empty_library_has_an_empty_area_index(svc: AsyncMock) -> None:
     client = _make_app(svc)
 
-    assert client.get("/v1/user/library/areas").json() == {"areas": []}
+    assert client.get("/v1/user/library/areas").json() == {
+        "areas": [],
+        "unassigned_count": 0,
+    }

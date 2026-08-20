@@ -454,6 +454,21 @@ class SavedPlaceView(BaseModel):
     user_data: UserPlace
 
 
+class AreaDistribution(BaseModel):
+    """How a user's saves spread across areas — the library's at-rest shape.
+
+    `areas` is the exact-key histogram (each save under the one key it
+    stores); `unassigned` is the rest — saves whose geography is coarser
+    than a city and so belong to no area at all. Kept in one model because
+    the two are read together and only mean something together: they sum to
+    the user's library total, which is what lets a client show a served
+    count for every heading it renders, "elsewhere" included.
+    """
+
+    areas: list[tuple[str, int]] = Field(default_factory=list)
+    unassigned: int = 0
+
+
 class SavedPlaceFilters(PlaceCatalogFilters):
     """Predicate over a user's saved places ⋈ the place catalog.
 

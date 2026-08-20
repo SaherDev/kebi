@@ -638,8 +638,10 @@ key is slash-hierarchical and passes through a codec, so clients must never
 rebuild it from `key`. `area` is `null` when the place's geography is coarser
 than a city; that is a data-completeness gap (the client's "elsewhere"
 bucket), **not** an unprofiled area — an area with no profile row still gets a
-working handle, because its screen renders unprofiled too. The same `area`
-field appears on `GET /v1/places/{id}`.
+working handle, because its screen renders unprofiled too. Those saves are
+counted as `unassigned_count` on `GET /v1/user/library/areas`, so the
+"elsewhere" heading has a served count even though it has no area. The same
+`area` field appears on `GET /v1/places/{id}`.
 
 | Field    | Type               | Notes                                                                                                                                                                                                                           |
 | -------- | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -1019,7 +1021,8 @@ GET /v1/user/library/areas
       },
       "count": 11
     }
-  ]
+  ],
+  "unassigned_count": 3
 }
 ```
 
@@ -1027,6 +1030,7 @@ GET /v1/user/library/areas
 | ------- | --------------- | -------------------------------------------------------------------------------------------------------------------------- |
 | `area`  | `AreaHandle`    | Same shape as the `area` on a library row, from the same builder — a heading and its rows can never disagree on a name      |
 | `count` | `integer`       | Saves keyed to **exactly** this area, across the whole library. Nested areas are separate entries and are *not* folded in   |
+| `unassigned_count` | `integer` | Saves that belong to **no** area — the "elsewhere" bucket. Counted across the whole library; `0` when every save resolved |
 
 This is **data, not a screen**. Complete and unpaged, with no rollup, no
 pinning and no truncation, and **the order carries no meaning** — sort for
@@ -1041,8 +1045,20 @@ is deliberate: a client wanting one rolled-up "Bali" heading sums the entries
 sharing that `parent` and opens it with `?area={the Bali row's key}`, which returns the
 nested rows. Pre-summing here would make the leaf histogram unavailable.
 
-Areas whose geography is coarser than a city are absent entirely — naming that
-bucket ("elsewhere") is the client's call.
+Saves whose geography is coarser than a city are absent from `areas` entirely
+— they have no key, no name and no screen, so they belong to no entry. They
+are **counted** in `unassigned_count`, so the "elsewhere" heading gets a
+number kebi served rather than one the client derives. Naming that bucket is
+still the client's call.
+
+`unassigned_count` is additive — the `areas` entries are unchanged by it — and
+completes the index: `sum(areas[].count) + unassigned_count` equals the
+library's `total` (`GET /v1/user/library`), for the same reason every other
+count here is server-side. Derived client-side as `total` minus the
+distribution, the number is right only once the whole library is paged in and
+wrong on screen until then; a fallback to the loaded rows understates it.
+Every save falls in exactly one bucket, including a save whose catalog row has
+gone missing.
 
 **Country naming is client-side, by design.** City-level handles carry
 `parent: null` (a country is not an area anyone navigates to from here), and
@@ -1381,7 +1397,7 @@ All protected calls additionally send the `X-Gateway-Token` + `X-Gateway-User-Id
 | GET /v1/user/intents        | "What you wanted" recall list              | — (optional `limit`/`cursor` query params)                   | IntentsResponse (`intents: { id, text, created_at }[]`, `next_cursor`)                                                                       |
 | POST /v1/extract            | Canonical extraction (save a place)        | raw_input                                                    | ExtractPlaceResponse                                                                                                                         |
 | GET /v1/user/library        | Browse + search the user's saved places (Library) | — (optional `q` + `area` + filter + `sort` + `limit`/`cursor` query params) | LibraryResponse (`places: SavedPlaceView[]`, `next_cursor`, `total`, `filtered_total`)                                |
-| GET /v1/user/library/areas  | Which areas the user's saves fall into     | — (identity only)                                            | LibraryAreasResponse (`areas: { area: AreaHandle, count }[]`) — complete, unpaged, unfiltered                                                |
+| GET /v1/user/library/areas  | Which areas the user's saves fall into     | — (identity only)                                            | LibraryAreasResponse (`areas: { area: AreaHandle, count }[]` + `unassigned_count`) — complete, unpaged, unfiltered                           |
 | GET /v1/places/{id}         | Open any surfaced place (the place screen) | — (path param only)                                          | LibraryItem (`place`, `user_data` — null when unsaved, `claims`); `404` if uncatalogued                                                      |
 | GET /v1/areas/{id}          | Open any linked area (the area screen)     | — (path param only; id = encoded geo key)                    | AreaScreenResponse (profile + breadcrumb + `saved_count` + one body section: saved drill-down or worth-knowing); `404` if the id is no token |
 | POST /v1/user/places        | Save a surfaced place (plain save)         | place_core_id                                                | LibraryUserData (created user-state, `201`; `404` if uncatalogued); emits the `saved_recommendation` taste signal                            |

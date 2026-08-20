@@ -19,9 +19,11 @@ from ._place_filters import (
     _up,
     _UserPlacesTable,
     build_filter_conditions,
+    place_core_columns,
     row_to_place_core,
 )
 from .models import (
+    AreaDistribution,
     LibrarySort,
     PlaceSource,
     SavedPlaceFilters,
@@ -137,16 +139,7 @@ class UserPlacesRepo:
 
         stmt = (
             select(
-                _p.id,
-                _p.provider_id,
-                _p.place_name,
-                _p.place_name_aliases,
-                _p.categories,
-                _p.tags,
-                _p.icon,
-                _p.location,
-                _p.created_at,
-                _p.refreshed_at,
+                *place_core_columns(),
                 _up.user_place_id,
                 _up.user_id,
                 _up.place_id,
@@ -191,8 +184,9 @@ class UserPlacesRepo:
         result = await self._session.execute(stmt)
         return result.scalar_one()
 
-    async def area_distribution(self, user_id: str) -> list[tuple[str, int]]:
-        """Every area the user holds saves in, with an exact count each.
+    async def area_distribution(self, user_id: str) -> AreaDistribution:
+        """Every area the user holds saves in, with an exact count each, plus
+        how many saves belong to no area at all.
 
         Deliberately unfiltered and unpaged: this is the library's at-rest
         index, so it answers for the whole library regardless of what the
@@ -202,21 +196,44 @@ class UserPlacesRepo:
 
         Groups on the stored key rather than the location strings, so a
         heading counts exactly the saves that its area screen would show.
-        Saves with no key (geography coarser than a city) are absent rather
-        than bucketed: naming that group is the client's call, not ours.
+        Keyless saves (geography coarser than a city) are still *not* an
+        area — they get no key, no name and no screen — but they are counted,
+        because the client's "elsewhere" heading otherwise has to derive its
+        own number from `total` minus this distribution, which on a partly
+        paged library is exactly the page-derived lie this endpoint exists to
+        end. Naming that bucket stays the client's call; counting it is ours.
+
+        One grouped read answers both, outer-joined from `user_places` so
+        every save lands in exactly one bucket: keyed saves under their key,
+        everything else — no key, a blank key, or a place row that has gone
+        missing — under the keyless one. The two therefore always sum to the
+        caller's library total.
 
         Ordered biggest-first for a stable, useful default, but the order is
         not part of any contract — callers sort for their own screen.
         """
+        # NULLIF folds a blank key into the keyless bucket: an empty string
+        # mints no handle, so counting it as an area would strand its saves
+        # under a heading that never renders.
+        key = func.nullif(_p.geo_key, "")
         stmt = (
-            select(_p.geo_key, func.count().label("n"))
-            .select_from(_PlacesTable.join(_UserPlacesTable, _up.place_id == _p.id))
-            .where(and_(_up.user_id == user_id, _p.geo_key.isnot(None)))
-            .group_by(_p.geo_key)
-            .order_by(func.count().desc(), _p.geo_key.asc())
+            select(key.label("geo_key"), func.count().label("n"))
+            .select_from(
+                _UserPlacesTable.outerjoin(_PlacesTable, _up.place_id == _p.id)
+            )
+            .where(_up.user_id == user_id)
+            .group_by(key)
+            .order_by(func.count().desc(), key.asc())
         )
         result = await self._session.execute(stmt)
-        return [(row.geo_key, row.n) for row in result]
+        areas: list[tuple[str, int]] = []
+        unassigned = 0
+        for row in result:
+            if row.geo_key is None:
+                unassigned += row.n
+            else:
+                areas.append((row.geo_key, row.n))
+        return AreaDistribution(areas=areas, unassigned=unassigned)
 
     async def count_filtered(self, user_id: str, filters: SavedPlaceFilters) -> int:
         """How many saves match `filters` across the whole library.

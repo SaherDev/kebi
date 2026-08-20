@@ -450,6 +450,15 @@ class TestSearchSQLShape:
         assert "txt" in sql
         assert "fused" in sql
 
+    async def test_final_select_names_the_geo_key_column(self) -> None:
+        """`row_to_place_core` reads `geo_key` off the row mapping, so a hit
+        loses its area unless this SELECT names the column — the same way the
+        library rows all came back area-less."""
+        repo, session = _make_repo([])
+        await repo.search("u1", "italian", _query_vector())
+        stmt = session.execute.call_args.args[0]
+        assert "places.geo_key" in str(_compiled(stmt))
+
     async def test_vector_leg_uses_cosine_distance_operator(self) -> None:
         repo, session = _make_repo([])
         await repo.search("u1", "italian", _query_vector())

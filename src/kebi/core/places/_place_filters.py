@@ -7,7 +7,9 @@ home for that shared surface so the logic is written once:
 
   * canonical typed table refs (`_PlacesTable` / `_UserPlacesTable`),
   * `build_filter_conditions` — the WHERE clauses for a `SavedPlaceFilters`,
-  * `row_to_place_core` — a joined row's place columns → `PlaceCore`.
+  * `place_core_columns` / `row_to_place_core` — the place columns a
+    `PlaceCore` needs, and the row → `PlaceCore` mapping. Select the former
+    or the latter reads keys the query never fetched.
 """
 
 from __future__ import annotations
@@ -286,12 +288,38 @@ def build_filter_conditions(
     return conditions
 
 
+def place_core_columns() -> list[ColumnElement[Any]]:
+    """The `places` columns a SELECT must name for `row_to_place_core`.
+
+    The mapper reads its row by key, so a column left out of the SELECT is
+    not an error — it is a `None` field on a place that looks fully hydrated.
+    That has already shipped twice (`icon`, then `geo_key`), each time as a
+    whole-library display bug, so the list lives here once and every joined
+    read spreads it rather than retyping it.
+    """
+    return [
+        _p.id,
+        _p.provider_id,
+        _p.place_name,
+        _p.place_name_aliases,
+        _p.categories,
+        _p.tags,
+        _p.icon,
+        _p.location,
+        _p.geo_key,
+        _p.created_at,
+        _p.refreshed_at,
+    ]
+
+
 def row_to_place_core(row: RowMapping) -> PlaceCore:
     """Map the place columns of a joined row to a `PlaceCore`.
 
     Reads only the `places` columns (`id`, `provider_id`, `place_name`,
-    `place_name_aliases`, `categories`, `tags`, `location`, `created_at`,
-    `refreshed_at`); ignores any user_places / score columns alongside them.
+    `place_name_aliases`, `categories`, `tags`, `location`, `geo_key`,
+    `created_at`, `refreshed_at`); ignores any user_places / score columns
+    alongside them. Callers must select `geo_key` — omitting it silently
+    yields an area-less place, which reads downstream as "elsewhere".
     """
     tags = [PlaceTag.model_validate(t) for t in (row.get("tags") or [])]
     aliases = [
@@ -308,6 +336,7 @@ def row_to_place_core(row: RowMapping) -> PlaceCore:
         tags=tags,
         icon=row.get("icon"),
         location=location,
+        geo_key=row.get("geo_key"),
         created_at=row.get("created_at"),
         refreshed_at=row.get("refreshed_at"),
     )
