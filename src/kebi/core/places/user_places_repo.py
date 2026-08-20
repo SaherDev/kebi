@@ -19,6 +19,7 @@ from ._place_filters import (
     _up,
     _UserPlacesTable,
     build_filter_conditions,
+    place_core_columns,
     row_to_place_core,
 )
 from .models import (
@@ -138,16 +139,7 @@ class UserPlacesRepo:
 
         stmt = (
             select(
-                _p.id,
-                _p.provider_id,
-                _p.place_name,
-                _p.place_name_aliases,
-                _p.categories,
-                _p.tags,
-                _p.icon,
-                _p.location,
-                _p.created_at,
-                _p.refreshed_at,
+                *place_core_columns(),
                 _up.user_place_id,
                 _up.user_id,
                 _up.place_id,

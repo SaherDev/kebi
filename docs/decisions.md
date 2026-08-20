@@ -17,6 +17,16 @@ Format:
 
 ---
 
+## ADR-171: A hydrated place is hydrated the same way everywhere — the column set is the contract, not each query's memory
+
+**Date:** 2026-08-20\
+**Status:** accepted — repairs the row half of ADR-165\
+**Context:** The library's rows all came back with no area, while its area index — reading the same stored key off the same table — returned every area with exact counts. Both were "working": the index grouped on the column, the rows were built by a shared mapper that reads a place's fields off whatever row it is handed, and the row-level query simply never asked the database for that column. A field the query omits is not an error anywhere; it is a null on an object that looks fully populated, so the failure travels as data. Downstream, an area-less save is a real and expected state (geography coarser than a city), so the client filed all forty saves under the arealess heading exactly as the contract instructs, every real area section rendered empty and was dropped, and the screen showed one heading. Nothing logged, nothing threw, and the two surfaces disagreed about the same rows. This had already shipped once in the same shape, one column over — icons vanished from the library and the same place wore different glyphs on two screens — which makes it a property of the arrangement rather than a slip: two hand-written column lists in two repositories, both feeding one mapper, drifting from it silently and independently.\
+**Decision:** The set of columns a place needs in order to be hydrated is stated once, next to the mapper that consumes it, and every joined read spreads that set instead of retyping it. Adding a field to a stored place is then a single edit that reaches every read path at once, and the two ways this bug can be introduced — forgetting a column in one query, or teaching the mapper a field no query fetches — collapse into one place where they are visible. Each read path additionally holds a test asserting the column is in the SQL it emits, because the mapper's tolerance for missing keys is deliberate (rows are shaped differently by different callers) and cannot be turned into a runtime failure without making legitimate partial reads throw.\
+**Consequences:** The library groups by area again, and place-search hits carry their area for the first time — the same omission was live in the retrieval path, unnoticed because nothing rendered an area from a search hit yet. No wire, schema, or data change: the keys were always correct in the database, so the fix is a redeploy, and the client work that assumed area-bearing rows needs no revision. The remaining exposure is a read path that builds a place without going through the shared set; the guard against that is the per-query test, not the type system, since a missing column is indistinguishable from an absent value by construction.
+
+---
+
 ## ADR-170: The library's index counts every heading, the arealess one included
 
 **Date:** 2026-08-20\
