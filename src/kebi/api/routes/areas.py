@@ -15,13 +15,15 @@ from kebi.api.deps import (
     GatewayIdentity,
     get_area_screen_service,
     get_event_dispatcher,
+    get_geo_registry,
     require_gateway_identity,
 )
 from kebi.api.rate_limit import limiter
 from kebi.api.schemas.areas import AreaScreenResponse
-from kebi.core.areas import AreaScreenService, decode_area_id
+from kebi.core.areas import AreaScreenService, decode_area_id, is_legacy_geo_key
 from kebi.core.events.dispatcher import EventDispatcher
 from kebi.core.events.events import AreaProfileRequested
+from kebi.core.geo.registry import GeoRegistry
 
 router = APIRouter()
 
@@ -34,6 +36,7 @@ async def get_area(
     identity: Annotated[GatewayIdentity, Depends(require_gateway_identity)],
     screen_service: AreaScreenService = Depends(get_area_screen_service),  # noqa: B008
     event_dispatcher: EventDispatcher = Depends(get_event_dispatcher),  # noqa: B008
+    geo_registry: GeoRegistry = Depends(get_geo_registry),  # noqa: B008
 ) -> AreaScreenResponse:
     """One area as the client renders it, profiled or not.
 
@@ -45,7 +48,10 @@ async def get_area(
     fresh for the verified caller on every open.
 
     404 when `area_id` does not decode to a canonical geo key — area links
-    kebi minted always decode, so this means a stale or fabricated id.
+    kebi minted always decode, so this means a stale or fabricated id. A
+    token minted before the id migration decodes to the old slug grammar
+    and is translated through the registry's recorded legacy keys, which
+    is what keeps every area link in an old chat message alive.
     """
     try:
         geo_key = decode_area_id(area_id)
@@ -53,6 +59,13 @@ async def get_area(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="area_not_found"
         ) from None
+    if is_legacy_geo_key(geo_key):
+        row = await geo_registry.row_for_legacy_key(geo_key)
+        if row is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="area_not_found"
+            )
+        geo_key = row.geo_key
     screen = await screen_service.build_screen(geo_key, identity.user_id)
     if not screen.profiled:
         await event_dispatcher.dispatch(

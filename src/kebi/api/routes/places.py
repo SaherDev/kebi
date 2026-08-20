@@ -24,7 +24,6 @@ from kebi.api.deps import (
 from kebi.api.rate_limit import limiter
 from kebi.api.schemas.library import LibraryItem
 from kebi.core.areas.handles import AreaHandleBuilder
-from kebi.core.areas.keys import geo_key_for_location
 from kebi.core.events.dispatcher import EventDispatcher
 from kebi.core.events.events import PlaceProfileRequested
 from kebi.core.knowledge.place_notes_service import PlaceNotesService
@@ -85,10 +84,6 @@ async def get_place(
         identity.user_id,
         save_ref=save.source_ref if save else None,
     )
-    area_key = geo_key_for_location(
-        cores[0].location.country_code if cores[0].location else None,
-        cores[0].location.city if cores[0].location else None,
-        cores[0].location.neighborhood if cores[0].location else None,
-    )
+    area_key = cores[0].geo_key
     area = (await handles.for_keys([area_key])).get(area_key) if area_key else None
     return LibraryItem.from_place(cores[0], save, notes, area)

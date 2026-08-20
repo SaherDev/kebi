@@ -12,7 +12,7 @@ a thin adapter.
 
 from __future__ import annotations
 
-from kebi.core.areas.keys import display_from_slug
+from kebi.core.geo.protocols import GeoRegistryProtocol
 from kebi.core.knowledge.curator import KnowledgeCurator
 from kebi.core.knowledge.producer import KnowledgeIngestion
 from kebi.core.knowledge.schemas import (
@@ -46,11 +46,13 @@ class KnowledgeCurationService:
         ingestion: KnowledgeIngestion,
         places_repo: PlacesRepoProtocol,
         area_repo: AreaRepository,
+        geo_registry: GeoRegistryProtocol,
     ) -> None:
         self._curator = curator
         self._ingestion = ingestion
         self._places_repo = places_repo
         self._area_repo = area_repo
+        self._registry = geo_registry
 
     async def curate(
         self,
@@ -99,16 +101,32 @@ class KnowledgeCurationService:
         return CurationAnchor(place_id=place_id, name=place.place_name, geo=geo)
 
     async def _resolve_area_anchor(self, geo_key: str) -> CurationAnchor:
-        """Any decodable geo key is a valid anchor — area rows are lazy
-        (ADR-153), so absence only means the profiler hasn't dressed it yet
-        and the display name falls back to the key's own slug."""
+        """A geo key anchors when the registry knows its segments.
+
+        Key segments are provider ids, so display names and geo parts come
+        from the registry rows behind them — never from the key text. Area
+        rows stay lazy (ADR-153): the profiled name wins when one exists.
+        """
         parts = geo_key.strip("/").split("/")
-        profile = await self._area_repo.get(geo_key)
-        name = profile.name if profile else display_from_slug(parts[-1])
+        ancestors = ["/".join(parts[: i + 1]) for i in range(len(parts))]
+        rows = await self._registry.rows_for_keys(ancestors)
+        city_row = rows.get(ancestors[1]) if len(ancestors) > 1 else None
+        area_row = rows.get(ancestors[2]) if len(ancestors) > 2 else None
+        if (len(ancestors) > 1 and city_row is None) or (
+            len(ancestors) > 2 and area_row is None
+        ):
+            raise AnchorNotFoundError(geo_key)
         geo = ResolvedGeo(
             country_code=parts[0],
-            city=parts[1] if len(parts) > 1 else None,
-            neighborhood=parts[2] if len(parts) > 2 else None,
+            city=city_row.name if city_row else None,
+            neighborhood=area_row.name if area_row else None,
+        )
+        profile = await self._area_repo.get(geo_key)
+        leaf = area_row or city_row
+        name = (
+            profile.name
+            if profile
+            else (leaf.display_name if leaf else parts[0].upper())
         )
         return CurationAnchor(place_id=None, name=name, geo=geo)
 

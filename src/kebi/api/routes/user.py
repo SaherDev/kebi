@@ -26,7 +26,6 @@ from kebi.api.schemas.library import (
     UserPlaceStatusPatch,
 )
 from kebi.core.areas.handles import AreaHandleBuilder
-from kebi.core.areas.keys import geo_key_for_location
 from kebi.core.areas.library_areas_service import LibraryAreasService
 from kebi.core.events.dispatcher import EventDispatcher
 from kebi.core.events.events import LibraryStateChanged, RecommendationSaved
@@ -47,16 +46,12 @@ router = APIRouter()
 def _area_key_of(place: PlaceCore) -> str | None:
     """The area key for a place row, or None when it has no area.
 
-    Recomputed from the row's location rather than read off the stored
-    column, so a response handle is always current with the folding rules —
-    even in the window between a fold-table change and the re-derivation
-    that repoints the stored keys (ADR-165). The stored key is what SQL
-    filters and groups on; this is what the row is decorated with.
+    The stored key, verbatim. It used to be recomputed per read to outrun
+    stale fold tables; identity now comes from the geo registry, so there
+    are no folding rules for a stored key to fall behind — what SQL groups
+    on and what the row is decorated with are one value by construction.
     """
-    loc = place.location
-    if loc is None:
-        return None
-    return geo_key_for_location(loc.country_code, loc.city, loc.neighborhood)
+    return place.geo_key
 
 
 @router.get("/user/library", response_model=LibraryResponse)

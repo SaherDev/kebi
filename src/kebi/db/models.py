@@ -3,6 +3,7 @@ from enum import Enum as PyEnum
 from uuid import uuid4
 
 from sqlalchemy import (
+    Boolean,
     DateTime,
     Enum,
     Float,
@@ -159,9 +160,9 @@ class KnowledgeClaim(Base):
     """One row per world-knowledge claim, entity-scoped (ADR-120).
 
     `entity_key` is a canonical, collision-proof identifier: `place:<places.id>`
-    for places, a lowercased hierarchical geo slug (`ae`, `ae/dubai`,
-    `ae/dubai/jumeirah`) for country/city/neighborhood — see
-    `kebi.core.knowledge.schemas` for the builders. `user_id` is NULL for
+    for places, a hierarchical geo-registry id path (`ae`, `ae/{city_pid}`,
+    `ae/{city_pid}/{area_pid}`) for country/city/neighborhood — see
+    `kebi.core.geo.registry` for resolution. `user_id` is NULL for
     global claims (shared_content, curated_expert) and set for
     conversation-origin claims (kebi_message, user_message), which are only
     ever read back for that same user. `confidence` is writer-set 0-1;
@@ -284,11 +285,111 @@ class UserMemory(Base):
     )
 
 
+class GeoAreaRow(Base):
+    """One row per geographic unit kebi has ever seen — the identity registry.
+
+    Identity is the provider's stable place id, minted lazily by one geocoder
+    lookup the first time a save or claim names an area the registry doesn't
+    know; every later mention worldwide joins by alias lookup with no network.
+    Names are data on the row (the provider's clean English `name` plus the
+    once-minted colloquial layer), never derived from keys — this table is
+    what retired the hand-maintained fold tables in `core.knowledge.schemas`.
+    """
+
+    __tablename__ = "geo_areas"
+    __table_args__ = (
+        UniqueConstraint("geo_key", name="uq_geo_areas_geo_key"),
+        # Legacy slug keys resolve old tokens and drive the one-off data
+        # migration; partial — rows minted after the migration have none.
+        Index(
+            "ix_geo_areas_legacy_key",
+            "legacy_key",
+            postgresql_where=text("legacy_key IS NOT NULL"),
+        ),
+        # Per-save disambiguation inside an ambiguous unit reads its splits.
+        Index(
+            "ix_geo_areas_split_of",
+            "split_of",
+            postgresql_where=text("split_of IS NOT NULL"),
+        ),
+    )
+
+    place_id: Mapped[str] = mapped_column(String, primary_key=True)
+    # Which geocoder minted the id. A future provider is new rows, never a
+    # new column meaning — ids are opaque and never compared across providers.
+    provider: Mapped[str] = mapped_column(
+        String, nullable=False, server_default="google"
+    )
+    country_code: Mapped[str] = mapped_column(String, nullable=False)
+    # Structural position in geo keys: a `city` row is the second segment,
+    # an `area` row the third. Distinct from `kind` — Bali is an
+    # administrative_area_level_1 by kind but sits in the city slot.
+    slot: Mapped[str] = mapped_column(String, nullable=False)
+    # The provider's own primary type (locality, administrative_area_level_4,
+    # natural_feature, …) — data for display and disambiguation, never a
+    # hardcoded vocabulary of ours.
+    kind: Mapped[str] = mapped_column(String, nullable=False)
+    name: Mapped[str] = mapped_column(String, nullable=False)
+    # The colloquial layer (LLM-minted once, code-verified): what people call
+    # the unit when that differs from the provider's honest name, and the
+    # bigger colloquial area it belongs to (Tibubeneng groups into Canggu).
+    colloquial_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    groups_into: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Set on rows minted to subdivide an ambiguous unit (the Gili islands
+    # under the Gili Indah desa) — points at that unit's place_id.
+    split_of: Mapped[str | None] = mapped_column(String, nullable=True)
+    # The city-slot row this area-slot row lives under; NULL on city rows.
+    city_place_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    # The unit's own full id-path key ({cc}/{pid} or {cc}/{city_pid}/{pid}) —
+    # stored composed so key lookups and prefix scans never need a join.
+    geo_key: Mapped[str] = mapped_column(String, nullable=False)
+    # The slug key this unit keyed under before the id migration; decodes
+    # tokens minted in old chat messages forever.
+    legacy_key: Mapped[str | None] = mapped_column(String, nullable=True)
+    lat: Mapped[float | None] = mapped_column(Float, nullable=True)
+    lng: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # Provider viewport [south, west, north, east] — the geometry per-save
+    # disambiguation tests points against.
+    viewport: Mapped[list | None] = mapped_column(  # type: ignore[type-arg]
+        JSONB, nullable=True
+    )
+    # True when one alias name covers several distinctly-named places and a
+    # point is needed to tell them apart (resolved via the `split_of` rows).
+    ambiguous: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
+    minted_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
+class GeoAreaAliasRow(Base):
+    """Name-slug → registry row lookup, scoped to its container.
+
+    The slug is a lookup *hint*, never identity: two cities in one country
+    can each have a "Chinatown", so area-slot aliases are scoped by the
+    containing city row and city-slot aliases use the empty-string scope.
+    Rows accrete — every verified way a unit has been asked for lands here,
+    so the next ask joins without a geocoder call.
+    """
+
+    __tablename__ = "geo_area_aliases"
+
+    country_code: Mapped[str] = mapped_column(String, primary_key=True)
+    # '' for a city-slot alias; the containing city's place_id otherwise.
+    city_place_id: Mapped[str] = mapped_column(
+        String, primary_key=True, server_default=""
+    )
+    slug: Mapped[str] = mapped_column(String, primary_key=True)
+    place_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
+
+
 class Area(Base):
     """One row per profiled geo entity — the area screen's global half (ADR-153).
 
-    Keyed by the canonical geo key (`build_geo_key` output: `id`, `id/bali`,
-    `id/bali/canggu`), the same identity claims already use, so an area's
+    Keyed by the canonical geo key (the geo registry's id path: `id`,
+    `id/{city_pid}`, `id/{city_pid}/{area_pid}`), the same identity claims
+    already use, so an area's
     claims, links, and screen all resolve through one key. The row exists
     only once the profiler has dressed the area: presence *is* the
     "already profiled" signal, exactly as experiential tags are for places

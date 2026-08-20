@@ -1,16 +1,14 @@
-"""Recompute `places.geo_key` from each row's stored location (ADR-165).
+"""Recompute `places.geo_key` through the geo registry.
 
-Run this after changing the hand-maintained fold tables — `_CITY_ALIASES`,
-`_AREA_ALIASES`, or the admin-unit affix lists in `core.knowledge.schemas`.
-Those tables are the reason the key is *derived* rather than authored, and
-the reason a stored copy needs a way back in sync: adding
-`("id", "kerobokan"): "canggu"` changes which area existing saves belong to,
-and rows written before it keep pointing at the old key until this runs.
+Run after correcting registry data — repointing a row's `groups_into`,
+fixing a wrong alias, adding splits to an ambiguous unit — so stored keys
+catch up with the corrected identity. The hand-maintained fold tables this
+script used to chase are gone; the registry rows are the rule now, and this
+is the maintenance that storing a derived key still costs.
 
 Deriving on read would avoid the job entirely, but the key has to be visible
 to SQL — grouping a library by area and fetching one area's saves are both
-set operations the database must do, not the application. Storing it is what
-buys that; this script is the maintenance that storing costs.
+set operations the database must do, not the application.
 
 Idempotent, and safe to run against a live database: it only ever writes
 `geo_key`, and only where the derived value differs from what is stored.
@@ -23,54 +21,32 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession
+import httpx
+from scripts.migrate_geo_identity import _rederive_places
 
-from kebi.core.areas.keys import geo_key_for_location
+from kebi.core.config import get_env
+from kebi.core.geo.google_lookup import GoogleGeoLookupClient
+from kebi.core.geo.registry import GeoRegistry
+from kebi.db.repositories.geo_area_repository import SQLAlchemyGeoAreaRepository
 from kebi.db.session import _get_session_factory
+from kebi.providers import get_instructor_client
 
 logger = logging.getLogger(__name__)
-
-_CHUNK = 500
-
-
-async def rederive(session: AsyncSession) -> int:
-    """Recompute every place's geo_key. Returns how many rows changed.
-
-    Reads the location components rather than whole rows — the derivation
-    needs three strings, and a catalog scan should not haul JSONB blobs it
-    will not read.
-    """
-    rows = (
-        await session.execute(
-            text(
-                "SELECT id, geo_key, "
-                "location->>'country_code' AS cc, "
-                "location->>'city' AS city, "
-                "location->>'neighborhood' AS hood "
-                "FROM places"
-            )
-        )
-    ).fetchall()
-
-    changed = [
-        {"pid": r.id, "key": derived}
-        for r in rows
-        if (derived := geo_key_for_location(r.cc, r.city, r.hood)) != r.geo_key
-    ]
-    for start in range(0, len(changed), _CHUNK):
-        await session.execute(
-            text("UPDATE places SET geo_key = :key WHERE id = :pid"),
-            changed[start : start + _CHUNK],
-        )
-    await session.commit()
-    return len(changed)
 
 
 async def _main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(message)s")
-    async with _get_session_factory()() as session:
-        changed = await rederive(session)
+    async with httpx.AsyncClient() as http:
+        registry = GeoRegistry(
+            repo=SQLAlchemyGeoAreaRepository(_get_session_factory()),
+            lookup=GoogleGeoLookupClient(
+                api_key=get_env().GOOGLE_API_KEY or "", http=http
+            ),
+            instructor_client=get_instructor_client("area_registry"),
+        )
+        changed = await _rederive_places(
+            _get_session_factory(), registry, dry_run=False
+        )
     logger.info("re-derived geo_key on %d row(s)", changed)
 
 

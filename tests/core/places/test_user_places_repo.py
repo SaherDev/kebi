@@ -212,29 +212,38 @@ async def test_browse_query_searches_every_field_a_person_might_type() -> None:
     assert "jsonb_path_query_array(places.tags" in sql
     assert "array_to_string(places.categories" in sql
     # ...and the area as the *library* names it. A section heading comes from
-    # geo_key, so without this, search denies places its own headings promise:
-    # "no matches for bangkok" above a Bangkok section holding ten.
-    assert "regexp_replace(places.geo_key" in sql
+    # the geo registry row behind geo_key, so without this, search denies
+    # places its own headings promise: "no matches for bangkok" above a
+    # Bangkok section holding ten.
+    assert "EXISTS (SELECT 1" in sql
+    assert "FROM geo_areas" in sql
     assert sql.count(" OR ") >= 7  # one OR-group, not eight ANDed predicates
 
 
 @pytest.mark.asyncio
 async def test_browse_query_matches_the_area_name_the_heading_shows() -> None:
     """`bangkok` must find places whose stored city is "Krung Thep Maha
-    Nakhon" — the key folds to th/bangkok, and the heading says Bangkok."""
+    Nakhon" — the key's registry row is named Bangkok, and the heading says
+    Bangkok. The match is against the registry rows containing the place
+    (official and colloquial names), never rebuilt from key text — an id
+    segment has nothing readable in it."""
     session = MagicMock()
     session.execute = AsyncMock(return_value=[])
     repo = UserPlacesRepo(session=session)
 
     await repo.browse("u1", SavedPlaceFilters(query="Hoi An"), limit=20)
 
+    sql = _compiled(session)
+    assert "geo_areas.name ILIKE" in sql
+    assert "geo_areas.colloquial_name ILIKE" in sql
+    # Containment is key-prefix with a `/` guard, spelled with substr, not
+    # LIKE — place-id segments may contain `_`, which LIKE would treat as a
+    # wildcard. So an area matches itself and everything under it, and a
+    # segment is whole or it is a different area.
+    assert "substr(places.geo_key" in sql
     params = session.execute.await_args.args[0].compile().params
-    # The needle is slugified the same way the key was built, so a typed
-    # space or a diacritic still reaches the hyphenated key segment.
-    assert "%hoi-an%" in params.values()
-    # The country prefix is stripped, so a two-letter needle can't drag in
-    # a whole country via `id/` or `th/`.
-    assert "^[a-z]{2}/" in params.values()
+    assert "/" in params.values()
+    assert "%Hoi An%" in params.values()
 
 
 @pytest.mark.asyncio

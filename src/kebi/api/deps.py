@@ -33,6 +33,8 @@ from kebi.core.extraction.extraction_pipeline import (
 )
 from kebi.core.extraction.result_cache import ExtractionResultCache
 from kebi.core.extraction.service import ExtractionService
+from kebi.core.geo.google_lookup import GoogleGeoLookupClient
+from kebi.core.geo.registry import GeoRegistry
 from kebi.core.home import HomeService
 from kebi.core.knowledge.candidate_notes_service import CandidateNotesService
 from kebi.core.knowledge.curation_service import (
@@ -41,7 +43,6 @@ from kebi.core.knowledge.curation_service import (
 )
 from kebi.core.knowledge.curator import KnowledgeCurator
 from kebi.core.knowledge.entity_search_service import EntitySearchService
-from kebi.core.knowledge.geo_resolve import EntityGeoResolver
 from kebi.core.knowledge.harvest_bucket import HarvestBucketReader, HarvestBucketWriter
 from kebi.core.knowledge.harvester import KnowledgeHarvester
 from kebi.core.knowledge.known_places_service import KnownPlacesService
@@ -84,6 +85,7 @@ from kebi.db.repositories import (
     SQLAlchemyAreaRepository,
     SQLAlchemyKnowledgeClaimRepository,
 )
+from kebi.db.repositories.geo_area_repository import SQLAlchemyGeoAreaRepository
 from kebi.db.repositories.user_intent_repository import (
     SQLAlchemyUserIntentRepository,
 )
@@ -263,6 +265,7 @@ def get_area_profile_service() -> AreaProfileService:
         area_repo=get_area_repository(),
         claim_repo=get_knowledge_claim_repository(),
         cache=get_cache_backend(),
+        geo_registry=get_geo_registry(),
         claims_input_limit=cfg.claims_input_limit,
         notable_sub_areas_max=cfg.notable_sub_areas_max,
     )
@@ -358,6 +361,8 @@ async def get_event_dispatcher(
         ingestion=get_knowledge_ingestion(
             get_knowledge_writer(get_knowledge_claim_repository())
         ),
+        # ^ the writer factory injects the geo registry itself; only the
+        # request-scoped repo needs passing here.
         web_harvester=get_web_knowledge_harvester(),
         profile_service=get_place_profile_service(),
         area_profile_service=get_area_profile_service(),
@@ -608,6 +613,33 @@ def get_geocoding_client() -> NominatimGeocodingClient:
     )
 
 
+def get_geo_area_repository() -> SQLAlchemyGeoAreaRepository:
+    """FastAPI dependency providing the geo registry repository."""
+    return SQLAlchemyGeoAreaRepository(_get_session_factory())
+
+
+def get_geo_lookup_client() -> GoogleGeoLookupClient:
+    """Registry mint lookups — Google Geocoding, English-pinned.
+
+    Paid, deliberately: identity needs the same provider the catalog
+    already trusts and ids that stay stable. Called only at mint time —
+    once per unique area ever.
+    """
+    return GoogleGeoLookupClient(
+        api_key=get_env().GOOGLE_API_KEY or "",
+        http=get_shared_http_client(),
+    )
+
+
+def get_geo_registry() -> GeoRegistry:
+    """The single authority on geo identity (registry resolve + mint)."""
+    return GeoRegistry(
+        repo=get_geo_area_repository(),
+        lookup=get_geo_lookup_client(),
+        instructor_client=get_instructor_client("area_registry"),
+    )
+
+
 def get_embeddings_repo(
     db_session: AsyncSession = Depends(get_session),  # noqa: B008
 ) -> EmbeddingsRepo:
@@ -663,7 +695,11 @@ def get_place_upsert_service(
     ),
 ) -> PlaceUpsertService:
     """FastAPI dependency providing PlaceUpsertService (places)."""
-    return PlaceUpsertService(repo=repo, embedding_service=embedding_service)
+    return PlaceUpsertService(
+        repo=repo,
+        embedding_service=embedding_service,
+        geo_registry=get_geo_registry(),
+    )
 
 
 def get_places_search_service(
@@ -777,7 +813,9 @@ def get_area_handle_builder() -> AreaHandleBuilder:
     the handle on a row and the one on a library-area heading, which is what
     guarantees the two can never disagree about an area's name.
     """
-    return AreaHandleBuilder(area_repo=get_area_repository())
+    return AreaHandleBuilder(
+        area_repo=get_area_repository(), geo_registry=get_geo_registry()
+    )
 
 
 def get_library_areas_service(
@@ -805,6 +843,7 @@ def get_area_screen_service(
         area_repo=get_area_repository(),
         user_places_repo=user_places_repo,
         places_repo=places_repo,
+        geo_registry=get_geo_registry(),
     )
 
 
@@ -951,7 +990,7 @@ def get_knowledge_writer(
     Mechanical write path; provenance is supplied by the producer via
     `KnowledgeIngestion`.
     """
-    return KnowledgeWriter(repo=repo)
+    return KnowledgeWriter(repo=repo, geo_registry=get_geo_registry())
 
 
 def get_knowledge_ingestion(
@@ -968,12 +1007,12 @@ def get_knowledge_harvester() -> KnowledgeHarvester:
     A `shared_content` ClaimProducer; its trust floor and review status come
     from config, so gating harvested claims later is a config change. Claims
     naming an entity other than their anchor place are re-keyed through the
-    shared free Nominatim geocoder, verified (ADR-126).
+    geo registry, verified (ADR-126).
     """
     knowledge = get_config().knowledge
     return KnowledgeHarvester(
         get_instructor_client("knowledge_harvester"),
-        get_geocoding_client(),
+        get_geo_registry(),
         confidence_floor=knowledge.harvest_confidence_floor,
         review_status=knowledge.harvest_review_status,
     )
@@ -990,7 +1029,7 @@ def get_web_knowledge_harvester() -> WebKnowledgeHarvester:
     knowledge = get_config().knowledge
     return WebKnowledgeHarvester(
         get_instructor_client("web_harvester"),
-        get_geocoding_client(),
+        get_geo_registry(),
         confidence_floor=knowledge.web_search_confidence_floor,
         review_status=knowledge.web_search_review_status,
     )
@@ -1044,13 +1083,13 @@ def get_knowledge_curator() -> KnowledgeCurator:
     """FastAPI dependency providing the KnowledgeCurator (ADR-121/122).
 
     A `curated_expert` ClaimProducer; resolves each claim's area through the
-    shared free Nominatim geocoder so a curated claim keys identically to a
-    harvested one. Trust floor and review status come from config.
+    geo registry so a curated claim keys identically to a harvested one.
+    Trust floor and review status come from config.
     """
     knowledge = get_config().knowledge
     return KnowledgeCurator(
         get_instructor_client("knowledge_curator"),
-        get_geocoding_client(),
+        get_geo_registry(),
         confidence_floor=knowledge.curator_confidence_floor,
         review_status=knowledge.curator_review_status,
     )
@@ -1071,6 +1110,7 @@ def get_knowledge_curation_service(
         ingestion=ingestion,
         places_repo=places_repo,
         area_repo=get_area_repository(),
+        geo_registry=get_geo_registry(),
     )
 
 
@@ -1096,7 +1136,7 @@ def get_entity_search_service(
     return EntitySearchService(
         area_repo=get_area_repository(),
         hybrid_search=hybrid_search,
-        geo_resolver=EntityGeoResolver(get_geocoding_client()),
+        geo_registry=get_geo_registry(),
         cache=cache,
         cache_ttl_seconds=entity_search.resolver_cache_ttl_seconds,
         area_limit=entity_search.area_limit,
@@ -1138,6 +1178,7 @@ def get_candidate_notes_service(
     cfg = get_config().knowledge
     return CandidateNotesService(
         repo,
+        get_geo_registry(),
         per_place_limit=cfg.candidate_notes_limit,
         area_limit=cfg.area_notes_limit,
     )
@@ -1185,15 +1226,15 @@ def get_research_service(
     """FastAPI dependency providing the ResearchService.
 
     The knowledge layer's agent-facing reader behind the `research` tool:
-    staged verified-or-refuse entity resolution over the free Nominatim
-    geocoder, then an entity-bounded, approved-only claims read ranked
-    in memory. Limits, weights, and thresholds come from config
-    (`agent.research`, `knowledge.research`).
+    staged verified-or-refuse entity resolution over the geo registry,
+    then an entity-bounded, approved-only claims read ranked in memory.
+    Limits, weights, and thresholds come from config (`agent.research`,
+    `knowledge.research`).
     """
     cfg = get_config()
     research_cfg = cfg.knowledge.research
     resolver = ResearchEntityResolver(
-        EntityGeoResolver(get_geocoding_client()),
+        get_geo_registry(),
         confidence_min=research_cfg.entity_confidence_min,
     )
     return ResearchService(
@@ -1406,4 +1447,5 @@ async def get_chat_service(
         config=config,
         agent_graph=agent_graph,
         icon_refresher=icon_refresher,
+        geo_registry=get_geo_registry(),
     )

@@ -24,7 +24,6 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from kebi.core.agent._trace_context import traced_call
 from kebi.core.config import get_prompt
-from kebi.core.knowledge.geo_resolve import EntityGeoResolver, slugs_match
 from kebi.core.knowledge.schemas import (
     HarvestContent,
     HarvestPlace,
@@ -33,11 +32,12 @@ from kebi.core.knowledge.schemas import (
     SourceType,
     StructuredClaim,
     _slugify,
+    slugs_match,
 )
 from kebi.core.knowledge.tags import render_claim_tag_vocabulary
 
 if TYPE_CHECKING:
-    from kebi.core.places.nominatim_geocoding_client import NominatimGeocodingClient
+    from kebi.core.geo.protocols import GeoRegistryProtocol
     from kebi.providers.llm import InstructorClient
 
 logger = logging.getLogger(__name__)
@@ -102,13 +102,13 @@ class KnowledgeHarvester:
     def __init__(
         self,
         instructor_client: InstructorClient,
-        geocoder: NominatimGeocodingClient,
+        geo_registry: GeoRegistryProtocol,
         *,
         confidence_floor: float = 0.35,
         review_status: ReviewStatus = "approved",
     ) -> None:
         self._client = instructor_client
-        self._geocoder = geocoder
+        self._registry = geo_registry
         self.confidence_floor = confidence_floor
         self.review_status = review_status
 
@@ -164,7 +164,6 @@ class KnowledgeHarvester:
         the anchor's country; country claims are resolved by name. Anything
         unverifiable is dropped — never keyed to the wrong entity.
         """
-        resolver = EntityGeoResolver(self._geocoder)
         resolved: list[StructuredClaim] = []
         for raw in response.claims:
             if not (0 <= raw.place_index < len(places)):
@@ -194,7 +193,7 @@ class KnowledgeHarvester:
                 if slugs_match(raw.entity_name, place.geo.city):
                     geo = place.geo
                 elif place.geo.country_code:
-                    geo = await resolver.resolve_city(
+                    geo = await self._resolve_city(
                         raw.entity_name, place.geo.country_code
                     )
                 if geo is None:
@@ -204,7 +203,7 @@ class KnowledgeHarvester:
                     )
                     continue
             else:  # country
-                geo = await resolver.resolve_country(raw.entity_name)
+                geo = await self._resolve_country(raw.entity_name)
                 if geo is None:
                     logger.debug(
                         "harvest_claim_dropped_unresolvable",
@@ -223,6 +222,35 @@ class KnowledgeHarvester:
                 )
             )
         return resolved
+
+    async def _resolve_city(self, name: str, country_code: str) -> ResolvedGeo | None:
+        """Registry-verified geo for a named city, or None (drop the claim).
+
+        Guarded: a registry failure (DB down, not a lookup miss) drops this
+        one claim rather than failing the whole harvest — the module's
+        returns-[] contract, held per claim.
+        """
+        try:
+            resolved = await self._registry.key_for_location(
+                country_code, name, None, mint=True
+            )
+        except Exception:
+            logger.warning("harvest_geo_resolve_failed", exc_info=True)
+            return None
+        if resolved is None or resolved.city is None:
+            return None
+        return ResolvedGeo(
+            country_code=resolved.city.country_code, city=resolved.city.name
+        )
+
+    async def _resolve_country(self, name: str) -> ResolvedGeo | None:
+        """Registry-verified geo for a named country, or None (drop)."""
+        try:
+            row = await self._registry.resolve_country(name)
+        except Exception:
+            logger.warning("harvest_geo_resolve_failed", exc_info=True)
+            return None
+        return ResolvedGeo(country_code=row.country_code) if row else None
 
 
 def _venue_names_match(entity_name: str, place_name: str) -> bool:

@@ -17,6 +17,12 @@ from kebi.core.knowledge.web_harvester import (
     is_entry_rule,
 )
 from kebi.core.web.models import WebFinding, WebSearchResult
+from tests.geo_fakes import FakeGeoRegistry, make_area, make_city, make_country
+
+_BADUNG = make_city("id", "Badung")
+_SEMINYAK = make_area(_BADUNG, "Seminyak")
+_UBUD = make_city("id", "Ubud")
+_INDONESIA = make_country("id", "Indonesia")
 
 
 def _result(**kw: Any) -> WebSearchResult:
@@ -44,10 +50,12 @@ def _claim(**kw: Any) -> _WebClaim:
     return _WebClaim(**base)
 
 
-def _harvester(claims: list[_WebClaim], geocoder: Any = None) -> WebKnowledgeHarvester:
+def _harvester(
+    claims: list[_WebClaim], registry: FakeGeoRegistry | None = None
+) -> WebKnowledgeHarvester:
     client = MagicMock()
     client.extract = AsyncMock(return_value=_WebHarvestResponse(claims=claims))
-    return WebKnowledgeHarvester(client, geocoder or MagicMock())
+    return WebKnowledgeHarvester(client, registry or FakeGeoRegistry())
 
 
 # --- provenance ------------------------------------------------------------
@@ -154,11 +162,29 @@ def test_is_entry_rule_leaves_ordinary_local_knowledge_alone() -> None:
 # --- key verification ------------------------------------------------------
 
 
-async def test_a_neighbourhood_claim_naming_somewhere_else_is_dropped() -> None:
+async def test_a_neighbourhood_claim_naming_an_unverified_area_is_dropped() -> None:
     """Verified-or-drop (ADR-126). The alternative is filing a fact about
-    Seminyak under Canggu because that is where the conversation was."""
-    claims = await _harvester([_claim(entity_name="Seminyak")]).harvest(_result())
+    an area the registry can't verify under whatever city the conversation
+    was in. City seeded, area not — the resolve comes back shallower than
+    the claim's scope, so it drops."""
+    claims = await _harvester(
+        [_claim(entity_name="Nowhere Beach")], FakeGeoRegistry(_BADUNG)
+    ).harvest(_result())
     assert claims == []
+
+
+async def test_a_neighbourhood_claim_naming_a_sibling_area_resolves() -> None:
+    """New with the registry (ADR-126 extension): a neighbourhood claim
+    naming an area other than the turn's own resolves inside the turn's
+    city instead of always dropping — verified, never free-texted."""
+    claims = await _harvester(
+        [_claim(entity_name="Seminyak")], FakeGeoRegistry(_BADUNG, _SEMINYAK)
+    ).harvest(_result())
+    assert len(claims) == 1
+    assert claims[0].scope == "neighborhood"
+    assert claims[0].geo == ResolvedGeo(
+        country_code="id", city="Badung", neighborhood="Seminyak"
+    )
 
 
 async def test_a_city_claim_naming_the_turns_city_keys_to_it() -> None:
@@ -186,59 +212,17 @@ async def test_the_turns_geography_outranks_the_models_scope_label() -> None:
     )
 
 
-async def test_the_label_still_decides_when_no_name_matches() -> None:
-    """The override is name-driven, not a blanket demotion — a claim about
-    somewhere else must still take the geocoder path."""
-    import kebi.core.knowledge.web_harvester as module
-
-    original = module.EntityGeoResolver
-    module.EntityGeoResolver = lambda _g: MagicMock(  # type: ignore[assignment]
-        resolve_city=AsyncMock(return_value=None)
-    )
-    try:
-        # scope=neighborhood + unmatched name → dropped, never geocoded.
-        dropped = await _harvester(
-            [_claim(scope="neighborhood", entity_name="Seminyak")]
-        ).harvest(_result())
-    finally:
-        module.EntityGeoResolver = original  # type: ignore[assignment]
-    assert dropped == []
-
-
-async def test_a_city_claim_naming_another_city_is_geocoded() -> None:
-    geocoder = MagicMock()
-    harvester = _harvester([_claim(scope="city", entity_name="Ubud")], geocoder)
-    resolved = ResolvedGeo(country_code="id", city="Ubud")
-
-    async def _resolve_city(name: str, country_code: str) -> ResolvedGeo | None:
-        return resolved if name == "Ubud" else None
-
-    import kebi.core.knowledge.web_harvester as module
-
-    original = module.EntityGeoResolver
-    module.EntityGeoResolver = lambda _g: MagicMock(  # type: ignore[assignment]
-        resolve_city=AsyncMock(side_effect=_resolve_city)
-    )
-    try:
-        claims = await harvester.harvest(_result())
-    finally:
-        module.EntityGeoResolver = original  # type: ignore[assignment]
-    assert claims[0].geo == resolved
+async def test_a_city_claim_naming_another_city_resolves_via_the_registry() -> None:
+    claims = await _harvester(
+        [_claim(scope="city", entity_name="Ubud")], FakeGeoRegistry(_UBUD)
+    ).harvest(_result())
+    assert claims[0].geo == ResolvedGeo(country_code="id", city="Ubud")
 
 
 async def test_an_unresolvable_city_claim_is_dropped() -> None:
-    import kebi.core.knowledge.web_harvester as module
-
-    original = module.EntityGeoResolver
-    module.EntityGeoResolver = lambda _g: MagicMock(  # type: ignore[assignment]
-        resolve_city=AsyncMock(return_value=None)
-    )
-    try:
-        claims = await _harvester(
-            [_claim(scope="city", entity_name="Nowhereville")]
-        ).harvest(_result())
-    finally:
-        module.EntityGeoResolver = original  # type: ignore[assignment]
+    claims = await _harvester(
+        [_claim(scope="city", entity_name="Nowhereville")]
+    ).harvest(_result())
     assert claims == []
 
 

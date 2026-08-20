@@ -12,8 +12,9 @@ opening empty. Row presence is the "already profiled" guard, mirroring the
 place profiler's tag check (ADR-152); a short Redis lock dedupes concurrent
 first opens, and a failed call leaves no row so the next open retries.
 
-The LLM emits *names* only — child geo keys are built mechanically from the
-parent key, the same never-invent-a-key rule the chat linkifier follows.
+The LLM emits *names* only — child geo keys come from the geo registry,
+verified or dropped, the same never-invent-a-key rule the chat linkifier
+follows.
 """
 
 from __future__ import annotations
@@ -25,13 +26,13 @@ from pydantic import BaseModel, Field
 
 from kebi.core.agent._trace_context import traced_call
 from kebi.core.config import get_prompt
-from kebi.core.knowledge.schemas import build_geo_key
 from kebi.core.places.models import normalize_icon
 
-from .keys import display_from_slug, parent_keys
+from .keys import parent_keys
 from .models import AreaChip, AreaLevel, AreaProfile, NotableSubArea
 
 if TYPE_CHECKING:
+    from kebi.core.geo.protocols import GeoRegistryProtocol
     from kebi.core.knowledge.schemas import KnowledgeClaim
     from kebi.db.repositories.area_repository import AreaRepository
     from kebi.db.repositories.knowledge_claim_repository import (
@@ -90,6 +91,7 @@ class AreaProfileService:
         area_repo: AreaRepository,
         claim_repo: KnowledgeClaimRepository,
         cache: CacheBackend,
+        geo_registry: GeoRegistryProtocol,
         *,
         claims_input_limit: int,
         notable_sub_areas_max: int,
@@ -98,6 +100,7 @@ class AreaProfileService:
         self._area_repo = area_repo
         self._claim_repo = claim_repo
         self._cache = cache
+        self._registry = geo_registry
         self._claims_input_limit = claims_input_limit
         self._notable_sub_areas_max = notable_sub_areas_max
 
@@ -126,49 +129,79 @@ class AreaProfileService:
             # most corroborated shape the profile.
             claims.sort(key=lambda c: c.confidence, reverse=True)
             response = await self._infer(geo_key, claims[: self._claims_input_limit])
-            return await self._area_repo.upsert(self._to_profile(geo_key, response))
+            profile = await self._to_profile(geo_key, response)
+            return await self._area_repo.upsert(profile)
         except Exception:
             logger.warning("area_profile failed for %s", geo_key, exc_info=True)
             return None
 
-    def _to_profile(self, geo_key: str, response: _ProfilerResponse) -> AreaProfile:
-        """Resolved profile: LLM names + mechanically built child keys."""
+    async def _to_profile(
+        self, geo_key: str, response: _ProfilerResponse
+    ) -> AreaProfile:
+        """Resolved profile: LLM names, keyed only through the registry.
+
+        The model emits child *names*; each becomes a key only if the
+        registry verifies it (`mint=True` — the profiler runs in the
+        background, and a notable child is an area worth registering). An
+        unverifiable child is dropped rather than mis-keyed — the
+        never-invent-a-key rule, now enforced by data instead of grammar.
+        """
         parts = geo_key.split("/")
+        cc = parts[0]
+        own_row = (await self._registry.rows_for_keys([geo_key])).get(geo_key)
+        city_name = own_row.name if own_row and len(parts) == 2 else None
         sub_areas: list[NotableSubArea] = []
         # A neighbourhood (3 segments) is the leaf — the key grammar has no
         # deeper level to point a child at, so any children the model offers
         # are dropped rather than mis-keyed.
         if len(parts) < 3:
             for sub in response.notable_sub_areas[: self._notable_sub_areas_max]:
-                try:
-                    child_key = (
-                        build_geo_key(parts[0], sub.name)
-                        if len(parts) == 1
-                        else build_geo_key(parts[0], parts[1], sub.name)
-                    )
-                except ValueError:
+                resolved = await self._registry.key_for_location(
+                    cc,
+                    sub.name if len(parts) == 1 else city_name,
+                    None if len(parts) == 1 else sub.name,
+                    mint=True,
+                )
+                if resolved is None:
+                    continue
+                leaf = resolved.leaf
+                if leaf is None or resolved.geo_key == geo_key:
+                    continue
+                if len(parts) == 2 and resolved.area is None:
                     continue
                 sub_areas.append(
                     NotableSubArea(
-                        geo_key=child_key,
-                        name=sub.name,
+                        geo_key=resolved.geo_key,
+                        name=leaf.display_name,
                         icon=normalize_icon(sub.icon),
                         hook=sub.hook,
                     )
                 )
-        # One breadcrumb name per ancestor, padded from the slugs when the
-        # model returned too few — the screen never renders a raw country
-        # code because the model got terse.
+        # One breadcrumb name per ancestor, padded from registry rows when
+        # the model returned too few — the screen never renders a raw
+        # country code because the model got terse.
         parents = parent_keys(geo_key)
-        breadcrumb = [
-            response.breadcrumb[i]
-            if i < len(response.breadcrumb) and response.breadcrumb[i].strip()
-            else display_from_slug(parents[i].rsplit("/", 1)[-1])
-            for i in range(len(parents))
-        ]
+        parent_rows = await self._registry.rows_for_keys(parents)
+        breadcrumb = []
+        for i in range(len(parents)):
+            if i < len(response.breadcrumb) and response.breadcrumb[i].strip():
+                breadcrumb.append(response.breadcrumb[i])
+                continue
+            row = parent_rows.get(parents[i])
+            segment = parents[i].rsplit("/", 1)[-1]
+            breadcrumb.append(
+                row.display_name
+                if row
+                else (segment.upper() if "/" not in parents[i] else segment)
+            )
+        fallback_name = (
+            own_row.display_name
+            if own_row
+            else (parts[-1].upper() if len(parts) == 1 else parts[-1])
+        )
         return AreaProfile(
             geo_key=geo_key,
-            name=response.name.strip() or display_from_slug(parts[-1]),
+            name=response.name.strip() or fallback_name,
             level=response.level,
             icon=normalize_icon(response.icon),
             summary=response.summary.strip(),
@@ -195,20 +228,27 @@ class AreaProfileService:
         # the model profiles the child the evidence describes instead of the
         # entity the key names.
         parts = geo_key.split("/")
+        ancestors = ["/".join(parts[: i + 1]) for i in range(len(parts))]
+        rows = await self._registry.rows_for_keys(ancestors)
         if len(parts) == 1:
             subject = (
                 f"the COUNTRY with ISO 3166 code {parts[0]!r} — name and "
                 "profile the country itself, not any place inside it"
             )
         elif len(parts) == 2:
+            own = rows.get(geo_key)
             subject = (
-                f"the city/region {display_from_slug(parts[1])!r} in country "
-                f"code {parts[0]!r}"
+                f"the city/region {(own.display_name if own else parts[1])!r} "
+                f"in country code {parts[0]!r}"
             )
         else:
+            own = rows.get(geo_key)
+            city = rows.get(ancestors[1])
             subject = (
-                f"the neighbourhood/district {display_from_slug(parts[2])!r} of "
-                f"{display_from_slug(parts[1])} (country code {parts[0]!r})"
+                f"the neighbourhood/district "
+                f"{(own.display_name if own else parts[2])!r} of "
+                f"{city.display_name if city else parts[1]} "
+                f"(country code {parts[0]!r})"
             )
         user_content = (
             f"geo key: {geo_key}\n"

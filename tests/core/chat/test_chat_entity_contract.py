@@ -17,9 +17,15 @@ from langchain_core.messages import AIMessage
 from kebi.api.schemas.chat import ChatRequest
 from kebi.core.areas.keys import encode_area_id
 from kebi.core.chat.service import ChatService
+from tests.geo_fakes import FakeGeoRegistry, make_area, make_city
+
+# Geo keys are registry id-paths now; the working location resolves through
+# a seeded registry, exactly as the wired service does.
+_BADUNG = make_city("id", "Badung")
+_CANGGU_ROW = make_area(_BADUNG, "Canggu")
 
 # Area URIs carry the geo key encoded as one opaque segment (ADR-153).
-_CANGGU_URI = f"kebi://area/{encode_area_id('id/badung/canggu')}"
+_CANGGU_URI = f"kebi://area/{encode_area_id(_CANGGU_ROW.geo_key)}"
 
 _CANGGU = {
     "country": "Indonesia",
@@ -95,6 +101,7 @@ def _service(graph: MagicMock) -> ChatService:
         taste_service=taste_service,
         config=get_config().model_copy(deep=True),
         agent_graph=graph,
+        geo_registry=FakeGeoRegistry(_BADUNG, _CANGGU_ROW),
     )
 
 
@@ -129,7 +136,7 @@ async def test_entities_resolve_each_link() -> None:
         },
         {
             "kind": "area",
-            "key": "id/badung/canggu",
+            "key": _CANGGU_ROW.geo_key,
             "name": "Canggu",
             "uri": _CANGGU_URI,
             # Row-sourced (ADR-162): the resolver's per-turn pick no longer

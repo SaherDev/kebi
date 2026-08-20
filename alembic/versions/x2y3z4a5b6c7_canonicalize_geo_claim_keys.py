@@ -34,15 +34,29 @@ depends_on = None
 
 
 def _aliases() -> dict[tuple[str, str], str]:
-    """Read the alias table from the code that owns it.
+    """Frozen snapshot of the ADR-144 city alias table.
 
-    Imported rather than duplicated so the migration cannot drift from the
-    rule it is backfilling — a copied table would silently diverge the moment
-    a new pair is added.
+    This was imported from `core.knowledge.schemas` while that table lived;
+    the geo identity registry later deleted it from live code, so the pairs
+    this migration actually applied are pinned here verbatim. On a fresh
+    (empty) database this is a no-op either way.
     """
-    from kebi.core.knowledge.schemas import _CITY_ALIASES
-
-    return dict(_CITY_ALIASES)
+    return {
+        ("th", "krung-thep-maha-nakhon"): "bangkok",
+        ("th", "krung-thep"): "bangkok",
+        ("id", "jakarta-raya"): "jakarta",
+        ("id", "daerah-khusus-ibukota-jakarta"): "jakarta",
+        ("id", "nusa-tenggara-barat"): "west-nusa-tenggara",
+        ("id", "nusa-tenggara-timur"): "east-nusa-tenggara",
+        ("vn", "thanh-pho-ho-chi-minh"): "ho-chi-minh-city",
+        ("vn", "sai-gon"): "ho-chi-minh-city",
+        ("vn", "ha-noi"): "hanoi",
+        ("vn", "da-nang"): "da-nang",
+        ("jp", "tokyo-to"): "tokyo",
+        ("kr", "seoul-teukbyeolsi"): "seoul",
+        ("cn", "beijing-shi"): "beijing",
+        ("ae", "dubayy"): "dubai",
+    }
 
 
 def upgrade() -> None:

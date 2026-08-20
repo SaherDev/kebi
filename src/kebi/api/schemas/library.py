@@ -20,7 +20,7 @@ from datetime import datetime
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from kebi.core.areas.handles import AreaHandle
-from kebi.core.areas.keys import geo_key_for_location, is_geo_key
+from kebi.core.areas.keys import is_geo_key
 from kebi.core.areas.library_areas_service import AreaWithCount
 from kebi.core.knowledge.schemas import PlaceNote, note_source_label
 from kebi.core.places import (
@@ -138,14 +138,10 @@ class LibraryQuery(BaseModel):
 
 
 def _area_for(place: PlaceCore, areas: dict[str, AreaHandle]) -> AreaHandle | None:
-    """The handle for a place row, keyed by the same derivation the builder
-    was fed. A place with no area (geography coarser than a city) is absent
-    from the map and correctly yields None."""
-    loc = place.location
-    if loc is None:
-        return None
-    key = geo_key_for_location(loc.country_code, loc.city, loc.neighborhood)
-    return areas.get(key) if key else None
+    """The handle for a place row, keyed by its stored registry key. A place
+    with no area (geography coarser than a city, or an unverifiable unit) is
+    absent from the map and correctly yields None."""
+    return areas.get(place.geo_key) if place.geo_key else None
 
 
 class AreaRefView(BaseModel):
