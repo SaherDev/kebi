@@ -85,56 +85,23 @@ class LLMRoleConfig(BaseModel):
     reasoning_effort: str | None = None
 
 
-class RoleOptionsConfig(BaseModel):
-    """Multi-option role block (ADR-068 for the orchestrator; ADR-173
-    generalises it to every role).
-
-    Shape in YAML:
-        <role>:
-          default: <option-key>
-          <option-key>: { provider, model, max_tokens, temperature, ... }
-          <option-key>: { ... }
-
-    Resolved at boot via `_resolve_model_options(raw, ...)`. A flat block
-    (top-level `provider`/`model`) stays valid — it is one fixed option.
-    """
-
-    role: str
-    default: str
-    options: dict[str, LLMRoleConfig]
-
-    @model_validator(mode="after")
-    def _default_must_exist(self) -> "RoleOptionsConfig":
-        if self.default not in self.options:
-            raise ValueError(
-                f"models.{self.role}: default={self.default!r} not found in "
-                f"options {sorted(self.options)}"
-            )
-        return self
-
-
-# Selector keys inside an optioned role block — every other key is a model
-# option. `default` picks the active option; `advanced` (orchestrator only)
-# names the option the top plan tier gets, exposed as the separate
-# `orchestrator_advanced` role so it survives boot resolution instead of
-# being collapsed away with the other options.
-_ROLE_RESERVED_KEYS = frozenset({"default", "advanced"})
-
 # Per-role boot override: KEBI_MODEL_<ROLE> (role name upper-cased) names
-# an option key, e.g. KEBI_MODEL_EXTRACTOR=luna. Rollback = unset the var
-# and restart — no deploy, no config edit (ADR-173).
+# a PROFILE from `model_profiles`, e.g. KEBI_MODEL_EXTRACTOR=gpt4o-strong.
+# Rollback = unset the var and restart — no deploy, no config edit
+# (ADR-173/179).
 _MODEL_OVERRIDE_PREFIX = "KEBI_MODEL_"
 
 
 def expand_profile(
     entry: dict[str, Any], profiles: dict[str, Any], where: str
 ) -> dict[str, Any]:
-    """Merge a `profile:` reference into an option/role dict (ADR-176).
+    """Merge a `profile:` reference into a role dict (ADR-176/179).
 
     `model_profiles.<name>` supplies the base fields (provider, model,
-    limits); the entry's own keys override. A group of roles referencing
-    one profile moves to a new model with a single profile edit, while
-    per-role env overrides keep working for one-at-a-time trials.
+    limits, quirks); the entry's own keys override — a role carries only
+    what is genuinely per-role (token ceiling, temperature, a tighter
+    timeout). A group of roles referencing one profile moves to a new
+    model with a single profile edit.
     """
     if "profile" not in entry:
         return entry
@@ -147,28 +114,6 @@ def expand_profile(
     if not isinstance(base, dict):
         raise ValueError(f"model_profiles.{name} must be a mapping")
     return {**base, **{k: v for k, v in entry.items() if k != "profile"}}
-
-
-def _split_options_block(
-    role: str, raw_block: dict[str, Any], profiles: dict[str, Any]
-) -> RoleOptionsConfig:
-    """Parse a YAML `{default, <option>, ...}` role block.
-
-    `default` and `advanced` are reserved selector keys; every other key is
-    an option name mapping to an `LLMRoleConfig`-shaped dict (possibly via
-    a `profile:` reference).
-    """
-    if "default" not in raw_block:
-        raise ValueError(
-            f"models.{role} must define a 'default' key naming one of its option keys"
-        )
-    default = raw_block["default"]
-    options = {
-        k: expand_profile(v, profiles, f"models.{role}.{k}")
-        for k, v in raw_block.items()
-        if k not in _ROLE_RESERVED_KEYS
-    }
-    return RoleOptionsConfig(role=role, default=default, options=options)
 
 
 def _model_env_overrides() -> dict[str, str]:
@@ -192,87 +137,88 @@ def _resolve_model_options(
     agent_model: str | None = None,
     profiles: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Flatten every `{default, <option>, ...}` role block to a flat
-    `LLMRoleConfig` dict (ADR-173, generalising ADR-068).
+    """Resolve every role's flat `profile:` reference to a flat
+    `LLMRoleConfig` dict (ADR-179, superseding ADR-173's option blocks).
 
-    `profiles` is the raw `model_profiles:` section (ADR-176): any role
-    block or option may reference one via `profile: <name>` instead of
-    inlining provider/model/limits; entry keys override profile keys.
-    Flat blocks (top-level `provider` or `profile`) pass through after
-    profile expansion. Mutates `raw_models` in place and returns it.
+    One shape for every role:
 
-    Per optioned role:
-    - no override → use `default`.
-    - `KEBI_MODEL_<ROLE>` matches an option key → use that option.
-    - override set but unknown → log a warning and fall back to `default`.
-      Boot continues so a typo in env vars does not kill prod.
-    - `default` missing or pointing at a missing option → raises.
+        <role>:
+          profile: <model_profiles key>   # which model
+          max_tokens / temperature / ...  # per-role params (override profile)
 
-    Orchestrator extras (ADR-068): `AGENT_MODEL` still works as an alias
-    (KEBI_MODEL_ORCHESTRATOR wins when both are set), and an `advanced`
-    key emits the separate `orchestrator_advanced` role from the same
-    option list — no duplicate model definition. `advanced` on any other
-    role is an error: it is a plan-tier selector, not a model option.
+    Switching a role's model is `KEBI_MODEL_<ROLE>=<profile-name>` in the
+    env (unknown name → warn + keep the configured profile, so a typo
+    never kills prod boot), or editing the role's `profile:` line; moving
+    a whole group is editing its shared profile in `model_profiles`.
+
+    Orchestrator extras: `AGENT_MODEL` works as an alias for
+    `KEBI_MODEL_ORCHESTRATOR` (which wins when both are set), and an
+    `advanced: <profile-name>` key emits the separate
+    `orchestrator_advanced` role — same per-role params, advanced-tier
+    profile. `advanced` on any other role is an error.
+
+    Blocks that inline `provider` without a `profile` pass through
+    untouched (test fixtures). Mutates `raw_models` in place, returns it.
     """
     overrides = overrides or {}
     if profiles is None:
-        # Back-compat callers (`_resolve_orchestrator`, tests feeding raw
-        # blocks) resolve against the committed catalog. Pass `{}`
-        # explicitly to mean "no profiles".
+        # Back-compat callers resolve against the committed catalog.
+        # Pass `{}` explicitly to mean "no profiles".
         profiles = load_yaml_config("app.yaml").get("model_profiles") or {}
     for role in list(raw_models):
         block = raw_models[role]
         if not isinstance(block, dict):
             continue
-        if "provider" in block or "profile" in block:
-            # Flat block — expand a profile reference in place, done.
-            raw_models[role] = expand_profile(block, profiles, f"models.{role}")
-            continue
-        if role != "orchestrator" and "advanced" in block:
+        entry = dict(block)
+        advanced_profile = entry.pop("advanced", None)
+        if advanced_profile is not None and role != "orchestrator":
             raise ValueError(
                 f"models.{role}: 'advanced' is reserved for the orchestrator "
-                "(plan-tier selector), not a model option"
+                "(plan-tier selector)"
             )
-        advanced_key = block.get("advanced")
-        parsed = _split_options_block(role, block, profiles)
+        if "profile" not in entry:
+            # Inline provider block (test fixtures) — leave as-is.
+            continue
         requested = overrides.get(role)
         override_source = f"{_MODEL_OVERRIDE_PREFIX}{role.upper()}"
         if requested is None and role == "orchestrator" and agent_model is not None:
             requested = agent_model
             override_source = "AGENT_MODEL"
-        chosen = parsed.default
         if requested is not None:
-            if requested in parsed.options:
-                chosen = requested
+            if requested in profiles:
+                logger.info(
+                    "models.%s: profile %r selected via %s (configured: %r)",
+                    role,
+                    requested,
+                    override_source,
+                    entry["profile"],
+                )
+                entry["profile"] = requested
             else:
                 logger.warning(
-                    "%s=%r not in %s options %s; falling back to default %r",
+                    "%s=%r is not a model profile %s; keeping configured profile %r",
                     override_source,
                     requested,
-                    role,
-                    sorted(parsed.options),
-                    parsed.default,
+                    sorted(profiles),
+                    entry["profile"],
                 )
-        if chosen != parsed.default:
-            logger.info("models.%s resolved to option %r (env override)", role, chosen)
-        raw_models[role] = parsed.options[chosen].model_dump()
-        if advanced_key is not None:
-            if advanced_key not in parsed.options:
-                raise ValueError(
-                    f"orchestrator.advanced={advanced_key!r} not found in options "
-                    f"{sorted(parsed.options)}"
-                )
-            raw_models["orchestrator_advanced"] = parsed.options[
-                advanced_key
-            ].model_dump()
+        raw_models[role] = expand_profile(entry, profiles, f"models.{role}")
+        if advanced_profile is not None:
+            adv_entry = {
+                **{k: v for k, v in block.items() if k != "advanced"},
+                "profile": advanced_profile,
+            }
+            raw_models["orchestrator_advanced"] = expand_profile(
+                adv_entry, profiles, "models.orchestrator.advanced"
+            )
     return raw_models
 
 
 def _resolve_orchestrator(
     raw_models: dict[str, Any], agent_model: str | None
 ) -> dict[str, Any]:
-    """Back-compat entry point (ADR-068) — now resolves ALL optioned role
-    blocks, with `agent_model` as the orchestrator's override alias."""
+    """Back-compat entry point (ADR-068) — resolves ALL role blocks, with
+    `agent_model` as the orchestrator's profile-override alias."""
     return _resolve_model_options(raw_models, agent_model=agent_model)
 
 

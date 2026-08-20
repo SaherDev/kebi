@@ -17,6 +17,26 @@ Format:
 
 ---
 
+## ADR-179: Roles belong to model families — one flat shape, and a family changes as one
+
+**Date:** 2026-08-21\
+**Status:** accepted — supersedes ADR-173's per-role option blocks; completes ADR-176\
+**Context:** ADR-173 gave each role a `default:` plus a list of named model options, and ADR-176 deduplicated the model definitions those options shared. The result worked but read badly: three levels of nesting per role, candidate lists copy-pasted across roles, and two competing places to express "which model" — the option key and the profile it pointed at. The owner's mental model is simpler than the structure was: there are model *families* (a cheap workhorse, a deliberately strong tier, a realtime Claude, candidates on the bench), every role belongs to exactly one family, and change happens at the family level.\
+**Decision:** The option layer is deleted. Every role is one flat block: `profile: <family>` plus the role's own parameters (token ceiling, temperature, a tighter timeout). The profiles catalog *is* the option list — per-role candidate staging disappears because any family can be trialled on any role: the env override now names a profile (`KEBI_MODEL_<ROLE>=<family>`), unknown names warn and keep the configured family, and `AGENT_MODEL` keeps its alias role with profile-name values. The orchestrator's `advanced:` selector likewise names a family. The bakeoff races families the same way — candidate name in, role's own parameters applied. Invariant tests keep it honest: every role must reference a family, no provider or model name may appear outside the catalog, and a family edit must move every member and nothing else.\
+**Consequences:** The config now states the mental model directly: one screen of families, then seventeen one-liner memberships. Swapping the extractor's family (this change also lands the bakeoff-backed move to the Luna family, ADR-178) is a one-line diff instead of a restructure; the eventual mini-family upgrade is likewise one line. What was lost is per-role candidate curation — any family can now be pointed at any role, including nonsensical pairings (the embedder on a chat family would fail at call time, not boot). That guard was judged not worth the structure it cost; the bakeoff and the boot log are the checks that matter. AGENT_MODEL values from the option era (e.g. an old `claude-sonnet`) no longer match anything and fall back to the configured family with a warning — deliberate, and visible in the boot log.
+
+---
+
+## ADR-178: The extractor moves to the Luna family — measured tie at a sixteenth of the price
+
+**Date:** 2026-08-21\
+**Status:** accepted — first swap executed under ADR-175's harness\
+**Context:** The extractor ran gpt-4o, two calls per uncached share, the single most expensive OpenAI role. The round-one bakeoff (ADR-175) measured GPT-5.6 Luna at identical quality on the golden set — same score, same pass rate — for roughly one-sixteenth the cost per call, with one caveat: a slower latency tail, on a synchronous endpoint. The harness also surfaced Luna's contract quirk (function tools require its reasoning dial off), which is captured on the family's profile, not at call sites.\
+**Decision:** The extractor's family becomes Luna in config — the owner chose config over an env-var trial. gpt-4o's family stays in the catalog as the rollback target, reachable without a deploy via the env override or by reverting the one-line diff. The watch item is explicit: extraction latency percentiles in the cost report over the first days of traffic; a fattening tail on `/v1/extract` is the trigger to roll back, not quality.\
+**Consequences:** Extraction's LLM spend drops an order of magnitude at measured-equal quality. This is the template every later swap follows: benchmark first, one-line change, named rollback, a stated metric that decides reversal. The extraction result cache (ADR-074) means old shares still serve cached results; only fresh extractions pay — and now they pay Luna prices.
+
+---
+
 ## ADR-177: The advanced tier runs Sonnet 5 — a newer model for a third less money
 
 **Date:** 2026-08-20\

@@ -7,10 +7,11 @@
     poetry run python -m kebi.eval.bakeoff --role extractor \
         --options current --prompt /tmp/trimmed.txt
 
-Each named option comes from the role's optioned block in `config/app.yaml`
-(`current` = the block's `default`), runs the role's REAL prompt and REAL
-response schema over the committed golden set, and reports quality,
-pass-rate, latency, and cost side by side. `--prompt` swaps the prompt
+Each named option is a PROFILE from `model_profiles` in `config/app.yaml`
+(`current` = the profile the role runs today), applied with the role's own
+params, run through the role's REAL prompt and REAL response schema over
+the committed golden set — quality, pass-rate, latency, and cost side by
+side. `--prompt` swaps the prompt
 template for every option — the prompt-parity mode that gates trims
 (ADR-174): same model, current-vs-trimmed prompt, same scores or no ship.
 
@@ -200,27 +201,29 @@ _ADAPTERS: dict[str, Any] = {
 
 
 def resolve_options(role: str, names: list[str]) -> dict[str, LLMRoleConfig]:
-    """Map requested option names to LLMRoleConfig from the RAW yaml block.
+    """Map requested PROFILE names to LLMRoleConfig for `role` (ADR-179).
 
-    The runtime config flattens options away at boot — the bakeoff reads
-    the unresolved block so inactive candidates stay reachable. `current`
-    aliases the block's `default`.
+    Each candidate is the named profile from `model_profiles` merged with
+    the role's own per-role params (max_tokens, temperature, timeout
+    overrides) — exactly what the role would run if switched to that
+    profile. `current` aliases the role's configured profile.
     """
     raw = load_yaml_config("app.yaml")
     profiles = raw.get("model_profiles") or {}
     block = raw["models"].get(role)
-    if not isinstance(block, dict):
-        raise ValueError(f"models.{role} not found in app.yaml")
-    if "default" not in block:
-        raise ValueError(f"models.{role} is flat — nothing to bake off against")
+    if not isinstance(block, dict) or "profile" not in block:
+        raise ValueError(f"models.{role} not found (or not profiled) in app.yaml")
     resolved: dict[str, LLMRoleConfig] = {}
     for name in names:
-        key = block["default"] if name == "current" else name
-        if key not in block or key in ("default", "advanced"):
-            options = [k for k in block if k not in ("default", "advanced")]
-            raise ValueError(f"models.{role} has no option {key!r}; have {options}")
+        key = block["profile"] if name == "current" else name
+        if key not in profiles:
+            raise ValueError(f"{key!r} is not a model profile; have {sorted(profiles)}")
+        entry = {
+            **{k: v for k, v in block.items() if k not in ("profile", "advanced")},
+            "profile": key,
+        }
         resolved[name] = LLMRoleConfig(
-            **expand_profile(block[key], profiles, f"models.{role}.{key}")
+            **expand_profile(entry, profiles, f"models.{role}<-{key}")
         )
     return resolved
 
