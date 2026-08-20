@@ -21,20 +21,23 @@ def _case(input: dict, expected: dict) -> GoldenCase:
 # --- option resolution -------------------------------------------------------
 
 
-def test_resolve_options_current_aliases_default() -> None:
-    options = resolve_options("extractor", ["current", "luna"])
-    assert options["current"].model == "gpt-4o"
-    assert options["luna"].model == "gpt-5.6-luna"
+def test_resolve_options_current_aliases_configured_profile() -> None:
+    from kebi.core.config import expand_profile, load_yaml_config
+
+    raw = load_yaml_config("app.yaml")
+    block = raw["models"]["extractor"]
+    configured = expand_profile(dict(block), raw.get("model_profiles") or {}, "t")
+
+    options = resolve_options("extractor", ["current", "gpt4o-strong"])
+    assert options["current"].model == configured["model"]
+    assert options["gpt4o-strong"].model == "gpt-4o"
+    # the role's own params apply to every candidate profile
+    assert options["gpt4o-strong"].max_tokens == block["max_tokens"]
 
 
-def test_resolve_options_unknown_option_raises() -> None:
-    with pytest.raises(ValueError, match="no option"):
+def test_resolve_options_unknown_profile_raises() -> None:
+    with pytest.raises(ValueError, match="not a model profile"):
         resolve_options("extractor", ["definitely-not-real"])
-
-
-def test_resolve_options_reserved_keys_are_not_options() -> None:
-    with pytest.raises(ValueError, match="no option"):
-        resolve_options("orchestrator", ["advanced"])
 
 
 # --- golden sets -------------------------------------------------------------
