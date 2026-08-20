@@ -62,7 +62,7 @@ class MemoryExtractor:
             standalone=True,
         ) as t:
             try:
-                response = await self._client.extract(
+                extraction = await self._client.extract(
                     response_model=_FactsResponse,
                     messages=[
                         {"role": "system", "content": _SYSTEM_PROMPT},
@@ -79,9 +79,11 @@ class MemoryExtractor:
                     user_id=user_id,
                 )
                 return []
+            t.usage = extraction.usage
+            t.attempts = extraction.attempts
             facts = [
                 fact
-                for fact in cast(_FactsResponse, response).facts
+                for fact in cast(_FactsResponse, extraction.data).facts
                 if fact.source == "stated"
             ]
             t.output = {"count": len(facts)}

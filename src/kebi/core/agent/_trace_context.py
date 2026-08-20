@@ -22,10 +22,12 @@ The verbose form is `get_tracing_client().trace(name=..., user_id=...,
 metadata={"feature": ...}, tags=["feature:..."])`; the helper collapses
 that to `async with feature_trace("agent", user_id): ...`.
 
-Instructor's internal `max_retries` is opaque to us — when Instructor
-retries inside one external `extract_with_completion(...)` call, only
-the final completion's usage is surfaced. Multiple internal retries
-collapse into one span. Revisit in subtask 4 if reconciliation drifts.
+Instructor's internal retries are no longer opaque: `extract(...)`
+returns an `InstructorExtraction` whose `attempts` the caller stamps on
+`TracedCall.attempts`, surfaced as `llm_attempts` on the span output.
+Only the final attempt's token usage is available (Instructor discards
+intermediate completions) — the attempt count is what keeps paid
+retries from being invisible.
 """
 
 from __future__ import annotations
@@ -152,20 +154,28 @@ class TracedCall:
     `t.fail(exc)`. An exception that escapes the block is auto-marked
     ERROR and re-raised.
 
-    `cost_usd` is for providers Langfuse's catalog doesn't price
-    (Voyage, Whisper, Google Places, Apify). When set, it's sent as
-    `cost_details={"total": cost_usd}` on span end. Leave None for
-    token-priced LLMs — Langfuse will price those from model + usage.
+    `cost_usd` is for providers whose pricing lives outside
+    `pricing.llm` (Voyage, Whisper, Google Places, Apify). Leave it None
+    for token-priced LLMs: when `usage` is set and the span's model has
+    a `pricing.llm` entry, `_end_span` prices the call from config and
+    sends it as `cost_details` — Langfuse's catalog stays as the
+    reconciliation cross-check (ADR-092).
+
+    `attempts` is the number of LLM calls the block actually made
+    (Instructor validation retries). >1 is surfaced on the span output
+    as `llm_attempts` so paid retries stop being invisible.
     """
 
-    __slots__ = ("span", "output", "usage", "level", "cost_usd")
+    __slots__ = ("span", "output", "usage", "level", "cost_usd", "model", "attempts")
 
-    def __init__(self, span: TracingSpan) -> None:
+    def __init__(self, span: TracingSpan, model: str | None = None) -> None:
         self.span = span
         self.output: dict[str, Any] | None = None
         self.usage: dict[str, int] | None = None
         self.level: str = "DEFAULT"
         self.cost_usd: float | None = None
+        self.model = model
+        self.attempts: int | None = None
 
     def fail(self, exc: object) -> None:
         self.level = "ERROR"
@@ -192,8 +202,9 @@ async def traced_call(
         async with traced_call("taste_regen.llm", "taste_regen",
                                role="taste_regen", user_id=user_id,
                                standalone=True) as t:
-            raw = await llm.complete(messages)
-            t.output = {"text": raw}
+            completion = await llm.complete(messages)
+            t.usage = completion.usage
+            t.output = {"text": completion.text}
 
     The span is opened on entry, ended on exit. An escaping exception
     marks the span ERROR and is re-raised. Inside the block, set
@@ -233,17 +244,18 @@ async def _traced_span(
     extra: dict[str, Any] | None,
     input: Any,
 ) -> AsyncIterator[TracedCall]:
+    resolved_model = model or _model_for_role(role)
     span = feature_span(
         name,
         feature,
         user_id=user_id,
         role=role,
-        model=model,
+        model=resolved_model,
         tool=tool,
         extra=extra,
         input=input,
     )
-    call = TracedCall(span)
+    call = TracedCall(span, model=resolved_model)
     try:
         yield call
     except Exception as exc:
@@ -255,11 +267,22 @@ async def _traced_span(
 
 
 def _end_span(call: TracedCall) -> None:
-    """End the span with whatever fields the caller mutated."""
-    cost = {"total": call.cost_usd} if call.cost_usd is not None else None
+    """End the span with whatever fields the caller mutated.
+
+    Cost precedence: an explicit `cost_usd` (non-token providers) wins;
+    otherwise usage + the span's model are priced from `pricing.llm`.
+    No pricing entry → the span goes out unpriced (Langfuse's catalog
+    may still price it) and the cost report surfaces the gap.
+    """
+    cost_usd = call.cost_usd
+    if cost_usd is None and call.usage:
+        cost_usd = get_config().pricing.llm_cost_for(call.model, call.usage)
+    output = call.output
+    if call.attempts is not None and call.attempts > 1:
+        output = {**(output or {}), "llm_attempts": call.attempts}
     call.span.end(
         level=call.level,
-        output=call.output,
+        output=output,
         usage=call.usage,
-        cost_details=cost,
+        cost_details={"total": cost_usd} if cost_usd is not None else None,
     )

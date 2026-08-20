@@ -51,10 +51,13 @@ from kebi.providers.tracing import TracingSpan, get_tracing_client
 
 logger = logging.getLogger(__name__)
 
-# Number of attempts for each LLM call in agent_node. Anthropic's API
+# Fallback attempt count when no `role` is passed. Anthropic's API
 # occasionally returns TLS handshake errors (SSLV3_ALERT_BAD_RECORD_MAC)
 # or dropped connections — a small bounded retry absorbs these without
-# surfacing to the user. Exponential backoff starting at 500ms.
+# surfacing to the user. Exponential backoff starting at 500ms. When a
+# role is passed, the budget is `models.<role>.max_retries + 1` from
+# config — this loop is the ONLY retry layer (SDK retries are disabled
+# at client construction, see providers/llm.py).
 _LLM_MAX_ATTEMPTS = 3
 _LLM_BACKOFF_BASE_SECONDS = 0.5
 
@@ -65,21 +68,30 @@ async def _invoke_llm_with_retry(
     *,
     make_span: Callable[[], TracingSpan] | None = None,
     extract_usage: Callable[[Any], dict[str, int]] | None = None,
+    role: str | None = None,
 ) -> Any:
     """Call `bound.ainvoke(conversation)` with bounded retry.
 
-    Retries any Exception up to `_LLM_MAX_ATTEMPTS` total attempts with
-    exponential backoff. Re-raises the last exception on final failure.
+    Retries any Exception with exponential backoff; the attempt budget is
+    the role's configured `max_retries + 1` (fallback `_LLM_MAX_ATTEMPTS`
+    when no role is given). Re-raises the last exception on final failure.
 
     When `make_span` is supplied, opens a fresh Langfuse generation per
     attempt so a turn that succeeds after N retries surfaces as N
     observations (N-1 ERROR + 1 OK) rather than one cheap-looking span.
     `extract_usage` pulls token counts off the successful result so the
-    span carries usage; pass None when the underlying call has no usage
-    metadata.
+    span carries usage — and with `role` set, the successful span is also
+    priced from `pricing.llm` (cache-aware) as `cost_details`.
     """
+    max_attempts = _LLM_MAX_ATTEMPTS
+    model: str | None = None
+    if role is not None:
+        role_config = get_config().models.get(role)
+        if role_config is not None:
+            max_attempts = role_config.max_retries + 1
+            model = role_config.model
     last_exc: Exception | None = None
-    for attempt in range(_LLM_MAX_ATTEMPTS):
+    for attempt in range(max_attempts):
         span = make_span() if make_span is not None else None
         try:
             result = await bound.ainvoke(conversation)
@@ -93,15 +105,20 @@ async def _invoke_llm_with_retry(
             logger.warning(
                 "LLM attempt %d/%d failed: %s",
                 attempt + 1,
-                _LLM_MAX_ATTEMPTS,
+                max_attempts,
                 exc,
             )
-            if attempt < _LLM_MAX_ATTEMPTS - 1:
+            if attempt < max_attempts - 1:
                 await asyncio.sleep(_LLM_BACKOFF_BASE_SECONDS * (2**attempt))
             continue
         if span is not None:
             usage = extract_usage(result) if extract_usage is not None else {}
-            span.end(usage=usage, output={"attempt": attempt + 1})
+            cost = get_config().pricing.llm_cost_for(model, usage)
+            span.end(
+                usage=usage,
+                output={"attempt": attempt + 1},
+                cost_details={"total": cost} if cost is not None else None,
+            )
         return result
     assert last_exc is not None
     raise last_exc
@@ -111,10 +128,14 @@ def _ai_message_usage(msg: Any) -> dict[str, int]:
     """Pull Langfuse-shaped usage off a LangChain `AIMessage`.
 
     LangChain Anthropic / OpenAI populate `usage_metadata` with
-    `{"input_tokens", "output_tokens", "total_tokens"}` (and optionally
-    a `cache_*` breakdown we don't propagate yet). Returns `{}` when
-    the metadata is missing so callers can pass the result straight to
-    `span.end(usage=...)`.
+    `{"input_tokens", "output_tokens", "total_tokens"}` plus an
+    `input_token_details` cache breakdown. LangChain's `input_tokens`
+    *includes* cached tokens; kebi's convention (see `LLMModelPricing`)
+    counts uncached input under `input` and forwards the cache buckets
+    under their own keys — that's what makes the orchestrator's prompt
+    cache hit-rate visible in Langfuse and priced at cache rates.
+    Returns `{}` when the metadata is missing so callers can pass the
+    result straight to `span.end(usage=...)`.
     """
     meta = getattr(msg, "usage_metadata", None)
     if not isinstance(meta, dict):
@@ -122,7 +143,19 @@ def _ai_message_usage(msg: Any) -> dict[str, int]:
     input_t = int(meta.get("input_tokens", 0) or 0)
     output_t = int(meta.get("output_tokens", 0) or 0)
     total_t = int(meta.get("total_tokens", 0) or 0) or (input_t + output_t)
-    return {"input": input_t, "output": output_t, "total": total_t}
+    details = meta.get("input_token_details") or {}
+    cache_read = int(details.get("cache_read", 0) or 0)
+    cache_write = int(details.get("cache_creation", 0) or 0)
+    usage = {
+        "input": max(input_t - cache_read - cache_write, 0),
+        "output": output_t,
+        "total": total_t,
+    }
+    if cache_read:
+        usage["cache_read_input_tokens"] = cache_read
+    if cache_write:
+        usage["cache_creation_input_tokens"] = cache_write
+    return usage
 
 
 def _structured_usage(result: Any) -> dict[str, int]:
@@ -753,8 +786,15 @@ def _render_system_prompt(state: AgentState) -> tuple[str, str]:
     return static_head.strip(), dynamic_tail.format(**slots).strip()
 
 
-def make_agent_node(llm: Any, tools: list[Any]) -> Any:
+def make_agent_node(
+    llm: Any, tools: list[Any], orchestrator_role: str = "orchestrator"
+) -> Any:
     """Return an agent-node callable bound to `llm` and `tools`.
+
+    `orchestrator_role` is the logical role `llm` was resolved from
+    ("orchestrator" or "orchestrator_advanced") — it drives the span's
+    model attribution, retry budget, and pricing, so the advanced tier
+    is priced as the model it actually runs.
 
     The node renders the system prompt with per-turn summaries, calls
     `llm.bind_tools(tools).ainvoke(...)`, appends the response to
@@ -818,7 +858,7 @@ def make_agent_node(llm: Any, tools: list[Any]) -> Any:
                 "agent.orchestrator",
                 "agent",
                 user_id=user_id,
-                role="orchestrator",
+                role=orchestrator_role,
             )
 
         # SSE lifecycle: announce the step before the LLM call so a streaming
@@ -846,6 +886,7 @@ def make_agent_node(llm: Any, tools: list[Any]) -> Any:
                 conversation,
                 make_span=_orchestrator_span,
                 extract_usage=_ai_message_usage,
+                role=orchestrator_role,
             )
         except Exception as exc:
             logger.exception("agent_node failed after retries: %s", exc)
@@ -2018,6 +2059,7 @@ def make_resolve_location_node(resolver_llm: Any, geocoding_client: Any) -> Any:
                 [HumanMessage(content=_render_resolver_prompt(state))],
                 make_span=_resolver_span,
                 extract_usage=_structured_usage,
+                role="location_resolver",
             )
         except Exception as exc:
             logger.warning("resolve_location LLM failed: %s", exc)
@@ -2325,6 +2367,7 @@ def build_graph(
     checkpointer: Any,
     resolver_llm: Any,
     geocoding_client: Any,
+    orchestrator_role: str = "orchestrator",
 ) -> Any:
     """Construct and compile the agent StateGraph (FR-025).
 
@@ -2346,7 +2389,9 @@ def build_graph(
         NODE_RESOLVE_LOCATION,
         make_resolve_location_node(resolver_llm, geocoding_client),
     )
-    graph.add_node(NODE_AGENT, make_agent_node(llm, tools))
+    graph.add_node(
+        NODE_AGENT, make_agent_node(llm, tools, orchestrator_role=orchestrator_role)
+    )
     graph.add_node(
         NODE_TOOLS, ToolNode(tools, handle_tool_errors=_handle_tool_node_error)
     )

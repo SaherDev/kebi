@@ -16,6 +16,7 @@ from kebi.core.taste.schemas import (
     TasteArtifacts,
 )
 from kebi.db.models import InteractionType
+from kebi.providers.llm import CompletionResult
 
 
 def _async_ctx(session: object) -> MagicMock:
@@ -201,8 +202,8 @@ class TestRunRegen:
 
         with patch("kebi.core.taste.service.get_llm") as mock_get_llm:
             mock_llm = AsyncMock()
-            mock_llm.complete.return_value = json.dumps(
-                _sample_artifacts().model_dump()
+            mock_llm.complete.return_value = CompletionResult(
+                text=json.dumps(_sample_artifacts().model_dump())
             )
             mock_get_llm.return_value = mock_llm
             service = _make_service(repo, cores={"p1": _core("p1")})
@@ -218,7 +219,9 @@ class TestRunRegen:
         repo.get_by_user_id.return_value = None
 
         mock_llm = AsyncMock()
-        mock_llm.complete.return_value = json.dumps(_sample_artifacts().model_dump())
+        mock_llm.complete.return_value = CompletionResult(
+            text=json.dumps(_sample_artifacts().model_dump())
+        )
         mock_get_llm.return_value = mock_llm
 
         service = _make_service(repo, cores={"p1": _core("p1")})
@@ -244,7 +247,9 @@ class TestRunRegen:
         repo.get_by_user_id.return_value = None
 
         mock_llm = AsyncMock()
-        mock_llm.complete.return_value = json.dumps({"summary": []})
+        mock_llm.complete.return_value = CompletionResult(
+            text=json.dumps({"summary": []})
+        )
         mock_get_llm.return_value = mock_llm
 
         # cores is empty → every interaction is an orphan
@@ -264,7 +269,7 @@ class TestRunRegen:
         repo.get_by_user_id.return_value = None
 
         mock_llm = AsyncMock()
-        mock_llm.complete.return_value = "not json"
+        mock_llm.complete.return_value = CompletionResult(text="not json")
         mock_get_llm.return_value = mock_llm
 
         service = _make_service(repo, cores={"p1": _core("p1")})

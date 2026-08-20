@@ -27,6 +27,7 @@ from kebi.core.places import (
     PlaceTag,
     TagType,
 )
+from kebi.providers.llm import InstructorExtraction
 
 
 def _ctx(caption: str = "") -> ExtractionContext:
@@ -55,7 +56,7 @@ def _attributed(
 
 def _picker_with_response(response: _PickerResponse) -> LLMPlacePicker:
     instructor = MagicMock()
-    instructor.extract = AsyncMock(return_value=response)
+    instructor.extract = AsyncMock(return_value=InstructorExtraction(data=response))
     return LLMPlacePicker(
         instructor_client=instructor,
         confidence_config=ConfidenceConfig(),

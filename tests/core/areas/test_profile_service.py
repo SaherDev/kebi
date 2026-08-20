@@ -24,6 +24,7 @@ from kebi.core.areas.profile_service import (
     _ProfilerSubArea,
 )
 from kebi.core.knowledge.schemas import KnowledgeClaim
+from kebi.providers.llm import InstructorExtraction
 from tests.geo_fakes import FakeGeoRegistry, make_area, make_city
 
 _BALI = make_city("id", "Bali", pid="CityBali01")
@@ -103,7 +104,11 @@ def _service(
     )
     extract = AsyncMock(
         side_effect=response if isinstance(response, Exception) else None,
-        return_value=None if isinstance(response, Exception) else response,
+        return_value=(
+            None
+            if isinstance(response, Exception)
+            else InstructorExtraction(data=response)
+        ),
     )
     client = AsyncMock(extract=extract)
     claim_repo = AsyncMock(list_under_prefix=AsyncMock(return_value=list(claims or [])))

@@ -12,12 +12,15 @@ from unittest.mock import AsyncMock, MagicMock
 
 from kebi.core.memory.extractor import MemoryExtractor, _FactsResponse
 from kebi.core.memory.schemas import PersonalFact
+from kebi.providers.llm import InstructorExtraction
 
 
 async def test_extract_returns_facts_for_stated_message() -> None:
     fact = PersonalFact(text="I'm vegetarian", source="stated")
     client = MagicMock()
-    client.extract = AsyncMock(return_value=_FactsResponse(facts=[fact]))
+    client.extract = AsyncMock(
+        return_value=InstructorExtraction(data=_FactsResponse(facts=[fact]))
+    )
 
     extractor = MemoryExtractor(instructor_client=client)
     result = await extractor.extract("I'm vegetarian", user_id="u1")
@@ -43,7 +46,9 @@ async def test_extract_filters_non_stated_sources() -> None:
         PersonalFact(text="seems lactose intolerant", source="inferred"),
     ]
     client = MagicMock()
-    client.extract = AsyncMock(return_value=_FactsResponse(facts=facts))
+    client.extract = AsyncMock(
+        return_value=InstructorExtraction(data=_FactsResponse(facts=facts))
+    )
 
     extractor = MemoryExtractor(instructor_client=client)
     result = await extractor.extract("I'm vegan", user_id="u1")

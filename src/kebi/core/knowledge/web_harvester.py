@@ -169,7 +169,7 @@ class WebKnowledgeHarvester:
             standalone=True,
         ) as t:
             try:
-                response = await self._client.extract(
+                extraction = await self._client.extract(
                     response_model=_WebHarvestResponse,
                     messages=[
                         {
@@ -187,7 +187,11 @@ class WebKnowledgeHarvester:
                 logger.warning("web harvest failed: %s", exc, exc_info=True)
                 t.fail(exc)
                 return []
-            claims = await self._resolve(cast(_WebHarvestResponse, response), result)
+            t.usage = extraction.usage
+            t.attempts = extraction.attempts
+            claims = await self._resolve(
+                cast(_WebHarvestResponse, extraction.data), result
+            )
             t.output = {"count": len(claims)}
             return claims
 
