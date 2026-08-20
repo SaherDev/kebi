@@ -17,6 +17,16 @@ Format:
 
 ---
 
+## ADR-174: The location resolver's rules ride the prompt cache — and every prompt now has a growth budget
+
+**Date:** 2026-08-20\
+**Status:** accepted — extends ADR-100's mechanism; trim work gated on ADR-175's harness\
+**Context:** The location resolver fires on every chat turn that mentions a place, carrying an 18KB rulebook that is byte-identical from turn to turn — and it was sent as plain uncached input every single time, at full price. The agent prompt solved this exact problem months ago (ADR-100): split at a marker into a static head that carries a cache breakpoint and a per-turn tail that doesn't. The resolver never got the same treatment, which ADR-172's new cache-token telemetry made visible as a number: ~6,000 full-price input tokens per turn on the second-hottest call in the system. Separately, prompt growth had no governor — an earlier prompt-budget audit tool was written, run, and lost without ever being committed, so prompts grow by drift and the only counterweight is code review remembering to care.\
+**Decision:** The resolver prompt adopts the agent prompt's split: rules first as a cache-controlled static head, the turn's inputs (message, history, locations, mobility) after the marker as the uncached tail. Same marker, same renderer contract, same config gate as the agent prompt — one mechanism, two prompts, not two mechanisms. And the audit tool returns as committed code with a committed budgets file: every prompt in the config directory gets a token budget set at today's size plus small headroom, a CI-runnable check fails when any prompt exceeds its budget, and a test keeps every prompt budgeted so a new prompt can't arrive ungoverned. Growing past a budget is done by raising the budget in the same change, with the eval evidence that justifies the tokens (ADR-135's philosophy, now enforced rather than remembered). The planned duplication-only trims to the agent and resolver prompts are deliberately NOT in this change — wording changes to live prompts land only after the bakeoff harness (next ADR) can hold them at parity on a golden set.\
+**Consequences:** Measured live: a resolver turn now bills ~1,300 uncached tokens plus ~5,500 cache reads instead of ~6,800 full-price tokens — per-turn resolver cost dropped 65%, verified on real traffic through the trace store, which can now prove cache effectiveness thanks to ADR-172. The rules moved from the user message into a system block, which is a real (small) behavioral surface — the golden-set benchmark round will catch any drift. Prompt budgets shift the default from "growth is invisible" to "growth is a decision": the cost of that is one more file to touch when a prompt legitimately needs more room, which is exactly the friction intended.
+
+---
+
 ## ADR-173: Any role can hold several models — one env var switches, unsetting it rolls back
 
 **Date:** 2026-08-20\

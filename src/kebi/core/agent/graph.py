@@ -1544,11 +1544,19 @@ def _render_distance_from_previous(state: AgentState) -> str:
     return f"actual location is ~{int(round(km))} km from the previous working location"
 
 
-def _render_resolver_prompt(state: AgentState) -> str:
-    """Format the location-resolver prompt with this turn's inputs."""
+def _render_resolver_prompt(state: AgentState) -> tuple[str, str]:
+    """Render the location-resolver prompt as (static_head, dynamic_tail).
+
+    Same `<<<DYNAMIC_CONTEXT>>>` split as the agent prompt (ADR-100/174):
+    the rules head is byte-identical every turn and rides a cache
+    breakpoint; only the per-turn inputs tail is formatted. Falls back to
+    an empty head when the marker is missing so rendering can never leave
+    a raw `{slot}` in front of the model.
+    """
     template = get_config().prompts["location_resolver"].content
     messages = state.get("messages") or []
-    return template.format(
+    static_head, marker, dynamic_tail = template.partition(_DYNAMIC_CONTEXT_MARKER)
+    slots = dict(
         current_message=_last_human_text(messages) or "(empty)",
         conversation_history=(
             _format_history_for_resolver(messages) or "(no prior messages)"
@@ -1558,6 +1566,9 @@ def _render_resolver_prompt(state: AgentState) -> str:
         distance_from_previous=_render_distance_from_previous(state),
         mobility_profile=_render_mobility_profile(state),
     )
+    if not marker:
+        return "", template.format(**slots)
+    return static_head.strip(), dynamic_tail.format(**slots).strip()
 
 
 def _coerce_coord(value: Any) -> float | None:
@@ -2053,10 +2064,32 @@ def make_resolve_location_node(resolver_llm: Any, geocoding_client: Any) -> Any:
                 role="location_resolver",
             )
 
+        # Cache split (ADR-174): the 18KB rules head is byte-identical every
+        # turn — as a cache-controlled system block it bills at the cache-read
+        # rate from the second resolver call on, instead of full price per
+        # turn. Only the small per-turn inputs tail stays uncached.
+        static_head, dynamic_tail = _render_resolver_prompt(state)
+        if get_config().agent.prompt_caching_enabled and static_head:
+            resolver_messages: list[Any] = [
+                SystemMessage(
+                    content=[
+                        {
+                            "type": "text",
+                            "text": static_head,
+                            "cache_control": {"type": "ephemeral"},
+                        }
+                    ]
+                ),
+                HumanMessage(content=dynamic_tail),
+            ]
+        else:
+            resolver_messages = [
+                HumanMessage(content=f"{static_head}\n\n{dynamic_tail}".strip())
+            ]
         try:
             result = await _invoke_llm_with_retry(
                 structured,
-                [HumanMessage(content=_render_resolver_prompt(state))],
+                resolver_messages,
                 make_span=_resolver_span,
                 extract_usage=_structured_usage,
                 role="location_resolver",
