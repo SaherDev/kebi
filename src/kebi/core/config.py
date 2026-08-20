@@ -8,6 +8,7 @@ All other modules import from here. Nobody calls load_yaml_config() directly.
 """
 
 import logging
+import os
 from pathlib import Path
 from typing import Any, Literal
 
@@ -79,105 +80,152 @@ class LLMRoleConfig(BaseModel):
     timeout_seconds: float | None = None
 
 
-class OrchestratorOptionsConfig(BaseModel):
-    """Multi-option orchestrator block (ADR-068).
+class RoleOptionsConfig(BaseModel):
+    """Multi-option role block (ADR-068 for the orchestrator; ADR-173
+    generalises it to every role).
 
     Shape in YAML:
-        orchestrator:
+        <role>:
           default: <option-key>
-          <option-key>: { provider, model, max_tokens, temperature }
+          <option-key>: { provider, model, max_tokens, temperature, ... }
           <option-key>: { ... }
 
-    Resolved at boot via `_resolve_orchestrator(raw, agent_model)`. Other
-    roles keep the flat `LLMRoleConfig` shape — orchestrator is the only
-    role with runtime selection right now.
+    Resolved at boot via `_resolve_model_options(raw, ...)`. A flat block
+    (top-level `provider`/`model`) stays valid — it is one fixed option.
     """
 
+    role: str
     default: str
     options: dict[str, LLMRoleConfig]
 
     @model_validator(mode="after")
-    def _default_must_exist(self) -> "OrchestratorOptionsConfig":
+    def _default_must_exist(self) -> "RoleOptionsConfig":
         if self.default not in self.options:
             raise ValueError(
-                f"orchestrator.default={self.default!r} not found in options "
-                f"{sorted(self.options)}"
+                f"models.{self.role}: default={self.default!r} not found in "
+                f"options {sorted(self.options)}"
             )
         return self
 
 
-# Selector keys inside the orchestrator block — every other key is a model
-# option. `default` picks the standard-tier orchestrator; `advanced`
-# (optional) names the option the top plan tier gets, exposed as the
-# separate `orchestrator_advanced` role so it survives boot resolution
-# instead of being collapsed away with the other options.
-_ORCH_RESERVED_KEYS = frozenset({"default", "advanced"})
+# Selector keys inside an optioned role block — every other key is a model
+# option. `default` picks the active option; `advanced` (orchestrator only)
+# names the option the top plan tier gets, exposed as the separate
+# `orchestrator_advanced` role so it survives boot resolution instead of
+# being collapsed away with the other options.
+_ROLE_RESERVED_KEYS = frozenset({"default", "advanced"})
+
+# Per-role boot override: KEBI_MODEL_<ROLE> (role name upper-cased) names
+# an option key, e.g. KEBI_MODEL_EXTRACTOR=luna. Rollback = unset the var
+# and restart — no deploy, no config edit (ADR-173).
+_MODEL_OVERRIDE_PREFIX = "KEBI_MODEL_"
 
 
-def _split_orchestrator_block(raw_orch: dict[str, Any]) -> OrchestratorOptionsConfig:
-    """Parse the YAML orchestrator block into OrchestratorOptionsConfig.
+def _split_options_block(role: str, raw_block: dict[str, Any]) -> RoleOptionsConfig:
+    """Parse a YAML `{default, <option>, ...}` role block.
 
     `default` and `advanced` are reserved selector keys; every other key is
     an option name mapping to an `LLMRoleConfig`-shaped dict.
     """
-    if "default" not in raw_orch:
+    if "default" not in raw_block:
         raise ValueError(
-            "models.orchestrator must define a 'default' key naming one of "
-            "its option keys"
+            f"models.{role} must define a 'default' key naming one of its option keys"
         )
-    default = raw_orch["default"]
-    options = {k: v for k, v in raw_orch.items() if k not in _ORCH_RESERVED_KEYS}
-    return OrchestratorOptionsConfig(default=default, options=options)
+    default = raw_block["default"]
+    options = {k: v for k, v in raw_block.items() if k not in _ROLE_RESERVED_KEYS}
+    return RoleOptionsConfig(role=role, default=default, options=options)
+
+
+def _model_env_overrides() -> dict[str, str]:
+    """Collect KEBI_MODEL_<ROLE> overrides from the process environment.
+
+    Process env only — the same place Railway sets variables. Role names
+    are recovered by lower-casing (KEBI_MODEL_LOCATION_RESOLVER →
+    location_resolver).
+    """
+    prefix = _MODEL_OVERRIDE_PREFIX
+    return {
+        key[len(prefix) :].lower(): value
+        for key, value in os.environ.items()
+        if key.startswith(prefix) and value
+    }
+
+
+def _resolve_model_options(
+    raw_models: dict[str, Any],
+    overrides: dict[str, str] | None = None,
+    agent_model: str | None = None,
+) -> dict[str, Any]:
+    """Flatten every `{default, <option>, ...}` role block to a flat
+    `LLMRoleConfig` dict (ADR-173, generalising ADR-068).
+
+    Flat blocks (top-level `provider`) pass through untouched. Mutates
+    `raw_models` in place and returns it.
+
+    Per optioned role:
+    - no override → use `default`.
+    - `KEBI_MODEL_<ROLE>` matches an option key → use that option.
+    - override set but unknown → log a warning and fall back to `default`.
+      Boot continues so a typo in env vars does not kill prod.
+    - `default` missing or pointing at a missing option → raises.
+
+    Orchestrator extras (ADR-068): `AGENT_MODEL` still works as an alias
+    (KEBI_MODEL_ORCHESTRATOR wins when both are set), and an `advanced`
+    key emits the separate `orchestrator_advanced` role from the same
+    option list — no duplicate model definition. `advanced` on any other
+    role is an error: it is a plan-tier selector, not a model option.
+    """
+    overrides = overrides or {}
+    for role in list(raw_models):
+        block = raw_models[role]
+        if not isinstance(block, dict) or "provider" in block:
+            continue
+        if role != "orchestrator" and "advanced" in block:
+            raise ValueError(
+                f"models.{role}: 'advanced' is reserved for the orchestrator "
+                "(plan-tier selector), not a model option"
+            )
+        advanced_key = block.get("advanced")
+        parsed = _split_options_block(role, block)
+        requested = overrides.get(role)
+        override_source = f"{_MODEL_OVERRIDE_PREFIX}{role.upper()}"
+        if requested is None and role == "orchestrator" and agent_model is not None:
+            requested = agent_model
+            override_source = "AGENT_MODEL"
+        chosen = parsed.default
+        if requested is not None:
+            if requested in parsed.options:
+                chosen = requested
+            else:
+                logger.warning(
+                    "%s=%r not in %s options %s; falling back to default %r",
+                    override_source,
+                    requested,
+                    role,
+                    sorted(parsed.options),
+                    parsed.default,
+                )
+        if chosen != parsed.default:
+            logger.info("models.%s resolved to option %r (env override)", role, chosen)
+        raw_models[role] = parsed.options[chosen].model_dump()
+        if advanced_key is not None:
+            if advanced_key not in parsed.options:
+                raise ValueError(
+                    f"orchestrator.advanced={advanced_key!r} not found in options "
+                    f"{sorted(parsed.options)}"
+                )
+            raw_models["orchestrator_advanced"] = parsed.options[
+                advanced_key
+            ].model_dump()
+    return raw_models
 
 
 def _resolve_orchestrator(
     raw_models: dict[str, Any], agent_model: str | None
 ) -> dict[str, Any]:
-    """Resolve a `{default, <option>, ...}` orchestrator block to a flat
-    `LLMRoleConfig` dict (ADR-068).
-
-    No-op if the block is already flat (i.e. has top-level `provider`/`model`).
-    Mutates `raw_models` in place and returns it.
-
-    - `agent_model` is None  → use `default`.
-    - `agent_model` matches an option key → use that option.
-    - `agent_model` is set but unknown → log a warning and fall back to
-      `default`. Boot continues so a typo in env vars does not kill prod.
-    - `default` missing or pointing at a missing option → raises.
-
-    When the block names an `advanced` option, that option is emitted as the
-    separate `orchestrator_advanced` role (selected per request for the
-    `advanced_models_enabled` plan tier). It references one of the existing
-    options — no duplicate model definition. A missing `advanced` key just
-    means the role is not defined (the agent path falls back to standard).
-    """
-    orch = raw_models.get("orchestrator")
-    if not isinstance(orch, dict) or "provider" in orch:
-        return raw_models
-
-    advanced_key = orch.get("advanced")
-    parsed = _split_orchestrator_block(orch)
-    chosen = parsed.default
-    if agent_model is not None:
-        if agent_model in parsed.options:
-            chosen = agent_model
-        else:
-            logger.warning(
-                "AGENT_MODEL=%r not in orchestrator options %s; "
-                "falling back to default %r",
-                agent_model,
-                sorted(parsed.options),
-                parsed.default,
-            )
-    raw_models["orchestrator"] = parsed.options[chosen].model_dump()
-    if advanced_key is not None:
-        if advanced_key not in parsed.options:
-            raise ValueError(
-                f"orchestrator.advanced={advanced_key!r} not found in options "
-                f"{sorted(parsed.options)}"
-            )
-        raw_models["orchestrator_advanced"] = parsed.options[advanced_key].model_dump()
-    return raw_models
+    """Back-compat entry point (ADR-068) — now resolves ALL optioned role
+    blocks, with `agent_model` as the orchestrator's override alias."""
+    return _resolve_model_options(raw_models, agent_model=agent_model)
 
 
 class ConfidenceWeights(BaseModel):
@@ -624,6 +672,12 @@ class AppProvidersConfig(BaseModel):
     )
     brave: ProviderEndpointConfig = ProviderEndpointConfig(
         base_url="https://api.search.brave.com"
+    )
+    # OpenAI-compatible gateway used for benchmarking candidate models
+    # (ADR-173). One key covers Gemini/Qwen/DeepSeek/etc.; production
+    # winners get a direct provider integration before promotion.
+    openrouter: ProviderEndpointConfig = ProviderEndpointConfig(
+        base_url="https://openrouter.ai/api/v1"
     )
 
 
@@ -1198,16 +1252,16 @@ class AppConfig(BaseModel):
 
     @model_validator(mode="before")
     @classmethod
-    def _resolve_orchestrator_default(cls, data: Any) -> Any:
-        """Default-only orchestrator resolution (ADR-068).
+    def _resolve_role_defaults(cls, data: Any) -> Any:
+        """Default-only option resolution (ADR-068/173).
 
-        The env-aware path runs in `get_config()` and replaces the
-        orchestrator block with a flat dict before AppConfig sees it.
-        Direct `AppConfig(**raw)` calls (e.g. from tests) hit this
-        validator instead and resolve to the `default` option.
+        The env-aware path runs in `get_config()` and replaces optioned
+        role blocks with flat dicts before AppConfig sees them. Direct
+        `AppConfig(**raw)` calls (e.g. from tests) hit this validator
+        instead and resolve every role to its `default` option.
         """
         if isinstance(data, dict) and isinstance(data.get("models"), dict):
-            _resolve_orchestrator(data["models"], agent_model=None)
+            _resolve_model_options(data["models"])
         return data
 
 
@@ -1291,8 +1345,10 @@ def get_config() -> AppConfig:
     global _config
     if _config is None:
         raw = load_yaml_config("app.yaml")
-        raw["models"] = _resolve_orchestrator(
-            raw.get("models") or {}, agent_model=get_env().AGENT_MODEL
+        raw["models"] = _resolve_model_options(
+            raw.get("models") or {},
+            overrides=_model_env_overrides(),
+            agent_model=get_env().AGENT_MODEL,
         )
         raw["prompts"] = _load_prompts(raw.get("prompts") or {})
         _config = AppConfig(**raw)
@@ -1336,6 +1392,9 @@ class EnvConfig(BaseSettings):
     VOYAGE_API_KEY: str | None = None
     GOOGLE_API_KEY: str | None = None
     GROQ_API_KEY: str | None = None
+    # OpenRouter — one key for the benchmark model matrix (ADR-173).
+    # Unset just means openrouter-provider roles can't be selected.
+    OPENROUTER_API_KEY: str | None = None
     APIFY_TOKEN: str | None = None
     # Brave Search — gates the `web_search` tool's backend (ADR-145). Unset
     # selects the null provider: the tool stays bound and callable, comes back

@@ -485,6 +485,16 @@ def get_llm(role: str) -> LLMClientProtocol:
             timeout_seconds=timeout_seconds,
         )
 
+    if provider == "openrouter":
+        return OpenAILLMClient(
+            model=model,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            api_key=secrets.OPENROUTER_API_KEY,
+            base_url=get_config().providers.openrouter.base_url,
+            timeout_seconds=timeout_seconds,
+        )
+
     raise ValueError(f"Unsupported provider: {provider}")
 
 
@@ -545,6 +555,19 @@ def get_langchain_chat_model(role: str) -> Any:
             max_retries=0,
         )
 
+    if provider == "openrouter":
+        from langchain_openai import ChatOpenAI
+
+        return ChatOpenAI(
+            model=model,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            api_key=secrets.OPENROUTER_API_KEY,
+            base_url=get_config().providers.openrouter.base_url,
+            timeout=role_config.timeout_seconds,
+            max_retries=0,
+        )
+
     raise ValueError(
         f"Unsupported provider for LangChain chat model: {provider!r}. "
         "Add an adapter here when a new provider is configured for the agent path."
@@ -575,9 +598,10 @@ def get_instructor_client(role: str) -> InstructorClient:
     """
     role_config = get_config().models[role]
 
-    if role_config.provider not in ("openai", "ollama"):
+    if role_config.provider not in ("openai", "ollama", "openrouter"):
         raise ValueError(
-            f"Instructor only supports openai/ollama providers, got: {role_config.provider}"
+            "Instructor only supports openai/ollama/openrouter providers, "
+            f"got: {role_config.provider}"
         )
 
     if role_config.provider == "ollama":
@@ -586,6 +610,15 @@ def get_instructor_client(role: str) -> InstructorClient:
             base_url=get_config().providers.ollama.base_url,
             api_key="ollama",
             mode=instructor.Mode.JSON,
+            max_retries=role_config.max_retries,
+            timeout_seconds=role_config.timeout_seconds,
+        )
+
+    if role_config.provider == "openrouter":
+        return InstructorClient(
+            model=role_config.model,
+            base_url=get_config().providers.openrouter.base_url,
+            api_key=get_env().OPENROUTER_API_KEY,
             max_retries=role_config.max_retries,
             timeout_seconds=role_config.timeout_seconds,
         )

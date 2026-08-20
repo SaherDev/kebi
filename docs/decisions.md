@@ -17,6 +17,16 @@ Format:
 
 ---
 
+## ADR-173: Any role can hold several models — one env var switches, unsetting it rolls back
+
+**Date:** 2026-08-20\
+**Status:** accepted — supersedes ADR-068's "orchestrator only" scope\
+**Context:** ADR-068 gave exactly one role — the orchestrator — the ability to carry several named model options and select one at boot from the environment, on the grounds that nothing else needed it yet. That "yet" has arrived: most roles run models two generations old, a benchmark round against current candidates is planned, and the agreed rollout discipline is one role at a time with instant rollback. Under the flat config, every swap and every rollback is a config edit and a deploy — precisely the friction that makes people batch changes together, which is the opposite of one-at-a-time. Separately, the candidate models worth benchmarking live on several providers, and signing up for each one just to measure it is its own drag; an OpenAI-compatible gateway can serve the whole matrix under one key at pass-through prices, but only production-grade winners should ever run through a middleman.\
+**Decision:** The orchestrator's option mechanism becomes the shape of every role. A role block may stay flat (one fixed model) or carry named options with a `default`; a per-role environment variable selects a non-default option at boot, an unknown value warns and falls back rather than killing production, and rollback is unsetting the variable. The orchestrator keeps its two existing special cases — its historical env var stays as an alias, and its plan-tier `advanced` selector remains orchestrator-only and is rejected anywhere else. Retry budget and timeout live on the role alongside model and temperature, so a candidate option carries its complete operating envelope, not just a name. The gateway becomes a first-class provider through the existing OpenAI-compatible client — no new adapter class — keyed by its own optional secret, and the round-one candidate options for the resolver, extractor, and orchestrator are staged in config as inactive entries with pricing rows, so starting a benchmark or an A/B is selection, not authorship. The hybrid boundary is explicit: the gateway is for measurement and short A/B windows; a confirmed winner gets a direct provider integration before being promoted to a role's default.\
+**Consequences:** Switching any role's model is now an operation, not a change: set one variable, restart, watch the cost report; unset to undo. A boot with no variables set resolves to a config identical to yesterday's, and a regression test holds that equality so the migration to optioned blocks can never silently reassign a role. The staged candidates make config the single place to see what each role runs today and what it might run next, priced. The cost of the generality is that a role's YAML block no longer states its model on one line — reading it now means reading which option `default` names — and that a mistyped option name degrades to the default with only a warning, a deliberate trade of loudness for uptime that the boot log records.
+
+---
+
 ## ADR-172: Every LLM call reports what it cost — usage, retries, and pricing stop being invisible
 
 **Date:** 2026-08-20\
