@@ -11,6 +11,7 @@ from .google_client import GooglePlacesClient
 from .hybrid_search_repo import HybridSearchRepo
 from .hybrid_search_service import HybridSearchService
 from .models import (
+    AreaDistribution,
     HybridSearchFilters,
     HybridSearchHit,
     LibrarySort,
@@ -87,6 +88,7 @@ __all__ = [
     "SeasonTag",
     "TagValue",
     # models
+    "AreaDistribution",
     "HybridSearchFilters",
     "HybridSearchHit",
     "LibrarySort",

@@ -21,7 +21,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from kebi.core.areas.handles import AreaHandle
 from kebi.core.areas.keys import is_geo_key
-from kebi.core.areas.library_areas_service import AreaWithCount
+from kebi.core.areas.library_areas_service import LibraryAreaIndex
 from kebi.core.knowledge.schemas import PlaceNote, note_source_label
 from kebi.core.places import (
     LibrarySort,
@@ -202,17 +202,37 @@ class LibraryAreasResponse(BaseModel):
     on the browse endpoint, because it is the library's at-rest index: an
     index that narrowed while someone typed would shift under them. Ordering
     carries no meaning and is not part of the contract; sort for the screen.
+
+    Every heading a client can render off this index therefore carries a
+    number kebi served: the areas in `areas`, and the arealess remainder in
+    `unassigned_count`.
     """
 
     areas: list[LibraryAreaItem] = Field(default_factory=list)
+    unassigned_count: int = Field(
+        0,
+        description=(
+            "Saves that belong to **no** area — the ones whose geography is "
+            "coarser than a city, which carry `area: null` on a library row "
+            "and appear under no entry above. The client's 'elsewhere' "
+            "heading, counted server-side for the same reason every other "
+            "count is: derived as `total` minus the sum of `areas`, it is "
+            "right only once the whole library is loaded, and wrong on "
+            "screen until then. `0` when every save resolved. Additive — the "
+            "`areas` entries are unchanged, and `sum(areas[].count) + "
+            "unassigned_count` equals the library's `total`. Naming the "
+            "bucket is still the client's call; kebi only counts it."
+        ),
+    )
 
     @classmethod
-    def from_areas(cls, areas: list[AreaWithCount]) -> LibraryAreasResponse:
+    def from_index(cls, index: LibraryAreaIndex) -> LibraryAreasResponse:
         return cls(
             areas=[
                 LibraryAreaItem(area=AreaHandleView.from_handle(a.area), count=a.count)
-                for a in areas
-            ]
+                for a in index.areas
+            ],
+            unassigned_count=index.unassigned,
         )
 
 
