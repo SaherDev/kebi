@@ -17,6 +17,16 @@ Format:
 
 ---
 
+## ADR-177: The advanced tier runs Sonnet 5 — a newer model for a third less money
+
+**Date:** 2026-08-20\
+**Status:** accepted\
+**Context:** The top plan tier's orchestrator ran Sonnet 4.6 at $3/$15 per million tokens. Sonnet 5 shipped at $2/$10 — introductory pricing that Anthropic later made permanent — leaving the advanced tier paying a premium for the older model in the same family. Unlike every other swap in the current program, this one needs no benchmark to justify: same provider, same function-calling lineage, same prompt-caching mechanics, newer generation, lower price. Waiting for the orchestrator bakeoff round (which gates the *default*-tier decision, a genuine Haiku-versus-bigger trade) would have meant paying the premium for nothing in the meantime.\
+**Decision:** The orchestrator's `advanced` selector points at the staged Sonnet 5 option. The default tier stays on Haiku 4.5 — ADR-100's choice stands until the orchestrator bakeoff measures a challenger against its acceptance gates. Sonnet 4.6 remains a named option for instant rollback by env override or one config line.\
+**Consequences:** Advanced-tier consults get the newer model and cost roughly a third less per token, with cache rates dropping proportionally. The rollback path is the one this program built: repoint the selector or override by env, no deploy of code. Production picks this up on the next deploy of `dev`; the cost report will show the tier's spend drop against the same traffic.
+
+---
+
 ## ADR-176: A model's name is written once — shared profiles, and roles only reference them
 
 **Date:** 2026-08-20\

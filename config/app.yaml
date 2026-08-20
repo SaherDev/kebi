@@ -279,9 +279,11 @@ models:
   # this same option list (no duplicate model block). Sonnet, not Opus: a
   # real quality lift over the Haiku base while staying cost-bounded
   # against the tier's unlimited consults — retune by repointing `advanced`.
+  # Sonnet 5, not 4.6 (ADR-177): newer model at $2/$10 vs $3/$15 — a strict
+  # upgrade within the same family; caching and function calling unchanged.
   orchestrator:
     default: claude-haiku
-    advanced: claude-sonnet
+    advanced: claude-sonnet-5
     # 2048, not 1024: a multi-stop trip answer walks five sections and was
     # observed truncating mid-close at 1024. Single-city answers stay short
     # by prompt; the ceiling only needs to clear the long-answer shape.
