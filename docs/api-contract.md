@@ -180,7 +180,7 @@ resolving each link. Three kinds:
 | Kind    | URI                          | `entity_key`                              | Tap opens          |
 | ------- | ---------------------------- | ----------------------------------------- | ------------------ |
 | `venue` | `kebi://venue/{place id}`    | `places.id` — the id `GET /v1/places/{id}` and `POST /v1/user/places` take | The place screen   |
-| `area`  | `kebi://area/{geo key}`      | `{cc}[/{city}[/{neighborhood}]]`, slugged | A light area sheet |
+| `area`  | `kebi://area/{token}`        | `{cc}[/{cityId}[/{areaId}]]` — geo-registry id path (ADR-169). **Opaque**: never parse or display segments; `/`-prefix nesting is the only structure a client may rely on | A light area sheet |
 | `web`   | `kebi://web/{token}`         | The full page URL the turn's `web_search` read | The page, in a browser |
 
 A `web` entity appears only on turns where `web_search` actually fired
@@ -234,7 +234,7 @@ to `POST /v1/extract` — the chat path never writes to `user_places`.
 ```json
 {
   "type": "agent",
-  "message": "its monday so tonight is [Luigis](kebi://venue/c0ffee00-…) night, their big night in [Canggu](kebi://area/id/badung/canggu)",
+  "message": "its monday so tonight is [Luigis](kebi://venue/c0ffee00-…) night, their big night in [Canggu](kebi://area/aWQvQ2hJSm9R…)",
   "data": {
     "reasoning_steps": [],
     "entities": [
@@ -247,9 +247,9 @@ to `POST /v1/extract` — the chat path never writes to `user_places`.
       },
       {
         "kind": "area",
-        "key": "id/badung/canggu",
+        "key": "id/ChIJoQ8Q…/ChIJZZZY…",
         "name": "Canggu",
-        "uri": "kebi://area/id/badung/canggu",
+        "uri": "kebi://area/aWQvQ2hJSm9R…",
         "icon": "🏄"
       }
     ],
@@ -271,7 +271,7 @@ to `POST /v1/extract` — the chat path never writes to `user_places`.
 | Field  | Type                  | Notes                                                                                    |
 | ------ | --------------------- | ---------------------------------------------------------------------------------------- |
 | `kind` | `"venue" \| "area" \| "web"` | Which detail surface the tap opens. Unknown kinds must degrade to plain text, never crash — the vocabulary can grow |
-| `key`  | `string`              | `places.id` for a venue; the slugged geo key for an area; the raw page URL for a web source |
+| `key`  | `string`              | `places.id` for a venue; the canonical geo key for an area (opaque registry id path — round-trip it, never parse it); the raw page URL for a web source |
 | `name` | `string`              | Canonical display name — may differ from the text the answer used ("Luigis" vs "Luigi's"). For `web`, the source domain ("fifa.com") |
 | `uri`  | `string`              | `kebi://{kind}/{key}`, pre-composed so the link handler never parses (a `web` URI carries the URL base64url-encoded, no padding) |
 | `icon` | `string \| null`      | Single emoji for the entity's identity (🍕, 🏄), drawn beside the name. **Always the stored row's icon, re-read at answer time (ADR-162)** — a chip never contradicts the screen its tap opens. A venue's comes off its catalog row (ADR-117); an area's off its area row (profiler-picked, ADR-153); a web source's is always 🌐. **Nullable by design** — a row with no icon yet (or an area not yet profiled) ships `null` and the client falls back to its own kind/category mapping |
@@ -536,7 +536,7 @@ GET /v1/user/library?sort=name&limit=20&cursor=<next_cursor-from-prior-response>
 | Param          | Type                                | Notes                                                                                                            |
 | -------------- | ----------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
 | `q`            | `string` (≤200 chars)               | Free-text search over the **whole** library (ADR-164). See below                                                 |
-| `area`         | `string` (geo key)                  | One area by key (`id/bali/canggu`), matched by **prefix** so `id/bali` includes its neighbourhoods. Malformed → 422 (ADR-165) |
+| `area`         | `string` (geo key)                  | One area by key — pass a `key` value received from kebi (a row's `area.key`, an entity's `key`) verbatim; matched by **prefix**, so a city key includes its neighbourhoods. Malformed → 422 (ADR-165) |
 | `category`     | repeated `PlaceCategory`            | OR across repeats. `?category=cafe&category=bar`                                                                 |
 | `tag`          | repeated `string`                   | Tag **value**; AND across repeats (every value must be present)                                                  |
 | `city`         | `string`                            | Case-insensitive match on `place.location.city`                                                                  |
@@ -619,11 +619,11 @@ tappable (ADR-165):
   "user_data": { "…": "UserPlace" },
   "claims": [],
   "area": {
-    "key": "id/bali/canggu",
+    "key": "id/ChIJoQ8Q…/ChIJZZZY…",
     "name": "Canggu",
-    "uri": "kebi://area/aWQvYmFsaS9jYW5nZ3U",
+    "uri": "kebi://area/aWQvQ2hJSm9R…",
     "icon": "🏄",
-    "parent": { "key": "id/bali", "name": "Bali", "uri": "kebi://area/aWQvYmFsaQ", "icon": null }
+    "parent": { "key": "id/ChIJoQ8Q…", "name": "Bali", "uri": "kebi://area/aWQvQ2hJSm9…", "icon": null }
   }
 }
 ```
@@ -729,11 +729,11 @@ all simply global.
     }
   ],
   "area": {
-    "key": "id/bali/canggu",
+    "key": "id/ChIJoQ8Q…/ChIJZZZY…",
     "name": "Canggu",
-    "uri": "kebi://area/aWQvYmFsaS9jYW5nZ3U",
+    "uri": "kebi://area/aWQvQ2hJSm9R…",
     "icon": "🏄",
-    "parent": { "key": "id/bali", "name": "Bali", "uri": "kebi://area/aWQvYmFsaQ", "icon": null }
+    "parent": { "key": "id/ChIJoQ8Q…", "name": "Bali", "uri": "kebi://area/aWQvQ2hJSm9…", "icon": null }
   }
 }
 ```
@@ -764,11 +764,18 @@ URL-safe segment; the raw key still rides the chat entity's `key` field.
 Every level of the key hierarchy is openable: country, city/region,
 neighbourhood.
 
+Since ADR-169 the key's segments are geo-registry provider ids, not name
+slugs — nothing a client can render or construct. Tokens minted before the
+change (in old chat messages) still resolve: kebi translates them
+server-side, so a stored link never dies. The contract is unchanged either
+way: tokens and keys are opaque values you receive from kebi and hand back
+verbatim.
+
 **Request:** path param only. Plus the `X-Gateway-Token` +
 `X-Gateway-User-Id` headers.
 
 ```
-GET /v1/areas/aWQvYmFsaS9jYW5nZ3U
+GET /v1/areas/aWQvQ2hJSm9R…
 ```
 
 **Response (200):** the area's **global half** (profile: `name`, `level`,
@@ -792,8 +799,8 @@ per request and never stored.
 
 ```json
 {
-  "key": "id/bali/canggu",
-  "uri": "kebi://area/aWQvYmFsaS9jYW5nZ3U",
+  "key": "id/ChIJoQ8Q…/ChIJZZZY…",
+  "uri": "kebi://area/aWQvQ2hJSm9R…",
   "name": "Canggu",
   "level": "neighbourhood",
   "icon": "🏄",
@@ -801,7 +808,7 @@ per request and never stored.
   "best_for": [{ "icon": "🌅", "text": "sunset drinks" }],
   "breadcrumb": [
     { "key": "id", "name": "Indonesia", "uri": "kebi://area/aWQ" },
-    { "key": "id/bali", "name": "Bali", "uri": "kebi://area/aWQvYmFsaQ" }
+    { "key": "id/ChIJoQ8Q…", "name": "Bali", "uri": "kebi://area/aWQvQ2hJSm9…" }
   ],
   "saved_count": 4,
   "profiled": true,
@@ -998,11 +1005,11 @@ GET /v1/user/library/areas
   "areas": [
     {
       "area": {
-        "key": "id/bali/canggu",
+        "key": "id/ChIJoQ8Q…/ChIJZZZY…",
         "name": "Canggu",
-        "uri": "kebi://area/aWQvYmFsaS9jYW5nZ3U",
+        "uri": "kebi://area/aWQvQ2hJSm9R…",
         "icon": "🏄",
-        "parent": { "key": "id/bali", "name": "Bali", "uri": "kebi://area/aWQvYmFsaQ", "icon": null }
+        "parent": { "key": "id/ChIJoQ8Q…", "name": "Bali", "uri": "kebi://area/aWQvQ2hJSm9…", "icon": null }
       },
       "count": 11
     }
@@ -1025,7 +1032,7 @@ results flat with `filtered_total` rather than as sections with at-rest counts.
 
 Counts are exact-key while `?area=` matches by **prefix**, and that asymmetry
 is deliberate: a client wanting one rolled-up "Bali" heading sums the entries
-sharing that `parent` and opens it with `?area=id/bali`, which returns the
+sharing that `parent` and opens it with `?area={the Bali row's key}`, which returns the
 nested rows. Pre-summing here would make the leaf histogram unavailable.
 
 Areas whose geography is coarser than a city are absent entirely — naming that
@@ -1301,7 +1308,7 @@ area rather than a guess.
     {
       "type": "area",
       "place_id": null,
-      "area_id": "aWQvYmFsaS9jYW5nZ3U",
+      "area_id": "aWQvQ2hJSm9R…",
       "name": "Canggu",
       "level": "neighbourhood",
       "icon": null,
