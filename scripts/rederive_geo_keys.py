@@ -44,8 +44,9 @@ async def _main() -> None:
             ),
             instructor_client=get_instructor_client("area_registry"),
         )
-        async with _get_session_factory()() as session:
-            changed = await _rederive_places(session, registry, dry_run=False)
+        changed = await _rederive_places(
+            _get_session_factory(), registry, dry_run=False
+        )
     logger.info("re-derived geo_key on %d row(s)", changed)
 
 

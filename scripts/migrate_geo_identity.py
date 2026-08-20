@@ -37,7 +37,7 @@ import logging
 
 import httpx
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from kebi.core.areas.keys import is_legacy_geo_key
 from kebi.core.config import get_env
@@ -120,21 +120,28 @@ async def _build_mapping(
 
 
 async def _rederive_places(
-    session: AsyncSession, registry: GeoRegistry, *, dry_run: bool
+    session_factory: async_sessionmaker[AsyncSession],
+    registry: GeoRegistry,
+    *,
+    dry_run: bool,
 ) -> int:
-    rows = (
-        await session.execute(
-            text(
-                "SELECT id, geo_key, "
-                "location->>'country_code' AS cc, "
-                "location->>'city' AS city, "
-                "location->>'neighborhood' AS hood, "
-                "location->>'lat' AS lat, "
-                "location->>'lng' AS lng "
-                "FROM places WHERE location IS NOT NULL"
+    """Sessions are opened per phase, never held across mint calls — a
+    connection idling under minutes of network work is how this script's
+    own first run died (and the shape ADR-166 warns about)."""
+    async with session_factory() as session:
+        rows = (
+            await session.execute(
+                text(
+                    "SELECT id, geo_key, "
+                    "location->>'country_code' AS cc, "
+                    "location->>'city' AS city, "
+                    "location->>'neighborhood' AS hood, "
+                    "location->>'lat' AS lat, "
+                    "location->>'lng' AS lng "
+                    "FROM places WHERE location IS NOT NULL"
+                )
             )
-        )
-    ).fetchall()
+        ).fetchall()
     changed: list[dict[str, str | None]] = []
     for r in rows:
         resolved = await registry.key_for_location(
@@ -148,13 +155,14 @@ async def _rederive_places(
         key = resolved.geo_key if resolved and resolved.city else None
         if key != r.geo_key:
             changed.append({"pid": r.id, "key": key})
-    if not dry_run:
-        for start in range(0, len(changed), _CHUNK):
-            await session.execute(
-                text("UPDATE places SET geo_key = :key WHERE id = :pid"),
-                changed[start : start + _CHUNK],
-            )
-        await session.commit()
+    if not dry_run and changed:
+        async with session_factory() as session:
+            for start in range(0, len(changed), _CHUNK):
+                await session.execute(
+                    text("UPDATE places SET geo_key = :key WHERE id = :pid"),
+                    changed[start : start + _CHUNK],
+                )
+            await session.commit()
     return len(changed)
 
 
@@ -222,7 +230,7 @@ async def _rekey_areas(
             await session.execute(
                 text(
                     "UPDATE areas SET geo_key = :new, "
-                    "notable_sub_areas = :children::jsonb "
+                    "notable_sub_areas = CAST(:children AS JSONB) "
                     "WHERE geo_key = :old"
                 ),
                 {
@@ -251,21 +259,21 @@ async def _main() -> None:
             ),
             instructor_client=get_instructor_client("area_registry"),
         )
-        async with _get_session_factory()() as session:
+        factory = _get_session_factory()
+        async with factory() as session:
             legacy_keys = await _collect_legacy_keys(session)
-            logger.info("legacy keys found: %d", len(legacy_keys))
-            mapping = await _build_mapping(registry, repo, legacy_keys)
-            unresolved = sorted(k for k, v in mapping.items() if v is None)
-            logger.info(
-                "mapped: %d, unresolvable: %d %s",
-                sum(v is not None for v in mapping.values()),
-                len(unresolved),
-                unresolved[:20],
-            )
-            places_changed = await _rederive_places(
-                session, registry, dry_run=args.dry_run
-            )
-            logger.info("places re-keyed: %d", places_changed)
+        logger.info("legacy keys found: %d", len(legacy_keys))
+        mapping = await _build_mapping(registry, repo, legacy_keys)
+        unresolved = sorted(k for k, v in mapping.items() if v is None)
+        logger.info(
+            "mapped: %d, unresolvable: %d %s",
+            sum(v is not None for v in mapping.values()),
+            len(unresolved),
+            unresolved[:20],
+        )
+        places_changed = await _rederive_places(factory, registry, dry_run=args.dry_run)
+        logger.info("places re-keyed: %d", places_changed)
+        async with factory() as session:
             claims_changed = await _rewrite_claims(
                 session, mapping, dry_run=args.dry_run
             )
