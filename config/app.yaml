@@ -25,6 +25,13 @@ providers:
   # BRAVE_API_KEY is set; otherwise the null provider is used.
   brave:
     base_url: https://api.search.brave.com
+  # OpenAI-compatible gateway for benchmarking candidate models (ADR-173):
+  # one OPENROUTER_API_KEY covers Gemini/Qwen/DeepSeek/MiniMax/etc. at
+  # pass-through pricing. Production winners get a direct provider
+  # integration before promotion — this path is for the bakeoff matrix
+  # and short A/B windows, not the steady state.
+  openrouter:
+    base_url: https://openrouter.ai/api/v1
 
 models:
   # Speech-to-text for the audio track of submitted videos (e.g. TikTok/Reels).
@@ -46,12 +53,38 @@ models:
   # Structured place extraction from free text (captions, descriptions, plain
   # text, transcribed speech). Returns the Pydantic place schema used by the
   # extraction pipeline.
+  # Optioned block (ADR-173): `default` names the active option;
+  # KEBI_MODEL_EXTRACTOR=<option-key> switches at boot, unset rolls back.
+  # Candidates staged for benchmark round 1 — inactive until selected.
   extractor:
-    provider: openai
-    model: gpt-4o
-    max_tokens: 512
-    temperature: 0
-  # Offline swap: set provider: ollama, model: gemma4:e2b (requires: ollama serve)
+    default: gpt-4o
+    gpt-4o:
+      provider: openai
+      model: gpt-4o
+      max_tokens: 512
+      temperature: 0
+    luna:
+      provider: openai
+      model: gpt-5.6-luna
+      max_tokens: 512
+      temperature: 0
+    gemini-flash:
+      provider: openrouter
+      model: google/gemini-3.7-flash
+      max_tokens: 512
+      temperature: 0
+    qwen-plus:
+      provider: openrouter
+      model: qwen/qwen3.5-plus
+      max_tokens: 512
+      temperature: 0
+    deepseek-flash:
+      provider: openrouter
+      model: deepseek/deepseek-v4-flash
+      max_tokens: 512
+      temperature: 0
+  # Offline swap: add an ollama option (model: gemma4:e2b, requires: ollama serve)
+  # and select it with KEBI_MODEL_EXTRACTOR.
 
   # Knowledge-layer writers (ADR-120/121). Both mine world-entity facts from
   # already-gathered text and emit structured claims; the harvester runs on the
@@ -158,6 +191,28 @@ models:
       model: gpt-4o-mini
       max_tokens: 1024
       temperature: 0.7
+    # Benchmark-round-1 candidates (ADR-173) — inactive until selected via
+    # KEBI_MODEL_ORCHESTRATOR (or AGENT_MODEL, its ADR-068 alias).
+    claude-sonnet-5:
+      provider: anthropic
+      model: claude-sonnet-5
+      max_tokens: 2048
+      temperature: 0.7
+    gemini-flash:
+      provider: openrouter
+      model: google/gemini-3.7-flash
+      max_tokens: 2048
+      temperature: 0.7
+    gpt-terra:
+      provider: openai
+      model: gpt-5.6-terra
+      max_tokens: 2048
+      temperature: 0.7
+    minimax-m3:
+      provider: openrouter
+      model: minimax/minimax-m3
+      max_tokens: 2048
+      temperature: 0.7
 
   # Rewrites the user's taste_profile_summary from accumulated signals.
   # Triggered by debounced signal events and by chip_confirm.
@@ -183,11 +238,30 @@ models:
   # lowercase place names, GPS-vs-explicit-name precedence) that the
   # mini-tier OpenAI model was missing on real traffic, so we run this
   # on Claude Haiku 4.5 instead.
+  # Optioned block (ADR-173): KEBI_MODEL_LOCATION_RESOLVER=<option-key>
+  # switches at boot. Candidates staged for benchmark round 1.
   location_resolver:
-    provider: anthropic
-    model: claude-haiku-4-5-20251001
-    max_tokens: 512
-    temperature: 0
+    default: claude-haiku
+    claude-haiku:
+      provider: anthropic
+      model: claude-haiku-4-5-20251001
+      max_tokens: 512
+      temperature: 0
+    gemini-flash:
+      provider: openrouter
+      model: google/gemini-3.7-flash
+      max_tokens: 512
+      temperature: 0
+    luna:
+      provider: openai
+      model: gpt-5.6-luna
+      max_tokens: 512
+      temperature: 0
+    qwen-flash:
+      provider: openrouter
+      model: qwen/qwen3.5-flash
+      max_tokens: 512
+      temperature: 0
 
   # Proposes well-known place names that fit the user's intent, scoped to
   # the turn's working location and movement capabilities. Output feeds
@@ -763,6 +837,14 @@ pricing:
       output_per_1m: 0.26
     qwen/qwen3.5-plus:
       input_per_1m: 0.40
+      output_per_1m: 2.40
+    # DeepSeek moved to peak/off-peak billing 2026-08-16 (peak doubles
+    # these); rates below are off-peak — reconcile against the invoice.
+    deepseek/deepseek-v4-flash:
+      input_per_1m: 0.14
+      output_per_1m: 0.28
+    minimax/minimax-m3:
+      input_per_1m: 0.60
       output_per_1m: 2.40
   embeddings:
     # Voyage — verified 2026-05-24 — source: docs.voyageai.com/docs/pricing
