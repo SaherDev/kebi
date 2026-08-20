@@ -126,18 +126,48 @@ _ROLE_RESERVED_KEYS = frozenset({"default", "advanced"})
 _MODEL_OVERRIDE_PREFIX = "KEBI_MODEL_"
 
 
-def _split_options_block(role: str, raw_block: dict[str, Any]) -> RoleOptionsConfig:
+def expand_profile(
+    entry: dict[str, Any], profiles: dict[str, Any], where: str
+) -> dict[str, Any]:
+    """Merge a `profile:` reference into an option/role dict (ADR-176).
+
+    `model_profiles.<name>` supplies the base fields (provider, model,
+    limits); the entry's own keys override. A group of roles referencing
+    one profile moves to a new model with a single profile edit, while
+    per-role env overrides keep working for one-at-a-time trials.
+    """
+    if "profile" not in entry:
+        return entry
+    name = entry["profile"]
+    if name not in profiles:
+        raise ValueError(
+            f"{where}: unknown model profile {name!r}; have {sorted(profiles)}"
+        )
+    base = profiles[name]
+    if not isinstance(base, dict):
+        raise ValueError(f"model_profiles.{name} must be a mapping")
+    return {**base, **{k: v for k, v in entry.items() if k != "profile"}}
+
+
+def _split_options_block(
+    role: str, raw_block: dict[str, Any], profiles: dict[str, Any]
+) -> RoleOptionsConfig:
     """Parse a YAML `{default, <option>, ...}` role block.
 
     `default` and `advanced` are reserved selector keys; every other key is
-    an option name mapping to an `LLMRoleConfig`-shaped dict.
+    an option name mapping to an `LLMRoleConfig`-shaped dict (possibly via
+    a `profile:` reference).
     """
     if "default" not in raw_block:
         raise ValueError(
             f"models.{role} must define a 'default' key naming one of its option keys"
         )
     default = raw_block["default"]
-    options = {k: v for k, v in raw_block.items() if k not in _ROLE_RESERVED_KEYS}
+    options = {
+        k: expand_profile(v, profiles, f"models.{role}.{k}")
+        for k, v in raw_block.items()
+        if k not in _ROLE_RESERVED_KEYS
+    }
     return RoleOptionsConfig(role=role, default=default, options=options)
 
 
@@ -160,12 +190,16 @@ def _resolve_model_options(
     raw_models: dict[str, Any],
     overrides: dict[str, str] | None = None,
     agent_model: str | None = None,
+    profiles: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Flatten every `{default, <option>, ...}` role block to a flat
     `LLMRoleConfig` dict (ADR-173, generalising ADR-068).
 
-    Flat blocks (top-level `provider`) pass through untouched. Mutates
-    `raw_models` in place and returns it.
+    `profiles` is the raw `model_profiles:` section (ADR-176): any role
+    block or option may reference one via `profile: <name>` instead of
+    inlining provider/model/limits; entry keys override profile keys.
+    Flat blocks (top-level `provider` or `profile`) pass through after
+    profile expansion. Mutates `raw_models` in place and returns it.
 
     Per optioned role:
     - no override → use `default`.
@@ -181,9 +215,18 @@ def _resolve_model_options(
     role is an error: it is a plan-tier selector, not a model option.
     """
     overrides = overrides or {}
+    if profiles is None:
+        # Back-compat callers (`_resolve_orchestrator`, tests feeding raw
+        # blocks) resolve against the committed catalog. Pass `{}`
+        # explicitly to mean "no profiles".
+        profiles = load_yaml_config("app.yaml").get("model_profiles") or {}
     for role in list(raw_models):
         block = raw_models[role]
-        if not isinstance(block, dict) or "provider" in block:
+        if not isinstance(block, dict):
+            continue
+        if "provider" in block or "profile" in block:
+            # Flat block — expand a profile reference in place, done.
+            raw_models[role] = expand_profile(block, profiles, f"models.{role}")
             continue
         if role != "orchestrator" and "advanced" in block:
             raise ValueError(
@@ -191,7 +234,7 @@ def _resolve_model_options(
                 "(plan-tier selector), not a model option"
             )
         advanced_key = block.get("advanced")
-        parsed = _split_options_block(role, block)
+        parsed = _split_options_block(role, block, profiles)
         requested = overrides.get(role)
         override_source = f"{_MODEL_OVERRIDE_PREFIX}{role.upper()}"
         if requested is None and role == "orchestrator" and agent_model is not None:
@@ -1266,7 +1309,9 @@ class AppConfig(BaseModel):
         instead and resolve every role to its `default` option.
         """
         if isinstance(data, dict) and isinstance(data.get("models"), dict):
-            _resolve_model_options(data["models"])
+            _resolve_model_options(
+                data["models"], profiles=data.pop("model_profiles", None)
+            )
         return data
 
 
@@ -1354,6 +1399,9 @@ def get_config() -> AppConfig:
             raw.get("models") or {},
             overrides=_model_env_overrides(),
             agent_model=get_env().AGENT_MODEL,
+            # Consumed here (ADR-176) — profiles exist only at resolution
+            # time; the resolved config carries flat LLMRoleConfig blocks.
+            profiles=raw.pop("model_profiles", None),
         )
         raw["prompts"] = _load_prompts(raw.get("prompts") or {})
         _config = AppConfig(**raw)
