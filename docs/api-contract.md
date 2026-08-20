@@ -831,8 +831,9 @@ per request and never stored.
 ```
 
 > **Lazy profiling (ADR-153):** an area opens thin the first time
-> (`profiled: false` — `summary`/`level`/`icon` null, slug-derived
-> name/breadcrumb) and that open triggers a background profiling pass, so
+> (`profiled: false` — `summary`/`level`/`icon` null, name/breadcrumb from
+> the geo registry's stored names) and that open triggers a background
+> profiling pass, so
 > the dressed screen is there within seconds on the next fetch — the same
 > first-open contract as the place screen (ADR-152). The personal fields
 > are always live, thin or not.
@@ -1292,11 +1293,10 @@ list. **Gated** on `X-Gateway-Can-Curate`. Deterministic (no LLM): catalog
 places via unscoped hybrid search, areas from the profiled areas table, and
 — only when the known corpus has no area hit — a verified-or-refuse geocode
 so a never-opened area can still be anchored. A bare unseen name resolves
-as a country or, failing that, as the prominent city of that name via a
-structured lookup whose answer must slug-match the typed name ("Tokyo" →
-Tokyo, JP); `"Name, Country"` constrains a lesser namesake to its country.
-Free-text geocoding is never used, and an unverifiable name returns no
-area rather than a guess.
+as a country or, failing that, as the prominent city of that name via the
+geo registry's verified resolution ("Tokyo" → Tokyo, JP); `"Name, Country"`
+constrains a lesser namesake to its country. An unverifiable name returns
+no area rather than a guess.
 
 **Query params:** `q` (required, 2–120 chars), `limit` (default 8, max 20).
 
