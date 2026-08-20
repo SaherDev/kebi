@@ -342,6 +342,7 @@ class InstructorClient:
         mode: instructor.Mode = instructor.Mode.TOOLS,
         max_retries: int = 2,
         timeout_seconds: float | None = None,
+        reasoning_effort: str | None = None,
     ) -> None:
         """Initialize Instructor client with OpenAI backend.
 
@@ -355,9 +356,13 @@ class InstructorClient:
                 (`models.<role>.max_retries`). The SDK's own transport
                 retries are disabled — Instructor's loop is the only one.
             timeout_seconds: Per-request timeout. None = SDK default.
+            reasoning_effort: GPT-5.6-family dial; "none" is REQUIRED for
+                gpt-5.6-luna function-tool calls on chat completions.
+                None = omit (non-reasoning models reject the parameter).
         """
         self._model = model
         self._max_attempts = max_retries + 1
+        self._reasoning_effort = reasoning_effort
         client_kwargs: dict[str, Any] = {
             "api_key": api_key,
             "base_url": base_url,
@@ -395,6 +400,9 @@ class InstructorClient:
         retrying: AsyncRetrying = AsyncRetrying(
             stop=stop_after_attempt(self._max_attempts)
         )
+        extra_kwargs: dict[str, Any] = {}
+        if self._reasoning_effort is not None:
+            extra_kwargs["reasoning_effort"] = self._reasoning_effort
         try:
             (
                 result,
@@ -404,6 +412,7 @@ class InstructorClient:
                 response_model=response_model,
                 messages=cast(list[Any], messages),
                 max_retries=retrying,
+                **extra_kwargs,
             )
         except IncompleteOutputException as e:
             raise RuntimeError(f"Incomplete extraction: {e}") from e
@@ -546,6 +555,9 @@ def get_langchain_chat_model(role: str) -> Any:
     if provider == "openai":
         from langchain_openai import ChatOpenAI
 
+        kwargs: dict[str, Any] = {}
+        if role_config.reasoning_effort is not None:
+            kwargs["reasoning_effort"] = role_config.reasoning_effort
         return ChatOpenAI(
             model=model,
             max_tokens=max_tokens,
@@ -553,6 +565,7 @@ def get_langchain_chat_model(role: str) -> Any:
             api_key=secrets.OPENAI_API_KEY,
             timeout=role_config.timeout_seconds,
             max_retries=0,
+            **kwargs,
         )
 
     if provider == "openrouter":
@@ -612,6 +625,7 @@ def get_instructor_client(role: str) -> InstructorClient:
             mode=instructor.Mode.JSON,
             max_retries=role_config.max_retries,
             timeout_seconds=role_config.timeout_seconds,
+            reasoning_effort=role_config.reasoning_effort,
         )
 
     if role_config.provider == "openrouter":
@@ -621,6 +635,7 @@ def get_instructor_client(role: str) -> InstructorClient:
             api_key=get_env().OPENROUTER_API_KEY,
             max_retries=role_config.max_retries,
             timeout_seconds=role_config.timeout_seconds,
+            reasoning_effort=role_config.reasoning_effort,
         )
 
     return InstructorClient(
@@ -628,6 +643,7 @@ def get_instructor_client(role: str) -> InstructorClient:
         api_key=get_env().OPENAI_API_KEY,
         max_retries=role_config.max_retries,
         timeout_seconds=role_config.timeout_seconds,
+        reasoning_effort=role_config.reasoning_effort,
     )
 
 

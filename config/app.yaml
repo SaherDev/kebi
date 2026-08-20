@@ -68,6 +68,9 @@ models:
       model: gpt-5.6-luna
       max_tokens: 512
       temperature: 0
+      # Required "none": Luna rejects function tools at any other effort
+      # on the chat-completions API (found live in the first bakeoff).
+      reasoning_effort: none
     gemini-flash:
       provider: openrouter
       model: google/gemini-3.7-flash
@@ -257,6 +260,7 @@ models:
       model: gpt-5.6-luna
       max_tokens: 512
       temperature: 0
+      reasoning_effort: none
     qwen-flash:
       provider: openrouter
       model: qwen/qwen3.5-flash
