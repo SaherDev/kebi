@@ -1,0 +1,119 @@
+# Seed golden set for the location_resolver bakeoff (ADR-175).
+# Curated by hand from the resolver prompt's own rule set — each case pins
+# one rule the incumbent is known to handle. Expand with real-traffic
+# drafts via scripts/export_golden_traces.py; expected values are
+# assertions a human stands behind, never a model transcript.
+cases:
+  - id: explicit-city
+    note: bare city name in the message wins over GPS
+    input:
+      current_message: "best tacos in mexico city tonight"
+      user_actual_location: '{"city": "guadalajara", "country": "Mexico", "lat": 20.67, "lng": -103.35}'
+    expected:
+      city: mexico city
+      scope_tier: city
+      location_irrelevant: false
+      needs_clarification: false
+
+  - id: gps-only-continuation
+    note: no place named → actual location carries
+    input:
+      current_message: "somewhere quiet for breakfast"
+      user_actual_location: '{"city": "Lisbon", "country": "Portugal", "lat": 38.72, "lng": -9.14}'
+    expected:
+      city: lisbon
+      location_irrelevant: false
+      needs_clarification: false
+
+  - id: continuation-keeps-working-location
+    note: follow-up refines the previous turn, not a shift
+    input:
+      current_message: "what about something vegetarian instead"
+      conversation_history: "user: cheap tacos in mexico city tonight\nassistant: (recommended street stands in centro)"
+      user_actual_location: '{"city": "guadalajara", "country": "Mexico"}'
+      previous_working_location: '{"city": "Mexico City", "country": "Mexico"}'
+      distance_from_previous: "actual location is ~460 km from the previous working location"
+    expected:
+      city: mexico city
+      is_shift: false
+      needs_clarification: false
+
+  - id: explicit-shift
+    note: naming a new city mid-conversation is a shift
+    input:
+      current_message: "ok now let's plan osaka"
+      conversation_history: "user: ramen in tokyo\nassistant: (recommended shinjuku spots)"
+      previous_working_location: '{"city": "Tokyo", "country": "Japan"}'
+    expected:
+      city: osaka
+      is_shift: true
+
+  - id: world-question-not-a-place-turn
+    note: ADR-145 — a general question must not become "which city?"
+    input:
+      current_message: "do i need a visa to enter japan as a canadian?"
+      user_actual_location: '{"city": "Toronto", "country": "Canada"}'
+    expected:
+      location_irrelevant: true
+      needs_clarification: false
+
+  - id: ambiguous-bare-name
+    note: two famous namesakes, nothing to disambiguate
+    input:
+      current_message: "good bars in portland"
+    expected:
+      needs_clarification: true
+
+  - id: walkable-tier
+    note: "near me / walking distance caps the reach"
+    input:
+      current_message: "a coffee place i can walk to from here"
+      user_actual_location: '{"city": "Berlin", "country": "Germany", "lat": 52.52, "lng": 13.40}'
+    expected:
+      city: berlin
+      scope_tier: walkable
+      effective_mode: walking
+
+  - id: future-trip-stays-future
+    note: future tense — planning a trip, not a shift of tonight's scope
+    input:
+      current_message: "next month we're doing three days in rome, start collecting ideas"
+      user_actual_location: '{"city": "London", "country": "United Kingdom"}'
+    expected:
+      city: rome
+      location_irrelevant: false
+
+  - id: itinerary-shape
+    note: multi-stop trip turn → itinerary shape (ADR-141/148)
+    input:
+      current_message: "plan a day: morning in ubud, sunset in uluwatu, dinner back in canggu"
+      user_actual_location: '{"city": "Canggu", "country": "Indonesia"}'
+    expected:
+      scope_shape: itinerary
+
+  - id: stated-mode-scooter
+    note: a capability stated for the stay lands in stated_modes (ADR-155)
+    input:
+      current_message: "we rented scooters for the week — where should we ride for lunch?"
+      user_actual_location: '{"city": "Da Nang", "country": "Vietnam"}'
+    expected:
+      city: da nang
+      needs_clarification: false
+
+  - id: taxi-arrival-is-not-a-capability
+    note: how they arrived says nothing about the stay
+    input:
+      current_message: "we took a taxi here, what's good around?"
+      user_actual_location: '{"city": "Marrakesh", "country": "Morocco"}'
+    expected:
+      city: marrakesh
+      needs_clarification: false
+
+  - id: neighborhood-scope
+    note: a named neighborhood narrows below city tier
+    input:
+      current_message: "izakaya in shimokitazawa"
+      user_actual_location: '{"city": "Tokyo", "country": "Japan"}'
+    expected:
+      city: tokyo
+      neighborhood: shimokitazawa

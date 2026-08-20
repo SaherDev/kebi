@@ -78,6 +78,11 @@ class LLMRoleConfig(BaseModel):
     max_retries: int = 2
     # Per-request timeout passed to the provider SDK. None = SDK default.
     timeout_seconds: float | None = None
+    # Reasoning-model dial (GPT-5.6 family: none|low|medium|high|...).
+    # Required as "none" for gpt-5.6-luna structured-output calls — the
+    # chat-completions API rejects function tools at any other effort.
+    # None = omit the parameter (non-reasoning models).
+    reasoning_effort: str | None = None
 
 
 class RoleOptionsConfig(BaseModel):

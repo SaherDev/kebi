@@ -17,6 +17,16 @@ Format:
 
 ---
 
+## ADR-175: Model choices are measured, not vibed — a committed bakeoff harness with golden sets
+
+**Date:** 2026-08-20\
+**Status:** accepted — pays the eval debt ADR-067/100 left open\
+**Context:** Every model decision in this project's history was made from priors and pricing pages, then gated on "real acceptance data" that was never actually collected — ADR-100 said the Haiku orchestrator choice would be validated against measured quality and never was. An eval harness was once written, run, and deleted without being committed; only its bytecode ghosts survived. Meanwhile the current models are two generations old, the market has candidates at a sixteenth of the price, and the rollout plan (one role at a time, instant rollback — previous ADR) is only as good as the quality measurement standing behind each swap. A benchmark also has a second job here: it is the parity gate that lets prompt trims ship safely (ADR-174 deferred all wording changes until this existed).\
+**Decision:** A committed eval package with three parts. Golden sets: per-role fixture files of curated cases — input plus the expected output facts a human stands behind, never a model transcript — seeded by hand from each role's own rule set (the extractor's cases rendered through the real production prompt builder, byte-faithful to live traffic) and grown from real traces by an export script that drafts cases for human curation. A bakeoff runner: given a role and a list of named config options (the previous ADR's blocks, including inactive candidates), it runs each option through the production-equivalent client, real prompt, and real response schema over the golden set, and reports quality, pass-rate, latency percentiles, and config-priced cost side by side; a prompt-override flag turns the same runner into the trim parity gate — same model, current-versus-trimmed prompt. Round one covers the resolver and extractor; the orchestrator's adapter is deliberately deferred to its own swap round because it needs the bound tool loop and a judge, and pretending otherwise would produce a number nobody should trust. Eval traffic is traced under its own feature tag so it never pollutes production cost reports.\
+**Consequences:** The first measured results immediately earned their keep, in both directions: the extractor's candidate ties the incumbent on quality at one-sixteenth the cost (with a latency tail worth watching on the synchronous path), while the resolver's incumbent beats the same candidate outright — confirming with numbers the "cheap model misses the nuanced rules" judgment that had been a config comment. The first run also caught a provider contract quirk (the candidate rejects function tools unless its reasoning dial is explicitly off), which is now a config field instead of a production surprise. Swap decisions and prompt trims now have a standing instrument; the seed sets are small and directional, so expanding them from real traces is part of any high-stakes swap. Results live in a committed benchmark log alongside the swap order.
+
+---
+
 ## ADR-174: The location resolver's rules ride the prompt cache — and every prompt now has a growth budget
 
 **Date:** 2026-08-20\
