@@ -1,0 +1,39 @@
+# Prompt token budgets (ADR-174) — enforced by:
+#   poetry run python -m kebi.eval.prompt_audit --fail-on-budget
+#
+# Budgets are estimated tokens (chars/4, same estimator as the audit) set
+# at the 2026-08-20 baseline plus ~5% headroom. Growing a prompt past its
+# budget is a deliberate act: raise the number in the SAME change, with
+# the eval evidence that justifies the extra tokens (ADR-135: this
+# project trades bytes for answers, not the reverse — but the trade is
+# made on purpose, never by drift). Trims lower the budget to the new
+# size so the win can't silently erode.
+limits:
+  agent:
+    max_estimated_tokens: 8950
+  location_resolver:
+    max_estimated_tokens: 4700
+  place_resolver:
+    max_estimated_tokens: 2550
+  place_classifier:
+    max_estimated_tokens: 2250
+  candidate_namer:
+    max_estimated_tokens: 1470
+  taste_regen:
+    max_estimated_tokens: 1390
+  web_harvester:
+    max_estimated_tokens: 1140
+  knowledge_harvester:
+    max_estimated_tokens: 1000
+  place_profiler:
+    max_estimated_tokens: 870
+  area_profiler:
+    max_estimated_tokens: 820
+  home_suggester:
+    max_estimated_tokens: 630
+  area_registry:
+    max_estimated_tokens: 600
+  knowledge_curator:
+    max_estimated_tokens: 550
+  knowledge_curator_anchor:
+    max_estimated_tokens: 230
