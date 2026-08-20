@@ -284,7 +284,9 @@ class TasteModelService:
                     user_id=user_id,
                     extra={"attempt": attempt + 1},
                 ) as t:
-                    raw = await llm.complete(messages)
+                    completion = await llm.complete(messages)
+                    raw = completion.text
+                    t.usage = completion.usage
                     try:
                         artifacts = TasteArtifacts.model_validate(json.loads(raw))
                     except (json.JSONDecodeError, ValidationError) as exc:

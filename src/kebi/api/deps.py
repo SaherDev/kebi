@@ -1419,6 +1419,7 @@ def get_agent_graph(
         checkpointer,
         resolver_llm,
         get_geocoding_client(),
+        orchestrator_role=orchestrator_role,
     )
 
 

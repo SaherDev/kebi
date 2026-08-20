@@ -69,6 +69,14 @@ class LLMRoleConfig(BaseModel):
     model: str
     max_tokens: int = 1024
     temperature: float = 1.0
+    # Retry budget owned by kebi, not the SDK. Counts retries *after* the
+    # first attempt (0 = single attempt). SDK-internal retries are disabled
+    # at client construction so every real API call is visible to tracing —
+    # hidden SDK retries multiplied on top of our loops (up to 9 calls per
+    # logical call) and never appeared in Langfuse.
+    max_retries: int = 2
+    # Per-request timeout passed to the provider SDK. None = SDK default.
+    timeout_seconds: float | None = None
 
 
 class OrchestratorOptionsConfig(BaseModel):
@@ -1032,6 +1040,49 @@ class MovementConfig(BaseModel):
     max_radius_m: int = 60000
 
 
+class LLMModelPricing(BaseModel):
+    """Per-1M-token rates for one LLM, keyed in `pricing.llm` by model name.
+
+    Usage-dict convention (matches what call sites stamp on spans):
+    `input` counts uncached input tokens only; cached tokens ride the
+    optional `cache_read_input_tokens` / `cache_creation_input_tokens`
+    keys. `output` is completion tokens. `total` is informational and
+    never priced.
+    """
+
+    input_per_1m: float
+    output_per_1m: float
+    # OpenAI-style cached-input rate (reads only; writes are free).
+    cached_input_per_1m: float | None = None
+    # Anthropic-style cache rates. Writes default to the 5m tier — the
+    # only tier kebi uses (`cache_control: ephemeral`).
+    cache_read_per_1m: float | None = None
+    cache_write_5m_per_1m: float | None = None
+    cache_write_1h_per_1m: float | None = None
+
+    def cost_for(self, usage: dict[str, int]) -> float:
+        input_t = usage.get("input", 0)
+        output_t = usage.get("output", 0)
+        cache_read = usage.get("cache_read_input_tokens", 0)
+        cache_write = usage.get("cache_creation_input_tokens", 0)
+        read_rate = (
+            self.cache_read_per_1m
+            if self.cache_read_per_1m is not None
+            else self.cached_input_per_1m
+        )
+        cost = input_t * self.input_per_1m + output_t * self.output_per_1m
+        # Unknown cache rate → price cached tokens at the full input rate
+        # (overcounts rather than hides spend).
+        cost += cache_read * (read_rate if read_rate is not None else self.input_per_1m)
+        write_rate = (
+            self.cache_write_5m_per_1m
+            if self.cache_write_5m_per_1m is not None
+            else self.input_per_1m
+        )
+        cost += cache_write * write_rate
+        return cost / 1_000_000
+
+
 class VoyagePricing(BaseModel):
     """Per-1M-token rate for Voyage embeddings (not in Langfuse catalog)."""
 
@@ -1091,17 +1142,39 @@ class ExternalProviderPricing(BaseModel):
 class PricingConfig(BaseModel):
     """Provider rates for cost attribution in Langfuse traces.
 
-    LLM completions and embeddings priced by Langfuse's catalog are
-    listed under `llm` for human reconciliation only — code never reads
-    those values. The fields that ARE read by code: `embeddings`,
-    `transcription`, and `external`.
+    Every section is read by code. `llm` is keyed by model name (exact,
+    or a prefix of a date-suffixed model id) and prices the `cost_usd`
+    stamped on LLM spans — Langfuse's own catalog stays as the
+    reconciliation cross-check (ADR-092). `embeddings`, `transcription`,
+    and `external` price providers Langfuse cannot.
     """
 
     currency: str = "USD"
-    llm: dict[str, dict[str, float]] = {}
+    llm: dict[str, LLMModelPricing] = {}
     embeddings: dict[str, VoyagePricing] = {}
     transcription: dict[str, WhisperPricing] = {}
     external: ExternalProviderPricing
+
+    def llm_cost_for(
+        self, model: str | None, usage: dict[str, int] | None
+    ) -> float | None:
+        """USD cost for one call, or None when model/usage is unknown.
+
+        Exact model-name key first; otherwise the longest `llm` key that
+        prefixes the model id (so `claude-haiku-4-5` prices
+        `claude-haiku-4-5-20251001`). Missing entry → None: the span
+        goes out unpriced rather than mispriced, and the cost report
+        surfaces the gap.
+        """
+        if not model or not usage:
+            return None
+        entry = self.llm.get(model)
+        if entry is None:
+            prefixes = [k for k in self.llm if model.startswith(k)]
+            if not prefixes:
+                return None
+            entry = self.llm[max(prefixes, key=len)]
+        return entry.cost_for(usage)
 
 
 class AppConfig(BaseModel):

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock
 
-from kebi.core.knowledge.curator import KnowledgeCurator
+from kebi.core.knowledge.curator import KnowledgeCurator, _CuratorResponse
 from kebi.core.knowledge.harvester import (
     KnowledgeHarvester,
     _HarvestedClaim,
@@ -22,6 +22,7 @@ from kebi.core.knowledge.schemas import (
     HarvestPlace,
     ResolvedGeo,
 )
+from kebi.providers.llm import InstructorExtraction
 
 
 def _harvest_inputs() -> tuple[HarvestContent, list[HarvestPlace]]:
@@ -40,7 +41,9 @@ def _harvest_inputs() -> tuple[HarvestContent, list[HarvestPlace]]:
 
 async def test_harvester_system_prompt_carries_the_vocabulary() -> None:
     client = AsyncMock()
-    client.extract = AsyncMock(return_value=_HarvesterResponse(claims=[]))
+    client.extract = AsyncMock(
+        return_value=InstructorExtraction(data=_HarvesterResponse(claims=[]))
+    )
     harvester = KnowledgeHarvester(client, AsyncMock())
 
     content, places = _harvest_inputs()
@@ -54,9 +57,9 @@ async def test_harvester_system_prompt_carries_the_vocabulary() -> None:
 
 async def test_curator_system_prompt_carries_the_vocabulary() -> None:
     client = AsyncMock()
-    response = AsyncMock()
-    response.claims = []
-    client.extract = AsyncMock(return_value=response)
+    client.extract = AsyncMock(
+        return_value=InstructorExtraction(data=_CuratorResponse(claims=[]))
+    )
     curator = KnowledgeCurator(client, AsyncMock())
 
     await curator.structure("Tipping is not expected in Da Nang.")
@@ -71,17 +74,19 @@ async def test_practical_fact_claim_keeps_vocab_tags_through_resolve() -> None:
     comes out of the harvester as a StructuredClaim carrying those tags."""
     client = AsyncMock()
     client.extract = AsyncMock(
-        return_value=_HarvesterResponse(
-            claims=[
-                _HarvestedClaim(
-                    scope="place",
-                    place_index=0,
-                    entity_name="Banh Mi Corner",
-                    claim="Cash only; the ATM inside charges a withdrawal fee.",
-                    tags=["cash_only", "atm_fees"],
-                    confidence=0.7,
-                )
-            ]
+        return_value=InstructorExtraction(
+            data=_HarvesterResponse(
+                claims=[
+                    _HarvestedClaim(
+                        scope="place",
+                        place_index=0,
+                        entity_name="Banh Mi Corner",
+                        claim="Cash only; the ATM inside charges a withdrawal fee.",
+                        tags=["cash_only", "atm_fees"],
+                        confidence=0.7,
+                    )
+                ]
+            )
         )
     )
     harvester = KnowledgeHarvester(client, AsyncMock())

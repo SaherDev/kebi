@@ -1,4 +1,12 @@
-"""LLM provider factory - resolves configured LLM clients by role."""
+"""LLM provider factory - resolves configured LLM clients by role.
+
+Retry policy: every SDK client here is constructed with `max_retries=0` —
+provider SDKs default to 2 silent internal retries, which multiplied
+under kebi's own retry loops (up to 9 API calls per logical call) and
+never appeared in tracing. Retries are owned by the callers' loops
+(traced per attempt) and by Instructor's validation retry, both budgeted
+from `models.<role>.max_retries` in config/app.yaml.
+"""
 
 import base64
 import functools
@@ -12,10 +20,90 @@ from anthropic.types import MessageParam, TextBlock
 from instructor.core import IncompleteOutputException, InstructorRetryException
 from openai import AsyncStream
 from openai.types.chat import ChatCompletionChunk, ChatCompletionMessageParam
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, ConfigDict, ValidationError
+from tenacity import AsyncRetrying, stop_after_attempt
 
 from kebi.core.config import get_config, get_env
 from kebi.providers.transcription import GroqWhisperClient, TranscriptionProtocol
+
+# --- Result models ---
+
+
+class CompletionResult(BaseModel):
+    """One completion plus the telemetry the caller's span needs.
+
+    `usage` is Langfuse-shaped: `input` counts uncached input tokens,
+    cached tokens ride `cache_read_input_tokens` /
+    `cache_creation_input_tokens`, `output`/`total` as usual. `None`
+    when the SDK surfaced no usage object.
+    """
+
+    text: str
+    usage: dict[str, int] | None = None
+
+
+class InstructorExtraction(BaseModel):
+    """Structured extraction plus usage + attempt count for the span.
+
+    `data` is the caller's `response_model` instance (callers cast to
+    the concrete type, as before). `attempts` is how many LLM calls
+    Instructor's validation retry actually made — >1 means paid retries
+    that would otherwise be invisible.
+    """
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    data: BaseModel
+    usage: dict[str, int] | None = None
+    attempts: int | None = None
+
+
+def _openai_usage(usage: Any) -> dict[str, int] | None:
+    """Langfuse-shaped usage dict from an OpenAI CompletionUsage.
+
+    OpenAI's `prompt_tokens` includes cached tokens; split them out so
+    `input` is uncached-only (matching the pricing convention in
+    `LLMModelPricing`).
+    """
+    if usage is None:
+        return None
+    prompt = int(usage.prompt_tokens or 0)
+    output = int(usage.completion_tokens or 0)
+    details = getattr(usage, "prompt_tokens_details", None)
+    cached = int(getattr(details, "cached_tokens", 0) or 0)
+    result = {
+        "input": prompt - cached,
+        "output": output,
+        "total": int(usage.total_tokens or (prompt + output)),
+    }
+    if cached:
+        result["cache_read_input_tokens"] = cached
+    return result
+
+
+def _anthropic_usage(usage: Any) -> dict[str, int] | None:
+    """Langfuse-shaped usage dict from an Anthropic Usage object.
+
+    Anthropic's `input_tokens` already excludes cache reads/writes —
+    they arrive as separate fields, forwarded under the same keys.
+    """
+    if usage is None:
+        return None
+    input_t = int(usage.input_tokens or 0)
+    output_t = int(usage.output_tokens or 0)
+    cache_read = int(getattr(usage, "cache_read_input_tokens", 0) or 0)
+    cache_write = int(getattr(usage, "cache_creation_input_tokens", 0) or 0)
+    result = {
+        "input": input_t,
+        "output": output_t,
+        "total": input_t + output_t + cache_read + cache_write,
+    }
+    if cache_read:
+        result["cache_read_input_tokens"] = cache_read
+    if cache_write:
+        result["cache_creation_input_tokens"] = cache_write
+    return result
+
 
 # --- Protocols ---
 
@@ -55,7 +143,7 @@ class OpenAIVisionExtractor:
 
     def __init__(self, model: str, api_key: str | None = None) -> None:
         self._model = model
-        self._client = openai.AsyncOpenAI(api_key=api_key)
+        self._client = openai.AsyncOpenAI(api_key=api_key, max_retries=0)
 
     @property
     def model(self) -> str:
@@ -133,11 +221,15 @@ class AnthropicLLMClient:
         max_tokens: int = 1024,
         temperature: float = 1.0,
         api_key: str | None = None,
+        timeout_seconds: float | None = None,
     ) -> None:
         self._model = model
         self._max_tokens = max_tokens
         self._temperature = temperature
-        self._client = anthropic.AsyncAnthropic(api_key=api_key)
+        client_kwargs: dict[str, Any] = {"api_key": api_key, "max_retries": 0}
+        if timeout_seconds is not None:
+            client_kwargs["timeout"] = timeout_seconds
+        self._client = anthropic.AsyncAnthropic(**client_kwargs)
 
     @staticmethod
     def _split_messages(
@@ -158,7 +250,7 @@ class AnthropicLLMClient:
                 )
         return system, user_messages
 
-    async def complete(self, messages: list[dict[str, str]]) -> str:
+    async def complete(self, messages: list[dict[str, str]]) -> CompletionResult:
         system, typed = self._split_messages(messages)
         response = await self._client.messages.create(
             model=self._model,
@@ -170,7 +262,7 @@ class AnthropicLLMClient:
         block = response.content[0]
         if not isinstance(block, TextBlock):
             raise ValueError(f"Unexpected content block type: {type(block)}")
-        return block.text
+        return CompletionResult(text=block.text, usage=_anthropic_usage(response.usage))
 
     async def stream(self, messages: list[dict[str, str]]) -> AsyncGenerator[str, None]:
         system, typed = self._split_messages(messages)
@@ -195,13 +287,21 @@ class OpenAILLMClient:
         temperature: float = 1.0,
         api_key: str | None = None,
         base_url: str | None = None,
+        timeout_seconds: float | None = None,
     ) -> None:
         self._model = model
         self._max_tokens = max_tokens
         self._temperature = temperature
-        self._client = openai.AsyncOpenAI(api_key=api_key, base_url=base_url)
+        client_kwargs: dict[str, Any] = {
+            "api_key": api_key,
+            "base_url": base_url,
+            "max_retries": 0,
+        }
+        if timeout_seconds is not None:
+            client_kwargs["timeout"] = timeout_seconds
+        self._client = openai.AsyncOpenAI(**client_kwargs)
 
-    async def complete(self, messages: list[dict[str, str]]) -> str:
+    async def complete(self, messages: list[dict[str, str]]) -> CompletionResult:
         typed = cast(list[ChatCompletionMessageParam], messages)
         response = await self._client.chat.completions.create(
             model=self._model,
@@ -209,7 +309,10 @@ class OpenAILLMClient:
             temperature=self._temperature,
             messages=typed,
         )
-        return response.choices[0].message.content or ""
+        return CompletionResult(
+            text=response.choices[0].message.content or "",
+            usage=_openai_usage(response.usage),
+        )
 
     async def stream(self, messages: list[dict[str, str]]) -> AsyncGenerator[str, None]:
         typed = cast(list[ChatCompletionMessageParam], messages)
@@ -237,6 +340,8 @@ class InstructorClient:
         api_key: str | None = None,
         base_url: str | None = None,
         mode: instructor.Mode = instructor.Mode.TOOLS,
+        max_retries: int = 2,
+        timeout_seconds: float | None = None,
     ) -> None:
         """Initialize Instructor client with OpenAI backend.
 
@@ -246,45 +351,72 @@ class InstructorClient:
             base_url: Override base URL (e.g., for Ollama's OpenAI-compatible endpoint)
             mode: Instructor extraction mode. Use Mode.JSON for models that don't
                   support tool calls (e.g., Ollama local models).
+            max_retries: Validation retries after the first attempt
+                (`models.<role>.max_retries`). The SDK's own transport
+                retries are disabled — Instructor's loop is the only one.
+            timeout_seconds: Per-request timeout. None = SDK default.
         """
         self._model = model
-        self._openai_client = openai.AsyncOpenAI(api_key=api_key, base_url=base_url)
+        self._max_attempts = max_retries + 1
+        client_kwargs: dict[str, Any] = {
+            "api_key": api_key,
+            "base_url": base_url,
+            "max_retries": 0,
+        }
+        if timeout_seconds is not None:
+            client_kwargs["timeout"] = timeout_seconds
+        self._openai_client = openai.AsyncOpenAI(**client_kwargs)
         self._client = instructor.from_openai(self._openai_client, mode=mode)
 
     async def extract(
         self,
         response_model: type[BaseModel],
         messages: list[dict[str, str]],
-        max_retries: int = 3,
-    ) -> BaseModel:
+    ) -> InstructorExtraction:
         """Extract structured data using the specified response model.
+
+        Uses `create_with_completion` so the raw completion's token usage
+        reaches the caller's span instead of being discarded, and a
+        per-call tenacity controller so the real attempt count is visible
+        (Instructor's internal retries used to collapse into one span).
 
         Args:
             response_model: Pydantic model for structured output
             messages: Chat messages for the LLM
-            max_retries: Number of retries on Instructor exceptions
 
         Returns:
-            Extracted data as instance of response_model
+            InstructorExtraction — `.data` is the response_model instance,
+            `.usage` / `.attempts` feed the caller's `TracedCall`.
 
         Raises:
             ValidationError: If final output fails schema validation
             RuntimeError: If extraction fails after max retries
         """
+        retrying: AsyncRetrying = AsyncRetrying(
+            stop=stop_after_attempt(self._max_attempts)
+        )
         try:
-            result = await self._client.chat.completions.create(
+            (
+                result,
+                completion,
+            ) = await self._client.chat.completions.create_with_completion(
                 model=self._model,
                 response_model=response_model,
                 messages=cast(list[Any], messages),
-                max_retries=max_retries,
+                max_retries=retrying,
             )
-            return result
         except IncompleteOutputException as e:
             raise RuntimeError(f"Incomplete extraction: {e}") from e
         except InstructorRetryException as e:
             raise RuntimeError(f"Extraction failed after retries: {e}") from e
         except ValidationError:
             raise
+        attempts = retrying.statistics.get("attempt_number")
+        return InstructorExtraction(
+            data=result,
+            usage=_openai_usage(getattr(completion, "usage", None)),
+            attempts=int(attempts) if attempts else None,
+        )
 
 
 # --- Factory ---
@@ -313,12 +445,15 @@ def get_llm(role: str) -> LLMClientProtocol:
     max_tokens = role_config.max_tokens
     temperature = role_config.temperature
 
+    timeout_seconds = role_config.timeout_seconds
+
     if provider == "anthropic":
         return AnthropicLLMClient(
             model=model,
             max_tokens=max_tokens,
             temperature=temperature,
             api_key=secrets.ANTHROPIC_API_KEY,
+            timeout_seconds=timeout_seconds,
         )
 
     if provider == "openai":
@@ -327,6 +462,7 @@ def get_llm(role: str) -> LLMClientProtocol:
             max_tokens=max_tokens,
             temperature=temperature,
             api_key=secrets.OPENAI_API_KEY,
+            timeout_seconds=timeout_seconds,
         )
 
     if provider == "ollama":
@@ -336,6 +472,7 @@ def get_llm(role: str) -> LLMClientProtocol:
             temperature=temperature,
             api_key="ollama",
             base_url=get_config().providers.ollama.base_url,
+            timeout_seconds=timeout_seconds,
         )
 
     if provider == "groq":
@@ -345,6 +482,7 @@ def get_llm(role: str) -> LLMClientProtocol:
             temperature=temperature,
             api_key=secrets.GROQ_API_KEY,
             base_url=get_config().providers.groq.base_url + "/openai/v1",
+            timeout_seconds=timeout_seconds,
         )
 
     raise ValueError(f"Unsupported provider: {provider}")
@@ -378,6 +516,10 @@ def get_langchain_chat_model(role: str) -> Any:
     max_tokens = role_config.max_tokens
     temperature = role_config.temperature
 
+    # SDK-internal retries off: the agent graph's `_invoke_llm_with_retry`
+    # owns the retry budget and traces each attempt; LangChain's default
+    # (2 silent SDK retries) multiplied under it — up to 9 API calls per
+    # node invocation with only 3 visible spans.
     if provider == "anthropic":
         from langchain_anthropic import ChatAnthropic
 
@@ -386,7 +528,8 @@ def get_langchain_chat_model(role: str) -> Any:
             max_tokens_to_sample=max_tokens,
             temperature=temperature,
             api_key=secrets.ANTHROPIC_API_KEY,
-            timeout=None,
+            timeout=role_config.timeout_seconds,
+            max_retries=0,
             stop=None,
         )
 
@@ -398,6 +541,8 @@ def get_langchain_chat_model(role: str) -> Any:
             max_tokens=max_tokens,
             temperature=temperature,
             api_key=secrets.OPENAI_API_KEY,
+            timeout=role_config.timeout_seconds,
+            max_retries=0,
         )
 
     raise ValueError(
@@ -441,11 +586,15 @@ def get_instructor_client(role: str) -> InstructorClient:
             base_url=get_config().providers.ollama.base_url,
             api_key="ollama",
             mode=instructor.Mode.JSON,
+            max_retries=role_config.max_retries,
+            timeout_seconds=role_config.timeout_seconds,
         )
 
     return InstructorClient(
         model=role_config.model,
         api_key=get_env().OPENAI_API_KEY,
+        max_retries=role_config.max_retries,
+        timeout_seconds=role_config.timeout_seconds,
     )
 
 

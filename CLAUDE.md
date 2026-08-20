@@ -45,8 +45,8 @@ See `.claude/workflows.md` for the 5-step workflow, constitution check, model as
 ## Notes
 
 - Git comment char is `;` not `#` (repo git config) — branch/commit/merge conventions in @.claude/rules/git.md.
-- LLM responses are cached in Redis — changing prompt templates or model config needs cache invalidation.
-- Every LLM/embedding call gets the Langfuse callback handler — missing traces usually means it wasn't attached.
+- The only LLM *output* cached in Redis is the home suggestion (`home:v1:` bucket key); other Redis caches skip work upstream of the LLM (extraction results by URL, web-search results, query embeddings, place payloads) — changing the home prompt or model needs that cache bumped (ADR-172).
+- Tracing is manual spans (`traced_call` / `feature_span` in `core/agent/_trace_context.py`), not a LangChain callback handler — a new LLM call site must open its own span and stamp `t.usage`, or it's invisible in Langfuse (ADR-172).
 - Chat's render contract is text + `kebi://{venue|area}/{key}` links only (ADR-136) — links are attached server-side after the agent writes, so the agent must name places in plain prose, never markdown.
 - `/v1/chat` needs `local_time` from the client for schedule-aware answers (ADR-138) — without it kebi won't assert what day it is, so "tonight is X's night" never fires.
 - Place-tool filter vocabulary lives in the tool arg descriptions (`_search_args.py`), not the agent prompt (ADR-137) — don't move it back.

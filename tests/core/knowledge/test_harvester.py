@@ -10,6 +10,7 @@ from kebi.core.knowledge.harvester import (
     _HarvesterResponse,
 )
 from kebi.core.knowledge.schemas import HarvestContent, HarvestPlace, ResolvedGeo
+from kebi.providers.llm import InstructorExtraction
 from tests.geo_fakes import FakeGeoRegistry, make_city, make_country
 
 _PLACE = HarvestPlace(
@@ -27,7 +28,9 @@ def _harvester(
     claims: list[_HarvestedClaim], registry: FakeGeoRegistry | None = None
 ) -> KnowledgeHarvester:
     client = AsyncMock()
-    client.extract = AsyncMock(return_value=_HarvesterResponse(claims=claims))
+    client.extract = AsyncMock(
+        return_value=InstructorExtraction(data=_HarvesterResponse(claims=claims))
+    )
     return KnowledgeHarvester(client, registry or FakeGeoRegistry())
 
 

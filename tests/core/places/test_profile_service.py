@@ -23,6 +23,7 @@ from kebi.core.places.profile_service import (
     needs_profile,
 )
 from kebi.core.places.tags import TagType
+from kebi.providers.llm import InstructorExtraction
 
 
 class _FakeCache:
@@ -80,7 +81,11 @@ def _service(
     )
     extract = AsyncMock(
         side_effect=response if isinstance(response, Exception) else None,
-        return_value=None if isinstance(response, Exception) else response,
+        return_value=(
+            None
+            if isinstance(response, Exception)
+            else InstructorExtraction(data=response)
+        ),
     )
     client = AsyncMock(extract=extract)
 

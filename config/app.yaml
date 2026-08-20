@@ -699,38 +699,71 @@ user_intents:
 # Pricing Configuration (ADR-092)
 # Reconcile monthly against invoices per docs/runbooks/cost-reconciliation.md.
 # Each provider carries its own `verified_on` date so reconciliation can
-# update one section without re-touching the others. Source-driven cost:
-# token-priced LLMs (gpt-4o, gpt-4o-mini, sonnet-4-6) are priced by Langfuse's
-# catalog from model + token count — `llm:` entries are documentation /
-# reconciliation only and code does NOT read them. `embeddings:`,
-# `transcription:`, and `external:` are read at the call site.
+# update one section without re-touching the others. Every section is read
+# by code: `llm:` is keyed by MODEL NAME (exact, or a prefix of a
+# date-suffixed model id) and prices the `cost_usd` stamped on LLM spans;
+# Langfuse's catalog is the reconciliation cross-check (ADR-092).
+# `embeddings:`, `transcription:`, and `external:` price providers
+# Langfuse cannot.
 # ---------------------------------------------------------------------------
 pricing:
   currency: USD
   llm:
-    # OpenAI — verified 2026-05-24 — source: pricepertoken.com (live aggregator)
-    gpt_4o:
+    # OpenAI — verified 2026-08-20 — source: developers.openai.com/api/docs
+    gpt-4o:
       input_per_1m: 2.50
       cached_input_per_1m: 1.25
       output_per_1m: 10.00
-    gpt_4o_mini:
+    gpt-4o-mini:
       input_per_1m: 0.15
       cached_input_per_1m: 0.075
       output_per_1m: 0.60
-    # Anthropic — verified 2026-05-24 — source: platform.claude.com/docs/en/about-claude/pricing
-    sonnet_4_6:
+    # Candidate (benchmark round 1) — GPT-5.6 family, GA 2026-07-09.
+    gpt-5.6-luna:
+      input_per_1m: 0.20
+      cached_input_per_1m: 0.02
+      output_per_1m: 1.20
+    gpt-5.6-terra:
+      input_per_1m: 2.00
+      cached_input_per_1m: 0.20
+      output_per_1m: 12.00
+    # Anthropic — verified 2026-08-20 — source: platform.claude.com/docs/en/about-claude/pricing
+    claude-sonnet-4-6:
       input_per_1m: 3.00
       cache_read_per_1m: 0.30
       cache_write_5m_per_1m: 3.75
       cache_write_1h_per_1m: 6.00
       output_per_1m: 15.00
-    # Anthropic Haiku 4.5 — used by location_resolver and as orchestrator alternative.
-    haiku_4_5:
+    # Prefix of claude-haiku-4-5-20251001 — used by location_resolver and
+    # as the default orchestrator (ADR-100).
+    claude-haiku-4-5:
       input_per_1m: 1.00
       cache_read_per_1m: 0.10
       cache_write_5m_per_1m: 1.25
       cache_write_1h_per_1m: 2.00
       output_per_1m: 5.00
+    # Candidate — Sonnet 5 ($2/$10 made standard; the announced Sep 2026
+    # increase to $3/$15 was cancelled).
+    claude-sonnet-5:
+      input_per_1m: 2.00
+      cache_read_per_1m: 0.20
+      cache_write_5m_per_1m: 2.50
+      cache_write_1h_per_1m: 4.00
+      output_per_1m: 10.00
+    # Candidates via OpenRouter (model ids are provider-prefixed there) —
+    # verified 2026-08-20 — sources: openrouter.ai model pages.
+    # Gemini 3.7 Flash is Google's intro rate through 2026-12-31; doubles
+    # to 1.50/7.50 on 2027-01-01 (calendar note in the reconciliation doc).
+    google/gemini-3.7-flash:
+      input_per_1m: 0.75
+      cached_input_per_1m: 0.075
+      output_per_1m: 3.75
+    qwen/qwen3.5-flash:
+      input_per_1m: 0.065
+      output_per_1m: 0.26
+    qwen/qwen3.5-plus:
+      input_per_1m: 0.40
+      output_per_1m: 2.40
   embeddings:
     # Voyage — verified 2026-05-24 — source: docs.voyageai.com/docs/pricing
     voyage_4_lite:

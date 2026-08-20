@@ -17,6 +17,7 @@ from kebi.core.knowledge.web_harvester import (
     is_entry_rule,
 )
 from kebi.core.web.models import WebFinding, WebSearchResult
+from kebi.providers.llm import InstructorExtraction
 from tests.geo_fakes import FakeGeoRegistry, make_area, make_city, make_country
 
 _BADUNG = make_city("id", "Badung")
@@ -54,7 +55,9 @@ def _harvester(
     claims: list[_WebClaim], registry: FakeGeoRegistry | None = None
 ) -> WebKnowledgeHarvester:
     client = MagicMock()
-    client.extract = AsyncMock(return_value=_WebHarvestResponse(claims=claims))
+    client.extract = AsyncMock(
+        return_value=InstructorExtraction(data=_WebHarvestResponse(claims=claims))
+    )
     return WebKnowledgeHarvester(client, registry or FakeGeoRegistry())
 
 
