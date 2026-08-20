@@ -7,7 +7,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from kebi.core.areas.keys import display_from_slug, encode_area_id, parent_keys
+from kebi.core.areas.keys import encode_area_id
 from kebi.core.knowledge.entity_search_service import AreaHit, EntitySearchResults
 from kebi.core.knowledge.schemas import KnowledgeClaim, WrittenClaim
 from kebi.core.places.models import PlaceCore
@@ -191,16 +191,15 @@ class EntityResultView(BaseModel):
 
     @classmethod
     def from_area(cls, hit: AreaHit) -> EntityResultView:
-        parents = [
-            display_from_slug(key.rsplit("/", 1)[-1])
-            for key in reversed(parent_keys(hit.geo_key))
-        ]
+        # Context (ancestor names) is composed by the search service from
+        # registry/profile data — an id-key segment has nothing readable
+        # to derive it from here.
         return cls(
             type="area",
             area_id=encode_area_id(hit.geo_key),
             name=hit.name,
             level=hit.level,
-            context=", ".join(parents) or None,
+            context=hit.context,
         )
 
     @classmethod

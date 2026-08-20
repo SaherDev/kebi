@@ -16,21 +16,20 @@ Stages:
    so its verified country code keys the entity with no geocode call. If the
    named area does NOT match, the working location is *not* used — that
    refusal is what closes the wrong-entity swap.
-2. **Verified geocode (confidence 0.8)** — resolve the name through the
-   round-trip-verified `EntityGeoResolver`, constrained to a country: the
-   agent-passed country first (the orchestrator usually knows which country
-   the asked-about city is in — a stale working location's country alone
-   would wrongly fail a cross-country question), then the working location's.
+2. **Verified registry resolve (confidence 0.8)** — resolve the name
+   through the geo registry (alias hit, or a round-trip-verified mint),
+   constrained to a country: the agent-passed country first (the
+   orchestrator usually knows which country the asked-about city is in — a
+   stale working location's country alone would wrongly fail a
+   cross-country question), then the working location's.
 3. **Clarify** — no country context at all (`ambiguous`) or a name that
    won't verify (`unresolved`): a `ResolvedEntity` with
    `needs_clarification=True` and a plain-language reason. Never a key for a
    different entity.
 
-A named neighborhood rides its *verified city's* key
-(`build_geo_key(cc, city, neighborhood)`) without its own verification —
-safe on the read side: an unknown neighborhood slug reads nothing (write-side
-keys were verified when stored, ADR-126), and the verified city/country
-ancestors still answer.
+A named neighborhood that the registry can't verify degrades the read to
+its verified city's key — the city/country ancestors still answer, and no
+key is ever minted for an unverified name.
 """
 
 from __future__ import annotations
@@ -41,11 +40,11 @@ from typing import TYPE_CHECKING, Literal
 
 from pydantic import BaseModel, ConfigDict
 
-from kebi.core.knowledge.geo_resolve import EntityGeoResolver, slugs_match
-from kebi.core.knowledge.schemas import EntityType, build_geo_key
+from kebi.core.knowledge.schemas import EntityType, slugs_match
 
 if TYPE_CHECKING:
     from kebi.core.agent.location import WorkingLocation
+    from kebi.core.geo.protocols import GeoRegistryProtocol
 
 logger = logging.getLogger(__name__)
 
@@ -83,8 +82,10 @@ def _clarify(
 class ResearchEntityResolver:
     """Resolve the asked-about area to a verified entity key, or refuse."""
 
-    def __init__(self, geo: EntityGeoResolver, *, confidence_min: float = 0.5) -> None:
-        self._geo = geo
+    def __init__(
+        self, geo_registry: GeoRegistryProtocol, *, confidence_min: float = 0.5
+    ) -> None:
+        self._registry = geo_registry
         self._confidence_min = confidence_min
 
     async def resolve(
@@ -131,7 +132,7 @@ class ResearchEntityResolver:
                 f"could not verify the current location ({wl.city})",
                 empty="unresolved",
             )
-        return self._geo_entity(code, wl.city, None, confidence=_EXACT_CONFIDENCE)
+        return await self._geo_entity(code, wl.city, None, confidence=_EXACT_CONFIDENCE)
 
     async def _resolve_country_scope(
         self, country: str, wl: WorkingLocation | None
@@ -140,18 +141,16 @@ class ResearchEntityResolver:
         if wl is not None and slugs_match(country, wl.country):
             code = await self._working_country_code(wl)
             if code is not None:
-                return self._country_entity(
-                    code, wl.country, confidence=_EXACT_CONFIDENCE
-                )
-        # Stage 2 — verified geocode by name (or a literal alpha-2 code).
+                return _country_entity(code, wl.country, confidence=_EXACT_CONFIDENCE)
+        # Stage 2 — verified registry resolve by name (or a literal code).
         if _ALPHA2_RE.match(country):
-            return self._country_entity(
+            return _country_entity(
                 country.lower(), country.upper(), confidence=_GEOCODED_CONFIDENCE
             )
-        geo = await self._geo.resolve_country(country)
-        if geo is not None and geo.country_code:
-            return self._country_entity(
-                geo.country_code, country, confidence=_GEOCODED_CONFIDENCE
+        row = await self._registry.resolve_country(country)
+        if row is not None:
+            return _country_entity(
+                row.country_code, row.display_name, confidence=_GEOCODED_CONFIDENCE
             )
         return _clarify(
             f"could not verify a country called '{country}'", empty="unresolved"
@@ -182,25 +181,22 @@ class ResearchEntityResolver:
         ):
             code = await self._working_country_code(wl)
             if code is not None:
-                return self._geo_entity(
+                return await self._geo_entity(
                     code, wl.city, neighborhood, confidence=_EXACT_CONFIDENCE
                 )
 
-        # Stage 2 — verified geocode; agent-passed country constrains first.
+        # Stage 2 — verified registry resolve; agent-passed country first.
         codes = await self._candidate_country_codes(country, wl)
         if not codes:
             return _clarify(
                 f"'{city_name}' — which country is that in?", empty="ambiguous"
             )
         for code in codes:
-            geo = await self._geo.resolve_city(city_name, code)
-            if geo is not None and geo.country_code and geo.city:
-                return self._geo_entity(
-                    geo.country_code,
-                    geo.city,
-                    neighborhood,
-                    confidence=_GEOCODED_CONFIDENCE,
-                )
+            entity = await self._geo_entity(
+                code, city_name, neighborhood, confidence=_GEOCODED_CONFIDENCE
+            )
+            if not entity.needs_clarification:
+                return entity
         return _clarify(
             f"could not verify a city called '{city_name}'"
             + (f" in {country}" if country else ""),
@@ -215,8 +211,8 @@ class ResearchEntityResolver:
         checkpointed before that field existed."""
         if wl.country_code:
             return wl.country_code
-        geo = await self._geo.resolve_country(wl.country)
-        return geo.country_code if geo is not None else None
+        row = await self._registry.resolve_country(wl.country)
+        return row.country_code if row is not None else None
 
     async def _candidate_country_codes(
         self, country: str | None, wl: WorkingLocation | None
@@ -228,9 +224,9 @@ class ResearchEntityResolver:
             if _ALPHA2_RE.match(country):
                 codes.append(country.lower())
             else:
-                geo = await self._geo.resolve_country(country)
-                if geo is not None and geo.country_code:
-                    codes.append(geo.country_code)
+                row = await self._registry.resolve_country(country)
+                if row is not None:
+                    codes.append(row.country_code)
         if wl is not None:
             code = await self._working_country_code(wl)
             if code and code not in codes:
@@ -251,7 +247,7 @@ class ResearchEntityResolver:
             and country.lower() == wl.country_code
         )
 
-    def _geo_entity(
+    async def _geo_entity(
         self,
         country_code: str,
         city: str,
@@ -259,32 +255,44 @@ class ResearchEntityResolver:
         *,
         confidence: float,
     ) -> ResolvedEntity:
-        try:
-            key = build_geo_key(country_code, city, neighborhood)
-        except ValueError:
+        """Registry-resolved entity for a (city, neighborhood) ask.
+
+        `mint=True`: research meeting a new area is the same first meeting
+        a save is, and the mint's round-trip verification *is* this stage's
+        verified-geocode. A city that won't verify clarifies; a neighborhood
+        that won't verify degrades to the verified city's key — ancestors
+        still answer, and no key is invented for an unverified name.
+        """
+        resolved = await self._registry.key_for_location(
+            country_code, city, neighborhood, mint=True
+        )
+        if resolved is None or resolved.city is None:
             return _clarify(
                 f"could not build a verified key for {neighborhood or city}",
                 empty="unresolved",
             )
+        if neighborhood and resolved.area is not None:
+            display = await self._registry.display_row(resolved.area)
+            return ResolvedEntity(
+                entity_key=display.geo_key,
+                entity_type="neighborhood",
+                entity_name=display.display_name,
+                confidence=confidence,
+            )
         return ResolvedEntity(
-            entity_key=key,
-            entity_type="neighborhood" if neighborhood else "city",
-            entity_name=neighborhood or city,
+            entity_key=resolved.city.geo_key,
+            entity_type="city",
+            entity_name=resolved.city.display_name,
             confidence=confidence,
         )
 
-    def _country_entity(
-        self, country_code: str, name: str, *, confidence: float
-    ) -> ResolvedEntity:
-        try:
-            key = build_geo_key(country_code)
-        except ValueError:
-            return _clarify(
-                f"could not build a verified key for {name}", empty="unresolved"
-            )
-        return ResolvedEntity(
-            entity_key=key,
-            entity_type="country",
-            entity_name=name,
-            confidence=confidence,
-        )
+
+def _country_entity(
+    country_code: str, name: str, *, confidence: float
+) -> ResolvedEntity:
+    return ResolvedEntity(
+        entity_key=country_code.strip().lower(),
+        entity_type="country",
+        entity_name=name,
+        confidence=confidence,
+    )

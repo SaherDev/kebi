@@ -32,19 +32,19 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from kebi.core.agent._trace_context import traced_call
 from kebi.core.config import get_prompt
-from kebi.core.knowledge.geo_resolve import EntityGeoResolver, slugs_match
 from kebi.core.knowledge.schemas import (
     EntityType,
     ResolvedGeo,
     ReviewStatus,
     SourceType,
     StructuredClaim,
+    slugs_match,
 )
 from kebi.core.knowledge.tags import render_claim_tag_vocabulary
 from kebi.core.web.models import WebSearchResult
 
 if TYPE_CHECKING:
-    from kebi.core.places.nominatim_geocoding_client import NominatimGeocodingClient
+    from kebi.core.geo.protocols import GeoRegistryProtocol
     from kebi.providers.llm import InstructorClient
 
 logger = logging.getLogger(__name__)
@@ -142,13 +142,13 @@ class WebKnowledgeHarvester:
     def __init__(
         self,
         instructor_client: InstructorClient,
-        geocoder: NominatimGeocodingClient,
+        geo_registry: GeoRegistryProtocol,
         *,
         confidence_floor: float = 0.25,
         review_status: ReviewStatus = "approved",
     ) -> None:
         self._client = instructor_client
-        self._geocoder = geocoder
+        self._registry = geo_registry
         self.confidence_floor = confidence_floor
         self.review_status = review_status
 
@@ -195,7 +195,6 @@ class WebKnowledgeHarvester:
         self, response: _WebHarvestResponse, result: WebSearchResult
     ) -> list[StructuredClaim]:
         """Key each claim to the entity it names, verified (ADR-126)."""
-        resolver = EntityGeoResolver(self._geocoder)
         country_code = result.country_code
         resolved: list[StructuredClaim] = []
         for raw in response.claims:
@@ -212,7 +211,7 @@ class WebKnowledgeHarvester:
                     "web_claim_dropped_entry_rule", extra={"entity": raw.entity_name}
                 )
                 continue
-            entity = await self._resolve_entity(raw, result, resolver, country_code)
+            entity = await self._resolve_entity(raw, result, country_code)
             if entity is None:
                 logger.debug(
                     "web_claim_dropped_unresolvable",
@@ -236,7 +235,20 @@ class WebKnowledgeHarvester:
         self,
         raw: _WebClaim,
         result: WebSearchResult,
-        resolver: EntityGeoResolver,
+        country_code: str | None,
+    ) -> tuple[EntityType, ResolvedGeo] | None:
+        try:
+            return await self._resolve_entity_inner(raw, result, country_code)
+        except Exception:
+            # A registry failure (DB down, not a lookup miss) drops this one
+            # claim rather than failing the whole harvest.
+            logger.warning("web_harvest_geo_resolve_failed", exc_info=True)
+            return None
+
+    async def _resolve_entity_inner(
+        self,
+        raw: _WebClaim,
+        result: WebSearchResult,
         country_code: str | None,
     ) -> tuple[EntityType, ResolvedGeo] | None:
         """The claim's real scope and key, or None if it cannot be verified.
@@ -254,8 +266,10 @@ class WebKnowledgeHarvester:
         model's label only decides what to do when neither matches.
         """
         if raw.scope == "country":
-            geo = await resolver.resolve_country(raw.entity_name)
-            return ("country", geo) if geo else None
+            row = await self._registry.resolve_country(raw.entity_name)
+            if row is None:
+                return None
+            return ("country", ResolvedGeo(country_code=row.country_code))
         if not country_code:
             return None
         if slugs_match(raw.entity_name, result.neighborhood):
@@ -273,8 +287,32 @@ class WebKnowledgeHarvester:
                 ResolvedGeo(country_code=country_code, city=result.city),
             )
         if raw.scope == "neighborhood":
-            # No geocoder path: a bare neighbourhood name free-texts badly
-            # (ADR-126), so it is keyed only when it IS the turn's own area.
+            # A neighbourhood naming a different area than the turn's own
+            # resolves through the registry inside the turn's city — verified
+            # or dropped, never free-texted (ADR-126).
+            if not result.city:
+                return None
+            resolved = await self._registry.key_for_location(
+                country_code, result.city, raw.entity_name, mint=True
+            )
+            if resolved is None or resolved.area is None:
+                return None
+            return (
+                "neighborhood",
+                ResolvedGeo(
+                    country_code=country_code,
+                    city=result.city,
+                    neighborhood=resolved.area.name,
+                ),
+            )
+        resolved = await self._registry.key_for_location(
+            country_code, raw.entity_name, None, mint=True
+        )
+        if resolved is None or resolved.city is None:
             return None
-        geo = await resolver.resolve_city(raw.entity_name, country_code)
-        return ("city", geo) if geo else None
+        return (
+            "city",
+            ResolvedGeo(
+                country_code=resolved.city.country_code, city=resolved.city.name
+            ),
+        )

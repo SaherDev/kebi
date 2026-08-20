@@ -6,8 +6,16 @@ from dataclasses import dataclass, field
 
 from kebi.core.knowledge.schemas import ResolvedGeo, StructuredClaim
 from kebi.core.knowledge.writer import KnowledgeWriter
+from tests.geo_fakes import FakeGeoRegistry, make_area, make_city
 
 _UAE = ResolvedGeo(country_code="ae", city="Dubai", neighborhood="Jumeirah")
+
+_DUBAI = make_city("ae", "Dubai")
+_JUMEIRAH = make_area(_DUBAI, "Jumeirah")
+
+
+def _registry() -> FakeGeoRegistry:
+    return FakeGeoRegistry(_DUBAI, _JUMEIRAH)
 
 
 @dataclass
@@ -63,7 +71,7 @@ def _claim(scope, *, geo=_UAE, place_ref=None, tags=None, confidence=0.5, name="
 
 
 async def _persist(repo, claims, *, floor=0.35, source_type="shared_content"):
-    return await KnowledgeWriter(repo).persist(
+    return await KnowledgeWriter(repo, _registry()).persist(
         claims,
         source_type=source_type,
         source_ref="ref",
@@ -84,7 +92,7 @@ async def test_builds_place_and_geo_keys() -> None:
         ],
     )
     keys = [r["entity_key"] for r in repo.saved]
-    assert keys == ["place:p1", "ae", "ae/dubai", "ae/dubai/jumeirah"]
+    assert keys == ["place:p1", "ae", _DUBAI.geo_key, _JUMEIRAH.geo_key]
     assert len(written) == 4
     # Each written claim carries the id its row was created with.
     assert all(w.id for w in written)
@@ -115,6 +123,25 @@ async def test_drops_city_claim_missing_city() -> None:
     repo = _FakeRepo()
     geo = ResolvedGeo(country_code="ae", city=None)
     assert await _persist(repo, [_claim("city", geo=geo)]) == []
+
+
+async def test_drops_city_claim_the_registry_cannot_verify() -> None:
+    """A claim about a city the registry never minted is dropped, not keyed
+    to the bare country — the old 'unkeyable claims are skipped' rule, now
+    enforced by the registry resolving shallower than the claim's scope."""
+    repo = _FakeRepo()
+    geo = ResolvedGeo(country_code="ae", city="Atlantis")
+    assert await _persist(repo, [_claim("city", geo=geo)]) == []
+    assert repo.saved == []
+
+
+async def test_drops_neighborhood_claim_the_registry_cannot_verify() -> None:
+    """Same rule one level down: a verified city with an unverified area
+    resolves to the city key — shallower than the claim's scope, so dropped."""
+    repo = _FakeRepo()
+    geo = ResolvedGeo(country_code="ae", city="Dubai", neighborhood="Nowhere")
+    assert await _persist(repo, [_claim("neighborhood", geo=geo)]) == []
+    assert repo.saved == []
 
 
 async def test_drops_accessibility_claim() -> None:
@@ -176,7 +203,7 @@ async def test_dedup_only_counts_new_rows() -> None:
 
 async def test_review_status_defaults_approved_and_passes_through() -> None:
     repo = _FakeRepo()
-    await KnowledgeWriter(repo).persist(
+    await KnowledgeWriter(repo, _registry()).persist(
         [_claim("country")],
         source_type="shared_content",
         source_ref="r",
@@ -188,7 +215,7 @@ async def test_review_status_defaults_approved_and_passes_through() -> None:
 
 async def test_review_status_pending_passes_through() -> None:
     repo = _FakeRepo()
-    await KnowledgeWriter(repo).persist(
+    await KnowledgeWriter(repo, _registry()).persist(
         [_claim("country")],
         source_type="shared_content",
         source_ref="r",

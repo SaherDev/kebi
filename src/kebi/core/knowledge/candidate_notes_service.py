@@ -24,7 +24,6 @@ from typing import TYPE_CHECKING
 from kebi.core.knowledge.research_models import ResearchNote
 from kebi.core.knowledge.schemas import (
     KnowledgeClaim,
-    build_geo_key,
     build_place_key,
     note_source_label,
 )
@@ -32,6 +31,7 @@ from kebi.db.repositories.knowledge_claim_repository import KnowledgeClaimReposi
 
 if TYPE_CHECKING:
     from kebi.core.agent.location import WorkingLocation
+    from kebi.core.geo.protocols import GeoRegistryProtocol
 
 
 def _to_note(claim: KnowledgeClaim) -> ResearchNote:
@@ -72,11 +72,13 @@ class CandidateNotesService:
     def __init__(
         self,
         repo: KnowledgeClaimRepository,
+        geo_registry: GeoRegistryProtocol,
         *,
         per_place_limit: int,
         area_limit: int,
     ) -> None:
         self._repo = repo
+        self._registry = geo_registry
         self._per_place_limit = per_place_limit
         self._area_limit = area_limit
 
@@ -109,16 +111,24 @@ class CandidateNotesService:
         fact ("cash still rules outside the cities") is as usable in an answer
         as a neighborhood one, and the agent, not this service, decides which
         earns a line. Returns empty when the location carries no country code
-        (no code, no canonical key — see `build_geo_key`).
+        (no code, no canonical key).
+
+        Registry resolution is read-only here (`mint=False`): notes are
+        decoration on a retrieval turn, and an area the registry hasn't met
+        simply contributes no notes yet.
         """
         if working is None or not working.country_code:
             return []
         code = working.country_code
         keys = [code]
         if working.city:
-            keys.append(build_geo_key(code, working.city))
-            if working.neighborhood:
-                keys.append(build_geo_key(code, working.city, working.neighborhood))
+            resolved = await self._registry.key_for_location(
+                code, working.city, working.neighborhood or None
+            )
+            if resolved is not None and resolved.city is not None:
+                keys.append(resolved.city.geo_key)
+                if resolved.area is not None:
+                    keys.append(resolved.area.geo_key)
         claims = await self._repo.list_for_entities(
             keys, user_id=user_id, approved_only=True
         )

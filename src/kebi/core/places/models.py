@@ -337,6 +337,12 @@ class PlaceCore(BaseModel):
     # location (Google-derived; wiped by nightly cron after 30 days per ToS)
     location: LocationContext | None = None
 
+    # Canonical area key (geo-registry id-path) — resolved by the upsert
+    # service through the registry before any write, read back verbatim from
+    # the row everywhere else. None when the geography is coarser than a
+    # city (the `elsewhere` bucket) or the registry couldn't verify a unit.
+    geo_key: str | None = None
+
     # timestamps
     created_at: datetime | None = None
     refreshed_at: datetime | None = None

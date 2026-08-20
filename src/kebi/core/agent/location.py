@@ -115,7 +115,7 @@ class ItineraryAnchor(BaseModel):
     derived by the resolve node, never transcribed by the resolver LLM —
     the same rule as `CorridorTarget`. The area names + country code ride
     along from the same geocode so per-stop area knowledge resolves to the
-    stop's own city, not the trip's first one (`build_geo_key` needs the
+    stop's own city, not the trip's first one (geo-key resolution needs the
     code; no code means that stop simply contributes no area notes).
     """
 
@@ -157,7 +157,7 @@ class WorkingLocation(BaseModel):
     neighborhood: str | None = None
     # ISO-3166 alpha-2, lowercased, from the geocoder's address.country_code.
     # `country` above is the display name ("Vietnam"); canonical entity keys
-    # (build_geo_key) need the code. Optional so states checkpointed before
+    # (the geo registry) need the code. Optional so states checkpointed before
     # this field existed still validate; consumers fall back to resolving the
     # display name.
     country_code: str | None = None

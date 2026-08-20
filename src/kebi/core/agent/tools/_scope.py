@@ -119,7 +119,7 @@ def itinerary_segments(working: WorkingLocation) -> list[ItinerarySegment]:
     )
     # Each stop disc carries the stop's OWN area names + country code from
     # its geocode — anything name-keyed downstream (area claims via
-    # `build_geo_key`) must resolve to Hue's knowledge for the Hue stop, not
+    # the geo registry) must resolve to Hue's knowledge for the Hue stop, not
     # the trip's first city. A leg has no area of its own, so it keeps the
     # primary names only for display and nothing name-keyed runs against it.
     segments = [

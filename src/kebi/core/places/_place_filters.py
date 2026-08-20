@@ -33,8 +33,6 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, TSVECTOR
 
-from kebi.core.knowledge.schemas import _slugify
-
 from ._place_utils import escape_like
 from .models import (
     LocationContext,
@@ -65,11 +63,22 @@ _PlacesTable = Table(
     Column("location", JSONB),
     Column("created_at", DateTime(timezone=True)),
     Column("refreshed_at", DateTime(timezone=True)),
-    # Derived on write from `location` — see `geo_key_for_location`.
+    # Resolved on write through the geo registry — see PlaceUpsertService.
     Column("geo_key", String),
     Column("search_vector", TSVECTOR),
 )
 _p = _PlacesTable.c
+
+# Registry rows, referenced by the free-text filter so a search can match an
+# area by the name the library's headings actually use.
+_GeoAreasTable = Table(
+    "geo_areas",
+    _metadata,
+    Column("geo_key", String),
+    Column("name", String),
+    Column("colloquial_name", String),
+)
+_g = _GeoAreasTable.c
 
 _UserPlacesTable = Table(
     "user_places",
@@ -135,15 +144,31 @@ def _free_text_condition(needle: str) -> ColumnElement[bool]:
     pattern = f"%{escape_like(needle)}%"
 
     # The area as the *library* names it, not as the provider spelled it.
-    # A section heading is derived from `geo_key`, and the key is a folded,
-    # transliterated form of the raw location — so a place under the
-    # "Bangkok" heading may store "Krung Thep Maha Nakhon", and one under
-    # "Canggu" may store "Tibubeneng". Matching only the display strings
-    # meant search denied places its own headings were promising: "no
-    # matches for bangkok" directly above a Bangkok section holding ten.
-    # The needle is slugified the same way the key was built, so "hoi an"
-    # and "Hội An" both reach `hoi-an`, and the country prefix is stripped
-    # so a two-letter needle cannot drag in a whole country.
+    # A section heading comes from the geo registry, and a row can sit under
+    # a heading whose name appears nowhere in its stored location — a place
+    # under "Canggu" may store "Tibubeneng". Matching only the display
+    # strings meant search denied places its own headings were promising:
+    # "no matches for bangkok" directly above a Bangkok section holding ten.
+    # So the needle also matches registry rows (official and colloquial
+    # names) whose key contains this place. Prefix containment is spelled
+    # with substr, not LIKE: place-id key segments may contain `_`, which
+    # LIKE would treat as a wildcard.
+    registry_name_match = (
+        _GeoAreasTable.select()
+        .with_only_columns(literal_column("1"))
+        .where(
+            or_(
+                _p.geo_key == _g.geo_key,
+                func.substr(_p.geo_key, 1, func.length(_g.geo_key) + 1)
+                == _g.geo_key + "/",
+            ),
+            or_(
+                _g.name.ilike(pattern, escape="\\"),
+                _g.colloquial_name.ilike(pattern, escape="\\"),
+            ),
+        )
+        .exists()
+    )
     conditions = [
         _p.place_name.ilike(pattern, escape="\\"),
         _jsonb_values_ilike(_p.place_name_aliases, pattern),
@@ -152,13 +177,8 @@ def _free_text_condition(needle: str) -> ColumnElement[bool]:
         _p.location["country"].astext.ilike(pattern, escape="\\"),
         _jsonb_values_ilike(_p.tags, pattern),
         func.array_to_string(_p.categories, " ").ilike(pattern, escape="\\"),
+        registry_name_match,
     ]
-    if slug := _slugify(needle):
-        conditions.append(
-            func.regexp_replace(_p.geo_key, "^[a-z]{2}/", "").ilike(
-                f"%{escape_like(slug)}%", escape="\\"
-            )
-        )
     return or_(*conditions)
 
 

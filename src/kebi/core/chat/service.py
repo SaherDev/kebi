@@ -20,6 +20,7 @@ from kebi.core.agent.entity_links import (
     linkify,
     normalize_voice,
     turn_recommendation_id,
+    working_location_entity_pairs,
 )
 from kebi.core.agent.invocation import build_turn_payload
 from kebi.core.agent.messages import extract_text_content
@@ -31,6 +32,7 @@ if TYPE_CHECKING:
     from kebi.core.chat.entity_icons import EntityIconRefresher
     from kebi.core.config import AppConfig
     from kebi.core.events.dispatcher import EventDispatcherProtocol
+    from kebi.core.geo.protocols import GeoRegistryProtocol
     from kebi.core.memory.service import UserMemoryService
     from kebi.core.taste.service import TasteModelService
 
@@ -87,6 +89,7 @@ class ChatService:
         config: AppConfig,
         agent_graph: Any,
         icon_refresher: EntityIconRefresher | None = None,
+        geo_registry: GeoRegistryProtocol | None = None,
     ) -> None:
         self._dispatcher = event_dispatcher
         self._memory = memory_service
@@ -94,6 +97,20 @@ class ChatService:
         self._config = config
         self._agent_graph = agent_graph
         self._icon_refresher = icon_refresher
+        self._geo_registry = geo_registry
+
+    async def working_location_pairs(
+        self, working_location: dict[str, Any] | None
+    ) -> list[Any]:
+        """Registry-resolved area entities for the turn's working location.
+
+        Public because the SSE route shares it — both chat paths must link
+        the same areas the same way. A service built without a registry
+        (tests) links tool entities only.
+        """
+        if self._geo_registry is None:
+            return []
+        return await working_location_entity_pairs(self._geo_registry, working_location)
 
     async def refresh_entity_icons(self, entities: list[Any]) -> list[Any]:
         """Row-sourced icons for a turn's linked entities (see `entity_icons`).
@@ -232,7 +249,10 @@ class ChatService:
                 # the prose become `kebi://` links the client can resolve.
                 message_text, entities = linkify(
                     normalize_voice(message_text),
-                    build_entity_index(tool_results, working_location),
+                    build_entity_index(
+                        tool_results,
+                        await self.working_location_pairs(working_location),
+                    ),
                 )
                 # Icons come off the stored rows, not the turn (the chip
                 # must match the screen its tap opens) — one batch read

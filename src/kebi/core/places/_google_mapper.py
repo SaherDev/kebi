@@ -11,7 +11,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from kebi.core.knowledge.schemas import strip_admin_unit
+from kebi.core.geo.display import strip_admin_unit
 
 from .models import (
     LocationContext,

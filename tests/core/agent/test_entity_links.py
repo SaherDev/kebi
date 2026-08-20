@@ -14,14 +14,22 @@ from kebi.core.agent.entity_links import (
     linkify,
     normalize_voice,
     turn_recommendation_id,
+    working_location_entity_pairs,
 )
 from kebi.core.areas.keys import encode_area_id
 from kebi.core.web.keys import encode_web_url
+from tests.geo_fakes import FakeGeoRegistry, make_area, make_city
+
+# Geo keys are registry id-paths now; the rows the working location resolves
+# to are seeded here, exactly as the real registry would hold them.
+_BADUNG = make_city("id", "Badung")
+_CANGGU_ROW = make_area(_BADUNG, "Canggu")
+_REGISTRY = FakeGeoRegistry(_BADUNG, _CANGGU_ROW)
 
 # Area URIs carry the geo key encoded as one opaque segment (ADR-153); the
 # raw key stays on the entity's `key` field.
-_CANGGU_URI = f"kebi://area/{encode_area_id('id/badung/canggu')}"
-_BADUNG_URI = f"kebi://area/{encode_area_id('id/badung')}"
+_CANGGU_URI = f"kebi://area/{encode_area_id(_CANGGU_ROW.geo_key)}"
+_BADUNG_URI = f"kebi://area/{encode_area_id(_BADUNG.geo_key)}"
 
 
 def _place_result(
@@ -69,6 +77,11 @@ _CANGGU = {
 }
 
 
+async def _wl_pairs(working_location: Any) -> list[Any]:
+    """Pre-resolved working-location pairs, as the chat routes supply them."""
+    return await working_location_entity_pairs(_REGISTRY, working_location)
+
+
 class TestBuildEntityIndex:
     def test_place_candidates_become_venue_entities(self) -> None:
         index = build_entity_index(
@@ -108,19 +121,19 @@ class TestBuildEntityIndex:
         assert aliases.index("Luigis Hot Pizza") < aliases.index("Luigis")
         assert dict(index)["Luigis"].key == "p1"
 
-    def test_working_location_contributes_area_entities(self) -> None:
-        index = build_entity_index([], _CANGGU)
+    async def test_working_location_contributes_area_entities(self) -> None:
+        index = build_entity_index([], await _wl_pairs(_CANGGU))
         by_alias = dict(index)
         assert by_alias["Canggu"].uri == _CANGGU_URI
         assert by_alias["Badung"].uri == _BADUNG_URI
 
-    def test_working_location_without_country_code_is_not_linkable(self) -> None:
+    async def test_working_location_without_country_code_is_not_linkable(self) -> None:
         # No ISO code, no canonical key — an unkeyed area cannot be tapped.
-        assert build_entity_index([], {**_CANGGU, "country_code": None}) == []
+        assert await _wl_pairs({**_CANGGU, "country_code": None}) == []
 
-    def test_working_location_sentinel_string_is_ignored(self) -> None:
+    async def test_working_location_sentinel_string_is_ignored(self) -> None:
         # First turn can leave the carry-forward sentinel in the state slot.
-        assert build_entity_index([], "__inherit__") == []  # type: ignore[arg-type]
+        assert await _wl_pairs("__inherit__") == []
 
     def test_research_geo_key_becomes_an_area(self) -> None:
         index = build_entity_index(
@@ -129,7 +142,7 @@ class TestBuildEntityIndex:
                     "tool": "research",
                     "payload": {
                         "entity_name": "Canggu",
-                        "entity_key": "id/badung/canggu",
+                        "entity_key": _CANGGU_ROW.geo_key,
                     },
                 }
             ]
@@ -175,7 +188,7 @@ class TestBuildEntityIndex:
         )
         assert dict(index)["Luigis"].icon is None
 
-    def test_area_entities_mint_icon_less_even_when_the_resolver_picked_one(
+    async def test_area_entities_mint_icon_less_even_when_the_resolver_picked_one(
         self,
     ) -> None:
         # Amends ADR-146: per-turn resolver picks never ride entities — a chip
@@ -183,15 +196,17 @@ class TestBuildEntityIndex:
         # stored rows at attach time (EntityIconRefresher). The row is the
         # only picker; here there is no row, so there is no icon.
         index = build_entity_index(
-            [], {**_CANGGU, "city_icon": "🏝️", "neighborhood_icon": "🏄"}
+            [],
+            await _wl_pairs({**_CANGGU, "city_icon": "🏝️", "neighborhood_icon": "🏄"}),
         )
         by_alias = dict(index)
         assert by_alias["Canggu"].icon is None
         assert by_alias["Badung"].icon is None
 
-    def test_a_venue_wins_a_same_named_area(self) -> None:
+    async def test_a_venue_wins_a_same_named_area(self) -> None:
         index = build_entity_index(
-            [_place_result(candidates=[_candidate("p1", "Canggu")])], _CANGGU
+            [_place_result(candidates=[_candidate("p1", "Canggu")])],
+            await _wl_pairs(_CANGGU),
         )
         assert dict(index)["Canggu"].kind == "venue"
 
@@ -243,9 +258,10 @@ class TestLinkify:
         assert text == "Finnsland is elsewhere"
         assert entities == []
 
-    def test_venues_and_areas_link_in_one_pass(self) -> None:
+    async def test_venues_and_areas_link_in_one_pass(self) -> None:
         index = build_entity_index(
-            [_place_result(candidates=[_candidate("p1", "Luigis")])], _CANGGU
+            [_place_result(candidates=[_candidate("p1", "Luigis")])],
+            await _wl_pairs(_CANGGU),
         )
         text, entities = linkify("Luigis is the Monday move in Canggu", index)
         assert text == (
@@ -324,33 +340,35 @@ class TestAreaNameCollisions:
     screen, which costs more trust than no link at all.
     """
 
-    def _index(self) -> list[tuple[str, Any]]:
-        return build_entity_index([], _CANGGU)
+    async def _index(self) -> list[tuple[str, Any]]:
+        return build_entity_index([], await _wl_pairs(_CANGGU))
 
-    def test_an_area_inside_a_street_name_is_not_linked(self) -> None:
-        text, entities = linkify("the nearest is on Jl. Raya Canggu", self._index())
+    async def test_an_area_inside_a_street_name_is_not_linked(self) -> None:
+        text, entities = linkify(
+            "the nearest is on Jl. Raya Canggu", await self._index()
+        )
         assert text == "the nearest is on Jl. Raya Canggu"
         assert entities == []
 
-    def test_an_area_inside_a_shouted_venue_name_is_not_linked(self) -> None:
-        text, _ = linkify("BNI CANGGU is closest", self._index())
+    async def test_an_area_inside_a_shouted_venue_name_is_not_linked(self) -> None:
+        text, _ = linkify("BNI CANGGU is closest", await self._index())
         assert text == "BNI CANGGU is closest"
 
-    def test_an_area_after_a_provider_separator_is_not_linked(self) -> None:
-        text, _ = linkify("Motel Mexicola | Canggu is open", self._index())
+    async def test_an_area_after_a_provider_separator_is_not_linked(self) -> None:
+        text, _ = linkify("Motel Mexicola | Canggu is open", await self._index())
         assert text == "Motel Mexicola | Canggu is open"
 
-    def test_a_real_area_mention_still_links(self) -> None:
-        text, entities = linkify("a good night to be in Canggu", self._index())
+    async def test_a_real_area_mention_still_links(self) -> None:
+        text, entities = linkify("a good night to be in Canggu", await self._index())
         assert text == f"a good night to be in [Canggu]({_CANGGU_URI})"
         assert [e.kind for e in entities] == ["area"]
 
-    def test_an_area_opening_a_sentence_still_links(self) -> None:
-        text, _ = linkify("Canggu is busy tonight", self._index())
+    async def test_an_area_opening_a_sentence_still_links(self) -> None:
+        text, _ = linkify("Canggu is busy tonight", await self._index())
         assert text.startswith(f"[Canggu]({_CANGGU_URI})")
 
-    def test_an_area_after_a_sentence_end_still_links(self) -> None:
-        text, _ = linkify("thats sorted. Canggu is busy.", self._index())
+    async def test_an_area_after_a_sentence_end_still_links(self) -> None:
+        text, _ = linkify("thats sorted. Canggu is busy.", await self._index())
         assert f"[Canggu]({_CANGGU_URI})" in text
 
 

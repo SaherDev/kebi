@@ -368,7 +368,10 @@ async def chat_stream(
                     # `tool_result` frames stay server-side.
                     final_message, entities = linkify(
                         normalize_voice(final_message),
-                        build_entity_index(tool_results, working_location),
+                        build_entity_index(
+                            tool_results,
+                            await service.working_location_pairs(working_location),
+                        ),
                     )
                     # Same row-sourced icons as the JSON path — the two
                     # chat paths must ship identical entities.

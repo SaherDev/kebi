@@ -17,17 +17,20 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Iterable
+from typing import TYPE_CHECKING
 
 from kebi.core.knowledge.schemas import (
     ReviewStatus,
     SourceType,
     StructuredClaim,
     WrittenClaim,
-    build_geo_key,
     build_place_key,
 )
 from kebi.core.knowledge.tags import normalize_claim_tags
 from kebi.db.repositories.knowledge_claim_repository import KnowledgeClaimRepository
+
+if TYPE_CHECKING:
+    from kebi.core.geo.protocols import GeoRegistryProtocol
 
 logger = logging.getLogger(__name__)
 
@@ -60,8 +63,11 @@ class KnowledgeWriter:
     keys, drops the undroppable, floors confidence, and writes.
     """
 
-    def __init__(self, repo: KnowledgeClaimRepository) -> None:
+    def __init__(
+        self, repo: KnowledgeClaimRepository, geo_registry: GeoRegistryProtocol
+    ) -> None:
         self._repo = repo
+        self._geo_registry = geo_registry
 
     async def persist(
         self,
@@ -79,7 +85,7 @@ class KnowledgeWriter:
         claims are skipped silently."""
         written: list[WrittenClaim] = []
         for claim in claims:
-            key = _build_key(claim)
+            key = await self._build_key(claim)
             if key is None:
                 logger.debug(
                     "knowledge_claim_dropped_no_key", extra={"scope": claim.scope}
@@ -116,26 +122,38 @@ class KnowledgeWriter:
                 )
         return written
 
+    async def _build_key(self, claim: StructuredClaim) -> str | None:
+        """Canonical entity_key for a claim, or None when its scope lacks the
+        parts the key needs (so it is dropped rather than mis-scoped).
 
-def _build_key(claim: StructuredClaim) -> str | None:
-    """Canonical entity_key for a claim, or None when its scope lacks the
-    parts the key needs (so it is dropped rather than mis-scoped)."""
-    if claim.scope == "place":
-        return build_place_key(claim.place_ref) if claim.place_ref else None
+        Geo scopes resolve through the registry with `mint=True` — a claim
+        about an area the registry hasn't met is the write path meeting it.
+        A key shallower than the claim's scope means the asked unit could not
+        be verified: dropped, never keyed to the wrong depth.
+        """
+        if claim.scope == "place":
+            return build_place_key(claim.place_ref) if claim.place_ref else None
 
-    geo = claim.geo
-    if geo is None or not geo.country_code:
-        return None
-    try:
+        geo = claim.geo
+        if geo is None or not geo.country_code:
+            return None
         if claim.scope == "country":
-            return build_geo_key(geo.country_code)
+            resolved = await self._geo_registry.key_for_location(
+                geo.country_code, None, None
+            )
+            return resolved.geo_key if resolved else None
         if claim.scope == "city":
-            return build_geo_key(geo.country_code, geo.city) if geo.city else None
+            if not geo.city:
+                return None
+            resolved = await self._geo_registry.key_for_location(
+                geo.country_code, geo.city, None, mint=True
+            )
+            return resolved.geo_key if resolved and resolved.city else None
         if claim.scope == "neighborhood":
             if not geo.city or not geo.neighborhood:
                 return None
-            return build_geo_key(geo.country_code, geo.city, geo.neighborhood)
-    except ValueError:
-        # country_code that isn't a valid alpha-2 — drop rather than raise.
+            resolved = await self._geo_registry.key_for_location(
+                geo.country_code, geo.city, geo.neighborhood, mint=True
+            )
+            return resolved.geo_key if resolved and resolved.area else None
         return None
-    return None

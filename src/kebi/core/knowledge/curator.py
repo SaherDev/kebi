@@ -25,18 +25,18 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from kebi.core.agent._trace_context import traced_call
 from kebi.core.config import get_prompt
-from kebi.core.knowledge.geo_resolve import slugs_match
 from kebi.core.knowledge.schemas import (
     CurationAnchor,
     ResolvedGeo,
     ReviewStatus,
     SourceType,
     StructuredClaim,
+    slugs_match,
 )
 from kebi.core.knowledge.tags import render_claim_tag_vocabulary
 
 if TYPE_CHECKING:
-    from kebi.core.places.nominatim_geocoding_client import NominatimGeocodingClient
+    from kebi.core.geo.protocols import GeoRegistryProtocol
     from kebi.providers.llm import InstructorClient
 
 logger = logging.getLogger(__name__)
@@ -102,13 +102,13 @@ class KnowledgeCurator:
     def __init__(
         self,
         instructor_client: InstructorClient,
-        geocoder: NominatimGeocodingClient,
+        geo_registry: GeoRegistryProtocol,
         *,
         confidence_floor: float = 0.9,
         review_status: ReviewStatus = "approved",
     ) -> None:
         self._client = instructor_client
-        self._geocoder = geocoder
+        self._registry = geo_registry
         self.confidence_floor = confidence_floor
         self.review_status = review_status
 
@@ -187,13 +187,16 @@ class KnowledgeCurator:
                 continue
             if _names_anchor(raw, anchor):
                 # The anchor supplies the key for claims about itself —
-                # re-geocoding the anchor's own name risks an incomplete or
+                # re-resolving the anchor's own name risks an incomplete or
                 # differently-keyed answer that would split the entity's
                 # claims (the harvester's own rule, ADR-126). Only a claim
-                # about a *different* area earns a geocode.
+                # about a *different* area earns a registry resolve.
                 geo = anchor_geo
             else:
-                geo = await self._resolve_area(raw.area_query, cache) or anchor_geo
+                geo = (
+                    await self._resolve_area(raw.area_query, anchor_geo, cache)
+                    or anchor_geo
+                )
             if geo is None:
                 continue
             resolved.append(
@@ -209,27 +212,54 @@ class KnowledgeCurator:
         return resolved
 
     async def _resolve_area(
-        self, query: str, cache: dict[str, ResolvedGeo | None]
+        self,
+        query: str,
+        anchor_geo: ResolvedGeo | None,
+        cache: dict[str, ResolvedGeo | None],
     ) -> ResolvedGeo | None:
-        """Geocode one area string to a canonical geo, memoized per request
-        (Nominatim is rate-limited). Returns None when it can't be resolved
-        to at least a country code."""
+        """Resolve one area string through the registry, memoized per request.
+
+        Constrained by the anchor's country — the free-text global geocode
+        this replaces was the write path's weakest link (ADR-126's "Muine
+        resolves to Italy" class). Tried most-specific first: an area inside
+        the anchor's city, then a city in the anchor's country, then a
+        country name. None when nothing verifies — the claim falls back to
+        the anchor's own geography rather than a guessed key.
+        """
         q = query.strip()
         if not q:
             return None
         if q in cache:
             return cache[q]
+        name = q.split(",")[0].strip() or q
         geo: ResolvedGeo | None = None
         try:
-            result = await self._geocoder.search(query=q)
+            cc = anchor_geo.country_code if anchor_geo else None
+            if cc and anchor_geo and anchor_geo.city:
+                resolved = await self._registry.key_for_location(
+                    cc, anchor_geo.city, name, mint=True
+                )
+                if resolved is not None and resolved.area is not None:
+                    geo = ResolvedGeo(
+                        country_code=cc,
+                        city=anchor_geo.city,
+                        neighborhood=resolved.area.name,
+                    )
+            if geo is None and cc:
+                resolved = await self._registry.key_for_location(
+                    cc, name, None, mint=True
+                )
+                if resolved is not None and resolved.city is not None:
+                    geo = ResolvedGeo(
+                        country_code=resolved.city.country_code,
+                        city=resolved.city.name,
+                    )
+            if geo is None:
+                row = await self._registry.resolve_country(name)
+                if row is not None:
+                    geo = ResolvedGeo(country_code=row.country_code)
         except Exception as exc:
-            logger.warning("curator geocode failed for %r: %s", q, exc)
-            result = None
-        if result is not None and result.country_code:
-            geo = ResolvedGeo(
-                country_code=result.country_code,
-                city=result.city,
-                neighborhood=result.neighborhood,
-            )
+            logger.warning("curator area resolve failed for %r: %s", q, exc)
+            geo = None
         cache[q] = geo
         return geo

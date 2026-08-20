@@ -22,8 +22,14 @@ from kebi.core.knowledge.entity_search_service import (
     EntitySearchService,
 )
 from kebi.core.places.models import LocationContext, PlaceCore
+from tests.geo_fakes import make_area, make_city
 
 _TEST_USER_ID = "user_test_dummy_123456789012345"
+
+# Geo keys are registry id-paths now; the hit's `context` is composed by the
+# search service from registry/profile data, not derived from key segments.
+_BALI = make_city("id", "Bali")
+_CANGGU = make_area(_BALI, "Canggu")
 
 
 def _make_app(service: AsyncMock, *, can_curate: bool) -> TestClient:
@@ -42,7 +48,14 @@ def svc() -> AsyncMock:
     service = AsyncMock(spec=EntitySearchService)
     service.search = AsyncMock(
         return_value=EntitySearchResults(
-            areas=[AreaHit(geo_key="id/bali/canggu", name="Canggu", level="area")],
+            areas=[
+                AreaHit(
+                    geo_key=_CANGGU.geo_key,
+                    name="Canggu",
+                    level="area",
+                    context="Bali, ID",
+                )
+            ],
             places=[
                 PlaceCore(
                     id="p1",
@@ -75,7 +88,7 @@ def test_typed_results_areas_first(svc: AsyncMock) -> None:
     assert area["name"] == "Canggu"
     assert area["place_id"] is None
     # The token is the same encoding area links and GET /v1/areas/{id} take.
-    assert decode_area_id(area["area_id"]) == "id/bali/canggu"
+    assert decode_area_id(area["area_id"]) == _CANGGU.geo_key
     assert area["context"] == "Bali, ID"
 
     place = results[1]

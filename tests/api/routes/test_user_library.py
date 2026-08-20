@@ -31,8 +31,14 @@ from kebi.core.places import (
     UserPlace,
     UserPlacesService,
 )
+from tests.geo_fakes import FakeGeoRegistry, make_area, make_city
 
 _TEST_USER_ID = "user_test_dummy_123456789012345"
+
+# Geo keys are registry id-paths now; library rows are keyed by the place's
+# stored `geo_key`, and unprofiled areas are named from their registry row.
+_BALI = make_city("id", "Bali")
+_CANGGU = make_area(_BALI, "Canggu")
 
 
 def _make_app(
@@ -49,7 +55,8 @@ def _make_app(
     app.dependency_overrides[get_user_places_service] = lambda: service
     app.dependency_overrides[get_place_notes_service] = lambda: notes_service
     app.dependency_overrides[get_area_handle_builder] = lambda: AreaHandleBuilder(
-        area_repo=MagicMock(get_many=AsyncMock(return_value={}))
+        area_repo=MagicMock(get_many=AsyncMock(return_value={})),
+        geo_registry=FakeGeoRegistry(_BALI, _CANGGU),
     )
     app.dependency_overrides[get_library_areas_service] = lambda: (
         areas_service or AsyncMock(list_areas=AsyncMock(return_value=[]))
@@ -292,6 +299,8 @@ def _bali_view(pid: str) -> SavedPlaceView:
     view.place.location = LocationContext(
         country_code="id", city="Bali", neighborhood="Canggu"
     )
+    # The row's area handle is keyed by the place's STORED registry key.
+    view.place.geo_key = _CANGGU.geo_key
     return view
 
 
@@ -303,10 +312,10 @@ def test_row_carries_a_tappable_area(svc: AsyncMock) -> None:
 
     area = client.get("/v1/user/library").json()["places"][0]["area"]
 
-    assert area["key"] == "id/bali/canggu"
+    assert area["key"] == _CANGGU.geo_key
     assert area["name"] == "Canggu"
     assert area["uri"].startswith("kebi://area/")
-    assert area["parent"]["key"] == "id/bali"
+    assert area["parent"]["key"] == _BALI.geo_key
 
 
 def test_area_is_top_level_not_nested_in_location(svc: AsyncMock) -> None:
@@ -332,10 +341,10 @@ def test_place_without_a_city_has_no_area(svc: AsyncMock) -> None:
 def test_area_filter_reaches_the_service(svc: AsyncMock) -> None:
     client = _make_app(svc)
 
-    resp = client.get("/v1/user/library", params={"area": "id/bali/canggu"})
+    resp = client.get("/v1/user/library", params={"area": _CANGGU.geo_key})
 
     assert resp.status_code == 200
-    assert svc.browse.await_args.args[1].area == "id/bali/canggu"
+    assert svc.browse.await_args.args[1].area == _CANGGU.geo_key
 
 
 def test_area_filter_combines_with_search(svc: AsyncMock) -> None:
@@ -343,11 +352,11 @@ def test_area_filter_combines_with_search(svc: AsyncMock) -> None:
     resets."""
     client = _make_app(svc)
 
-    resp = client.get("/v1/user/library", params={"area": "id/bali", "q": "warung"})
+    resp = client.get("/v1/user/library", params={"area": _BALI.geo_key, "q": "warung"})
 
     assert resp.status_code == 200
     filters = svc.browse.await_args.args[1]
-    assert (filters.area, filters.query) == ("id/bali", "warung")
+    assert (filters.area, filters.query) == (_BALI.geo_key, "warung")
 
 
 def test_malformed_area_key_rejected_422(svc: AsyncMock) -> None:
@@ -366,12 +375,12 @@ def test_area_index_returns_handles_with_exact_counts(svc: AsyncMock) -> None:
             return_value=[
                 AreaWithCount(
                     area=AreaHandle(
-                        key="id/bali/canggu",
+                        key=_CANGGU.geo_key,
                         name="Canggu",
                         uri="kebi://area/abc",
                         icon="🏄",
                         parent=AreaRef(
-                            key="id/bali", name="Bali", uri="kebi://area/def"
+                            key=_BALI.geo_key, name="Bali", uri="kebi://area/def"
                         ),
                     ),
                     count=11,
@@ -387,15 +396,17 @@ def test_area_index_returns_handles_with_exact_counts(svc: AsyncMock) -> None:
         "areas": [
             {
                 "area": {
-                    "key": "id/bali/canggu",
+                    "key": _CANGGU.geo_key,
                     "name": "Canggu",
                     "uri": "kebi://area/abc",
                     "icon": "🏄",
+                    "country_code": "id",
                     "parent": {
-                        "key": "id/bali",
+                        "key": _BALI.geo_key,
                         "name": "Bali",
                         "uri": "kebi://area/def",
                         "icon": None,
+                        "country_code": "id",
                     },
                 },
                 "count": 11,

@@ -6,12 +6,11 @@ when the known corpus has no area hit, a verified-or-refuse geocode so a
 never-opened area can still be anchored. No LLM anywhere; every id returned
 is an anchor payload the curate endpoint accepts verbatim.
 
-The resolver fallback deliberately inherits the knowledge layer's refusal
-posture (ADR-126): a bare name resolves only if it round-trip-verifies as a
-country; pinning a new city needs "Name, Country" in the query, because
-free-text geocoding of bare names is the documented failure mode. Its
-verdicts — including misses — are Redis-cached on the normalized query, so
-a typeahead can't hammer the rate-limited public Nominatim instance.
+The registry fallback deliberately inherits the knowledge layer's refusal
+posture (ADR-126): every name resolves through the geo registry's verified
+lookup or not at all. Its verdicts — including misses — are Redis-cached on
+the normalized query, so typeahead traffic can't turn into a stream of
+mint-time geocoder calls.
 """
 
 from __future__ import annotations
@@ -21,8 +20,9 @@ import logging
 
 from pydantic import BaseModel, ConfigDict
 
-from kebi.core.knowledge.geo_resolve import EntityGeoResolver
-from kebi.core.knowledge.schemas import ResolvedGeo, _slugify, build_geo_key
+from kebi.core.geo.models import GeoArea
+from kebi.core.geo.protocols import GeoRegistryProtocol
+from kebi.core.knowledge.schemas import _slugify
 from kebi.core.places.hybrid_search_service import HybridSearchService
 from kebi.core.places.models import PlaceCore
 from kebi.db.repositories.area_repository import AreaRepository
@@ -30,9 +30,9 @@ from kebi.providers.cache import CacheBackend
 
 logger = logging.getLogger(__name__)
 
-# v2: bare names gained verified global-city resolution — old v1 misses
-# ("tokyo" → nothing) must not shadow the new behavior for their TTL.
-_CACHE_PREFIX = "entsearch:v2:"
+# v3: keys became geo-registry id-paths — cached v2 verdicts carry slug
+# keys and must not shadow the new grammar for their TTL.
+_CACHE_PREFIX = "entsearch:v3:"
 _CACHE_MISS = '{"miss": true}'
 
 
@@ -44,17 +44,21 @@ class _ResolverCache(BaseModel):
     geo_key: str
     name: str
     level: str
+    context: str | None = None
 
 
 class AreaHit(BaseModel):
     """One area result, whatever corpus it came from. `level` is a display
-    label (an areas row's own, or the resolver's structural verdict)."""
+    label (an areas row's own, or the resolver's structural verdict);
+    `context` is the human ancestor line ("Bali, Indonesia"), composed here
+    because key segments carry nothing readable."""
 
     model_config = ConfigDict(frozen=True)
 
     geo_key: str
     name: str
     level: str
+    context: str | None = None
 
 
 class EntitySearchResults(BaseModel):
@@ -66,6 +70,17 @@ class EntitySearchResults(BaseModel):
     places: list[PlaceCore]
 
 
+def _city_hit(row: GeoArea | None) -> AreaHit | None:
+    if row is None:
+        return None
+    return AreaHit(
+        geo_key=row.geo_key,
+        name=row.display_name,
+        level="city",
+        context=row.country_code.upper(),
+    )
+
+
 class EntitySearchService:
     """Deterministic lookup: DB corpus always, resolver only on area miss."""
 
@@ -73,7 +88,7 @@ class EntitySearchService:
         self,
         area_repo: AreaRepository,
         hybrid_search: HybridSearchService,
-        geo_resolver: EntityGeoResolver,
+        geo_registry: GeoRegistryProtocol,
         *,
         cache: CacheBackend | None = None,
         cache_ttl_seconds: int = 604800,
@@ -81,7 +96,7 @@ class EntitySearchService:
     ) -> None:
         self._area_repo = area_repo
         self._hybrid = hybrid_search
-        self._geo = geo_resolver
+        self._registry = geo_registry
         self._cache = cache
         self._cache_ttl = cache_ttl_seconds
         self._area_limit = area_limit
@@ -92,7 +107,12 @@ class EntitySearchService:
             return EntitySearchResults(areas=[], places=[])
 
         areas = [
-            AreaHit(geo_key=p.geo_key, name=p.name, level=p.level)
+            AreaHit(
+                geo_key=p.geo_key,
+                name=p.name,
+                level=p.level,
+                context=", ".join(reversed(p.breadcrumb)) or None,
+            )
             for p in await self._area_repo.search_by_name(query, self._area_limit)
         ]
         if not areas:
@@ -129,32 +149,20 @@ class EntitySearchService:
         name, _, country = query.partition(",")
         name, country = name.strip(), country.strip()
         if country:
-            country_geo = await self._geo.resolve_country(country)
-            if country_geo is None or not country_geo.country_code:
+            country_row = await self._registry.resolve_country(country)
+            if country_row is None:
                 return None
-            geo = await self._geo.resolve_city(name, country_geo.country_code)
-            return self._city_hit(geo)
+            resolved = await self._registry.key_for_location(
+                country_row.country_code, name, None, mint=True
+            )
+            return _city_hit(resolved.city if resolved else None)
         # Bare name: a country first ("Vietnam" must never resolve as some
         # city named Vietnam), then a verified unconstrained city lookup —
-        # prominence-ranked, round-trip checked ("Tokyo" → jp/tokyo).
-        geo = await self._geo.resolve_country(name)
-        if geo is not None and geo.country_code:
-            try:
-                key = build_geo_key(geo.country_code)
-            except ValueError:
-                return None
-            return AreaHit(geo_key=key, name=name, level="country")
-        return self._city_hit(await self._geo.resolve_city_global(name))
-
-    @staticmethod
-    def _city_hit(geo: ResolvedGeo | None) -> AreaHit | None:
-        if geo is None or not geo.country_code or not geo.city:
-            return None
-        try:
-            key = build_geo_key(geo.country_code, geo.city)
-        except ValueError:
-            return None
-        return AreaHit(geo_key=key, name=geo.city, level="city")
+        # prominence-ranked, round-trip checked ("Tokyo" resolves).
+        row = await self._registry.resolve_country(name)
+        if row is not None:
+            return AreaHit(geo_key=row.geo_key, name=row.display_name, level="country")
+        return _city_hit(await self._registry.resolve_city_global(name))
 
     # ---- cache (degrade-don't-fail: any Redis error means "no cache") ----
 
@@ -176,7 +184,12 @@ class EntitySearchService:
             data = _ResolverCache.model_validate(json.loads(raw))
         except ValueError:
             return None
-        return AreaHit(geo_key=data.geo_key, name=data.name, level=data.level)
+        return AreaHit(
+            geo_key=data.geo_key,
+            name=data.name,
+            level=data.level,
+            context=data.context,
+        )
 
     async def _cache_set(self, key: str, hit: AreaHit | None) -> None:
         if self._cache is None:

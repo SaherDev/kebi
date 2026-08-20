@@ -2,9 +2,10 @@
 
 The service's contract: only keys with no row get profiled; one in-flight
 lock per key; claims feed the call highest-confidence first under the cap;
-child keys are built mechanically from the LLM's names (never emitted by
-it); breadcrumb names are padded from slugs when the model is terse; every
-failure path returns None and writes no row.
+child keys come from the geo registry resolving the LLM's names (never
+emitted by it — an unverifiable child is dropped, not mis-keyed); breadcrumb
+names are padded from registry rows when the model is terse; every failure
+path returns None and writes no row.
 """
 
 from __future__ import annotations
@@ -23,6 +24,13 @@ from kebi.core.areas.profile_service import (
     _ProfilerSubArea,
 )
 from kebi.core.knowledge.schemas import KnowledgeClaim
+from tests.geo_fakes import FakeGeoRegistry, make_area, make_city
+
+_BALI = make_city("id", "Bali", pid="CityBali01")
+_CANGGU = make_area(_BALI, "Canggu", pid="AreaCanggu01")
+_UBUD = make_area(_BALI, "Ubud", pid="AreaUbud0001")
+_BALI_KEY = _BALI.geo_key
+_CANGGU_KEY = _CANGGU.geo_key
 
 
 class _FakeCache:
@@ -57,7 +65,7 @@ def _claim(text: str, confidence: float) -> KnowledgeClaim:
         created_at=datetime(2026, 8, 1, tzinfo=UTC),
         id=f"c-{text[:8]}",
         entity_type="neighborhood",
-        entity_key="id/bali/canggu",
+        entity_key=_CANGGU_KEY,
         entity_name="Canggu",
         claim=text,
         tags=["vibe"],
@@ -88,6 +96,7 @@ def _service(
     monkeypatch: pytest.MonkeyPatch,
     claims: list[KnowledgeClaim] | None = None,
     claims_input_limit: int = 30,
+    registry: FakeGeoRegistry | None = None,
 ) -> tuple[AreaProfileService, AsyncMock, AsyncMock]:
     monkeypatch.setattr(
         "kebi.core.areas.profile_service.get_prompt", lambda name: "profile it"
@@ -103,6 +112,7 @@ def _service(
         area_repo,
         claim_repo,
         cache,
+        registry or FakeGeoRegistry(_BALI, _CANGGU, _UBUD),
         claims_input_limit=claims_input_limit,
         notable_sub_areas_max=6,
     )
@@ -115,11 +125,11 @@ async def test_profiles_an_unprofiled_key_and_persists_the_row(
     repo = _FakeAreaRepo()
     svc, extract, _ = _service(repo, _FakeCache(), _response(), monkeypatch)
 
-    profile = await svc.profile_area("id/bali/canggu")
+    profile = await svc.profile_area(_CANGGU_KEY)
 
     assert profile is not None
     extract.assert_awaited_once()
-    assert repo.upserts[0].geo_key == "id/bali/canggu"
+    assert repo.upserts[0].geo_key == _CANGGU_KEY
     assert repo.upserts[0].name == "Canggu"
     assert repo.upserts[0].best_for[0].text == "sunset drinks"
 
@@ -128,7 +138,7 @@ async def test_an_already_profiled_key_is_skipped(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     existing = AreaProfile(
-        geo_key="id/bali/canggu",
+        geo_key=_CANGGU_KEY,
         name="Canggu",
         level="neighbourhood",
         summary="already dressed",
@@ -136,18 +146,18 @@ async def test_an_already_profiled_key_is_skipped(
     repo = _FakeAreaRepo(existing=existing)
     svc, extract, _ = _service(repo, _FakeCache(), _response(), monkeypatch)
 
-    assert await svc.profile_area("id/bali/canggu") is None
+    assert await svc.profile_area(_CANGGU_KEY) is None
     extract.assert_not_awaited()
     assert repo.upserts == []
 
 
 async def test_a_held_lock_skips_the_pass(monkeypatch: pytest.MonkeyPatch) -> None:
     cache = _FakeCache()
-    cache.store["area_profile:inflight:id/bali/canggu"] = "1"
+    cache.store[f"area_profile:inflight:{_CANGGU_KEY}"] = "1"
     repo = _FakeAreaRepo()
     svc, extract, _ = _service(repo, cache, _response(), monkeypatch)
 
-    assert await svc.profile_area("id/bali/canggu") is None
+    assert await svc.profile_area(_CANGGU_KEY) is None
     extract.assert_not_awaited()
 
 
@@ -164,7 +174,7 @@ async def test_claims_feed_the_call_highest_confidence_first_under_the_cap(
         claims_input_limit=1,
     )
 
-    await svc.profile_area("id/bali/canggu")
+    await svc.profile_area(_CANGGU_KEY)
 
     user_content = extract.await_args.kwargs["messages"][1]["content"]
     assert "strong claim" in user_content
@@ -185,7 +195,7 @@ async def test_a_country_key_anchors_the_subject_against_child_heavy_claims(
     assert "not any place inside it" in user_content
 
 
-async def test_child_keys_are_built_mechanically_from_names(
+async def test_child_keys_come_from_the_registry_not_the_model(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     repo = _FakeAreaRepo()
@@ -204,11 +214,37 @@ async def test_child_keys_are_built_mechanically_from_names(
         monkeypatch,
     )
 
-    await svc.profile_area("id/bali")
+    await svc.profile_area(_BALI_KEY)
 
     subs = repo.upserts[0].notable_sub_areas
-    assert [s.geo_key for s in subs] == ["id/bali/canggu", "id/bali/ubud"]
+    assert [s.geo_key for s in subs] == [_CANGGU.geo_key, _UBUD.geo_key]
     assert subs[0].hook == "surf & laptops"
+
+
+async def test_a_child_the_registry_cannot_verify_is_dropped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The never-invent-a-key rule: a name the registry has never met gets
+    no key, so the child is dropped rather than mis-keyed."""
+    repo = _FakeAreaRepo()
+    svc, _, _ = _service(
+        repo,
+        _FakeCache(),
+        _response(
+            name="Bali",
+            level="region",
+            breadcrumb=["Indonesia"],
+            notable_sub_areas=[
+                _ProfilerSubArea(name="Canggu"),
+                _ProfilerSubArea(name="Middle Earth"),
+            ],
+        ),
+        monkeypatch,
+    )
+
+    await svc.profile_area(_BALI_KEY)
+
+    assert [s.geo_key for s in repo.upserts[0].notable_sub_areas] == [_CANGGU.geo_key]
 
 
 async def test_a_leaf_key_stores_no_children_however_many_the_model_offers(
@@ -222,18 +258,20 @@ async def test_a_leaf_key_stores_no_children_however_many_the_model_offers(
         monkeypatch,
     )
 
-    await svc.profile_area("id/bali/canggu")
+    await svc.profile_area(_CANGGU_KEY)
 
     assert repo.upserts[0].notable_sub_areas == []
 
 
-async def test_breadcrumb_is_padded_from_slugs_when_the_model_is_terse(
+async def test_breadcrumb_is_padded_from_registry_rows_when_the_model_is_terse(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # The city segment pads from its registry row's name; the country has no
+    # row seeded, so it shows its code uppercased until first dressing.
     repo = _FakeAreaRepo()
     svc, _, _ = _service(repo, _FakeCache(), _response(breadcrumb=[]), monkeypatch)
 
-    await svc.profile_area("id/bali/canggu")
+    await svc.profile_area(_CANGGU_KEY)
 
     assert repo.upserts[0].breadcrumb == ["ID", "Bali"]
 
@@ -244,5 +282,5 @@ async def test_a_failed_call_writes_nothing_and_returns_none(
     repo = _FakeAreaRepo()
     svc, _, _ = _service(repo, _FakeCache(), RuntimeError("llm down"), monkeypatch)
 
-    assert await svc.profile_area("id/bali/canggu") is None
+    assert await svc.profile_area(_CANGGU_KEY) is None
     assert repo.upserts == []
