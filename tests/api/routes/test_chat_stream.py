@@ -11,13 +11,20 @@ from fastapi.testclient import TestClient
 
 from kebi.api.deps import get_agent_graph, get_chat_service
 from kebi.api.main import app
+from kebi.core.agent.entity_links import working_location_entity_pairs
 from kebi.core.agent.reasoning import ReasoningStep
 from kebi.core.areas.keys import encode_area_id
 from kebi.core.chat.service import ChatService
 from kebi.core.config import AppConfig
+from tests.geo_fakes import FakeGeoRegistry, make_area, make_city
+
+# Geo keys are registry id-paths now; the working location resolves through
+# a seeded registry, exactly as the wired service does.
+_BADUNG = make_city("id", "Badung")
+_CANGGU_ROW = make_area(_BADUNG, "Canggu")
 
 # Area URIs carry the geo key encoded as one opaque segment (ADR-153).
-_CANGGU_URI = f"kebi://area/{encode_area_id('id/badung/canggu')}"
+_CANGGU_URI = f"kebi://area/{encode_area_id(_CANGGU_ROW.geo_key)}"
 
 
 def _make_mock_service() -> MagicMock:
@@ -32,6 +39,14 @@ def _make_mock_service() -> MagicMock:
     # Pass-through: a service with no refresher ships entities as linkified
     # (icons are row-sourced separately, ADR-162).
     svc.refresh_entity_icons = AsyncMock(side_effect=lambda entities: entities)
+    # The route asks the service for the pre-resolved working-location pairs;
+    # resolve them through the seeded registry, as the real service does.
+    registry = FakeGeoRegistry(_BADUNG, _CANGGU_ROW)
+
+    async def _pairs(working_location: Any) -> list[Any]:
+        return await working_location_entity_pairs(registry, working_location)
+
+    svc.working_location_pairs = AsyncMock(side_effect=_pairs)
     return svc
 
 
@@ -498,7 +513,7 @@ class TestChatStreamEntityLinks:
         frame = self._message_frame(mock_service)
         assert [(e["kind"], e["key"]) for e in frame["entities"]] == [
             ("venue", "p1"),
-            ("area", "id/badung/canggu"),
+            ("area", _CANGGU_ROW.geo_key),
         ]
 
     def test_no_tool_result_frames_are_emitted(self, mock_service: MagicMock) -> None:

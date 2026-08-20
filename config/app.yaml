@@ -87,6 +87,20 @@ models:
     max_tokens: 800
     temperature: 0
 
+  # Geo registry colloquial layer — once per newly minted area, records what
+  # people call the unit, the bigger colloquial area it belongs to, and the
+  # distinct places one admin name covers (multi-island desa). Every name it
+  # offers is verified against the geocoder in code before storage; identity
+  # never comes from this call. gpt-4o, not mini, deliberately: mini missed
+  # the multi-island covers case outright in live probes, and this fires
+  # once per unique area EVER — the knowledge gap costs a wrong screen, the
+  # model gap costs fractions of a cent.
+  area_registry:
+    provider: openai
+    model: gpt-4o
+    max_tokens: 400
+    temperature: 0
+
   # Mines durable area facts out of a turn's web-search findings (ADR-145).
   # Runs after the answer is already sent, so latency does not matter and
   # cheap does: same tier as the other knowledge writers.
@@ -344,6 +358,7 @@ prompts:
   place_classifier: place_classifier.txt
   place_profiler: place_profiler.txt
   area_profiler: area_profiler.txt
+  area_registry: area_registry.txt
   location_resolver: location_resolver.txt
   candidate_namer: candidate_namer.txt
   home_suggester: home_suggester.txt
@@ -736,6 +751,14 @@ pricing:
         ":searchText": 0.032       # $32 / 1k — Text Search Pro
         ":searchNearby": 0.032     # $32 / 1k — Nearby Search Pro
         "/{place_id}": 0.005       # $5 / 1k  — Place Details Essentials
+    google_geocoding:
+      # Google Geocoding API — verified 2026-08-20 — source: developers.google.com/maps/billing-and-pricing/pricing
+      # Registry minting only (geo identity, once per unique area ever —
+      # forward lookups at mint plus split/group verification). Steady-state
+      # volume is near zero: resolution is an alias lookup, not a call.
+      # First 10k requests/month are free (Essentials SKU) — mint volume
+      # should never leave the free tier; the price is the over-tier rate.
+      per_request: 0.005           # $5 / 1k — Geocoding (after 10k/mo free)
     apify:
       # Apify — verified 2026-05-24 — sources: actor pages on apify.com
       # Per-result × x-apify-pagination-total header — no follow-up call.

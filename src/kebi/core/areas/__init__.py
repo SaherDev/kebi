@@ -18,10 +18,9 @@ from typing import TYPE_CHECKING, Any
 from .handles import AreaHandle, AreaHandleBuilder, AreaRef
 from .keys import (
     decode_area_id,
-    display_from_slug,
     encode_area_id,
-    geo_key_for_location,
     is_geo_key,
+    is_legacy_geo_key,
     parent_keys,
 )
 from .models import AreaChip, AreaProfile, NotableSubArea
@@ -61,9 +60,8 @@ __all__ = [
     "AreaScreenService",
     "NotableSubArea",
     "decode_area_id",
-    "display_from_slug",
     "encode_area_id",
-    "geo_key_for_location",
     "is_geo_key",
+    "is_legacy_geo_key",
     "parent_keys",
 ]

@@ -14,7 +14,7 @@ The link format is `kebi://{kind}/{id}` with exactly three kinds:
 Venue and area ids are the ones those surfaces already use — a venue id is
 what `POST /v1/user/places` takes, an area id is what `GET /v1/areas/{id}`
 decodes — so a tap resolves against existing endpoints with no new identity
-scheme. An area's key is a slash path (`build_geo_key` output), so it rides
+scheme. An area's key is a slash path (a geo-registry id-path), so it rides
 the URI as one opaque segment via the shared codec (ADR-153); the entity's
 `key` field still carries it raw. A web entity follows the same split: `key`
 is the raw page URL, the URI carries it encoded (`core/web/keys.py`), and
@@ -37,7 +37,7 @@ from typing import Any, Literal
 from pydantic import BaseModel
 
 from kebi.core.areas.keys import encode_area_id
-from kebi.core.knowledge.schemas import build_geo_key
+from kebi.core.geo.protocols import GeoRegistryProtocol
 from kebi.core.places._place_utils import display_place_name
 from kebi.core.places.models import normalize_icon
 from kebi.core.web.keys import encode_web_url
@@ -301,20 +301,26 @@ def _web_entities(payload: dict[str, Any]) -> list[tuple[str, ChatEntity]]:
     return pairs
 
 
-def _working_location_entities(
+async def working_location_entity_pairs(
+    geo_registry: GeoRegistryProtocol,
     working_location: dict[str, Any] | None,
 ) -> list[tuple[str, ChatEntity]]:
     """`(alias, entity)` for the turn's city and neighborhood.
 
     The area the answer is *about* is almost never named by a tool — it comes
-    from the resolver — so it is seeded here. Without a country code there is
-    no canonical key, and an unkeyed area is not linkable.
+    from the resolver — so it is seeded here, resolved through the geo
+    registry (`mint=True`: a chat turn in an area nobody has saved yet is a
+    legitimate first meeting, worth the one-time mint). An area the registry
+    can't verify simply isn't linkable this turn — plain prose, never an
+    invented key.
+
+    The entity rides the *display group's* row (a Tibubeneng turn links to
+    Canggu), and every name that can mean the area in prose is an alias for
+    it: the resolver's string, the provider's name, and the colloquial name.
 
     Icons are deliberately NOT seeded from the resolver (amends ADR-146):
     a chip and the screen its tap opens must agree, so every entity's icon
     is re-read from its stored row at attach time (`EntityIconRefresher`).
-    A per-turn model pick the row never sees is exactly what made them
-    disagree.
 
     Defensive `isinstance`: the state slot can still hold the carry-forward
     sentinel string on a first turn (see `_carried_working_location`).
@@ -327,22 +333,47 @@ def _working_location_entities(
         return []
     if not isinstance(city, str) or not city:
         return []
-    pairs: list[tuple[str, ChatEntity]] = []
     neighborhood = working_location.get("neighborhood")
-    if isinstance(neighborhood, str) and neighborhood:
-        pairs.append(
-            (
-                neighborhood,
-                _area(build_geo_key(country_code, city, neighborhood), neighborhood),
-            )
+    lat = working_location.get("lat")
+    lng = working_location.get("lng")
+    try:
+        resolved = await geo_registry.key_for_location(
+            country_code,
+            city,
+            neighborhood if isinstance(neighborhood, str) else None,
+            lat=lat if isinstance(lat, int | float) else None,
+            lng=lng if isinstance(lng, int | float) else None,
+            mint=True,
         )
-    pairs.append((city, _area(build_geo_key(country_code, city), city)))
+    except Exception:
+        # Linkable areas are decoration on the answer — a registry hiccup
+        # must never cost the message its text.
+        return []
+    if resolved is None:
+        return []
+
+    pairs: list[tuple[str, ChatEntity]] = []
+    if resolved.area is not None:
+        display = await geo_registry.display_row(resolved.area)
+        entity = _area(display.geo_key, display.display_name)
+        aliases = {
+            neighborhood if isinstance(neighborhood, str) else None,
+            resolved.area.name,
+            resolved.area.colloquial_name,
+            display.name,
+            display.colloquial_name,
+        }
+        pairs.extend((alias, entity) for alias in aliases if alias)
+    if resolved.city is not None:
+        entity = _area(resolved.city.geo_key, resolved.city.display_name)
+        aliases = {city, resolved.city.name, resolved.city.colloquial_name}
+        pairs.extend((alias, entity) for alias in aliases if alias)
     return pairs
 
 
 def build_entity_index(
     tool_results: list[dict[str, Any]],
-    working_location: dict[str, Any] | None = None,
+    working_location_pairs: list[tuple[str, ChatEntity]] | None = None,
 ) -> list[tuple[str, ChatEntity]]:
     """Every `(alias, entity)` pair this turn can link, longest alias first.
 
@@ -351,6 +382,10 @@ def build_entity_index(
     Duplicate aliases keep their first (highest-priority) entity — place-tool
     results are indexed before research and the working location, so a real
     retrieved venue beats a same-named area.
+
+    `working_location_pairs` is pre-resolved by the caller via
+    `working_location_entity_pairs` — registry resolution is async and this
+    index stays a pure function.
     """
     pairs: list[tuple[str, ChatEntity]] = []
     for result in tool_results:
@@ -364,7 +399,7 @@ def build_entity_index(
             pairs.extend(_research_entity(payload))
         elif tool == "web_search":
             pairs.extend(_web_entities(payload))
-    pairs.extend(_working_location_entities(working_location))
+    pairs.extend(working_location_pairs or [])
 
     # Spoken short forms, added only where exactly one place answers to them.
     # An ambiguous prefix ("Bank Mandiri…" vs "Bank BNI…") would send a tap to

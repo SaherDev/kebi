@@ -9,8 +9,12 @@ from typing import Any
 from kebi.core.agent.location import WorkingLocation
 from kebi.core.knowledge.candidate_notes_service import CandidateNotesService
 from kebi.core.knowledge.schemas import KnowledgeClaim
+from tests.geo_fakes import FakeGeoRegistry, make_area, make_city
 
 _NOW = datetime(2026, 8, 6, tzinfo=UTC)
+
+_BADUNG = make_city("id", "Badung")
+_CANGGU = make_area(_BADUNG, "Canggu")
 
 
 def _claim(
@@ -61,6 +65,7 @@ def _service(
     repo = _FakeRepo(claims)
     service = CandidateNotesService(
         repo,  # type: ignore[arg-type]
+        FakeGeoRegistry(_BADUNG, _CANGGU),
         per_place_limit=kw.get("per_place_limit", 2),
         area_limit=kw.get("area_limit", 3),
     )
@@ -139,13 +144,20 @@ class TestNotesForArea:
     async def test_reads_country_city_and_neighborhood_keys(self) -> None:
         service, repo = _service([])
         await service.notes_for_area(_working(), "user-1")
-        assert repo.requested_keys == ["id", "id/badung", "id/badung/canggu"]
+        assert repo.requested_keys == ["id", _BADUNG.geo_key, _CANGGU.geo_key]
+
+    async def test_unregistered_city_contributes_only_the_country_key(self) -> None:
+        """The read path never mints: an area the registry hasn't met simply
+        contributes no notes yet, and the country key still reads."""
+        service, repo = _service([])
+        await service.notes_for_area(_working(city="Ghost Town"), "user-1")
+        assert repo.requested_keys == ["id"]
 
     async def test_all_levels_rank_as_one_pool(self) -> None:
         service, _ = _service(
             [
                 _claim("id", "cash still rules outside the cities", confidence=0.9),
-                _claim("id/badung/canggu", "packed after 11", confidence=0.5),
+                _claim(_CANGGU.geo_key, "packed after 11", confidence=0.5),
             ]
         )
         notes = await service.notes_for_area(_working(), "user-1")

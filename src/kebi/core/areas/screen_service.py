@@ -8,7 +8,7 @@ rows at wide levels and venue rows at the leaf, exactly the drill-down the
 mocks draw — Bali routes you to Canggu instead of repeating its venues.
 
 Saves are scoped by computing each saved place's geo key with the same
-`build_geo_key` the claims writers use, so a save and a claim about the same
+geo-registry key the claims writers use, so a save and a claim about the same
 place always agree on which area contains it. With no saves under the key,
 the body falls back to the profile's notable children ("worth knowing");
 with neither, the profile and the ask bar carry the screen alone.
@@ -18,12 +18,11 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from kebi.core.knowledge.schemas import build_geo_key
 from kebi.core.places._place_utils import display_place_name
 from kebi.core.places.models import PlaceCore, UserPlace
 from kebi.core.places.tags import TagType
 
-from .keys import display_from_slug, parent_keys
+from .keys import parent_keys
 from .models import (
     AreaProfile,
     AreaScreen,
@@ -33,6 +32,7 @@ from .models import (
 )
 
 if TYPE_CHECKING:
+    from kebi.core.geo.protocols import GeoRegistryProtocol
     from kebi.core.places.places_repo import PlacesRepo
     from kebi.core.places.user_places_repo import UserPlacesRepo
     from kebi.db.repositories.area_repository import AreaRepository
@@ -97,10 +97,12 @@ class AreaScreenService:
         area_repo: AreaRepository,
         user_places_repo: UserPlacesRepo,
         places_repo: PlacesRepo,
+        geo_registry: GeoRegistryProtocol,
     ) -> None:
         self._area_repo = area_repo
         self._user_places_repo = user_places_repo
         self._places_repo = places_repo
+        self._registry = geo_registry
 
     async def build_screen(self, geo_key: str, user_id: str) -> AreaScreen:
         profile = await self._area_repo.get(geo_key)
@@ -129,9 +131,16 @@ class AreaScreenService:
         else:
             section_kind = None
 
+        registry_rows = await self._registry.rows_for_keys([geo_key])
+        own_row = registry_rows.get(geo_key)
+        fallback_name = (
+            own_row.display_name
+            if own_row
+            else (parts[-1].upper() if len(parts) == 1 else parts[-1])
+        )
         return AreaScreen(
             geo_key=geo_key,
-            name=profile.name if profile else display_from_slug(parts[-1]),
+            name=profile.name if profile else fallback_name,
             level=profile.level if profile else None,
             icon=profile.icon if profile else None,
             summary=profile.summary if profile else None,
@@ -147,12 +156,13 @@ class AreaScreenService:
     async def _saves_under(
         self, geo_key: str, user_id: str
     ) -> list[tuple[str, PlaceCore, UserPlace]]:
-        """The caller's saves inside this area, each with its computed key.
+        """The caller's saves inside this area, each with its stored key.
 
-        A save whose place lacks the geo fields a key needs simply cannot be
-        placed on any area screen — skipped, not guessed. The full-library
-        read is fine: saves are capped per plan and the library pages the
-        same order of rows.
+        The stored registry key is authoritative — it was resolved at write
+        time by the same registry every other surface reads, so screen
+        membership and library grouping can never disagree. A save with no
+        key (geography coarser than a city) belongs to no area screen —
+        skipped, not guessed.
         """
         saves = await self._user_places_repo.get_by_user(user_id)
         if not saves:
@@ -161,12 +171,8 @@ class AreaScreenService:
         cores = await self._places_repo.get_by_ids(list(by_place))
         in_scope: list[tuple[str, PlaceCore, UserPlace]] = []
         for core in cores:
-            loc = core.location
-            if loc is None or not loc.country_code or not loc.city or not core.id:
-                continue
-            try:
-                key = build_geo_key(loc.country_code, loc.city, loc.neighborhood)
-            except ValueError:
+            key = core.geo_key
+            if not key or not core.id:
                 continue
             if key == geo_key or key.startswith(f"{geo_key}/"):
                 in_scope.append((key, core, by_place[core.id]))
@@ -200,9 +206,9 @@ class AreaScreenService:
                 direct.append((key, core, save))
 
         # A profiled child supplies its own name/icon/hook; an unprofiled one
-        # is named from its saved places' stored display geo and hooked from
-        # their tags.
+        # is named from its registry row and hooked from its members' tags.
         profiles = await self._area_repo.get_many(list(groups))
+        registry_rows = await self._registry.rows_for_keys(list(groups))
         sub_areas: list[SectionArea] = []
         for child_key, members in sorted(
             groups.items(), key=lambda kv: (-len(kv[1]), kv[0])
@@ -211,11 +217,12 @@ class AreaScreenService:
             cores = [core for _, core, _ in members]
             name = child_profile.name if child_profile else None
             if name is None:
-                loc = cores[0].location
-                display = (
-                    (loc.city if depth == 1 else loc.neighborhood) if loc else None
+                child_row = registry_rows.get(child_key)
+                name = (
+                    child_row.display_name
+                    if child_row
+                    else child_key.rsplit("/", 1)[-1]
                 )
-                name = display or display_from_slug(child_key.rsplit("/", 1)[-1])
             hook = None
             if child_profile and child_profile.best_for:
                 hook = " · ".join(
@@ -238,23 +245,28 @@ class AreaScreenService:
         """Tappable ancestors, outermost first.
 
         Names prefer the ancestor's own row (it may already be profiled),
-        then the names this profile's dressing recorded, then the slug —
-        so `id/bali/canggu` reads `Indonesia › Bali` once anything has
-        named those levels, and degrades to readable slugs before that.
+        then the names this profile's dressing recorded, then the registry
+        row's name — so the breadcrumb reads `Indonesia › Bali` from data,
+        never from key text (an id segment has nothing readable in it).
         """
         parents = parent_keys(geo_key)
         if not parents:
             return []
         parent_profiles = await self._area_repo.get_many(parents)
+        registry_rows = await self._registry.rows_for_keys(parents)
         recorded: list[str] = list(profile.breadcrumb) if profile else []
         items: list[BreadcrumbItem] = []
         for i, parent_key in enumerate(parents):
             parent_profile = parent_profiles.get(parent_key)
+            registry_row = registry_rows.get(parent_key)
             if parent_profile is not None:
                 name = parent_profile.name
             elif i < len(recorded) and recorded[i].strip():
                 name = recorded[i]
+            elif registry_row is not None:
+                name = registry_row.display_name
             else:
-                name = display_from_slug(parent_key.rsplit("/", 1)[-1])
+                segment = parent_key.rsplit("/", 1)[-1]
+                name = segment.upper() if "/" not in parent_key else segment
             items.append(BreadcrumbItem(geo_key=parent_key, name=name))
         return items

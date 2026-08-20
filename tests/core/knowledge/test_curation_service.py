@@ -13,12 +13,17 @@ from kebi.core.knowledge.curation_service import (
     curator_source_ref,
 )
 from kebi.core.places.models import LocationContext, PlaceCore
+from tests.geo_fakes import FakeGeoRegistry, make_area, make_city
+
+_BALI = make_city("id", "Bali", pid="CityBali01")
+_CANGGU = make_area(_BALI, "Canggu", pid="AreaCanggu01")
 
 
 def _service(
     *,
     place: PlaceCore | None = None,
     area_profile=None,
+    registry: FakeGeoRegistry | None = None,
 ) -> tuple[KnowledgeCurationService, AsyncMock, AsyncMock]:
     curator = AsyncMock()
     curator.structure = AsyncMock(return_value=[])
@@ -33,6 +38,7 @@ def _service(
         ingestion=ingestion,
         places_repo=places_repo,
         area_repo=area_repo,
+        geo_registry=registry or FakeGeoRegistry(_BALI, _CANGGU),
     )
     return svc, curator, ingestion
 
@@ -68,16 +74,18 @@ async def test_unknown_place_anchor_raises_before_llm() -> None:
     curator.structure.assert_not_awaited()
 
 
-async def test_area_anchor_from_key_parts_with_slug_name() -> None:
-    # No profiled row: the display name falls back to the key's own slug.
+async def test_area_anchor_named_and_geo_built_from_registry_rows() -> None:
+    # Key segments are provider ids, so geo parts and the display name come
+    # from the rows behind them — never from the key text. No profiled row:
+    # the leaf registry row's display name is the fallback.
     svc, curator, _ = _service(area_profile=None)
-    await svc.curate(text="prose", user_id="user_x", anchor_geo_key="id/bali/canggu")
+    await svc.curate(text="prose", user_id="user_x", anchor_geo_key=_CANGGU.geo_key)
     anchor = curator.structure.await_args.args[1]
     assert anchor.place_id is None
     assert anchor.name == "Canggu"
     assert anchor.geo.country_code == "id"
-    assert anchor.geo.city == "bali"
-    assert anchor.geo.neighborhood == "canggu"
+    assert anchor.geo.city == "Bali"
+    assert anchor.geo.neighborhood == "Canggu"
 
 
 async def test_area_anchor_prefers_profiled_name() -> None:
@@ -85,9 +93,32 @@ async def test_area_anchor_prefers_profiled_name() -> None:
         name = "Canggu (Bali)"
 
     svc, curator, _ = _service(area_profile=_Profile())
-    await svc.curate(text="prose", user_id="user_x", anchor_geo_key="id/bali/canggu")
+    await svc.curate(text="prose", user_id="user_x", anchor_geo_key=_CANGGU.geo_key)
     anchor = curator.structure.await_args.args[1]
     assert anchor.name == "Canggu (Bali)"
+
+
+async def test_country_only_anchor_falls_back_to_the_code() -> None:
+    # A bare country key needs no registry row; the code is the display.
+    svc, curator, _ = _service(registry=FakeGeoRegistry())
+    await svc.curate(text="prose", user_id="user_x", anchor_geo_key="id")
+    anchor = curator.structure.await_args.args[1]
+    assert anchor.name == "ID"
+    assert anchor.geo.country_code == "id"
+    assert anchor.geo.city is None
+
+
+async def test_unregistered_area_key_raises_before_llm() -> None:
+    # A non-country segment with no registry row cannot anchor — the key
+    # text alone proves nothing (AnchorNotFoundError, not a guessed geo).
+    svc, curator, _ = _service()
+    with pytest.raises(AnchorNotFoundError):
+        await svc.curate(
+            text="prose",
+            user_id="user_x",
+            anchor_geo_key="id/CityBali01/AreaGhost99",
+        )
+    curator.structure.assert_not_awaited()
 
 
 async def test_provenance_is_caller_scoped_but_claims_global() -> None:

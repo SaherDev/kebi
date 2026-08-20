@@ -38,15 +38,129 @@ depends_on = None
 
 _GEO_KEY_RE = re.compile(r"^[a-z]{2}(/.+)?$")
 
+# ---------------------------------------------------------------------------
+# Frozen snapshot of the ADR-163-era fold logic. This lived in
+# `core.knowledge.schemas` when this migration shipped and was imported from
+# there; the geo identity registry later deleted it from live code, so the
+# rule is pinned here verbatim. Data migrations only ever re-run against
+# fresh (empty) databases, where these are no-ops — the snapshot exists so
+# `alembic upgrade head` keeps importing cleanly forever.
+# ---------------------------------------------------------------------------
+
+_LEADING_ADMIN_UNITS = frozenset(
+    {
+        "khet",
+        "khwaeng",
+        "tambon",
+        "amphoe",
+        "chang-wat",
+        "changwat",
+        "kecamatan",
+        "kec",
+        "kabupaten",
+        "kab",
+        "kelurahan",
+        "thanh-pho",
+        "quan",
+        "huyen",
+        "phuong",
+        "thi-xa",
+    }
+)
+_TRAILING_ADMIN_UNITS = frozenset({"district", "regency", "subdistrict"})
+_TRAILING_STRIP_COUNTRIES = frozenset({"id", "th", "vn", "la", "kh", "mm"})
+_AREA_ALIASES: dict[tuple[str, str], str] = {
+    ("id", "tibubeneng"): "canggu",
+    ("id", "pecatu"): "uluwatu",
+    ("id", "gili-indah"): "gili-trawangan",
+    ("be", "antwerpen"): "antwerp",
+}
+_CITY_ALIASES: dict[tuple[str, str], str] = {
+    ("th", "krung-thep-maha-nakhon"): "bangkok",
+    ("th", "krung-thep"): "bangkok",
+    ("id", "jakarta-raya"): "jakarta",
+    ("id", "daerah-khusus-ibukota-jakarta"): "jakarta",
+    ("id", "nusa-tenggara-barat"): "west-nusa-tenggara",
+    ("id", "nusa-tenggara-timur"): "east-nusa-tenggara",
+    ("vn", "thanh-pho-ho-chi-minh"): "ho-chi-minh-city",
+    ("vn", "sai-gon"): "ho-chi-minh-city",
+    ("vn", "ha-noi"): "hanoi",
+    ("vn", "da-nang"): "da-nang",
+    ("jp", "tokyo-to"): "tokyo",
+    ("kr", "seoul-teukbyeolsi"): "seoul",
+    ("cn", "beijing-shi"): "beijing",
+    ("ae", "dubayy"): "dubai",
+}
+
+
+def _snapshot_slugify(part: str) -> str:
+    from anyascii import anyascii
+
+    out: list[str] = []
+    prev_hyphen = False
+    for ch in anyascii(part).lower():
+        if ch.isalnum():
+            out.append(ch)
+            prev_hyphen = False
+        elif not prev_hyphen:
+            out.append("-")
+            prev_hyphen = True
+    return "".join(out).strip("-")
+
+
+def _strips_trailing(country_code: str | None) -> bool:
+    return (
+        country_code is not None
+        and country_code.strip().lower() in _TRAILING_STRIP_COUNTRIES
+    )
+
+
+def canonical_area_slug(slug: str, country_code: str | None = None) -> str:
+    for token in sorted(_LEADING_ADMIN_UNITS, key=len, reverse=True):
+        prefix = f"{token}-"
+        if slug.startswith(prefix) and len(slug) > len(prefix):
+            slug = slug[len(prefix) :]
+            break
+    if _strips_trailing(country_code):
+        for token in _TRAILING_ADMIN_UNITS:
+            suffix = f"-{token}"
+            if slug.endswith(suffix) and len(slug) > len(suffix):
+                slug = slug.removesuffix(suffix)
+                break
+    if country_code is not None:
+        slug = _AREA_ALIASES.get((country_code.strip().lower(), slug), slug)
+    return slug
+
+
+def canonical_city_slug(country_code: str, city: str) -> str:
+    cc = country_code.strip().lower()
+    slug = _snapshot_slugify(city)
+    if (cc, slug) in _CITY_ALIASES:
+        return _CITY_ALIASES[(cc, slug)]
+    folded = canonical_area_slug(slug, cc)
+    return _CITY_ALIASES.get((cc, folded), folded)
+
+
+def strip_admin_unit(name: str, country_code: str | None = None) -> str:
+    words = name.split()
+    stripped = list(words)
+    for n in (2, 1):
+        if len(stripped) > n and _snapshot_slugify(" ".join(stripped[:n])) in (
+            _LEADING_ADMIN_UNITS
+        ):
+            stripped = stripped[n:]
+            break
+    if (
+        _strips_trailing(country_code)
+        and len(stripped) > 1
+        and _snapshot_slugify(stripped[-1]) in _TRAILING_ADMIN_UNITS
+    ):
+        stripped = stripped[:-1]
+    return " ".join(stripped) if stripped != words else name
+
 
 def _fold_key(key: str) -> str | None:
-    """The canonical form of a geo key under ADR-163, or None if unchanged.
-
-    Imported from the code that owns the rule rather than duplicated, so the
-    migration cannot drift from what `build_geo_key` produces.
-    """
-    from kebi.core.knowledge.schemas import canonical_area_slug, canonical_city_slug
-
+    """The canonical form of a geo key under ADR-163, or None if unchanged."""
     if not _GEO_KEY_RE.match(key):
         return None
     parts = key.split("/")
@@ -61,8 +175,6 @@ def _fold_key(key: str) -> str | None:
 
 
 def upgrade() -> None:
-    from kebi.core.knowledge.schemas import strip_admin_unit
-
     conn = op.get_bind()
 
     # -- knowledge_claims: rewrite folding entity keys wholesale ------------

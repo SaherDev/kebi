@@ -7,11 +7,16 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from kebi.core.places.models import (
+    LocationContext,
     PlaceCore,
     PlaceNameAlias,
     PlaceTag,
 )
 from kebi.core.places.upsert_service import PlaceUpsertService
+from tests.geo_fakes import FakeGeoRegistry, make_area, make_city
+
+_BALI = make_city("id", "Bali", pid="CityBali01")
+_CANGGU = make_area(_BALI, "Canggu", pid="AreaCanggu01")
 
 
 @pytest.fixture
@@ -33,7 +38,11 @@ def mock_embedding_service() -> MagicMock:
 def service(
     mock_repo: MagicMock, mock_embedding_service: MagicMock
 ) -> PlaceUpsertService:
-    return PlaceUpsertService(repo=mock_repo, embedding_service=mock_embedding_service)
+    return PlaceUpsertService(
+        repo=mock_repo,
+        embedding_service=mock_embedding_service,
+        geo_registry=FakeGeoRegistry(_BALI, _CANGGU),
+    )
 
 
 class TestUpsertAndEmbed:
@@ -117,3 +126,79 @@ class TestUpsertAndEmbed:
         assert {t.value for t in merged.tags} == {"chill", "italian"}
         assert {a.value for a in merged.place_name_aliases} == {"Cafe Centro Mission"}
         mock_embedding_service.embed_and_store.assert_awaited_once()
+
+
+class TestGeoKeyResolution:
+    """The write path is the mint point: each merged core's area identity is
+    resolved through the geo registry before it reaches the repo."""
+
+    async def test_resolved_location_stores_the_registry_key(
+        self, service: PlaceUpsertService, mock_repo: MagicMock
+    ) -> None:
+        candidate = PlaceCore(
+            place_name="Crate Café",
+            provider_id="google:crate",
+            location=LocationContext(
+                city="Bali", neighborhood="Canggu", country_code="id"
+            ),
+        )
+        mock_repo.upsert_places.side_effect = lambda cores: cores
+
+        result = await service.upsert_and_embed([candidate])
+
+        assert result[0].geo_key == _CANGGU.geo_key
+
+    async def test_unresolved_city_stores_no_key(
+        self, service: PlaceUpsertService, mock_repo: MagicMock
+    ) -> None:
+        """A location whose city the registry can't verify keys to nothing —
+        the `elsewhere` bucket, coarser-but-correct; a country-level key is
+        not an area anyone navigates to."""
+        candidate = PlaceCore(
+            place_name="Ghost Café",
+            provider_id="google:ghost",
+            geo_key="id/CityBali01/AreaCanggu01",  # stale — must not survive
+            location=LocationContext(city="Atlantis", country_code="id"),
+        )
+        mock_repo.upsert_places.side_effect = lambda cores: cores
+
+        result = await service.upsert_and_embed([candidate])
+
+        assert result[0].geo_key is None
+
+    async def test_missing_location_stores_no_key(
+        self, service: PlaceUpsertService, mock_repo: MagicMock
+    ) -> None:
+        candidate = PlaceCore(place_name="Nowhere Bar", provider_id="google:nw")
+        mock_repo.upsert_places.side_effect = lambda cores: cores
+
+        result = await service.upsert_and_embed([candidate])
+
+        assert result[0].geo_key is None
+
+    async def test_registry_failure_keeps_the_carried_key(
+        self, mock_repo: MagicMock, mock_embedding_service: MagicMock
+    ) -> None:
+        """Identity resolution must never cost the save: a refresh must not
+        strip a good key over a transient registry failure."""
+        registry = MagicMock(
+            key_for_location=AsyncMock(side_effect=RuntimeError("geo down"))
+        )
+        service = PlaceUpsertService(
+            repo=mock_repo,
+            embedding_service=mock_embedding_service,
+            geo_registry=registry,
+        )
+        candidate = PlaceCore(
+            place_name="Crate Café",
+            provider_id="google:crate",
+            geo_key="id/CityBali01/AreaCanggu01",
+            location=LocationContext(
+                city="Bali", neighborhood="Canggu", country_code="id"
+            ),
+        )
+        mock_repo.upsert_places.side_effect = lambda cores: cores
+
+        result = await service.upsert_and_embed([candidate])
+
+        assert result[0].geo_key == "id/CityBali01/AreaCanggu01"
