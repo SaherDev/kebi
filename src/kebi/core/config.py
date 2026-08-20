@@ -83,6 +83,11 @@ class LLMRoleConfig(BaseModel):
     # chat-completions API rejects function tools at any other effort.
     # None = omit the parameter (non-reasoning models).
     reasoning_effort: str | None = None
+    # Claude Sonnet 5 rejects `temperature` outright ("deprecated for this
+    # model", 400) — caught by the orchestrator bakeoff before it broke the
+    # advanced tier in prod. False = clients omit the parameter entirely;
+    # the role's `temperature` value is then ignored by design.
+    supports_temperature: bool = True
 
 
 # Per-role boot override: KEBI_MODEL_<ROLE> (role name upper-cased) names

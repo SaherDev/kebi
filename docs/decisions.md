@@ -17,6 +17,16 @@ Format:
 
 ---
 
+## ADR-180: The agent has a strength test — first-move routing, measured, and it already paid for itself twice
+
+**Date:** 2026-08-21\
+**Status:** accepted — closes ADR-175's deliberate orchestrator gap\
+**Context:** The orchestrator was the one role without a benchmark adapter, deferred because a full test seemed to need the executing tool loop and a prose judge. That framing was too expensive for what the swap decision actually hinges on: the properties that make an orchestrator swap dangerous are its *first move* — routing to the right tool, or correctly answering directly — and whether hard constraints (vegan, halal, accessibility) survive into tool arguments. Both are testable with the real prompt and the real tool schemas bound to mock services, no execution needed. Meanwhile the advanced-tier swap to Sonnet 5 (ADR-177) had shipped on family-lineage reasoning alone, unbenchmarked.\
+**Decision:** A routing-strength adapter joins the harness: the real agent prompt, the real five-tool schema surface, one model call per case, scored on first action plus constraint-carrying args. A twelve-case golden set pins one routing rule each, straight from the prompt's own routing section. Explicitly out of scope, stated rather than implied: multi-step loop behaviour and answer voice — this test gates swaps on the failure modes that are cheap to measure and catastrophic to miss, not on everything.\
+**Consequences:** The first run earned the harness its keep twice over. It caught that Sonnet 5 rejects the temperature parameter outright — the already-shipped advanced-tier swap would have failed every advanced consult on the next deploy; the quirk is now a profile capability flag and clients omit the parameter. And it put a number on the production orchestrator: Haiku routes 11 of 12 correctly, and its single miss is the dietary hard-constraint case — precisely the adherence gate ADR-100 named and never measured, and consistent with this project's history that prompt rules guarding real cost need backstops. One case is a signal, not a verdict: the next step is expanding the constraint cases from real traces before deciding between reinforcing the prompt, adding a code backstop, or paying for a stronger default model (Sonnet 5, Luna, and Sonnet 4.6 all routed 12/12; Luna did it at a seventh of Haiku's cost, unproven on loop behaviour). The agent-prompt trim is also unblocked — this adapter is the parity gate ADR-174 was waiting for.
+
+---
+
 ## ADR-179: Roles belong to model families — one flat shape, and a family changes as one
 
 **Date:** 2026-08-21\

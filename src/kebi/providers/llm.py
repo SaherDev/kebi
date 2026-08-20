@@ -219,10 +219,12 @@ class AnthropicLLMClient:
         self,
         model: str,
         max_tokens: int = 1024,
-        temperature: float = 1.0,
+        temperature: float | None = 1.0,
         api_key: str | None = None,
         timeout_seconds: float | None = None,
     ) -> None:
+        """`temperature=None` omits the parameter — required for models
+        that reject it outright (Sonnet 5, `supports_temperature: false`)."""
         self._model = model
         self._max_tokens = max_tokens
         self._temperature = temperature
@@ -230,6 +232,11 @@ class AnthropicLLMClient:
         if timeout_seconds is not None:
             client_kwargs["timeout"] = timeout_seconds
         self._client = anthropic.AsyncAnthropic(**client_kwargs)
+
+    def _sampling_kwargs(self) -> dict[str, Any]:
+        if self._temperature is None:
+            return {}
+        return {"temperature": self._temperature}
 
     @staticmethod
     def _split_messages(
@@ -255,9 +262,9 @@ class AnthropicLLMClient:
         response = await self._client.messages.create(
             model=self._model,
             max_tokens=self._max_tokens,
-            temperature=self._temperature,
             system=system or "",
             messages=typed,
+            **self._sampling_kwargs(),
         )
         block = response.content[0]
         if not isinstance(block, TextBlock):
@@ -269,9 +276,9 @@ class AnthropicLLMClient:
         async with self._client.messages.stream(
             model=self._model,
             max_tokens=self._max_tokens,
-            temperature=self._temperature,
             system=system or "",
             messages=typed,
+            **self._sampling_kwargs(),
         ) as s:
             async for text in s.text_stream:
                 yield text
@@ -284,7 +291,7 @@ class OpenAILLMClient:
         self,
         model: str,
         max_tokens: int = 1024,
-        temperature: float = 1.0,
+        temperature: float | None = 1.0,
         api_key: str | None = None,
         base_url: str | None = None,
         timeout_seconds: float | None = None,
@@ -303,11 +310,14 @@ class OpenAILLMClient:
 
     async def complete(self, messages: list[dict[str, str]]) -> CompletionResult:
         typed = cast(list[ChatCompletionMessageParam], messages)
+        sampling: dict[str, Any] = (
+            {} if self._temperature is None else {"temperature": self._temperature}
+        )
         response = await self._client.chat.completions.create(
             model=self._model,
             max_tokens=self._max_tokens,
-            temperature=self._temperature,
             messages=typed,
+            **sampling,
         )
         return CompletionResult(
             text=response.choices[0].message.content or "",
@@ -452,9 +462,11 @@ def get_llm(role: str) -> LLMClientProtocol:
     provider = role_config.provider
     model = role_config.model
     max_tokens = role_config.max_tokens
-    temperature = role_config.temperature
+    temperature: float | None = role_config.temperature
 
     timeout_seconds = role_config.timeout_seconds
+    if not role_config.supports_temperature:
+        temperature = None  # model rejects the parameter (e.g. Sonnet 5)
 
     if provider == "anthropic":
         return AnthropicLLMClient(
@@ -533,7 +545,9 @@ def get_langchain_chat_model(role: str) -> Any:
     provider = role_config.provider
     model = role_config.model
     max_tokens = role_config.max_tokens
-    temperature = role_config.temperature
+    temperature: float | None = role_config.temperature
+    if not role_config.supports_temperature:
+        temperature = None  # model rejects the parameter (e.g. Sonnet 5)
 
     # SDK-internal retries off: the agent graph's `_invoke_llm_with_retry`
     # owns the retry budget and traces each attempt; LangChain's default

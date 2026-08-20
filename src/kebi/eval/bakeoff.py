@@ -187,11 +187,81 @@ class ExtractorAdapter:
         return 2 * precision * recall / (precision + recall)
 
 
+class OrchestratorAdapter:
+    """Agent routing-strength test: the model's FIRST move on a turn.
+
+    Binds the real tool schemas (services mocked — nothing executes) to
+    the real agent prompt and scores the first response: which tool it
+    called (or that it answered directly) and whether hard-constraint
+    args survived. This is the swap-safety property ADR-100 cares about —
+    a model that mis-routes or drops a dietary constraint fails here
+    regardless of how nice its prose is. Multi-step loop quality and an
+    LLM prose judge remain future extensions.
+    """
+
+    role = "orchestrator"
+    kind = "agentic"
+    schema: type[BaseModel] = BaseModel  # unused on the agentic path
+
+    def prompt_template(self) -> str:
+        return get_config().prompts["agent"].content
+
+    @staticmethod
+    def tools() -> list[Any]:
+        """The real tool surface with schema-only (mock) services."""
+        from unittest.mock import MagicMock
+
+        from kebi.core.agent.tools import build_tools
+
+        return build_tools(
+            MagicMock(),
+            MagicMock(),
+            MagicMock(),
+            MagicMock(),
+            candidate_notes=MagicMock(),
+            known_places=MagicMock(),
+            web_knowledge=MagicMock(),
+            discovery_enabled=True,
+        )
+
+    def messages(self, case: GoldenCase, template: str) -> tuple[str, str]:
+        head, _, tail = template.partition(_DYNAMIC_MARKER)
+        slots = {
+            "location_context": case.input.get(
+                "location_context", "Working location: unknown."
+            ),
+            "time_context": case.input.get("time_context", "(no local time)"),
+            "movement_context": case.input.get("movement_context", "(default)"),
+            "user_profile_context": case.input.get("user_profile_context", "(none)"),
+            "taste_profile_summary": case.input.get("taste_profile_summary", "(none)"),
+            "memory_summary": case.input.get("memory_summary", "(none)"),
+        }
+        system_text = f"{head.strip()}\n\n{tail.format(**slots).strip()}"
+        return system_text, str(case.input.get("message", "")).strip()
+
+    def score(self, case: GoldenCase, output: Any) -> float:
+        """`output` is the first AIMessage. Routing decision + arg checks."""
+        expected = case.expected
+        allowed = expected.get("first_action", [])
+        if isinstance(allowed, str):
+            allowed = [allowed]
+        tool_calls = getattr(output, "tool_calls", None) or []
+        first = tool_calls[0]["name"] if tool_calls else "answer"
+        routing = 1.0 if first in allowed else 0.0
+        needles = [str(n).lower() for n in expected.get("args_contain", [])]
+        if not needles:
+            return routing
+        args_blob = json.dumps(
+            [c.get("args", {}) for c in tool_calls], ensure_ascii=False
+        ).lower()
+        arg_hits = sum(needle in args_blob for needle in needles) / len(needles)
+        return 0.5 * routing + 0.5 * arg_hits
+
+
 _ADAPTERS: dict[str, Any] = {
     "location_resolver": LocationResolverAdapter,
     "extractor": ExtractorAdapter,
-    # orchestrator: deliberately absent — its bakeoff needs the bound tool
-    # loop and an LLM judge, built when its swap round starts (ADR-175).
+    "orchestrator": OrchestratorAdapter,
 }
 
 
@@ -239,7 +309,7 @@ async def _call_option(
         llm = ChatAnthropic(
             model=option.model,
             max_tokens_to_sample=option.max_tokens,
-            temperature=option.temperature,
+            temperature=(option.temperature if option.supports_temperature else None),
             api_key=get_env().ANTHROPIC_API_KEY,
             timeout=option.timeout_seconds,
             max_retries=0,
@@ -288,6 +358,57 @@ async def _call_option(
     raise ValueError(f"Bakeoff has no client for provider {option.provider!r}")
 
 
+def _langchain_model(option: LLMRoleConfig) -> Any:
+    """LangChain chat model for an option — the agent-path client shape."""
+    if option.provider == "anthropic":
+        from langchain_anthropic import ChatAnthropic
+
+        return ChatAnthropic(
+            model=option.model,
+            max_tokens_to_sample=option.max_tokens,
+            temperature=(option.temperature if option.supports_temperature else None),
+            api_key=get_env().ANTHROPIC_API_KEY,
+            timeout=option.timeout_seconds,
+            max_retries=0,
+            stop=None,
+        )
+    if option.provider in ("openai", "openrouter"):
+        from langchain_openai import ChatOpenAI
+
+        kwargs: dict[str, Any] = {}
+        if option.reasoning_effort is not None:
+            kwargs["reasoning_effort"] = option.reasoning_effort
+        if option.provider == "openrouter":
+            kwargs["base_url"] = get_config().providers.openrouter.base_url
+            kwargs["api_key"] = get_env().OPENROUTER_API_KEY
+        else:
+            kwargs["api_key"] = get_env().OPENAI_API_KEY
+        return ChatOpenAI(
+            model=option.model,
+            max_tokens=option.max_tokens,
+            temperature=option.temperature,
+            timeout=option.timeout_seconds,
+            max_retries=0,
+            **kwargs,
+        )
+    raise ValueError(f"No agentic client for provider {option.provider!r}")
+
+
+async def _call_agentic(
+    option: LLMRoleConfig, tools: list[Any], system_text: str, user_text: str
+) -> tuple[Any, dict[str, int] | None]:
+    """One agent-node-shaped call: tools bound, first response returned."""
+    from langchain_core.messages import HumanMessage, SystemMessage
+
+    from kebi.core.agent.graph import _ai_message_usage
+
+    bound = _langchain_model(option).bind_tools(tools, parallel_tool_calls=False)
+    ai_msg = await bound.ainvoke(
+        [SystemMessage(content=system_text), HumanMessage(content=user_text)]
+    )
+    return ai_msg, (_ai_message_usage(ai_msg) or None)
+
+
 # ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
@@ -311,6 +432,8 @@ async def run_bakeoff(
         prompt_override.read_text() if prompt_override else adapter.prompt_template()
     )
     pricing = get_config().pricing
+    agentic = getattr(adapter, "kind", "structured") == "agentic"
+    tools = adapter.tools() if agentic else None
 
     results: list[CaseResult] = []
     for option_name, option in options.items():
@@ -325,9 +448,14 @@ async def run_bakeoff(
                 standalone=True,
             ) as t:
                 try:
-                    output, usage = await _call_option(
-                        option, adapter.schema, system_text, user_text
-                    )
+                    if agentic:
+                        output, usage = await _call_agentic(
+                            option, tools or [], system_text, user_text
+                        )
+                    else:
+                        output, usage = await _call_option(
+                            option, adapter.schema, system_text, user_text
+                        )
                 except Exception as exc:  # a failed call scores zero, run goes on
                     t.fail(exc)
                     results.append(
