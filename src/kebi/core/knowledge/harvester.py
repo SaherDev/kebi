@@ -131,7 +131,7 @@ class KnowledgeHarvester:
             standalone=True,
         ) as t:
             try:
-                response = await self._client.extract(
+                extraction = await self._client.extract(
                     response_model=_HarvesterResponse,
                     messages=[
                         {
@@ -149,7 +149,11 @@ class KnowledgeHarvester:
                 logger.warning("knowledge harvest failed: %s", exc, exc_info=True)
                 t.fail(exc)
                 return []
-            claims = await self._resolve(cast(_HarvesterResponse, response), places)
+            t.usage = extraction.usage
+            t.attempts = extraction.attempts
+            claims = await self._resolve(
+                cast(_HarvesterResponse, extraction.data), places
+            )
             t.output = {"count": len(claims)}
             return claims
 

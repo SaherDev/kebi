@@ -10,6 +10,7 @@ from kebi.core.knowledge.curator import (
     _CuratorResponse,
 )
 from kebi.core.knowledge.schemas import CurationAnchor, ResolvedGeo
+from kebi.providers.llm import InstructorExtraction
 from tests.geo_fakes import FakeGeoRegistry, make_area, make_city, make_country
 
 _DUBAI = make_city("ae", "Dubai")
@@ -22,7 +23,9 @@ def _curator(
     claims: list[_CuratedClaim], registry: FakeGeoRegistry | None = None
 ) -> tuple[KnowledgeCurator, FakeGeoRegistry]:
     client = AsyncMock()
-    client.extract = AsyncMock(return_value=_CuratorResponse(claims=claims))
+    client.extract = AsyncMock(
+        return_value=InstructorExtraction(data=_CuratorResponse(claims=claims))
+    )
     registry = registry or FakeGeoRegistry()
     registry.key_for_location = AsyncMock(  # type: ignore[method-assign]
         wraps=registry.key_for_location

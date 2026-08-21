@@ -25,55 +25,164 @@ providers:
   # BRAVE_API_KEY is set; otherwise the null provider is used.
   brave:
     base_url: https://api.search.brave.com
+  # OpenAI-compatible gateway for benchmarking candidate models (ADR-173):
+  # one OPENROUTER_API_KEY covers Gemini/Qwen/DeepSeek/MiniMax/etc. at
+  # pass-through pricing. Production winners get a direct provider
+  # integration before promotion — this path is for the bakeoff matrix
+  # and short A/B windows, not the steady state.
+  openrouter:
+    base_url: https://openrouter.ai/api/v1
+
+# ---------------------------------------------------------------------------
+# Model profiles (ADR-176/179) — THE model catalog. Every role under
+# models: references exactly one profile via `profile: <name>`; provider
+# and model names never appear anywhere else. The mini-workhorse GROUP
+# (harvesters, profilers, taste, memory, namer, home) moves to a new
+# model by editing ONE profile here; KEBI_MODEL_<ROLE>=<profile-name>
+# switches a single role for a trial (unset = rollback). Role keys
+# override profile keys (max_tokens, temperature, timeouts per-role).
+# ---------------------------------------------------------------------------
+model_profiles:
+  mini-workhorse:
+    provider: openai
+    model: gpt-4o-mini
+    max_retries: 2
+    timeout_seconds: 30
+  luna-workhorse:
+    provider: openai
+    model: gpt-5.6-luna
+    max_retries: 2
+    timeout_seconds: 30
+    # Required "none": Luna rejects function tools at any other effort on
+    # the chat-completions API (found live in the first bakeoff).
+    reasoning_effort: none
+  # The strong group — roles that deliberately pay for gpt-4o (extractor,
+  # area_registry, and any future role where mini measurably missed).
+  gpt4o-strong:
+    provider: openai
+    model: gpt-4o
+    max_retries: 2
+    timeout_seconds: 30
+  # The realtime Claude group — per-turn classification/orchestration on
+  # Haiku 4.5 (location_resolver, orchestrator default). Timeouts differ
+  # per role, so they stay on the role block.
+  haiku-fast:
+    provider: anthropic
+    model: claude-haiku-4-5-20251001
+    max_retries: 2
+  # Previous advanced-tier orchestrator — kept as the rollback target
+  # for ADR-177's sonnet-5 selection.
+  sonnet-strong:
+    provider: anthropic
+    model: claude-sonnet-4-6
+    max_retries: 2
+  # Non-chat providers — profiled for uniformity: provider+model appear
+  # ONLY in this section, never inline under models:.
+  whisper-transcribe:
+    provider: groq
+    model: whisper-large-v3-turbo
+    max_retries: 2
+  voyage-embed:
+    provider: voyage
+    model: voyage-4-lite
+  # --- Benchmark candidates (ADR-175) — unused until a role's profile
+  # points here or KEBI_MODEL_<ROLE>=<name> selects one for a trial. ---
+  sonnet-5:
+    provider: anthropic
+    model: claude-sonnet-5
+    max_retries: 2
+    # Sonnet 5 rejects `temperature` (400 "deprecated for this model") —
+    # found by the orchestrator bakeoff. Clients omit the param; the
+    # role-level temperature value is ignored for this family.
+    supports_temperature: false
+  gpt-terra:
+    provider: openai
+    model: gpt-5.6-terra
+    max_retries: 2
+    timeout_seconds: 60
+  gemini-flash:
+    provider: openrouter
+    model: google/gemini-3.7-flash
+    max_retries: 2
+    timeout_seconds: 30
+    # Reasoning is MANDATORY on this model (cannot be disabled) and its
+    # thinking spends the completion budget — unusable for roles with
+    # small structured-output ceilings (extractor's 512 → truncation).
+    # Only viable where max_tokens leaves thinking room (orchestrator).
+  qwen-flash:
+    provider: openrouter
+    model: qwen/qwen3.5-flash-02-23
+    max_retries: 2
+    timeout_seconds: 30
+    # Thinking mode rejects forced tool_choice — effort off, like Luna.
+    reasoning_effort: none
+  qwen-plus:
+    provider: openrouter
+    model: qwen/qwen3.5-plus-20260420
+    max_retries: 2
+    timeout_seconds: 30
+    reasoning_effort: none
+  deepseek-flash:
+    provider: openrouter
+    model: deepseek/deepseek-v4-flash
+    max_retries: 2
+    timeout_seconds: 30
+  minimax-m3:
+    provider: openrouter
+    model: minimax/minimax-m3
+    max_retries: 2
+    timeout_seconds: 60
 
 models:
+  # One shape for every role (ADR-179): `profile:` names the model from
+  # model_profiles above; the rest is per-role params (they override the
+  # profile). Switch one role: KEBI_MODEL_<ROLE>=<profile-name> in the env
+  # (unset = rollback, unknown name = warn + keep configured). Move a
+  # whole group: edit its shared profile once.
+
   # Speech-to-text for the audio track of submitted videos (e.g. TikTok/Reels).
   # Output feeds the SPEECH source in the extraction confidence pipeline.
   transcriber:
-    provider: groq
-    model: whisper-large-v3-turbo
+    profile: whisper-transcribe
     max_tokens: 0
     temperature: 0
 
   # Vision model that reads sampled video frames to pull on-screen place names,
   # signage, and OCR'd text. Feeds the OCR / vision_frames extraction sources.
   vision_frames:
-    provider: openai
-    model: gpt-4o-mini
+    profile: mini-workhorse
     max_tokens: 512
     temperature: 0
 
   # Structured place extraction from free text (captions, descriptions, plain
   # text, transcribed speech). Returns the Pydantic place schema used by the
-  # extraction pipeline.
+  # extraction pipeline. Luna, not gpt-4o (ADR-178): the round-1 bakeoff tied
+  # them on quality (0.875 / 88% pass) at ~1/16th the cost. Rollback:
+  # KEBI_MODEL_EXTRACTOR=gpt4o-strong (no deploy) or repoint this profile.
+  # Watch /v1/extract latency — Luna's p95 was slower in the bakeoff.
   extractor:
-    provider: openai
-    model: gpt-4o
+    profile: luna-workhorse
     max_tokens: 512
     temperature: 0
-  # Offline swap: set provider: ollama, model: gemma4:e2b (requires: ollama serve)
 
   # Knowledge-layer writers (ADR-120/121). Both mine world-entity facts from
   # already-gathered text and emit structured claims; the harvester runs on the
   # background second pass over a saved share, the curator structures an
-  # expert's prose. gpt-4o-mini — cheap, off the critical path.
+  # expert's prose. Cheap, off the critical path.
   knowledge_harvester:
-    provider: openai
-    model: gpt-4o-mini
+    profile: mini-workhorse
     max_tokens: 1024
     temperature: 0
   knowledge_curator:
-    provider: openai
-    model: gpt-4o-mini
+    profile: mini-workhorse
     max_tokens: 1024
     temperature: 0
 
   # Place profiler (ADR-152) — experiential tags for a thin catalog row from
   # venue identity alone, fired in the background on the place screen's first
-  # open. One call per unique place ever; gpt-4o-mini, off the critical path.
+  # open. One call per unique place ever; off the critical path.
   place_profiler:
-    provider: openai
-    model: gpt-4o-mini
+    profile: mini-workhorse
     max_tokens: 512
     temperature: 0
 
@@ -82,8 +191,7 @@ models:
   # knowledge, fired in the background on the area screen's first open.
   # One call per unique area ever; off the critical path.
   area_profiler:
-    provider: openai
-    model: gpt-4o-mini
+    profile: mini-workhorse
     max_tokens: 800
     temperature: 0
 
@@ -91,13 +199,12 @@ models:
   # people call the unit, the bigger colloquial area it belongs to, and the
   # distinct places one admin name covers (multi-island desa). Every name it
   # offers is verified against the geocoder in code before storage; identity
-  # never comes from this call. gpt-4o, not mini, deliberately: mini missed
-  # the multi-island covers case outright in live probes, and this fires
-  # once per unique area EVER — the knowledge gap costs a wrong screen, the
-  # model gap costs fractions of a cent.
+  # never comes from this call. The strong profile, not mini, deliberately:
+  # mini missed the multi-island covers case outright in live probes, and
+  # this fires once per unique area EVER — the knowledge gap costs a wrong
+  # screen, the model gap costs fractions of a cent.
   area_registry:
-    provider: openai
-    model: gpt-4o
+    profile: gpt4o-strong
     max_tokens: 400
     temperature: 0
 
@@ -105,65 +212,44 @@ models:
   # Runs after the answer is already sent, so latency does not matter and
   # cheap does: same tier as the other knowledge writers.
   web_harvester:
-    provider: openai
-    model: gpt-4o-mini
+    profile: mini-workhorse
     max_tokens: 800
     temperature: 0
 
   # Embedding model for semantic search over saved places (pgvector) and for
   # the FTS+vector RRF recall pipeline. 1024-dim per ADR-040.
   embedder:
-    provider: voyage
-    model: voyage-4-lite
+    profile: voyage-embed
     dimensions: 1024
 
   # LangGraph agent brain — drives the recall/consult tool loop behind
   # POST /v1/chat and /v1/chat/stream (ADR-062/065). Higher temperature for
   # conversational variety.
   #
-  # Runtime selection (ADR-068): set AGENT_MODEL=<option-key> in the env to
-  # pick a non-default option. Unset / unknown values fall back to `default`.
-  # Boot fails if `default` does not name one of the option keys below.
+  # Haiku default (ADR-100): the orchestrator is ~69% of consult cost, and
+  # Haiku stays in the function-calling-leading Claude family so the prompt
+  # cache split applies. AGENT_MODEL=<profile-name> (alias for
+  # KEBI_MODEL_ORCHESTRATOR) A/Bs another profile without a deploy.
   #
-  # Default is Haiku 4.5 (ADR-100, supersedes ADR-067's Sonnet choice): the
-  # orchestrator is ~69% of consult cost, and Haiku 4.5 is ~3x cheaper per
-  # token while staying in the function-calling-leading Claude family — so
-  # prompt caching below still applies. Set AGENT_MODEL=claude-sonnet to A/B
-  # back to Sonnet without a deploy.
+  # `advanced` names the PROFILE the top plan tier gets — the
+  # `advanced_models_enabled` entitlement selects the emitted
+  # `orchestrator_advanced` role. Sonnet 5, not 4.6 (ADR-177): newer model
+  # at $2/$10 vs $3/$15 — a strict upgrade within the same family.
   #
-  # `advanced` (optional) names the option the top plan tier gets — the
-  # `advanced_models_enabled` entitlement makes `get_agent_graph` select
-  # logical role `orchestrator_advanced`, which boot resolution emits from
-  # this same option list (no duplicate model block). Sonnet, not Opus: a
-  # real quality lift over the Haiku base while staying cost-bounded
-  # against the tier's unlimited consults — retune by repointing `advanced`.
+  # max_tokens 2048, not 1024: a multi-stop trip answer walks five sections
+  # and was observed truncating mid-close at 1024. Single-city answers stay
+  # short by prompt; the ceiling only needs to clear the long-answer shape.
   orchestrator:
-    default: claude-haiku
-    advanced: claude-sonnet
-    # 2048, not 1024: a multi-stop trip answer walks five sections and was
-    # observed truncating mid-close at 1024. Single-city answers stay short
-    # by prompt; the ceiling only needs to clear the long-answer shape.
-    claude-sonnet:
-      provider: anthropic
-      model: claude-sonnet-4-6
-      max_tokens: 2048
-      temperature: 0.7
-    claude-haiku:
-      provider: anthropic
-      model: claude-haiku-4-5-20251001
-      max_tokens: 2048
-      temperature: 0.7
-    gpt-4o-mini:
-      provider: openai
-      model: gpt-4o-mini
-      max_tokens: 1024
-      temperature: 0.7
+    profile: haiku-fast
+    advanced: sonnet-5
+    max_tokens: 2048
+    temperature: 0.7
+    timeout_seconds: 60
 
   # Rewrites the user's taste_profile_summary from accumulated signals.
   # Triggered by debounced signal events and by chip_confirm.
   taste_regen:
-    provider: openai
-    model: gpt-4o-mini
+    profile: mini-workhorse
     max_tokens: 512
     temperature: 0.3
 
@@ -171,23 +257,22 @@ models:
   # Triggered every Nth user turn (memory.extraction.debounce_messages).
   # Output feeds UserMemoryService.save_facts → user_memories.
   memory_extractor:
-    provider: openai
-    model: gpt-4o-mini
+    profile: mini-workhorse
     max_tokens: 256
     temperature: 0
 
   # Resolves the working location at the start of every agent turn that
   # passes the location gate (core/agent/graph.py resolve_location node).
-  # Classification-like structured output — keep it cheap and
-  # deterministic, but the prompt has nuanced rules (future tense,
-  # lowercase place names, GPS-vs-explicit-name precedence) that the
-  # mini-tier OpenAI model was missing on real traffic, so we run this
-  # on Claude Haiku 4.5 instead.
+  # Classification-like structured output with nuanced rules (future tense,
+  # shift-vs-continuation, GPS-vs-explicit-name precedence) that mini-tier
+  # models measurably miss — the round-1 bakeoff confirmed Haiku's lead
+  # (0.917 vs 0.833), so this stays on the realtime Claude profile.
+  # Its 18KB rules head rides the prompt cache (ADR-174).
   location_resolver:
-    provider: anthropic
-    model: claude-haiku-4-5-20251001
+    profile: haiku-fast
     max_tokens: 512
     temperature: 0
+    timeout_seconds: 20
 
   # Proposes well-known place names that fit the user's intent, scoped to
   # the turn's working location and movement capabilities. Output feeds
@@ -195,10 +280,10 @@ models:
   # against the place provider. Cheap structured-output role — model
   # knowledge of local landmarks matters more than reasoning depth.
   candidate_namer:
-    provider: openai
-    model: gpt-4o-mini
+    profile: mini-workhorse
     max_tokens: 700
     temperature: 0.3
+    timeout_seconds: 20
 
   # Generates the home screen's context-aware greeting + suggestion chips
   # from the user's taste signal and the client-supplied local context
@@ -206,10 +291,10 @@ models:
   # is Redis-cached per coarse context bucket (ADR-111). Higher temperature
   # for greeting variety; cheap structured-output role.
   home_suggester:
-    provider: openai
-    model: gpt-4o-mini
+    profile: mini-workhorse
     max_tokens: 300
     temperature: 0.8
+    timeout_seconds: 15
 
 # ---------------------------------------------------------------------------
 # Extraction pipeline — confidence weights and decision thresholds
@@ -699,38 +784,79 @@ user_intents:
 # Pricing Configuration (ADR-092)
 # Reconcile monthly against invoices per docs/runbooks/cost-reconciliation.md.
 # Each provider carries its own `verified_on` date so reconciliation can
-# update one section without re-touching the others. Source-driven cost:
-# token-priced LLMs (gpt-4o, gpt-4o-mini, sonnet-4-6) are priced by Langfuse's
-# catalog from model + token count — `llm:` entries are documentation /
-# reconciliation only and code does NOT read them. `embeddings:`,
-# `transcription:`, and `external:` are read at the call site.
+# update one section without re-touching the others. Every section is read
+# by code: `llm:` is keyed by MODEL NAME (exact, or a prefix of a
+# date-suffixed model id) and prices the `cost_usd` stamped on LLM spans;
+# Langfuse's catalog is the reconciliation cross-check (ADR-092).
+# `embeddings:`, `transcription:`, and `external:` price providers
+# Langfuse cannot.
 # ---------------------------------------------------------------------------
 pricing:
   currency: USD
   llm:
-    # OpenAI — verified 2026-05-24 — source: pricepertoken.com (live aggregator)
-    gpt_4o:
+    # OpenAI — verified 2026-08-20 — source: developers.openai.com/api/docs
+    gpt-4o:
       input_per_1m: 2.50
       cached_input_per_1m: 1.25
       output_per_1m: 10.00
-    gpt_4o_mini:
+    gpt-4o-mini:
       input_per_1m: 0.15
       cached_input_per_1m: 0.075
       output_per_1m: 0.60
-    # Anthropic — verified 2026-05-24 — source: platform.claude.com/docs/en/about-claude/pricing
-    sonnet_4_6:
+    # Candidate (benchmark round 1) — GPT-5.6 family, GA 2026-07-09.
+    gpt-5.6-luna:
+      input_per_1m: 0.20
+      cached_input_per_1m: 0.02
+      output_per_1m: 1.20
+    gpt-5.6-terra:
+      input_per_1m: 2.00
+      cached_input_per_1m: 0.20
+      output_per_1m: 12.00
+    # Anthropic — verified 2026-08-20 — source: platform.claude.com/docs/en/about-claude/pricing
+    claude-sonnet-4-6:
       input_per_1m: 3.00
       cache_read_per_1m: 0.30
       cache_write_5m_per_1m: 3.75
       cache_write_1h_per_1m: 6.00
       output_per_1m: 15.00
-    # Anthropic Haiku 4.5 — used by location_resolver and as orchestrator alternative.
-    haiku_4_5:
+    # Prefix of claude-haiku-4-5-20251001 — used by location_resolver and
+    # as the default orchestrator (ADR-100).
+    claude-haiku-4-5:
       input_per_1m: 1.00
       cache_read_per_1m: 0.10
       cache_write_5m_per_1m: 1.25
       cache_write_1h_per_1m: 2.00
       output_per_1m: 5.00
+    # Candidate — Sonnet 5 ($2/$10 made standard; the announced Sep 2026
+    # increase to $3/$15 was cancelled).
+    claude-sonnet-5:
+      input_per_1m: 2.00
+      cache_read_per_1m: 0.20
+      cache_write_5m_per_1m: 2.50
+      cache_write_1h_per_1m: 4.00
+      output_per_1m: 10.00
+    # Candidates via OpenRouter (model ids are provider-prefixed there) —
+    # verified 2026-08-20 — sources: openrouter.ai model pages.
+    # Gemini 3.7 Flash is Google's intro rate through 2026-12-31; doubles
+    # to 1.50/7.50 on 2027-01-01 (calendar note in the reconciliation doc).
+    google/gemini-3.7-flash:
+      input_per_1m: 0.75
+      cached_input_per_1m: 0.075
+      output_per_1m: 3.75
+    qwen/qwen3.5-flash:
+      input_per_1m: 0.065
+      output_per_1m: 0.26
+    qwen/qwen3.5-plus:
+      input_per_1m: 0.40
+      output_per_1m: 2.40
+    # DeepSeek moved to peak/off-peak billing 2026-08-16 (peak doubles
+    # these); rates below are off-peak — reconcile against the invoice.
+    deepseek/deepseek-v4-flash:
+      input_per_1m: 0.14
+      output_per_1m: 0.28
+    minimax/minimax-m3:
+      input_per_1m: 0.60
+      output_per_1m: 2.40
   embeddings:
     # Voyage — verified 2026-05-24 — source: docs.voyageai.com/docs/pricing
     voyage_4_lite:

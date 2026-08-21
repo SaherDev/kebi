@@ -216,20 +216,21 @@ class LLMResolver:
             input={"candidates": names},
         ) as t:
             try:
-                response = cast(
-                    _ResolverResponse,
-                    await self._instructor_client.extract(
-                        response_model=_ResolverResponse,
-                        messages=[
-                            {"role": "system", "content": get_prompt("place_resolver")},
-                            {"role": "user", "content": user_content},
-                        ],
-                    ),
+                extraction = await self._instructor_client.extract(
+                    response_model=_ResolverResponse,
+                    messages=[
+                        {"role": "system", "content": get_prompt("place_resolver")},
+                        {"role": "user", "content": user_content},
+                    ],
                 )
             except Exception as exc:
                 t.fail(exc)
                 logger.warning("LLMResolver failed: %s", exc, exc_info=True)
                 return self._degraded(context, names)
+
+            response = cast(_ResolverResponse, extraction.data)
+            t.usage = extraction.usage
+            t.attempts = extraction.attempts
 
             # Shared post-level location (ADR-080) — the default bias
             # for any candidate without its own `area`.

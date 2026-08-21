@@ -130,7 +130,7 @@ class KnowledgeCurator:
             standalone=True,
         ) as t:
             try:
-                response = await self._client.extract(
+                extraction = await self._client.extract(
                     response_model=_CuratorResponse,
                     messages=[
                         {
@@ -144,7 +144,11 @@ class KnowledgeCurator:
                 logger.warning("knowledge curation failed: %s", exc, exc_info=True)
                 t.fail(exc)
                 return []
-            resolved = await self._resolve(cast(_CuratorResponse, response), anchor)
+            t.usage = extraction.usage
+            t.attempts = extraction.attempts
+            resolved = await self._resolve(
+                cast(_CuratorResponse, extraction.data), anchor
+            )
             t.output = {"count": len(resolved)}
             return resolved
 

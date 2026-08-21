@@ -206,11 +206,13 @@ class HomeService:
                 standalone=True,
                 input={"daypart": daypart, "city": city or ""},
             ) as t:
-                response = await self._client.extract(
+                extraction = await self._client.extract(
                     response_model=HomeSuggestion,
                     messages=[{"role": "user", "content": prompt}],
                 )
-                result = cast(HomeSuggestion, response)
+                t.usage = extraction.usage
+                t.attempts = extraction.attempts
+                result = cast(HomeSuggestion, extraction.data)
                 # Honor the configured max; the prompt guides the min.
                 result = HomeSuggestion(
                     greeting=result.greeting,

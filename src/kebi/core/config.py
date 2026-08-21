@@ -8,6 +8,7 @@ All other modules import from here. Nobody calls load_yaml_config() directly.
 """
 
 import logging
+import os
 from pathlib import Path
 from typing import Any, Literal
 
@@ -69,107 +70,161 @@ class LLMRoleConfig(BaseModel):
     model: str
     max_tokens: int = 1024
     temperature: float = 1.0
+    # Retry budget owned by kebi, not the SDK. Counts retries *after* the
+    # first attempt (0 = single attempt). SDK-internal retries are disabled
+    # at client construction so every real API call is visible to tracing —
+    # hidden SDK retries multiplied on top of our loops (up to 9 calls per
+    # logical call) and never appeared in Langfuse.
+    max_retries: int = 2
+    # Per-request timeout passed to the provider SDK. None = SDK default.
+    timeout_seconds: float | None = None
+    # Reasoning-model dial (GPT-5.6 family: none|low|medium|high|...).
+    # Required as "none" for gpt-5.6-luna structured-output calls — the
+    # chat-completions API rejects function tools at any other effort.
+    # None = omit the parameter (non-reasoning models).
+    reasoning_effort: str | None = None
+    # Claude Sonnet 5 rejects `temperature` outright ("deprecated for this
+    # model", 400) — caught by the orchestrator bakeoff before it broke the
+    # advanced tier in prod. False = clients omit the parameter entirely;
+    # the role's `temperature` value is then ignored by design.
+    supports_temperature: bool = True
 
 
-class OrchestratorOptionsConfig(BaseModel):
-    """Multi-option orchestrator block (ADR-068).
+# Per-role boot override: KEBI_MODEL_<ROLE> (role name upper-cased) names
+# a PROFILE from `model_profiles`, e.g. KEBI_MODEL_EXTRACTOR=gpt4o-strong.
+# Rollback = unset the var and restart — no deploy, no config edit
+# (ADR-173/179).
+_MODEL_OVERRIDE_PREFIX = "KEBI_MODEL_"
 
-    Shape in YAML:
-        orchestrator:
-          default: <option-key>
-          <option-key>: { provider, model, max_tokens, temperature }
-          <option-key>: { ... }
 
-    Resolved at boot via `_resolve_orchestrator(raw, agent_model)`. Other
-    roles keep the flat `LLMRoleConfig` shape — orchestrator is the only
-    role with runtime selection right now.
+def expand_profile(
+    entry: dict[str, Any], profiles: dict[str, Any], where: str
+) -> dict[str, Any]:
+    """Merge a `profile:` reference into a role dict (ADR-176/179).
+
+    `model_profiles.<name>` supplies the base fields (provider, model,
+    limits, quirks); the entry's own keys override — a role carries only
+    what is genuinely per-role (token ceiling, temperature, a tighter
+    timeout). A group of roles referencing one profile moves to a new
+    model with a single profile edit.
     """
-
-    default: str
-    options: dict[str, LLMRoleConfig]
-
-    @model_validator(mode="after")
-    def _default_must_exist(self) -> "OrchestratorOptionsConfig":
-        if self.default not in self.options:
-            raise ValueError(
-                f"orchestrator.default={self.default!r} not found in options "
-                f"{sorted(self.options)}"
-            )
-        return self
-
-
-# Selector keys inside the orchestrator block — every other key is a model
-# option. `default` picks the standard-tier orchestrator; `advanced`
-# (optional) names the option the top plan tier gets, exposed as the
-# separate `orchestrator_advanced` role so it survives boot resolution
-# instead of being collapsed away with the other options.
-_ORCH_RESERVED_KEYS = frozenset({"default", "advanced"})
-
-
-def _split_orchestrator_block(raw_orch: dict[str, Any]) -> OrchestratorOptionsConfig:
-    """Parse the YAML orchestrator block into OrchestratorOptionsConfig.
-
-    `default` and `advanced` are reserved selector keys; every other key is
-    an option name mapping to an `LLMRoleConfig`-shaped dict.
-    """
-    if "default" not in raw_orch:
+    if "profile" not in entry:
+        return entry
+    name = entry["profile"]
+    if name not in profiles:
         raise ValueError(
-            "models.orchestrator must define a 'default' key naming one of "
-            "its option keys"
+            f"{where}: unknown model profile {name!r}; have {sorted(profiles)}"
         )
-    default = raw_orch["default"]
-    options = {k: v for k, v in raw_orch.items() if k not in _ORCH_RESERVED_KEYS}
-    return OrchestratorOptionsConfig(default=default, options=options)
+    base = profiles[name]
+    if not isinstance(base, dict):
+        raise ValueError(f"model_profiles.{name} must be a mapping")
+    return {**base, **{k: v for k, v in entry.items() if k != "profile"}}
+
+
+def _model_env_overrides() -> dict[str, str]:
+    """Collect KEBI_MODEL_<ROLE> overrides from the process environment.
+
+    Process env only — the same place Railway sets variables. Role names
+    are recovered by lower-casing (KEBI_MODEL_LOCATION_RESOLVER →
+    location_resolver).
+    """
+    prefix = _MODEL_OVERRIDE_PREFIX
+    return {
+        key[len(prefix) :].lower(): value
+        for key, value in os.environ.items()
+        if key.startswith(prefix) and value
+    }
+
+
+def _resolve_model_options(
+    raw_models: dict[str, Any],
+    overrides: dict[str, str] | None = None,
+    agent_model: str | None = None,
+    profiles: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Resolve every role's flat `profile:` reference to a flat
+    `LLMRoleConfig` dict (ADR-179, superseding ADR-173's option blocks).
+
+    One shape for every role:
+
+        <role>:
+          profile: <model_profiles key>   # which model
+          max_tokens / temperature / ...  # per-role params (override profile)
+
+    Switching a role's model is `KEBI_MODEL_<ROLE>=<profile-name>` in the
+    env (unknown name → warn + keep the configured profile, so a typo
+    never kills prod boot), or editing the role's `profile:` line; moving
+    a whole group is editing its shared profile in `model_profiles`.
+
+    Orchestrator extras: `AGENT_MODEL` works as an alias for
+    `KEBI_MODEL_ORCHESTRATOR` (which wins when both are set), and an
+    `advanced: <profile-name>` key emits the separate
+    `orchestrator_advanced` role — same per-role params, advanced-tier
+    profile. `advanced` on any other role is an error.
+
+    Blocks that inline `provider` without a `profile` pass through
+    untouched (test fixtures). Mutates `raw_models` in place, returns it.
+    """
+    overrides = overrides or {}
+    if profiles is None:
+        # Back-compat callers resolve against the committed catalog.
+        # Pass `{}` explicitly to mean "no profiles".
+        profiles = load_yaml_config("app.yaml").get("model_profiles") or {}
+    for role in list(raw_models):
+        block = raw_models[role]
+        if not isinstance(block, dict):
+            continue
+        entry = dict(block)
+        advanced_profile = entry.pop("advanced", None)
+        if advanced_profile is not None and role != "orchestrator":
+            raise ValueError(
+                f"models.{role}: 'advanced' is reserved for the orchestrator "
+                "(plan-tier selector)"
+            )
+        if "profile" not in entry:
+            # Inline provider block (test fixtures) — leave as-is.
+            continue
+        requested = overrides.get(role)
+        override_source = f"{_MODEL_OVERRIDE_PREFIX}{role.upper()}"
+        if requested is None and role == "orchestrator" and agent_model is not None:
+            requested = agent_model
+            override_source = "AGENT_MODEL"
+        if requested is not None:
+            if requested in profiles:
+                logger.info(
+                    "models.%s: profile %r selected via %s (configured: %r)",
+                    role,
+                    requested,
+                    override_source,
+                    entry["profile"],
+                )
+                entry["profile"] = requested
+            else:
+                logger.warning(
+                    "%s=%r is not a model profile %s; keeping configured profile %r",
+                    override_source,
+                    requested,
+                    sorted(profiles),
+                    entry["profile"],
+                )
+        raw_models[role] = expand_profile(entry, profiles, f"models.{role}")
+        if advanced_profile is not None:
+            adv_entry = {
+                **{k: v for k, v in block.items() if k != "advanced"},
+                "profile": advanced_profile,
+            }
+            raw_models["orchestrator_advanced"] = expand_profile(
+                adv_entry, profiles, "models.orchestrator.advanced"
+            )
+    return raw_models
 
 
 def _resolve_orchestrator(
     raw_models: dict[str, Any], agent_model: str | None
 ) -> dict[str, Any]:
-    """Resolve a `{default, <option>, ...}` orchestrator block to a flat
-    `LLMRoleConfig` dict (ADR-068).
-
-    No-op if the block is already flat (i.e. has top-level `provider`/`model`).
-    Mutates `raw_models` in place and returns it.
-
-    - `agent_model` is None  → use `default`.
-    - `agent_model` matches an option key → use that option.
-    - `agent_model` is set but unknown → log a warning and fall back to
-      `default`. Boot continues so a typo in env vars does not kill prod.
-    - `default` missing or pointing at a missing option → raises.
-
-    When the block names an `advanced` option, that option is emitted as the
-    separate `orchestrator_advanced` role (selected per request for the
-    `advanced_models_enabled` plan tier). It references one of the existing
-    options — no duplicate model definition. A missing `advanced` key just
-    means the role is not defined (the agent path falls back to standard).
-    """
-    orch = raw_models.get("orchestrator")
-    if not isinstance(orch, dict) or "provider" in orch:
-        return raw_models
-
-    advanced_key = orch.get("advanced")
-    parsed = _split_orchestrator_block(orch)
-    chosen = parsed.default
-    if agent_model is not None:
-        if agent_model in parsed.options:
-            chosen = agent_model
-        else:
-            logger.warning(
-                "AGENT_MODEL=%r not in orchestrator options %s; "
-                "falling back to default %r",
-                agent_model,
-                sorted(parsed.options),
-                parsed.default,
-            )
-    raw_models["orchestrator"] = parsed.options[chosen].model_dump()
-    if advanced_key is not None:
-        if advanced_key not in parsed.options:
-            raise ValueError(
-                f"orchestrator.advanced={advanced_key!r} not found in options "
-                f"{sorted(parsed.options)}"
-            )
-        raw_models["orchestrator_advanced"] = parsed.options[advanced_key].model_dump()
-    return raw_models
+    """Back-compat entry point (ADR-068) — resolves ALL role blocks, with
+    `agent_model` as the orchestrator's profile-override alias."""
+    return _resolve_model_options(raw_models, agent_model=agent_model)
 
 
 class ConfidenceWeights(BaseModel):
@@ -617,6 +672,12 @@ class AppProvidersConfig(BaseModel):
     brave: ProviderEndpointConfig = ProviderEndpointConfig(
         base_url="https://api.search.brave.com"
     )
+    # OpenAI-compatible gateway used for benchmarking candidate models
+    # (ADR-173). One key covers Gemini/Qwen/DeepSeek/etc.; production
+    # winners get a direct provider integration before promotion.
+    openrouter: ProviderEndpointConfig = ProviderEndpointConfig(
+        base_url="https://openrouter.ai/api/v1"
+    )
 
 
 class PromptConfig(BaseModel):
@@ -1032,6 +1093,49 @@ class MovementConfig(BaseModel):
     max_radius_m: int = 60000
 
 
+class LLMModelPricing(BaseModel):
+    """Per-1M-token rates for one LLM, keyed in `pricing.llm` by model name.
+
+    Usage-dict convention (matches what call sites stamp on spans):
+    `input` counts uncached input tokens only; cached tokens ride the
+    optional `cache_read_input_tokens` / `cache_creation_input_tokens`
+    keys. `output` is completion tokens. `total` is informational and
+    never priced.
+    """
+
+    input_per_1m: float
+    output_per_1m: float
+    # OpenAI-style cached-input rate (reads only; writes are free).
+    cached_input_per_1m: float | None = None
+    # Anthropic-style cache rates. Writes default to the 5m tier — the
+    # only tier kebi uses (`cache_control: ephemeral`).
+    cache_read_per_1m: float | None = None
+    cache_write_5m_per_1m: float | None = None
+    cache_write_1h_per_1m: float | None = None
+
+    def cost_for(self, usage: dict[str, int]) -> float:
+        input_t = usage.get("input", 0)
+        output_t = usage.get("output", 0)
+        cache_read = usage.get("cache_read_input_tokens", 0)
+        cache_write = usage.get("cache_creation_input_tokens", 0)
+        read_rate = (
+            self.cache_read_per_1m
+            if self.cache_read_per_1m is not None
+            else self.cached_input_per_1m
+        )
+        cost = input_t * self.input_per_1m + output_t * self.output_per_1m
+        # Unknown cache rate → price cached tokens at the full input rate
+        # (overcounts rather than hides spend).
+        cost += cache_read * (read_rate if read_rate is not None else self.input_per_1m)
+        write_rate = (
+            self.cache_write_5m_per_1m
+            if self.cache_write_5m_per_1m is not None
+            else self.input_per_1m
+        )
+        cost += cache_write * write_rate
+        return cost / 1_000_000
+
+
 class VoyagePricing(BaseModel):
     """Per-1M-token rate for Voyage embeddings (not in Langfuse catalog)."""
 
@@ -1091,17 +1195,39 @@ class ExternalProviderPricing(BaseModel):
 class PricingConfig(BaseModel):
     """Provider rates for cost attribution in Langfuse traces.
 
-    LLM completions and embeddings priced by Langfuse's catalog are
-    listed under `llm` for human reconciliation only — code never reads
-    those values. The fields that ARE read by code: `embeddings`,
-    `transcription`, and `external`.
+    Every section is read by code. `llm` is keyed by model name (exact,
+    or a prefix of a date-suffixed model id) and prices the `cost_usd`
+    stamped on LLM spans — Langfuse's own catalog stays as the
+    reconciliation cross-check (ADR-092). `embeddings`, `transcription`,
+    and `external` price providers Langfuse cannot.
     """
 
     currency: str = "USD"
-    llm: dict[str, dict[str, float]] = {}
+    llm: dict[str, LLMModelPricing] = {}
     embeddings: dict[str, VoyagePricing] = {}
     transcription: dict[str, WhisperPricing] = {}
     external: ExternalProviderPricing
+
+    def llm_cost_for(
+        self, model: str | None, usage: dict[str, int] | None
+    ) -> float | None:
+        """USD cost for one call, or None when model/usage is unknown.
+
+        Exact model-name key first; otherwise the longest `llm` key that
+        prefixes the model id (so `claude-haiku-4-5` prices
+        `claude-haiku-4-5-20251001`). Missing entry → None: the span
+        goes out unpriced rather than mispriced, and the cost report
+        surfaces the gap.
+        """
+        if not model or not usage:
+            return None
+        entry = self.llm.get(model)
+        if entry is None:
+            prefixes = [k for k in self.llm if model.startswith(k)]
+            if not prefixes:
+                return None
+            entry = self.llm[max(prefixes, key=len)]
+        return entry.cost_for(usage)
 
 
 class AppConfig(BaseModel):
@@ -1125,16 +1251,18 @@ class AppConfig(BaseModel):
 
     @model_validator(mode="before")
     @classmethod
-    def _resolve_orchestrator_default(cls, data: Any) -> Any:
-        """Default-only orchestrator resolution (ADR-068).
+    def _resolve_role_defaults(cls, data: Any) -> Any:
+        """Default-only option resolution (ADR-068/173).
 
-        The env-aware path runs in `get_config()` and replaces the
-        orchestrator block with a flat dict before AppConfig sees it.
-        Direct `AppConfig(**raw)` calls (e.g. from tests) hit this
-        validator instead and resolve to the `default` option.
+        The env-aware path runs in `get_config()` and replaces optioned
+        role blocks with flat dicts before AppConfig sees them. Direct
+        `AppConfig(**raw)` calls (e.g. from tests) hit this validator
+        instead and resolve every role to its `default` option.
         """
         if isinstance(data, dict) and isinstance(data.get("models"), dict):
-            _resolve_orchestrator(data["models"], agent_model=None)
+            _resolve_model_options(
+                data["models"], profiles=data.pop("model_profiles", None)
+            )
         return data
 
 
@@ -1218,8 +1346,13 @@ def get_config() -> AppConfig:
     global _config
     if _config is None:
         raw = load_yaml_config("app.yaml")
-        raw["models"] = _resolve_orchestrator(
-            raw.get("models") or {}, agent_model=get_env().AGENT_MODEL
+        raw["models"] = _resolve_model_options(
+            raw.get("models") or {},
+            overrides=_model_env_overrides(),
+            agent_model=get_env().AGENT_MODEL,
+            # Consumed here (ADR-176) — profiles exist only at resolution
+            # time; the resolved config carries flat LLMRoleConfig blocks.
+            profiles=raw.pop("model_profiles", None),
         )
         raw["prompts"] = _load_prompts(raw.get("prompts") or {})
         _config = AppConfig(**raw)
@@ -1263,6 +1396,9 @@ class EnvConfig(BaseSettings):
     VOYAGE_API_KEY: str | None = None
     GOOGLE_API_KEY: str | None = None
     GROQ_API_KEY: str | None = None
+    # OpenRouter — one key for the benchmark model matrix (ADR-173).
+    # Unset just means openrouter-provider roles can't be selected.
+    OPENROUTER_API_KEY: str | None = None
     APIFY_TOKEN: str | None = None
     # Brave Search — gates the `web_search` tool's backend (ADR-145). Unset
     # selects the null provider: the tool stays bound and callable, comes back

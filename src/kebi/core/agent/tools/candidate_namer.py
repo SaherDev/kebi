@@ -158,7 +158,7 @@ class CandidateNamerService:
             },
         ) as t:
             try:
-                response = await self._client.extract(
+                extraction = await self._client.extract(
                     response_model=CandidateNames,
                     messages=[{"role": "user", "content": prompt_text}],
                 )
@@ -166,6 +166,8 @@ class CandidateNamerService:
                 logger.warning("candidate naming failed: %s", exc, exc_info=True)
                 t.fail(exc)
                 return CandidateNames(candidates=[])
-            result = cast(CandidateNames, response)
+            t.usage = extraction.usage
+            t.attempts = extraction.attempts
+            result = cast(CandidateNames, extraction.data)
             t.output = {"count": len(result.candidates)}
             return result

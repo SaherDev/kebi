@@ -24,6 +24,7 @@ from kebi.core.extraction.types import (
     Producer,
 )
 from kebi.core.places import TagType
+from kebi.providers.llm import InstructorExtraction
 
 
 def _ctx(names: list[str], **kw: object) -> ExtractionContext:
@@ -42,7 +43,7 @@ def _resolver(response: _ResolverResponse | Exception) -> LLMResolver:
     if isinstance(response, Exception):
         instructor.extract = AsyncMock(side_effect=response)
     else:
-        instructor.extract = AsyncMock(return_value=response)
+        instructor.extract = AsyncMock(return_value=InstructorExtraction(data=response))
     return LLMResolver(instructor_client=instructor)
 
 

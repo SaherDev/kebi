@@ -547,22 +547,22 @@ class GeoRegistry:
             standalone=True,
         ) as t:
             try:
-                response = cast(
-                    _MintResponse,
-                    await self._instructor_client.extract(  # type: ignore[union-attr]
-                        response_model=_MintResponse,
-                        messages=[
-                            {
-                                "role": "system",
-                                "content": get_prompt("area_registry"),
-                            },
-                            {"role": "user", "content": user_content},
-                        ],
-                    ),
+                extraction = await self._instructor_client.extract(  # type: ignore[union-attr]
+                    response_model=_MintResponse,
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": get_prompt("area_registry"),
+                        },
+                        {"role": "user", "content": user_content},
+                    ],
                 )
             except Exception as exc:
                 t.fail(exc)
                 raise
+            response = cast(_MintResponse, extraction.data)
+            t.usage = extraction.usage
+            t.attempts = extraction.attempts
             t.output = {
                 "colloquial": bool(response.colloquial_name),
                 "part_of": bool(response.part_of),

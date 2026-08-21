@@ -20,6 +20,7 @@ from kebi.core.agent.tools.candidate_namer import (
     CandidateNames,
 )
 from kebi.core.places.models import PlaceCategory
+from kebi.providers.llm import InstructorExtraction
 
 
 def _bangkok() -> WorkingLocation:
@@ -48,7 +49,9 @@ def _stub_client(
         client.extract = AsyncMock(side_effect=raises)
     else:
         client.extract = AsyncMock(
-            return_value=response or CandidateNames(candidates=[])
+            return_value=InstructorExtraction(
+                data=response or CandidateNames(candidates=[])
+            )
         )
     return client
 

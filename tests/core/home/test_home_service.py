@@ -14,6 +14,7 @@ from kebi.core.home.service import (
     daypart_for,
     weather_bucket_for,
 )
+from kebi.providers.llm import InstructorExtraction
 
 
 def _make_service(
@@ -30,8 +31,10 @@ def _make_service(
         instructor.extract = AsyncMock(side_effect=extract_side_effect)
     else:
         instructor.extract = AsyncMock(
-            return_value=extract_return
-            or HomeSuggestion(greeting="hi", chips=[HomeChip(text="surprise me")])
+            return_value=InstructorExtraction(
+                data=extract_return
+                or HomeSuggestion(greeting="hi", chips=[HomeChip(text="surprise me")])
+            )
         )
 
     taste = MagicMock()

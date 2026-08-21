@@ -164,9 +164,8 @@ class LLMPlacePicker:
 
         user_content = self._build_prompt(context, search_set)
         # Phase 4.5 subtask 2: nests under the extraction_run trace.
-        # Same shape as `LLMResolver` — Instructor doesn't expose token
-        # counts, so usage is left for Langfuse to approximate from the
-        # input/output payloads.
+        # Same shape as `LLMResolver` — usage + attempt count come off
+        # the InstructorExtraction result.
         async with traced_call(
             "extraction.llm_picker",
             "extraction",
@@ -179,24 +178,24 @@ class LLMPlacePicker:
             },
         ) as t:
             try:
-                response = cast(
-                    _PickerResponse,
-                    await self._instructor_client.extract(
-                        response_model=_PickerResponse,
-                        messages=[
-                            {
-                                "role": "system",
-                                "content": get_prompt("place_classifier"),
-                            },
-                            {"role": "user", "content": user_content},
-                        ],
-                    ),
+                extraction = await self._instructor_client.extract(
+                    response_model=_PickerResponse,
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": get_prompt("place_classifier"),
+                        },
+                        {"role": "user", "content": user_content},
+                    ],
                 )
             except Exception as exc:
                 t.fail(exc)
                 logger.warning("LLMPlacePicker failed: %s", exc, exc_info=True)
                 return []
 
+            response = cast(_PickerResponse, extraction.data)
+            t.usage = extraction.usage
+            t.attempts = extraction.attempts
             kept = [p for p in response.picks if not p.rejected]
             rejected = [p for p in response.picks if p.rejected]
             t.output = {

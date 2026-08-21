@@ -45,7 +45,7 @@ Kebi is the AI engine of the Kebi product. It owns all AI logic: natural languag
 - Ranking and scoring (deterministic, tunable)
 - Taste model construction and reading
 - Agent orchestration (LangGraph) for conversational turns
-- LLM response caching in Redis
+- Redis caching around LLM work (extraction results by URL, web-search results, query embeddings, place payloads; the home suggestion is the one cached LLM output)
 - Evaluation pipelines (retrieval accuracy, agent task completion, cost, latency)
 
 ## What This Repo Does NOT Do
@@ -165,14 +165,15 @@ See ADR-026 for the rationale, and `config/app.yaml` for the live mapping.
 
 Redis is owned exclusively by this repo; the product repo does not connect to it. Uses:
 
-- LLM response caching
-- Extraction result cache (keyed by canonical URL, 30-day TTL — ADR-074)
+- Extraction result cache (keyed by canonical URL, 30-day TTL — ADR-074) — skips the whole pipeline including its LLM calls
+- Home suggestion cache (the one true LLM-response cache — ADR-111)
+- Web-search result cache (ADR-145), query-embedding cache, place-payload cache
 - LangGraph checkpointer state for agent conversation history
 - Rate-limit and circuit-breaker counters
 
 ## Cost and Tracing
 
-Langfuse traces every paid call (LLM, embedding, transcription, place-provider, third-party scrapers). One parent trace opens per user-facing entry point and every nested paid call attaches to it. Per-tool attribution comes from a contextual stamp set on tool entry. Pricing for providers Langfuse does not natively catalog (per-call providers) lives in `app.yaml` and is computed at the call site, then stamped on the trace span using the same primitive Langfuse uses internally. Reconciliation is monthly: Langfuse totals vs. provider invoices; drift triggers a rate update. See ADR-025, ADR-092.
+Langfuse traces every paid call (LLM, embedding, transcription, place-provider, third-party scrapers) via manual spans — there is no LangChain callback handler; each call site opens a span and stamps token usage on it. One parent trace opens per user-facing entry point and every nested paid call attaches to it. Per-tool attribution comes from a contextual stamp set on tool entry. All pricing lives in `app.yaml` (`pricing:`): LLM calls are priced from `pricing.llm` (cache-aware, keyed by model name) and stamped as span cost, with Langfuse's own catalog as the cross-check; per-call providers (Google Places, Apify, Whisper, Voyage) are priced the same way at the call site. Retries are explicit: SDK-internal retries are disabled, retry loops are kebi-owned with one span per attempt, and Instructor validation retries surface as `llm_attempts` on the span. `scripts/llm_cost_report.py` aggregates per-role calls/tokens/cost/latency from the Langfuse API. Reconciliation is monthly: Langfuse totals vs. provider invoices; drift triggers a rate update. See ADR-025, ADR-092, ADR-172.
 
 ## Boundaries (quick reference)
 

@@ -264,18 +264,18 @@ class AreaProfileService:
             standalone=True,
         ) as t:
             try:
-                response = cast(
-                    _ProfilerResponse,
-                    await self._instructor_client.extract(
-                        response_model=_ProfilerResponse,
-                        messages=[
-                            {"role": "system", "content": get_prompt("area_profiler")},
-                            {"role": "user", "content": user_content},
-                        ],
-                    ),
+                extraction = await self._instructor_client.extract(
+                    response_model=_ProfilerResponse,
+                    messages=[
+                        {"role": "system", "content": get_prompt("area_profiler")},
+                        {"role": "user", "content": user_content},
+                    ],
                 )
             except Exception as exc:
                 t.fail(exc)
                 raise
+            response = cast(_ProfilerResponse, extraction.data)
+            t.usage = extraction.usage
+            t.attempts = extraction.attempts
             t.output = {"chips": len(response.best_for)}
         return response

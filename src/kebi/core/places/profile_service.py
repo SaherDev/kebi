@@ -172,19 +172,19 @@ class PlaceProfileService:
             standalone=True,
         ) as t:
             try:
-                response = cast(
-                    _ProfilerResponse,
-                    await self._instructor_client.extract(
-                        response_model=_ProfilerResponse,
-                        messages=[
-                            {"role": "system", "content": get_prompt("place_profiler")},
-                            {"role": "user", "content": user_content},
-                        ],
-                    ),
+                extraction = await self._instructor_client.extract(
+                    response_model=_ProfilerResponse,
+                    messages=[
+                        {"role": "system", "content": get_prompt("place_profiler")},
+                        {"role": "user", "content": user_content},
+                    ],
                 )
             except Exception as exc:
                 t.fail(exc)
                 raise
+            response = cast(_ProfilerResponse, extraction.data)
+            t.usage = extraction.usage
+            t.attempts = extraction.attempts
             t.output = {"tag_count": len(response.tags)}
         # Accessibility backstop + source="llm" stamping, shared with the
         # extraction classifiers.
