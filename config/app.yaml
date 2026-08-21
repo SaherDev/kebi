@@ -105,16 +105,23 @@ model_profiles:
     model: google/gemini-3.7-flash
     max_retries: 2
     timeout_seconds: 30
+    # Reasoning is MANDATORY on this model (cannot be disabled) and its
+    # thinking spends the completion budget — unusable for roles with
+    # small structured-output ceilings (extractor's 512 → truncation).
+    # Only viable where max_tokens leaves thinking room (orchestrator).
   qwen-flash:
     provider: openrouter
-    model: qwen/qwen3.5-flash
+    model: qwen/qwen3.5-flash-02-23
     max_retries: 2
     timeout_seconds: 30
+    # Thinking mode rejects forced tool_choice — effort off, like Luna.
+    reasoning_effort: none
   qwen-plus:
     provider: openrouter
-    model: qwen/qwen3.5-plus
+    model: qwen/qwen3.5-plus-20260420
     max_retries: 2
     timeout_seconds: 30
+    reasoning_effort: none
   deepseek-flash:
     provider: openrouter
     model: deepseek/deepseek-v4-flash
