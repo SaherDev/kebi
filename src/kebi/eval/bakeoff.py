@@ -345,6 +345,9 @@ async def _call_option(
             max_retries=option.max_retries,
             timeout_seconds=option.timeout_seconds,
             reasoning_effort=option.reasoning_effort,
+            max_tokens=option.max_tokens,
+            temperature=(option.temperature if option.supports_temperature else None),
+            use_max_completion_tokens=option.provider == "openai",
         )
         extraction = await client.extract(
             response_model=schema,

@@ -1,4 +1,58 @@
-# Model benchmark — round 1 (2026-08-20, ADR-175)
+# Model benchmark — round 1 (2026-08-20/21, ADR-175)
+
+## Round 1b — OpenRouter matrix (2026-08-21, ADR-181)
+
+Run after the OpenRouter key landed. Note: the account's free allowance
+ran out mid-race — qwen's orchestrator leg is unraced and one MiniMax
+case 402'd; add a few dollars of credits to finish.
+
+**extractor** (current = gpt-5.6-luna after ADR-178):
+
+| option | quality | pass | p50 ms | $/1k |
+|---|---|---|---|---|
+| deepseek-flash (v4) | **0.958** | 88% | 7292 | 0.65 |
+| current (luna) | 0.875 | 88% | 1857 | 0.32 |
+| qwen-plus | 0.708 | 62% | 3709 | 2.06 |
+| gemini-flash | unusable | — | — | — |
+
+Read: DeepSeek V4 Flash actually out-scored Luna — but at 4x the p50 on a
+synchronous endpoint. Luna keeps the role; DeepSeek is the named
+challenger if extraction ever goes async. Gemini 3.7 Flash cannot run
+this role at all: its reasoning is mandatory and eats the 512-token
+structured-output budget.
+
+**location_resolver** (current = claude-haiku-4-5):
+
+| option | quality | pass | p50 ms | $/1k |
+|---|---|---|---|---|
+| current (haiku) | 0.833* | 67% | 2382 | 6.91 |
+| qwen-flash (effort none) | 0.861 | 67% | 1507 | 0.40 |
+| gemini-flash | 0.611 | 42% | 6602 | 6.47 |
+
+\*Haiku scored 0.917 on 2026-08-20; today's run had one transient
+tool-parse error. Read: **qwen3.5-flash is statistically tied with Haiku
+at ~1/17th the cost** — the first credible resolver challenger. Expand
+the golden set (30+ cases from real traces) before deciding; do not swap
+on a 12-case tie. Gemini loses outright.
+
+**orchestrator routing** (first-move test, ADR-180):
+
+| option | quality | pass |
+|---|---|---|
+| sonnet-5 / sonnet-4.6 / luna | 1.000 | 100% |
+| gemini-flash | 0.917 | 92% (missed practical-errand) |
+| minimax-m3 | 0.917 | 92% (1 credit-402) |
+| current (haiku) | 0.917 | 92% (missed vegan constraint) |
+| qwen-flash | unraced | credits ran out |
+
+**Provider quirks found this round** (all now config fields):
+`max_tokens`/`temperature` were historically NEVER sent on the Instructor
+path (config values were decorative — now enforced); the GPT-5.6 family
+requires `max_completion_tokens` on OpenAI-direct; Qwen thinking mode
+rejects forced tool_choice (fixed with `reasoning_effort: none`); Gemini
+3.7 Flash reasoning cannot be disabled; OpenRouter qwen ids carry date
+suffixes.
+
 
 Harness: `poetry run python -m kebi.eval.bakeoff --role <role> --options ...`
 Golden sets: `config/evals/golden/<role>/` (seed sets; expand from real

@@ -353,6 +353,9 @@ class InstructorClient:
         max_retries: int = 2,
         timeout_seconds: float | None = None,
         reasoning_effort: str | None = None,
+        max_tokens: int | None = None,
+        temperature: float | None = None,
+        use_max_completion_tokens: bool = False,
     ) -> None:
         """Initialize Instructor client with OpenAI backend.
 
@@ -369,10 +372,26 @@ class InstructorClient:
             reasoning_effort: GPT-5.6-family dial; "none" is REQUIRED for
                 gpt-5.6-luna function-tool calls on chat completions.
                 None = omit (non-reasoning models reject the parameter).
+            max_tokens: Completion ceiling from role config. Historically
+                NEVER passed on this path — the config value was
+                decorative, and OpenRouter pre-authorizes the model max
+                (65K) without it, 402-ing small credit balances. None =
+                provider default (kept for back-compat call sites).
+            temperature: Sampling temperature from role config — same
+                historical gap as max_tokens. None = provider default.
+            use_max_completion_tokens: Send the ceiling as
+                `max_completion_tokens` (OpenAI-direct; the GPT-5.6
+                family 400s on `max_tokens`). OpenAI-compatible gateways
+                (OpenRouter, Ollama) keep the standard `max_tokens`.
         """
         self._model = model
         self._max_attempts = max_retries + 1
         self._reasoning_effort = reasoning_effort
+        self._max_tokens = max_tokens
+        self._temperature = temperature
+        self._tokens_param = (
+            "max_completion_tokens" if use_max_completion_tokens else "max_tokens"
+        )
         client_kwargs: dict[str, Any] = {
             "api_key": api_key,
             "base_url": base_url,
@@ -413,6 +432,10 @@ class InstructorClient:
         extra_kwargs: dict[str, Any] = {}
         if self._reasoning_effort is not None:
             extra_kwargs["reasoning_effort"] = self._reasoning_effort
+        if self._max_tokens is not None:
+            extra_kwargs[self._tokens_param] = self._max_tokens
+        if self._temperature is not None:
+            extra_kwargs["temperature"] = self._temperature
         try:
             (
                 result,
@@ -631,6 +654,7 @@ def get_instructor_client(role: str) -> InstructorClient:
             f"got: {role_config.provider}"
         )
 
+    temperature = role_config.temperature if role_config.supports_temperature else None
     if role_config.provider == "ollama":
         return InstructorClient(
             model=role_config.model,
@@ -640,6 +664,8 @@ def get_instructor_client(role: str) -> InstructorClient:
             max_retries=role_config.max_retries,
             timeout_seconds=role_config.timeout_seconds,
             reasoning_effort=role_config.reasoning_effort,
+            max_tokens=role_config.max_tokens,
+            temperature=temperature,
         )
 
     if role_config.provider == "openrouter":
@@ -650,6 +676,8 @@ def get_instructor_client(role: str) -> InstructorClient:
             max_retries=role_config.max_retries,
             timeout_seconds=role_config.timeout_seconds,
             reasoning_effort=role_config.reasoning_effort,
+            max_tokens=role_config.max_tokens,
+            temperature=temperature,
         )
 
     return InstructorClient(
@@ -658,6 +686,9 @@ def get_instructor_client(role: str) -> InstructorClient:
         max_retries=role_config.max_retries,
         timeout_seconds=role_config.timeout_seconds,
         reasoning_effort=role_config.reasoning_effort,
+        max_tokens=role_config.max_tokens,
+        temperature=temperature,
+        use_max_completion_tokens=True,
     )
 
 

@@ -17,6 +17,16 @@ Format:
 
 ---
 
+## ADR-181: The full candidate field is raced — incumbents hold, and the Instructor path finally obeys its own limits
+
+**Date:** 2026-08-21\
+**Status:** accepted — completes the round-one matrix ADR-175 opened\
+**Context:** The gateway key arrived, unlocking the candidates that could not be raced before: Gemini 3.7 Flash, Qwen 3.5 (flash and plus), DeepSeek V4 Flash, MiniMax M3. The first run immediately failed in an instructive way: the gateway pre-authorizes a model's maximum output window when no ceiling is sent, and no ceiling was being sent — because the structured-extraction client had *never* passed the configured token ceiling or temperature to the API. Every Instructor-path role's `max_tokens` and `temperature` had been decorative since the beginning; the calls ran on provider defaults and nobody could tell, because until ADR-172 nothing measured them.\
+**Decision:** The limits become real: the structured-extraction client sends the role's ceiling and temperature on every call, with the provider differences that enforcing them exposed captured as config facts — the GPT-5.6 family takes its ceiling under a different parameter name on the direct API, Qwen's thinking mode must be switched off before it accepts forced tool choice, and Gemini 3.7 Flash's reasoning cannot be switched off at all, which disqualifies it from any role with a small structured-output budget. With the field runnable, the races ran; the verdicts are recorded in the benchmark log.\
+**Consequences:** Every incumbent held, which is itself the finding: the extractor stays on Luna (DeepSeek V4 Flash out-scored it but at four times the latency on a synchronous endpoint — the named challenger if extraction ever goes async); the resolver stays on Haiku, though Qwen 3.5 Flash tied it at a seventeenth of the cost and earns an expanded-golden-set rematch before any decision; the orchestrator's perfect-routing trio (Sonnet 5, Sonnet 4.6, Luna) is unthreatened by Gemini or MiniMax at eleven of twelve. Enforcing the ceilings is a small live behavior change on every Instructor role — completions that previously ran unbounded are now capped at the configured values, which the config always claimed. One loose end: the gateway account ran out of free credits mid-race, leaving Qwen's orchestrator leg unraced — a few dollars of credits finishes it.
+
+---
+
 ## ADR-180: The agent has a strength test — first-move routing, measured, and it already paid for itself twice
 
 **Date:** 2026-08-21\
